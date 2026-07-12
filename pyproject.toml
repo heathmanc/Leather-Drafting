@@ -4,20 +4,24 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leathercad"
-version = "0.1.0"
-description = "Python CAD core for laser-cut leather patterns with pricking-iron-accurate stitch hole spacing"
+version = "0.2.0"
+description = "Python CAD for laser-cut leather patterns with pricking-iron-accurate stitch hole spacing"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "heathmanc" }]
-keywords = ["leather", "cad", "laser", "stitching", "pricking-iron", "svg"]
+keywords = ["leather", "cad", "laser", "stitching", "pricking-iron", "svg", "dxf"]
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0"]
+gui = ["PySide6>=6.5"]
+dev = ["pytest>=7.0", "PySide6>=6.5"]
+
+[project.scripts]
+leather-drafting = "leathercad_app.__main__:main"
 
 [tool.setuptools]
-packages = ["leathercad"]
+packages = ["leathercad", "leathercad_app"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

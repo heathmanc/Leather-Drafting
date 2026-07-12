@@ -14,21 +14,36 @@ from .stitching import (
     Hole,
     StitchResult,
     stitch_path,
+    stitch_polyline,
     march_chord,
     march_arclength,
     polyline_from_path,
 )
+from .stitchsettings import StitchSettings
 from .irons import Iron, spi_to_mm, mm_to_spi, get as get_iron, PRESETS
-from .svg import SvgDocument, export_svg
+from .offset import offset_closed_inward
+from .shapes import (Transform, Shape, Rectangle, Ellipse, Circle, Polygon,
+                     PathShape)
+from .layers import Layer, default_layers, CUT, SCORE, ENGRAVE, STITCH
+from .stitchline import StitchLine
+from .document import Document
+from .svg import SvgDocument
+from . import export
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "Vec2", "distance",
     "Path", "PathBuilder", "Line", "Arc", "CubicBezier", "QuadraticBezier",
-    "Polyline", "Hole", "StitchResult", "stitch_path", "march_chord",
-    "march_arclength", "polyline_from_path",
+    "Polyline", "Hole", "StitchResult", "stitch_path", "stitch_polyline",
+    "march_chord", "march_arclength", "polyline_from_path",
+    "StitchSettings",
     "Iron", "spi_to_mm", "mm_to_spi", "get_iron", "PRESETS",
-    "SvgDocument", "export_svg",
+    "offset_closed_inward",
+    "Transform", "Shape", "Rectangle", "Ellipse", "Circle", "Polygon",
+    "PathShape",
+    "Layer", "default_layers", "CUT", "SCORE", "ENGRAVE", "STITCH",
+    "StitchLine", "Document",
+    "SvgDocument", "export",
     "__version__",
 ]

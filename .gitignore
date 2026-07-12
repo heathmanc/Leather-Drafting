@@ -6,6 +6,10 @@ dist/
 .pytest_cache/
 .venv/
 venv/
-# example output
+
+# generated exports / saves
 *.svg
+*.dxf
+*.leathercad.json
+# keep committed docs assets
 !docs/*.svg

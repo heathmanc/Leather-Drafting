@@ -13,7 +13,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from leathercad import PathBuilder, stitch_path, get_iron, export_svg, Vec2
+from leathercad import PathBuilder, stitch_path, get_iron, Vec2
+from leathercad.svg import export_svg
 from leathercad.stitching import polyline_from_path, march_chord, march_arclength
 
 

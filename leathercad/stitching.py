@@ -66,6 +66,22 @@ class Polyline:
         t = (s - self.cum[i]) / seg_len
         return self.points[i].lerp(self.points[i + 1], t)
 
+    def nearest_arclength(self, target: Vec2) -> float:
+        """Arc-length of the closest point on the polyline to ``target``."""
+        best_s = 0.0
+        best_d = float("inf")
+        for i in range(len(self.points) - 1):
+            a, b = self.points[i], self.points[i + 1]
+            ab = b - a
+            denom = ab.length_sq()
+            t = 0.0 if denom <= _EPS else max(0.0, min(1.0, (target - a).dot(ab) / denom))
+            proj = a.lerp(b, t)
+            d = (proj - target).length_sq()
+            if d < best_d:
+                best_d = d
+                best_s = self.cum[i] + (b - a).length() * t
+        return best_s
+
     def tangent_at(self, s: float) -> Vec2:
         s = max(0.0, min(self.length, s))
         i = self.seg_index_at(s)
@@ -394,3 +410,97 @@ def _result_from_positions(poly: Polyline, positions: List[float],
                            pitches: List[float], closed: bool) -> StitchResult:
     holes = [Hole(poly.point_at(s), poly.tangent_at(s)) for s in positions]
     return StitchResult(holes=holes, pitches=pitches, closed=closed)
+
+
+# ---------------------------------------------------------------------------
+# Polyline-level API used by the shapes / document layer
+# ---------------------------------------------------------------------------
+def _rotate_closed_ring(points: List[Vec2], start_offset: float) -> List[Vec2]:
+    """Rotate a closed ring so arc-length 0 sits at ``start_offset``.
+
+    Keeping ``start_offset`` identical across two pieces with the same outline
+    guarantees identical holes -> perfect stitch registration.
+    """
+    poly = Polyline(points)
+    total = poly.length
+    if total <= _EPS:
+        return points
+    s0 = start_offset % total
+    if s0 <= _EPS:
+        return points
+    new_start = poly.point_at(s0)
+    i = poly.seg_index_at(s0)
+    ring = points[:-1] if (points[0] - points[-1]).length() < 1e-9 else points[:]
+    n = len(ring)
+    rotated = [new_start]
+    for k in range(1, n + 1):
+        rotated.append(ring[(i + k) % n])
+    if (rotated[0] - rotated[-1]).length() > 1e-9:
+        rotated.append(rotated[0])
+    return rotated
+
+
+def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
+                    settings) -> StitchResult:
+    """Distribute holes on a world-space polyline using ``StitchSettings``.
+
+    ``corner_points`` are geometric points where a hole must be forced (e.g.
+    sharp corners). For closed outlines the stitch line is inset from the edge
+    by ``settings.inset`` first; corners are then projected onto the inset ring,
+    so a sharp corner still gets a hole at the *inset* corner. This is the
+    function the CAD document / export layer calls.
+    """
+    from .offset import offset_closed_inward
+
+    pts = list(points)
+
+    if closed and settings.inset and settings.inset > 0:
+        pts = offset_closed_inward(pts, settings.inset)
+
+    if closed and getattr(settings, "start_offset", 0.0):
+        pts = _rotate_closed_ring(pts, settings.start_offset)
+
+    poly = Polyline(pts)
+    if poly.length <= _EPS:
+        return StitchResult(closed=closed)
+
+    # Project corner points onto the (possibly inset) stitch line.
+    cor = sorted(poly.nearest_arclength(cp) for cp in (corner_points or []))
+
+    fit = settings.fit
+    if fit == "auto":
+        fit = "closed" if closed else "endpoints"
+
+    if settings.mode == "arclength":
+        positions = march_arclength(poly, settings.pitch_mm)
+        return _result_from_positions(poly, positions, [settings.pitch_mm], closed)
+
+    anchors = _anchors_from(cor, poly.length, closed, fit)
+    if anchors is None:
+        positions = march_chord(poly, settings.pitch_mm)
+        return _result_from_positions(poly, positions, [settings.pitch_mm], closed)
+
+    positions: List[float] = []
+    pitches: List[float] = []
+    for a, b in _spans(anchors, closed, poly.length):
+        p_eff, n = _best_fit_span(poly, settings.pitch_mm, a, b, settings.max_dev)
+        if n is None:
+            span_positions = march_chord(poly, settings.pitch_mm, a, b)
+            pitches.append(settings.pitch_mm)
+        else:
+            span_positions = march_chord_n(poly, p_eff, n, a, b)
+            pitches.append(p_eff)
+        positions.extend(span_positions[:-1])
+    if not closed:
+        positions.append(anchors[-1])
+    return _result_from_positions(poly, positions, pitches, closed)
+
+
+def _anchors_from(corners: List[float], total: float, closed: bool,
+                  fit: str) -> Optional[List[float]]:
+    cor = [c for c in corners if 1e-6 < c < total - 1e-6]
+    if fit == "none" and not cor:
+        return None
+    if closed:
+        return sorted(set([0.0] + cor))
+    return sorted(set([0.0, total] + cor))

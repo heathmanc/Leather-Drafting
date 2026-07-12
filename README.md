@@ -1,141 +1,163 @@
-# Leather-Drafting (`leathercad`)
+# Leather-Drafting
 
-A Python CAD core for drawing **laser-cut leather patterns**, built around the
+A Python desktop **CAD program for laser-cut leather patterns**, built around the
 one thing most pattern software gets wrong for hand-stitchers: **stitch hole
-spacing that matches a real pricking iron.**
+spacing that matches a real pricking iron**, and holes that **line up perfectly
+across overlapping pieces** no matter which side you laser.
 
-> Status: early foundation (v0.1). The stitch-spacing engine, path model, iron
-> presets, and laser-ready SVG export are working and tested. A GUI and more
-> pattern primitives are on the roadmap below.
+![the app](docs/app.png)
+
+> Status: v0.2. The desktop app (draw / radius / move-overlay / per-iron holes /
+> layers / registration / SVG+DXF export) is working and tested. Roadmap below.
 
 ---
 
-## The problem this solves
+## Two problems this is designed around
 
-Ask most CAD / pattern tools for "5 mm stitch spacing" and they place a hole
-every **5 mm of arc length** — they walk *along the contour*. On a curve, the
-actual straight-line gap between two neighbouring holes then comes out **shorter
-than 5 mm**. So the holes never line up with your physical pricking iron or
-stitching chisel, whose teeth are rigid and a fixed **straight-line (chord)**
+### 1. Pricking-iron spacing, not contour spacing
+Ask most tools for "3.85 mm spacing" and they drop a hole every 3.85 mm *of arc
+length* along the contour. On a curve the actual straight-line gap between
+neighbouring holes then comes out **short**, so the holes never match your
+physical iron, whose teeth are rigid and a fixed **straight-line (chord)**
 distance apart.
 
-`leathercad` does **chord marching** instead: from each hole it finds the next
-point *forward along the path* whose straight-line distance is exactly the
-iron's pitch. That reproduces what an iron physically does as you rotate it to
-follow a curve — consecutive holes are always `pitch` apart point-to-point.
+Leather-Drafting does **chord marching**: from each hole it finds the next point
+forward along the path whose straight-line distance is exactly the iron's pitch.
+Consecutive holes are always `pitch` apart point-to-point — exactly what the iron
+does as you rotate it around a curve.
 
 ![chord vs arc-length spacing](docs/spacing_comparison.svg)
 
-On a 6 mm-radius bend with a 3.85 mm iron:
+It also nudges the pitch a few percent (within a limit you set) so a whole number
+of holes lands cleanly on **every corner** and on **both ends** of an open seam —
+the thing leatherworkers do by hand.
 
-```
-  gap 0: chord=3.850 mm   arc-length=3.786 mm  (+1.7% short vs the iron)
-  gap 1: chord=3.850 mm   arc-length=3.783 mm  (+1.7% short vs the iron)
-  ...
-```
+### 2. Registration across overlapping pieces
+Two pieces stitched together (front + lining, gusset + panel) must have their
+holes in **identical positions** or they won't line up. Leather-Drafting
+guarantees this three ways:
 
-Small per hole, but it accumulates over a seam and it means the software's holes
-drift out of register with the tool in your hand. Chord spacing stays locked to
-the iron.
+- **Deterministic perimeter stitching** — two pieces with the same outline and
+  settings get *byte-identical* hole layouts automatically. Duplicate a panel and
+  the holes already match.
+- **Mirror-safe** — flip a piece to laser it from the back (`Mirror`) and the
+  holes stay registered, hole-for-hole.
+- **Shared stitch line (seam)** — for pieces with *different* outlines that share
+  one edge, draw one seam and every piece against it gets the same holes.
 
-It also does what leatherworkers do by hand: **nudges the effective pitch a few
-percent** so a whole number of holes lands cleanly on every corner and on both
-ends of an open seam (the `fit` modes).
+Verify any of it visually by dragging one piece on top of another and dropping the
+opacity — the tool is built for exactly that overlay check.
 
-## Quick start
+## Install & run
 
 ```bash
 git clone <this repo>
 cd Leather-Drafting
-pip install -e .          # no dependencies; Python 3.9+
-python examples/card_holder.py
+pip install -e ".[gui]"        # installs PySide6; Python 3.9+
+python -m leathercad_app       # or: leather-drafting
 ```
+
+On **Windows/macOS** the PySide6 wheel is self-contained. On headless **Linux**
+you may need system libs: `sudo apt-get install libegl1 libgl1 libxkbcommon0`.
+
+The engine alone (spacing, geometry, export) has **zero dependencies** — you only
+need PySide6 for the GUI.
+
+## Using the app
+
+| | |
+|---|---|
+| **Draw** | Rectangle `R`, Rounded rect `O`, Ellipse `E`, Circle `C`, Polygon `P` (click points, double-click to finish) |
+| **Seam** | Stitch line `L` — a shared seam for cross-piece registration |
+| **Select / move** | `S` — drag to move, drag one piece over another to check fit |
+| **Radius corners** | select a rectangle/polygon, set *Corner radius* in Properties |
+| **Iron & holes** | per shape: pick an iron (mm or SPI), inset, round or slanted-slit holes, live hole count + spacing readout |
+| **Layers → laser jobs** | colour-coded Cut / Score / Engrave / Stitch layers with visibility |
+| **Duplicate / Delete / Fit** | `Ctrl+D` / `Del` / `F` |
+| **Zoom / pan** | mouse wheel / middle-drag |
+| **Save / Open** | `Ctrl+S` / `Ctrl+O` (JSON project files) |
+| **Export** | SVG `Ctrl+E` or DXF — millimetre-accurate, layer-coloured |
+
+Everything is in **millimetres**, Y-up, and the canvas is WYSIWYG with the export.
+
+## Scripting API (no GUI needed)
+
+The whole model is usable headless — handy for parametric patterns:
 
 ```python
-import math
-from leathercad import PathBuilder, stitch_path, get_iron, export_svg
+from leathercad import Document, Rectangle, Transform, StitchSettings, get_iron, export
 
-iron = get_iron("3.85mm")          # or Iron.from_spi(7), or a raw pitch in mm
+doc = Document("wallet")
+iron = get_iron("3.85mm")
+for x in (0, 120):                       # front + lining, placed apart
+    doc.add_shape(Rectangle(
+        width=95, height=65, corner_radius=10,
+        transform=Transform(x=x, y=0),
+        stitch=StitchSettings(pitch_mm=iron.pitch_mm, inset=3.5,
+                              hole_style="slit", slit_angle=30),
+        layer="Cut"))
 
-# A rounded-corner card sleeve, corners tagged so a hole lands on each one.
-b = PathBuilder().move_to(8, 0)
-b.line_to(82, 0)
-b.arc_to(82, 8, -math.pi/2, 0.0).corner()
-b.line_to(90, 52)
-b.arc_to(82, 52, 0.0, math.pi/2).corner()
-b.line_to(8, 60)
-b.arc_to(8, 52, math.pi/2, math.pi).corner()
-b.line_to(0, 8)
-b.arc_to(8, 8, math.pi, 1.5*math.pi).corner()
-b.close(corner=False)
-path = b.build()
-
-stitches = stitch_path(path, pitch=iron.pitch_mm, fit="closed")
-
-export_svg("sleeve.svg",
-           cut_polylines=[path.flatten()],
-           stitches=stitches,
-           slit_length=1.6, slit_angle_deg=30)   # diamond-awl slant
+export.export_svg(doc, "wallet.svg")
+export.export_dxf(doc, "wallet.dxf")
+doc.save("wallet.leathercad.json")
 ```
 
-The SVG is sized in real millimetres (1 user unit = 1 mm), with the outline on a
-red `cut` layer and holes on a blue `holes` layer, ready to drop into your laser
-software.
-
-## Key concepts
-
-| Concept | What it does |
-|---|---|
-| `PathBuilder` | Turtle-style builder: `move_to`, `line_to`, `arc_to`, `cubic_to`, `quad_to`, `close`. Curves flatten to a fine polyline automatically. |
-| `.corner()` | Tags the current point as a corner — a hole is forced there and each edge between corners is fitted independently. |
-| `stitch_path(..., mode=)` | `"chord"` = pricking-iron accurate (default). `"arclength"` = the naive method, for comparison. |
-| `stitch_path(..., fit=)` | `"auto"` / `"endpoints"` / `"closed"` / `"none"`. Fitting nudges the pitch (within `max_dev`, default 12%) so holes land on corners and ends. |
-| `irons` | `spi_to_mm`, `mm_to_spi`, `Iron.from_spi`, and a table of common pitches (`get_iron("4.0mm")`). |
-| SVG holes | Round holes (`hole_diameter`) or slanted slits (`slit_length` + `slit_angle_deg`) oriented to the local tangent. |
-
-## How the spacing engine works
-
-1. The path (lines, arcs, Béziers) is flattened to a fine polyline (0.02 mm
-   tolerance — well below any laser kerf).
-2. **Chord marching:** from the current hole, intersect a circle of radius =
-   pitch with the path, forward, and take the outward crossing. That point is
-   the next hole. Repeat. (`leathercad/stitching.py`)
-3. **Fitting:** for each span between corners (or between the two ends of an
-   open seam), binary-search the pitch so an integer number of chord steps lands
-   exactly on the far anchor — within `max_dev`, else fall back to exact pitch.
-
-Run the tests to see the guarantees, including "chord spacing equals the pitch
-exactly on a circle" and "arc-length spacing is measurably short":
+Runnable examples:
 
 ```bash
-pip install pytest && pytest
+python examples/wallet_document.py   # builds a doc, proves registration, exports
+python examples/card_holder.py       # engine demo: chord vs arc-length on a curve
+```
+
+## Tests
+
+```bash
+pip install -e ".[dev]" && QT_QPA_PLATFORM=offscreen pytest
+```
+
+The suite proves the guarantees that matter: chord spacing equals the iron pitch
+on curves while arc-length spacing is measurably short; identical and mirrored
+pieces get registered holes; save/load and SVG/DXF export round-trip.
+
+## Project layout
+
+```
+leathercad/            pure-Python model + engine (no dependencies)
+  geometry.py          Vec2 / vector math
+  path.py              segments (line/arc/bezier), Path, PathBuilder, flattening
+  offset.py            inward polygon offset (stitch-line inset)
+  stitching.py         chord/arc marching + fitting + registration  <- the core
+  stitchsettings.py    per-shape/seam stitch config
+  shapes.py            Rectangle/Ellipse/Circle/Polygon/PathShape + transform + fillet
+  layers.py            colour layers -> laser jobs
+  stitchline.py        shared seam for cross-piece registration
+  document.py          the CAD document + JSON save/load
+  irons.py             pricking-iron pitch / SPI presets
+  export.py            SVG + DXF exporters
+leathercad_app/        PySide6 desktop app
+  canvas.py            mm-accurate Y-up QGraphicsView, tools, grid, zoom/pan
+  items.py             shape/seam graphics items with live hole rendering
+  panels.py            properties + layers docks
+  mainwindow.py        window, toolbar, menus, export wiring
+  __main__.py          python -m leathercad_app
+examples/  tests/  docs/
 ```
 
 ## Roadmap
 
-- [x] Path model (lines, arcs, quadratic/cubic Béziers) + adaptive flattening
-- [x] Chord (pricking-iron) stitch spacing + arc-length for comparison
-- [x] Corner/endpoint fitting (integer hole counts, per-edge pitch nudging)
-- [x] Iron / SPI presets and conversions
-- [x] Laser-ready SVG export (mm-accurate, cut + holes layers, round or slit holes)
-- [ ] Two-sided seam registration (holes aligned across a fold/join)
-- [ ] Backstitch / start-stop hole conventions
-- [ ] DXF export
-- [ ] Boolean ops and offset (seam allowance / stitch-line offset from the edge)
-- [ ] Interactive GUI (draw, tag corners, live hole preview)
-
-## Layout
-
-```
-leathercad/
-  geometry.py    Vec2 and vector math (dependency-free)
-  path.py        Segments (Line/Arc/Bezier), Path, PathBuilder, flattening
-  stitching.py   Polyline + chord/arc marching + fitting  <- the core
-  irons.py       Pricking-iron pitch / SPI presets
-  svg.py         mm-accurate laser SVG export
-examples/card_holder.py
-tests/test_stitching.py
-```
+- [x] Draw rectangles / rounded rects / ellipses / circles / polygons
+- [x] Radius (fillet) corners
+- [x] Move & overlay shapes (opacity) to verify sizing
+- [x] Per-shape pricking-iron sizes (mm or SPI), round or slanted-slit holes
+- [x] Chord (iron-accurate) spacing with corner/endpoint fitting
+- [x] Cross-piece registration (deterministic + mirror-safe + shared seams)
+- [x] Colour layers → laser jobs
+- [x] SVG + DXF export, JSON project save/load
+- [ ] Snapping / alignment guides / numeric dimension entry while drawing
+- [ ] Edit polygon/seam vertices after creation; add holes/skives/slots
+- [ ] Two-row saddle-stitch offset and backstitch conventions
+- [ ] Boolean ops (windows, cut-outs) and true seam-allowance offset
+- [ ] Undo/redo history
 
 ## License
 

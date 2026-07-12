@@ -188,6 +188,8 @@ class Path:
     closed: bool = False
     # Arc-length positions (mm) at which a stitch hole must be forced.
     corners: List[float] = field(default_factory=list)
+    # The same corners as geometric points -- robust under insetting/transform.
+    corner_points: List[Vec2] = field(default_factory=list)
 
     def flatten(self, flatness: float = DEFAULT_FLATNESS) -> List[Vec2]:
         if not self.segments:
@@ -273,7 +275,8 @@ class PathBuilder:
 
     def build(self, flatness: float = DEFAULT_FLATNESS) -> Path:
         path = Path(segments=list(self._segments), closed=self._closed)
-        # Resolve corner arc-length positions against the flattened polyline.
+        # Resolve corner arc-length positions against the flattened polyline,
+        # and keep the geometric corner points (robust under inset/transform).
         if self._corner_points:
             pts = path.flatten(flatness)
             cum = _cumulative_lengths(pts)
@@ -281,6 +284,7 @@ class PathBuilder:
             for cp in self._corner_points:
                 positions.append(_nearest_arclen(pts, cum, cp))
             path.corners = sorted(set(round(p, 6) for p in positions))
+            path.corner_points = list(self._corner_points)
         return path
 
 

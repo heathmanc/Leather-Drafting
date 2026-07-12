@@ -291,7 +291,10 @@ def bake_text_contours(text, family, size_mm):
     the cap height is ``size_mm``. Done here (Qt layer) so the engine stays
     Qt-free; the result is stored as plain polylines on the text model."""
     from PySide6.QtGui import QFont, QPainterPath, QFontMetricsF
-    font = QFont(family or "Sans")
+    font = QFont()
+    if family and family != "Sans":
+        font.setFamily(family)          # avoid the missing-"Sans" alias lookup
+    font.setStyleHint(QFont.SansSerif)
     font.setPointSizeF(100.0)
     fm = QFontMetricsF(font)
     cap = fm.capHeight() or fm.ascent() or 100.0

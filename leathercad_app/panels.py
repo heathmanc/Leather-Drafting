@@ -16,7 +16,7 @@ from leathercad.irons import PRESETS
 from leathercad.stitchsettings import StitchSettings
 from leathercad.shapes import Rectangle, Ellipse, Circle, Polygon, PathShape
 from leathercad.layers import Layer, ROLES
-from .items import ShapeItem, StitchLineItem, HoleItem
+from .items import ShapeItem, StitchLineItem, HoleItem, DimensionItem, TextItem
 
 try:
     import shiboken6
@@ -251,6 +251,15 @@ class PropertiesPanel(QWidget):
             self._update_readout()
             return
 
+        # annotations (dimension / text) have no stitch/geometry properties
+        if isinstance(it, (DimensionItem, TextItem)):
+            self.g_stitch.setCheckable(False)
+            self.g_stitch.setTitle(
+                "Dimension" if isinstance(it, DimensionItem) else "Text")
+            self._loading = False
+            self._update_readout()
+            return
+
         if is_shape:
             sh = it.model
             self.pos_x.setValue(sh.transform.x)
@@ -407,6 +416,8 @@ class PropertiesPanel(QWidget):
             self._item = None
             return
         it = self._item
+        if isinstance(it, (DimensionItem, TextItem)):
+            return                          # annotations have no editable props
         if isinstance(it, HoleItem):
             self._write_hole_style(it.hole)
             self._sync_hole_vis()
@@ -514,6 +525,12 @@ class PropertiesPanel(QWidget):
         if isinstance(it, HoleItem):
             self.readout.setText("<b>1 hole</b> (ungrouped)<br>"
                                  "move or Delete freely; right-click to group")
+            return
+        if isinstance(it, DimensionItem):
+            self.readout.setText(f"<b>Dimension</b><br>{it.dim.label()}")
+            return
+        if isinstance(it, TextItem):
+            self.readout.setText(f"<b>Text</b><br>“{it.model.text}”")
             return
         if isinstance(it, ShapeItem) and it.model.baked_holes:
             self.readout.setText(

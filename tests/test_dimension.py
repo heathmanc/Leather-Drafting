@@ -35,3 +35,36 @@ def test_measure_readout(qapp=None):
     c = cm.Canvas(Document())
     msg = c._measure_text(QPointF(0, 0), QPointF(30, 40))
     assert "length 50.00 mm" in msg and "dx 30.00" in msg
+
+
+def test_properties_panel_handles_annotation_selection():
+    # Regression: selecting a Dimension or Text must not crash the Properties
+    # panel (it used to assume any non-shape/hole item was a seam with .line).
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    from leathercad.dimension import Dimension
+    from leathercad.text import TextShape
+    from leathercad.shapes import Transform
+    from leathercad.geometry import Vec2
+    from leathercad_app.items import bake_text_contours, DimensionItem, TextItem
+
+    doc = Document()
+    doc.dimensions.append(Dimension(p1=Vec2(0, 0), p2=Vec2(40, 30)))
+    doc.texts.append(TextShape(
+        text="Hi",
+        contours=[[Vec2(p.x, p.y) for p in c] for c in bake_text_contours("Hi", "Sans", 8)],
+        transform=Transform(x=5, y=5), layer="Engrave"))
+    win = MainWindow(doc)
+    win.canvas.rebuild()
+    dim = next(it for it in win.canvas.scene_obj.items() if isinstance(it, DimensionItem))
+    txt = next(it for it in win.canvas.scene_obj.items() if isinstance(it, TextItem))
+    dim.setSelected(True)
+    win._selection_changed()
+    assert "Dimension" in win.properties.readout.text()
+    win.canvas.scene_obj.clearSelection()
+    txt.setSelected(True)
+    win._selection_changed()
+    assert "Text" in win.properties.readout.text()
+    win.properties._apply()   # must be a no-op, not a crash

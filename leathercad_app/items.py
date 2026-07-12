@@ -267,6 +267,12 @@ class ShapeItem(QGraphicsItem):
         node_locals = [p for p, _k in self._snap_typed_local]
         self._snap_local = node_locals
         self._snap_offsets = [t.apply_dir(p) for p in node_locals]
+        self._snap_offset_kinds = [k for _p, k in self._snap_typed_local]
+        # For a circle / ellipse the meaningful anchor is the centre (Fusion /
+        # LightBurn lock a circle by its centre); its quadrants otherwise steal
+        # the snap.  Flag it so the canvas prefers the centre while dragging.
+        from leathercad.shapes import Circle, Ellipse
+        self._center_snap_priority = isinstance(self.model, (Circle, Ellipse))
         self._hole_locals = []          # local stitch-hole centres (set below)
 
         self._holes = None

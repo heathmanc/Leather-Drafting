@@ -555,18 +555,28 @@ class Canvas(QGraphicsView):
         if not offsets:
             return value
         thr = 12.0 / self._zoom
-        best = None
-        best_target = None
-        best_d = thr
         vx, vy = value.x(), value.y()
-        for off in offsets:
-            nx, ny = vx + off.x, vy + off.y
-            for s in self._snap_cache:
-                d = ((nx - s.x) ** 2 + (ny - s.y) ** 2) ** 0.5
-                if d < best_d:
-                    best_d = d
-                    best = QPointF(s.x - off.x, s.y - off.y)
-                    best_target = s
+
+        def _best(cand_offsets):
+            bd, bp, bt = thr, None, None
+            for off in cand_offsets:
+                nx, ny = vx + off.x, vy + off.y
+                for s in self._snap_cache:
+                    d = ((nx - s.x) ** 2 + (ny - s.y) ** 2) ** 0.5
+                    if d < bd:
+                        bd, bp, bt = d, QPointF(s.x - off.x, s.y - off.y), s
+            return bp, bt
+
+        best = best_target = None
+        # Circles / ellipses lock by their centre first: try centre-only, and
+        # only fall back to quadrants if the centre finds no target in range.
+        if getattr(item, "_center_snap_priority", False):
+            kinds = getattr(item, "_snap_offset_kinds", [])
+            centre = [o for o, k in zip(offsets, kinds) if k == "center"]
+            if centre:
+                best, best_target = _best(centre)
+        if best is None:
+            best, best_target = _best(offsets)
         if best is not None:
             self._show_snap_marker(QPointF(best_target.x, best_target.y), "end")
             return best
@@ -623,9 +633,7 @@ class Canvas(QGraphicsView):
         pos = raw
         if self.tool != SELECT:
             pos, _v = self.snap(pos)
-            if (event.modifiers() & Qt.ShiftModifier and self._start is not None
-                    and self.tool in (LINE, CONSTRUCTION)):
-                pos = self._apply_ortho(self._start, raw)
+            pos, _o = self._maybe_ortho(raw, pos, event)
         if self.tool == SELECT:
             return super().mousePressEvent(event)
         if event.button() == Qt.LeftButton:
@@ -668,6 +676,23 @@ class Canvas(QGraphicsView):
         return QPointF(start.x() + length * math.cos(ang),
                        start.y() + length * math.sin(ang))
 
+    def _ortho_anchor(self) -> QPointF | None:
+        """The point ortho locks are measured from for the current tool."""
+        if self._start is not None and self.tool in (LINE, CONSTRUCTION):
+            return self._start
+        if self._poly_pts and self.tool in _POLY_TOOLS:
+            return self._poly_pts[-1]
+        return None
+
+    def _maybe_ortho(self, raw: QPointF, pos: QPointF, event) -> tuple[QPointF, bool]:
+        """Return (pos, applied): lock to 0/45/90 from the anchor when Shift held."""
+        if not (event.modifiers() & Qt.ShiftModifier):
+            return pos, False
+        anchor = self._ortho_anchor()
+        if anchor is None:
+            return pos, False
+        return self._apply_ortho(anchor, raw), True
+
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.MiddleButton and hasattr(self, "_pan_last"):
             delta = event.position() - self._pan_last
@@ -684,9 +709,8 @@ class Canvas(QGraphicsView):
         pos = raw
         if self.tool != SELECT:
             pos, vtx, guides, kind = self._smart_snap(raw)
-            if (event.modifiers() & Qt.ShiftModifier and self._start is not None
-                    and self.tool in (LINE, CONSTRUCTION)):
-                pos = self._apply_ortho(self._start, raw)   # 0/45/90 line
+            pos, applied = self._maybe_ortho(raw, pos, event)   # 0/45/90 lock
+            if applied:
                 guides, kind = [], None
             self._show_align_guides(guides)
             self._show_snap_nodes(raw)

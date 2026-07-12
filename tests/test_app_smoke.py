@@ -1104,6 +1104,51 @@ def test_escape_returns_to_pointer(qapp):
     assert c.tool == cm.SELECT
 
 
+def test_ortho_anchor_for_poly_tools(qapp):
+    # Shift-ortho must work for score / stitch (polyline) tools, anchored on the
+    # last placed point -- not just the 2-point line / construction tools.
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document
+
+    c = MainWindow(Document()).canvas
+    for tool in (cm.SCORE, cm.STITCHLINE, cm.POLYGON):
+        c.tool = tool
+        c._poly_pts = [QPointF(10, 10)]
+        assert c._ortho_anchor() == QPointF(10, 10)
+        locked = c._apply_ortho(c._ortho_anchor(), QPointF(40, 18))
+        assert round(locked.y(), 1) == 10.0     # forced horizontal
+    # no anchor yet -> no ortho
+    c._poly_pts = []
+    assert c._ortho_anchor() is None
+
+
+def test_circle_drag_locks_center(qapp):
+    # Dragging a circle must lock its CENTRE to nearby object nodes, even though
+    # its quadrants sit closer to the cursor.
+    from PySide6.QtCore import QPointF
+    from leathercad_app import canvas as cm
+    from leathercad.shapes import Circle, Rectangle, Transform
+    from leathercad.document import Document
+
+    doc = Document()
+    doc.add_shape(Rectangle(width=20, height=20, transform=Transform(x=40, y=40)))
+    circ = Circle(rx=5, ry=5, transform=Transform(x=48, y=48))
+    doc.add_shape(circ)
+    c = cm.Canvas(doc)
+    c.snap_to_nodes = True
+    c.snap_to_grid = False
+    c.rebuild()
+    citem = next(it for it in c.scene_obj.items()
+                 if getattr(it, "model", None) is circ)
+    assert getattr(citem, "_center_snap_priority", False) is True
+    c.begin_move_snap(citem)
+    # rect corner is at (50, 50); nudging the centre there must lock the centre
+    res = c.snap_move(citem, QPointF(49.6, 49.6))
+    assert round(res.x(), 2) == 50.0 and round(res.y(), 2) == 50.0
+
+
 def test_line_length_and_angle_field(qapp):
     import math
     from leathercad_app.mainwindow import MainWindow

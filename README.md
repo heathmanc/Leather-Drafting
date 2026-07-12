@@ -32,12 +32,13 @@ It also nudges the pitch a few percent (within a limit you set) so a whole numbe
 of holes lands cleanly on **every corner** and on **both ends** of an open seam —
 the thing leatherworkers do by hand.
 
-On a **rounded corner** every arc is fitted as its own span, so the holes come
-out **symmetric about the arc's midpoint** — either a stitch sitting right on the
-45° apex or an even pair straddling it, never a lone hole landing off-centre. Pick
-`auto` (whichever count best matches your iron), `midpoint`, or `straddle` per
-shape. A happy side effect: a symmetric outline now gets flip-symmetric holes for
-free.
+On a **rounded corner** the holes come out **symmetric about the arc's
+midpoint** — either a stitch sitting right on the 45° apex or an even pair
+straddling it, never a lone hole landing off-centre. A generous corner is fitted
+as its own span; a **tight corner** collapses to a single clean hole on the apex
+instead of cramming several holes into a couple of millimetres. Pick `auto`
+(whichever count best matches your iron), `midpoint`, or `straddle` per shape. A
+happy side effect: a symmetric outline now gets flip-symmetric holes for free.
 
 ![corner hole placement: auto / midpoint / straddle](docs/corner_zoom.png)
 

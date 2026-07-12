@@ -247,15 +247,15 @@ def fit_pitch_for_count(poly: Polyline, n_intervals: int, start_s: float,
 
 def _best_fit_span(poly: Polyline, target_pitch: float, start_s: float,
                    end_s: float, max_dev: float, parity: Optional[str] = None,
-                   force: bool = False):
+                   symmetric_fallback: bool = False):
     """Choose an integer hole count for one span and return (pitch, n).
 
-    ``parity`` ('even' | 'odd' | None) restricts the number of intervals so a
-    rounded corner arc lands a hole on its apex (even) or straddles it (odd).
-    When ``force`` is set the parity is honoured even if it means exceeding
-    ``max_dev`` -- the user asked for that corner look, so spacing fidelity
-    yields to it; otherwise a parity that can't be met within ``max_dev`` just
-    falls back like any unfittable span.
+    Prefers a count whose pitch stays within ``max_dev`` of the target. If none
+    does and ``symmetric_fallback`` is set (every span of a closed outline), the
+    closest-pitch count is used anyway rather than returning ``None`` -- a corner
+    arc must place its holes *symmetrically* even when no count hits the pitch
+    exactly, so we never drop back to a lopsided plain march there. ``parity``
+    ('odd') forces an even pair to straddle a bare apex.
     """
     span = end_s - start_s
     if span <= _EPS:
@@ -267,52 +267,122 @@ def _best_fit_span(poly: Polyline, target_pitch: float, start_s: float,
             return n % 2 == 0 and n >= 2   # >=2 so a hole lands on the apex
         if parity == "odd":
             return n % 2 == 1 and n >= 1
-        return True
+        return n >= 1
 
-    if force and parity:
-        best = None
-        for n in range(max(1, n0 - 3), n0 + 4):
-            if not ok_parity(n):
-                continue
-            p = fit_pitch_for_count(poly, n, start_s, end_s)
-            if p is None:
-                continue
-            dev = abs(p - target_pitch) / target_pitch
-            if best is None or dev < best[2]:
-                best = (p, n, dev)
-        return (best[0], best[1]) if best else (target_pitch, None)
-
-    best = None
-    for n in (n0 - 1, n0, n0 + 1, n0 + 2):
-        if n < 1 or not ok_parity(n):
+    within = []
+    allc = []
+    for n in range(max(1, n0 - 3), n0 + 4):
+        if not ok_parity(n):
             continue
         p = fit_pitch_for_count(poly, n, start_s, end_s)
         if p is None:
             continue
         dev = abs(p - target_pitch) / target_pitch
-        if dev <= max_dev and (best is None or dev < best[2]):
-            best = (p, n, dev)
-    if best is None:
-        return target_pitch, None  # caller falls back to plain marching
-    return best[0], best[1]
+        allc.append((dev, p, n))
+        if dev <= max_dev:
+            within.append((dev, p, n))
+    if within:
+        within.sort()
+        return within[0][1], within[0][2]
+    if symmetric_fallback and allc:
+        allc.sort()
+        return allc[0][1], allc[0][2]
+    return target_pitch, None  # caller falls back to plain marching
 
 
-def _span_is_arc(poly: Polyline, a: float, b: float, tol: float = 0.1) -> bool:
-    """True if the outline between arc-lengths ``a`` and ``b`` curves (an arc),
-    as opposed to a straight edge. Detected by the bulge of interior samples off
-    the chord -- a 90-degree corner arc bulges far more than the flattening
-    tolerance, a straight edge not at all."""
-    pa, pb = poly.point_at(a), poly.point_at(b)
+def _span_is_arc(poly: Polyline, a: float, span_len: float, total: float,
+                 tol: float = 0.1) -> bool:
+    """True if the outline over the (possibly wrapping) span starting at ``a`` of
+    length ``span_len`` curves (a rounded corner), as opposed to a straight edge.
+    Detected by the bulge of interior samples off the chord -- a corner arc
+    bulges far more than the flattening tolerance, a straight edge not at all."""
+    pa = poly.point_at(a % total)
+    pb = poly.point_at((a + span_len) % total)
     chord = pb - pa
     length = chord.length()
     if length <= _EPS:
         return False
     max_dev = 0.0
     for k in range(1, 8):
-        p = poly.point_at(a + (b - a) * k / 8.0)
+        p = poly.point_at((a + span_len * k / 8.0) % total)
         dev = abs((p.x - pa.x) * chord.y - (p.y - pa.y) * chord.x) / length
         max_dev = max(max_dev, dev)
     return max_dev > tol
+
+
+def _plan_corners(poly: Polyline, cor: List[float], settings):
+    """Decide where holes are forced around a closed outline's corners.
+
+    Given the projected corner anchor arc-lengths ``cor`` (sharp corners plus the
+    tangent points of every rounded arc), classify each span between consecutive
+    anchors. A straight span is ignored here (it gets filled later). A curved
+    span is a rounded corner and is handled so its holes stay **symmetric about
+    the arc midpoint without ever cramming**:
+
+      * A corner too small to hold two holes a full pitch apart collapses to a
+        single hole on the arc apex (the neighbours land on the straight edges).
+        This is the fix for tight radii, where forcing a hole at each tangent
+        point used to pile 3+ holes into a couple of millimetres.
+      * A large corner keeps its two tangent points as span anchors so the arc
+        is fitted on its own -> holes at equal angular steps, symmetric about the
+        apex. ``corner_style`` then biases it: ``midpoint`` also anchors the apex
+        (a hole sits on it), ``straddle`` forces an odd count (the apex stays
+        bare), ``auto`` takes whatever count best matches the iron.
+
+    Returns ``(forced, straddle)``: the set of arc-lengths that must be holes,
+    and the set of ``(a, b)`` arc spans whose fit must be forced odd.
+    """
+    total = poly.length
+    p = settings.pitch_mm
+    style = getattr(settings, "corner_style", "auto")
+    # Merge near-coincident anchors (e.g. a corner whose inset collapsed the arc
+    # to a point when the inset >= the radius) so it becomes one hole, not two
+    # stacked on top of each other.
+    merge = min(0.3, 0.1 * p)
+    cor_sorted = sorted({c % total for c in cor})
+    cor_set: List[float] = []
+    for c in cor_sorted:
+        if not cor_set or (c - cor_set[-1]) > merge:
+            cor_set.append(c)
+    if len(cor_set) >= 2 and (total - cor_set[-1] + cor_set[0]) <= merge:
+        cor_set.pop()          # last wraps onto the first -- same point
+    forced: set = set()
+    straddle: set = set()
+    used: set = set()
+    m = len(cor_set)
+    for i in range(m):
+        a = cor_set[i]
+        b = cor_set[(i + 1) % m]
+        span_len = (b - a) % total
+        if span_len <= _EPS or not _span_is_arc(poly, a, span_len, total):
+            continue
+        arc_len = span_len
+        chord_tt = (poly.point_at(a) - poly.point_at(b)).length()
+        apex = (a + arc_len / 2.0) % total
+        used.add(a)
+        used.add(b)
+        if style == "midpoint":
+            # a hole on the apex; add the tangents too only if there is room
+            # for a full extra pitch on each side (else just the apex).
+            if arc_len >= 2.0 * p * 0.95:
+                forced |= {a, b, apex}
+            else:
+                forced.add(apex)
+        elif style == "straddle":
+            if chord_tt >= p * 0.98:
+                forced |= {a, b}
+                straddle.add((a, b))
+            else:
+                forced.add(apex)          # too tight to straddle -> apex hole
+        else:  # auto
+            if chord_tt >= p * 0.98:
+                forced |= {a, b}          # arc fitted on its own (symmetric)
+            else:
+                forced.add(apex)          # tight corner -> single apex hole
+    for c in cor_set:
+        if c not in used:                 # a genuine sharp corner
+            forced.add(c)
+    return forced, straddle
 
 
 # ---------------------------------------------------------------------------
@@ -591,24 +661,7 @@ def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
     poly = Polyline(pts)
     if poly.length <= _EPS:
         return StitchResult(closed=closed)
-
-    # Symmetry: rotate so the outline starts at one axis crossing and anchor a
-    # hole at the other. That splits the loop into the two mirror-image halves;
-    # each is fitted deterministically, so the holes come out flip-symmetric.
-    sym = getattr(settings, "symmetry", "none")
-    if closed and sym in ("vertical", "horizontal"):
-        crossings = _axis_crossings(poly, sym)
-        if len(crossings) >= 2:
-            poly = Polyline(_rotate_closed_ring(list(poly.points), crossings[0]))
-            cor = sorted(poly.nearest_arclength(cp) for cp in (corner_points or []))
-            other = [s for s in _axis_crossings(poly, sym) if s > 1e-6]
-            if other:
-                cor = sorted(set(cor) | {other[0]})
-        else:
-            cor = sorted(poly.nearest_arclength(cp) for cp in (corner_points or []))
-    else:
-        # Project corner points onto the (possibly inset) stitch line.
-        cor = sorted(poly.nearest_arclength(cp) for cp in (corner_points or []))
+    total = poly.length
 
     fit = settings.fit
     if fit == "auto":
@@ -619,25 +672,66 @@ def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
         return _apply_rows(_result_from_positions(
             poly, positions, [settings.pitch_mm], closed), settings)
 
-    anchors = _anchors_from(cor, poly.length, closed, fit)
+    # Symmetry: rotate so the outline starts at one axis crossing and anchor a
+    # hole at the other. That splits the loop into the two mirror-image halves;
+    # each is fitted deterministically, so the holes come out flip-symmetric.
+    sym = getattr(settings, "symmetry", "none")
+    symmetric = closed and sym in ("vertical", "horizontal")
+    axis_forced: set = set()
+    if symmetric:
+        crossings = _axis_crossings(poly, sym)
+        if len(crossings) >= 2:
+            poly = Polyline(_rotate_closed_ring(list(poly.points), crossings[0]))
+            total = poly.length
+            other = [s for s in _axis_crossings(poly, sym) if s > 1e-6]
+            if other:
+                axis_forced.add(other[0])
+        else:
+            symmetric = False
+
+    cor = [poly.nearest_arclength(cp) for cp in (corner_points or [])]
+
+    straddle: set = set()
+    if closed:
+        # Plan corner holes: single apex hole on tight radii (no cramming),
+        # a fitted arc span on generous ones. See _plan_corners.
+        forced, straddle = _plan_corners(poly, cor, settings)
+        forced |= axis_forced
+        # The span machinery needs a hole at arc-length 0. The final hole set is
+        # invariant to which corner we start at (each span is fitted from its own
+        # geometry), so for a plain shape just rotate 0 onto the first corner;
+        # a symmetric shape already starts on its axis crossing.
+        if not symmetric and forced:
+            rot = min(forced)
+            if rot > _EPS:
+                poly = Polyline(_rotate_closed_ring(list(poly.points), rot))
+                total = poly.length
+                forced = {(s - rot) % total for s in forced}
+                straddle = {((a - rot) % total, (b - rot) % total)
+                            for (a, b) in straddle}
+        corners_for_anchors = sorted(forced)
+    else:
+        corners_for_anchors = sorted(set(cor))
+
+    anchors = _anchors_from(corners_for_anchors, total, closed, fit)
     if anchors is None:
         positions = march_chord(poly, settings.pitch_mm)
         return _apply_rows(_result_from_positions(
             poly, positions, [settings.pitch_mm], closed), settings)
 
-    corner_style = getattr(settings, "corner_style", "auto")
-    want_parity = corner_style in ("midpoint", "straddle")
+    straddle_keys = {(round(a, 4), round(b, 4)) for (a, b) in straddle}
 
     positions: List[float] = []
     pitches: List[float] = []
-    for a, b in _spans(anchors, closed, poly.length):
+    for a, b in _spans(anchors, closed, total):
         parity = None
-        force = False
-        if want_parity and _span_is_arc(poly, a, b):
-            parity = "even" if corner_style == "midpoint" else "odd"
-            force = True
+        # the wrap span ends at ``total``; straddle keys use it mod total (0.0)
+        b_key = 0.0 if abs(b - total) < 1e-6 else b
+        if (round(a, 4), round(b_key, 4)) in straddle_keys:
+            parity = "odd"          # straddle: an even pair around a bare apex
         p_eff, n = _best_fit_span(poly, settings.pitch_mm, a, b,
-                                  settings.max_dev, parity, force)
+                                  settings.max_dev, parity,
+                                  symmetric_fallback=closed)
         if n is None:
             span_positions = march_chord(poly, settings.pitch_mm, a, b)
             pitches.append(settings.pitch_mm)

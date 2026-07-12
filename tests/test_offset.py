@@ -45,3 +45,32 @@ def test_offset_command_makes_new_shape(qapp=None):
     assert len(doc.shapes) == 2
     b = doc.shapes[-1].bounds()
     assert tuple(round(v, 1) for v in b) == (25.0, 30.0, 75.0, 70.0)
+
+
+def test_array_grid_and_circular():
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    import leathercad_app.canvas as cm
+    from leathercad.document import Document, LooseHole
+    from leathercad.geometry import Vec2
+
+    doc = Document()
+    doc.holes.append(LooseHole(point=Vec2(0, 0)))
+    c = cm.Canvas(doc)
+    c.rebuild()
+    h = next(it for it in c.scene_obj.items() if getattr(it, "hole", None))
+    h.setSelected(True)
+    c.array_grid(2, 3, 10, 8)
+    pts = {(round(x.point.x), round(x.point.y)) for x in doc.holes}
+    assert len(doc.holes) == 6
+    assert (20, 8) in pts and (0, 0) in pts
+
+    doc2 = Document()
+    doc2.holes.append(LooseHole(point=Vec2(20, 0)))
+    c2 = cm.Canvas(doc2)
+    c2.rebuild()
+    h2 = next(it for it in c2.scene_obj.items() if getattr(it, "hole", None))
+    h2.setSelected(True)
+    c2.array_circular(4, 0, 0, 360, True)
+    pts2 = {(round(x.point.x), round(x.point.y)) for x in doc2.holes}
+    assert pts2 == {(20, 0), (0, 20), (-20, 0), (0, -20)}

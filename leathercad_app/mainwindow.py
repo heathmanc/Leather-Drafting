@@ -255,6 +255,7 @@ class MainWindow(QMainWindow):
         self._add(em, "Join / weld segments", "Ctrl+J", lambda: self.canvas.join_selected())
         self._add(em, "Offset / seam allowance…", "Ctrl+Shift+O",
                   self._offset_selected)
+        self._add(em, "Array…", "Ctrl+Shift+R", self._array_selected)
         em.addSeparator()
         self._add(em, "Make back piece (mirror)", "Ctrl+M",
                   self.canvas.make_back_piece_selected)
@@ -405,6 +406,22 @@ class MainWindow(QMainWindow):
             3.0, -100.0, 100.0, 2)
         if ok:
             self.canvas.offset_selected(dist)
+
+    def _array_selected(self):
+        from .arraydialog import ArrayDialog
+        if not self.canvas.selected_items():
+            QMessageBox.information(self, "Array",
+                                   "Select something to array first.")
+            return
+        dlg = ArrayDialog(self, center=self.canvas.selection_center())
+        if dlg.exec() != ArrayDialog.Accepted:
+            return
+        mode, p = dlg.result_params()
+        if mode == "grid":
+            self.canvas.array_grid(p["rows"], p["cols"], p["dx"], p["dy"])
+        else:
+            self.canvas.array_circular(p["count"], p["cx"], p["cy"],
+                                       p["total_deg"], p["rotate_items"])
 
     def _zoom(self, factor):
         self.canvas._zoom = max(0.3, min(40.0, self.canvas._zoom * factor))

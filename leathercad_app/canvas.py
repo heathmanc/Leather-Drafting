@@ -1313,6 +1313,130 @@ class Canvas(QGraphicsView):
             self.documentChangedSig.emit()
             self._emit_commit()
 
+    # -- array (grid / circular duplication) ---------------------------
+    def _clone_item(self, it, translate=(0.0, 0.0), pivot=None,
+                    pos_angle=0.0, orient_angle=0.0):
+        """Clone one selectable item, rotating its POSITION around ``pivot`` by
+        ``pos_angle`` degrees (if given), optionally rotating its ORIENTATION by
+        ``orient_angle``, then translating. Fresh ids, ungrouped."""
+        import copy
+        import math
+        from leathercad.geometry import Vec2
+        from leathercad.shapes import _next_id as _sid
+        from leathercad.holes import _next_id as _hid
+        from leathercad.stitchline import _next_id as _lid
+
+        def place(p):
+            x, y = p.x, p.y
+            if pivot is not None and abs(pos_angle) > 1e-12:
+                a = math.radians(pos_angle)
+                dx, dy = x - pivot[0], y - pivot[1]
+                x = pivot[0] + dx * math.cos(a) - dy * math.sin(a)
+                y = pivot[1] + dx * math.sin(a) + dy * math.cos(a)
+            return Vec2(x + translate[0], y + translate[1])
+
+        def spin(v):
+            if abs(orient_angle) < 1e-12:
+                return v
+            a = math.radians(orient_angle)
+            return Vec2(v.x * math.cos(a) - v.y * math.sin(a),
+                        v.x * math.sin(a) + v.y * math.cos(a))
+
+        if isinstance(it, ShapeItem):
+            sh = copy.deepcopy(it.model)
+            c = place(Vec2(sh.transform.x, sh.transform.y))
+            sh.transform.x, sh.transform.y = c.x, c.y
+            sh.transform.rotation += orient_angle
+            sh.shape_id = _sid("shape")
+            sh.group_id = None
+            self.doc.add_shape(sh)
+            return self._add_item(ShapeItem(sh, self))
+        if isinstance(it, HoleItem):
+            lh = copy.deepcopy(it.hole)
+            lh.point = place(lh.point)
+            lh.tangent = spin(lh.tangent)
+            lh.hole_id = _hid()
+            lh.group_id = None
+            self.doc.holes.append(lh)
+            return self._add_item(HoleItem(lh, self))
+        if isinstance(it, StitchLineItem):
+            sl = copy.deepcopy(it.line)
+            sl.points = [place(p) for p in sl.points]
+            sl.line_id = _lid()
+            sl.group_id = None
+            self.doc.add_stitch_line(sl)
+            return self._add_item(StitchLineItem(sl, self))
+        return None
+
+    def array_grid(self, rows: int, cols: int, dx: float, dy: float) -> None:
+        """Duplicate the selection into a rows x cols grid (the original stays
+        at cell 0,0); dx / dy are the world spacings in mm."""
+        sel = list(self.selected_items())
+        if not sel or rows < 1 or cols < 1:
+            return
+        made = []
+        self._suppress_commit = True
+        for r in range(rows):
+            for cc in range(cols):
+                if r == 0 and cc == 0:
+                    continue
+                for it in sel:
+                    m = self._clone_item(it, translate=(cc * dx, r * dy))
+                    if m:
+                        made.append(m)
+        self._suppress_commit = False
+        self._finish_array(made)
+
+    def array_circular(self, count: int, cx: float, cy: float,
+                       total_deg: float = 360.0, rotate_items: bool = True) -> None:
+        """Duplicate the selection ``count`` times around (cx, cy). A full 360°
+        spreads ``count`` copies evenly; a partial arc spans the copies across
+        ``total_deg``. ``rotate_items`` also spins each copy to face out."""
+        sel = list(self.selected_items())
+        if not sel or count < 2:
+            return
+        full = abs(total_deg % 360.0) < 1e-6 and abs(total_deg) > 1e-6
+        step = total_deg / count if full else total_deg / (count - 1)
+        made = []
+        self._suppress_commit = True
+        for k in range(1, count):
+            ang = step * k
+            for it in sel:
+                m = self._clone_item(it, pivot=(cx, cy), pos_angle=ang,
+                                     orient_angle=ang if rotate_items else 0.0)
+                if m:
+                    made.append(m)
+        self._suppress_commit = False
+        self._finish_array(made)
+
+    def _finish_array(self, made) -> None:
+        self.scene_obj.clearSelection()
+        for m in made:
+            m.setSelected(True)
+        if made:
+            self.documentChangedSig.emit()
+            self._emit_commit()
+
+    def selection_center(self):
+        """World centroid of the current selection's bounding box (array pivot
+        default)."""
+        items = self.selected_items()
+        xs, ys = [], []
+        for it in items:
+            if isinstance(it, ShapeItem):
+                x0, y0, x1, y1 = it.model.bounds()
+                xs += [x0, x1]
+                ys += [y0, y1]
+            elif isinstance(it, HoleItem):
+                xs.append(it.hole.point.x)
+                ys.append(it.hole.point.y)
+            elif isinstance(it, StitchLineItem):
+                xs += [p.x for p in it.line.points]
+                ys += [p.y for p in it.line.points]
+        if not xs:
+            return 0.0, 0.0
+        return 0.5 * (min(xs) + max(xs)), 0.5 * (min(ys) + max(ys))
+
     def _ask_offset_distance(self):
         from PySide6.QtWidgets import QInputDialog
         return QInputDialog.getDouble(

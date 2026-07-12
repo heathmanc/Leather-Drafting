@@ -129,6 +129,24 @@ def test_export_svg_and_dxf(tmp_path):
     assert "SECTION" in dxf_txt and "CIRCLE" in dxf_txt and "EOF" in dxf_txt
 
 
+def test_construction_line_roundtrips_and_is_not_exported(tmp_path):
+    from leathercad.shapes import PathShape
+    doc = Document("t")
+    doc.add_shape(Rectangle(width=40, height=30, layer="Cut"))
+    g = PathShape(points=[Vec2(-20, 0), Vec2(20, 0)], close_path=False, layer="Cut")
+    g.construction = True
+    doc.add_shape(g)
+
+    outlines, _ = export.collect(doc)
+    assert len(outlines) == 1                      # the guide is not cut
+
+    p = tmp_path / "c.json"
+    doc.save(str(p))
+    doc2 = Document.load(str(p))
+    flags = [getattr(s, "construction", False) for s in doc2.shapes]
+    assert flags == [False, True]
+
+
 def test_loose_holes_roundtrip(tmp_path):
     from leathercad import LooseHole
     doc = Document("t")

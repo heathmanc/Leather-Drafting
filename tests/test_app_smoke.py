@@ -691,6 +691,49 @@ def test_trim_tool_cuts_outline_at_intersections(qapp):
     assert any(not isinstance(it.model, R) for it in items)   # A was trimmed
 
 
+def test_smart_snap_alignment_and_guides(qapp):
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.canvas import LINE
+    from leathercad.document import Document
+
+    doc = Document()
+    # two separate rectangles so an x-alignment to one and a y-alignment to the
+    # other cross at a point that is NOT a node (otherwise a direct snap wins).
+    doc.add_shape(Rectangle(width=40, height=30, transform=Transform(x=0, y=0),
+                            layer="Cut"))     # centre y = 0
+    doc.add_shape(Rectangle(width=40, height=30, transform=Transform(x=60, y=40),
+                            layer="Cut"))     # left edge x = 40
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    c.tool = LINE
+    # near rect-B's left edge (x=40) and rect-A's centre line (y=0)
+    p, vtx, guides = c._smart_snap(QPointF(39.4, 0.6))
+    assert abs(p.x() - 40.0) < 1e-6      # locked to B's edge x
+    assert abs(p.y() - 0.0) < 1e-6       # locked to A's centre y
+    assert vtx and len(guides) == 2      # a vertical and a horizontal guide
+
+
+def test_line_and_construction_tools_create_shapes(qapp):
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.canvas import LINE, CONSTRUCTION
+    from leathercad.shapes import PathShape
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.tool = LINE
+    c._finalize_drag(QPointF(-20, 5), QPointF(20, 5))
+    c.tool = CONSTRUCTION
+    c._finalize_drag(QPointF(0, -20), QPointF(0, 20))
+
+    shapes = [it.model for it in _shape_items(c)]
+    assert any(isinstance(s, PathShape) and not s.construction for s in shapes)
+    assert any(getattr(s, "construction", False) for s in shapes)
+
+
 def test_export_from_document(qapp, tmp_path):
     from leathercad_app.mainwindow import MainWindow
     from leathercad.document import Document

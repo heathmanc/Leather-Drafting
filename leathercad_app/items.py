@@ -241,23 +241,37 @@ class ShapeItem(QGraphicsItem):
         oriented = [t.apply_dir(p) for p in local]
         self._outline = _qpoly(oriented)
 
-        # snap nodes (local): the shape's editable nodes + bbox corners +
-        # origin -- used both for magnetic move-snap and as snap targets.
+        # snap nodes (local): centre, bbox corners + side centres, the shape's
+        # vertices, and edge midpoints -- used for magnetic move-snap and as
+        # snap/alignment targets while drawing.
         from leathercad.shapes import Polygon, PathShape, EditablePath
-        node_locals = [Vec2(0.0, 0.0)]
+        node_locals = [Vec2(0.0, 0.0)]                     # shape centre
         if local:
             xs = [p.x for p in local]
             ys = [p.y for p in local]
-            node_locals += [Vec2(min(xs), min(ys)), Vec2(max(xs), min(ys)),
-                            Vec2(max(xs), max(ys)), Vec2(min(xs), max(ys))]
+            minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
+            cx, cy = 0.5 * (minx + maxx), 0.5 * (miny + maxy)
+            node_locals += [Vec2(minx, miny), Vec2(maxx, miny),
+                            Vec2(maxx, maxy), Vec2(minx, maxy),
+                            Vec2(cx, miny), Vec2(maxx, cy),   # side centres
+                            Vec2(cx, maxy), Vec2(minx, cy)]
         if isinstance(self.model, (Polygon, PathShape)):
-            node_locals += list(self.model.points)
+            verts = list(self.model.points)
+            closed = getattr(self.model, "close_path", False)
         elif isinstance(self.model, EditablePath):
-            node_locals += list(self.model.nodes)
+            verts = list(self.model.nodes)
+            closed = self.model.closed
             node_locals += [e.mid for e in self.model.edges
                             if e.kind == "arc" and e.mid is not None]
         else:
-            node_locals += list(path.corner_points)
+            verts = list(path.corner_points)
+            closed = False
+        node_locals += verts
+        if len(verts) >= 2:                                # edge midpoints
+            n = len(verts)
+            for i in range(n if closed else n - 1):
+                a, b = verts[i], verts[(i + 1) % n]
+                node_locals.append(Vec2(0.5 * (a.x + b.x), 0.5 * (a.y + b.y)))
         self._snap_local = node_locals
         self._snap_offsets = [t.apply_dir(p) for p in node_locals]
 
@@ -309,7 +323,11 @@ class ShapeItem(QGraphicsItem):
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
         # outline
-        pen = QPen(self._color)
+        if getattr(self.model, "construction", False):
+            pen = QPen(QColor(150, 150, 160))
+            pen.setStyle(Qt.DashLine)
+        else:
+            pen = QPen(self._color)
         pen.setCosmetic(True)
         pen.setWidthF(1.6 if self.isSelected() else 1.0)
         painter.setPen(pen)

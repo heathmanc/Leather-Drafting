@@ -37,6 +37,8 @@ def collect(doc: Document):
     from .stitchsettings import StitchSettings
 
     for sh in doc.shapes:
+        if getattr(sh, "construction", False):
+            continue                      # guides are references, never cut
         lyr = doc.layer(sh.layer)
         if lyr is not None and not lyr.visible:
             continue

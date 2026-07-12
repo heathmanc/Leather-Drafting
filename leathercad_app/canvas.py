@@ -49,8 +49,10 @@ HOLE = "hole"
 SLOT = "slot"
 SCORE = "score"
 TRIM = "trim"
+LINE = "line"
+CONSTRUCTION = "construction"
 
-_DRAG_TOOLS = (RECT, ROUNDED, ELLIPSE, CIRCLE, SLOT)
+_DRAG_TOOLS = (RECT, ROUNDED, ELLIPSE, CIRCLE, SLOT, LINE, CONSTRUCTION)
 _POLY_TOOLS = (POLYGON, STITCHLINE, SCORE)
 
 
@@ -237,24 +239,78 @@ class Canvas(QGraphicsView):
         return pts
 
     def snap(self, pos: QPointF):
-        """Return (snapped QPointF, is_vertex_snap)."""
+        """Return (snapped QPointF, is_vertex_snap). Also refreshes alignment
+        guides as a side effect so drawing tools show smart-snap lines."""
+        p, vtx, guides = self._smart_snap(pos)
+        self._show_align_guides(guides)
+        return p, vtx
+
+    def _smart_snap(self, pos: QPointF):
+        """Snap to a nearby node, else to horizontal/vertical *alignment* with a
+        node (returning guide lines to draw), else to the grid.
+
+        Returns (snapped QPointF, is_vertex_snap, guides) where each guide is
+        (Vec2 target, 'v'|'h')."""
+        guides = []
         if not self.snap_enabled:
-            return pos, False
-        thr = 10.0 / self._zoom  # ~10 px in mm
+            return pos, False, guides
+        thr = 10.0 / self._zoom          # ~10 px in mm
+        cands = self._snap_candidates()
+
+        # 1. direct point snap wins
         if self.snap_vertices:
-            best = None
-            best_d = thr
-            for c in self._snap_candidates():
+            best, best_d = None, thr
+            for c in cands:
                 d = ((pos.x() - c.x) ** 2 + (pos.y() - c.y) ** 2) ** 0.5
                 if d < best_d:
-                    best_d = d
-                    best = c
+                    best_d, best = d, c
             if best is not None:
-                return QPointF(best.x, best.y), True
+                return QPointF(best.x, best.y), True, guides
+
+        # 2. alignment snap: lock x and/or y to an aligned node (smart guides)
+        ax = ay = None
+        if self.snap_vertices:
+            dx = dy = thr
+            for c in cands:
+                if abs(c.x - pos.x()) < dx:
+                    dx, ax = abs(c.x - pos.x()), c
+                if abs(c.y - pos.y()) < dy:
+                    dy, ay = abs(c.y - pos.y()), c
         g = self.snap_grid
-        if g > 0:
-            return QPointF(round(pos.x() / g) * g, round(pos.y() / g) * g), False
-        return pos, False
+        nx = ax.x if ax else (round(pos.x() / g) * g if g > 0 else pos.x())
+        ny = ay.y if ay else (round(pos.y() / g) * g if g > 0 else pos.y())
+        if ax is not None:
+            guides.append((ax, "v"))
+        if ay is not None:
+            guides.append((ay, "h"))
+        vtx = ax is not None or ay is not None
+        return QPointF(nx, ny), vtx, guides
+
+    def _show_align_guides(self, guides):
+        # ensure two reusable dashed line items
+        while len(self._align_guides) < len(guides):
+            ln = QGraphicsLineItem()
+            ln.setZValue(998)
+            pen = QPen(QColor(255, 120, 0, 200), 0, Qt.DashLine)
+            pen.setCosmetic(True)
+            ln.setPen(pen)
+            self.scene_obj.addItem(ln)
+            self._align_guides.append(ln)
+        big = 100000.0
+        for i, ln in enumerate(self._align_guides):
+            if i < len(guides):
+                target, axis = guides[i]
+                if axis == "v":
+                    ln.setLine(target.x, target.y - big, target.x, target.y + big)
+                else:
+                    ln.setLine(target.x - big, target.y, target.x + big, target.y)
+                ln.setVisible(True)
+            else:
+                ln.setVisible(False)
+
+    def _clear_align_guides(self):
+        for ln in self._align_guides:
+            ln.setVisible(False)
 
     def _show_snap_marker(self, pt: QPointF, vertex: bool):
         if self._snap_marker is None:
@@ -275,6 +331,7 @@ class Canvas(QGraphicsView):
     def _hide_snap_marker(self):
         if self._snap_marker is not None:
             self._snap_marker.setVisible(False)
+        self._clear_align_guides()
 
     # -- magnetic node snapping while dragging shapes -------------------
     def begin_move_snap(self, item) -> None:
@@ -542,6 +599,9 @@ class Canvas(QGraphicsView):
         elif self.tool == SLOT:
             r = min(w, h) / 2.0
             path.addRoundedRect(x0, y0, w, h, r, r)
+        elif self.tool in (LINE, CONSTRUCTION):
+            path.moveTo(a)
+            path.lineTo(b)
         else:
             path.addRect(x0, y0, w, h)
         return path
@@ -590,6 +650,24 @@ class Canvas(QGraphicsView):
             sh = Rectangle(width=w, height=h, corner_radius=min(w, h) / 2.0,
                            transform=Transform(x=cx, y=cy),
                            layer=self._current_layer)  # slot: cut only, no stitch
+        elif self.tool == LINE:
+            sh = PathShape(points=[Vec2(a.x() - cx, a.y() - cy),
+                                   Vec2(b.x() - cx, b.y() - cy)],
+                           close_path=False, transform=Transform(x=cx, y=cy),
+                           layer=self._current_layer)
+        elif self.tool == CONSTRUCTION:
+            ax, ay, bx, by = a.x(), a.y(), b.x(), b.y()
+            dx, dy = bx - ax, by - ay
+            length = (dx * dx + dy * dy) ** 0.5
+            if length > 1e-6:                       # extend so it reads as a guide
+                ux, uy = dx / length, dy / length
+                ax -= ux * length * 0.5; ay -= uy * length * 0.5
+                bx += ux * length * 0.5; by += uy * length * 0.5
+            gx, gy = (ax + bx) / 2, (ay + by) / 2
+            sh = PathShape(points=[Vec2(ax - gx, ay - gy), Vec2(bx - gx, by - gy)],
+                           close_path=False, transform=Transform(x=gx, y=gy),
+                           layer=self._current_layer)
+            sh.construction = True
         else:
             return
         self.add_shape(sh)

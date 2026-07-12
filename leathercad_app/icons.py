@@ -83,6 +83,13 @@ def tool_icon(kind: str, size: int = 22) -> QIcon:
         p.drawRect(QRectF(m, m, 8, 8))
         p.drawRect(QRectF(size - m - 8, size - m - 8, 8, 8))
         _dots_along(p, [QPointF(size / 2, size / 2)], _ACCENT, 1.4)
+    elif kind == "line":
+        p.drawLine(QPointF(m + 1, size - m - 1), QPointF(size - m - 1, m + 1))
+        _dots_along(p, [QPointF(m + 1, size - m - 1),
+                        QPointF(size - m - 1, m + 1)], _ACCENT, 1.5)
+    elif kind == "construction":
+        pen = p.pen(); pen.setStyle(Qt.DashLine); p.setPen(pen)
+        p.drawLine(QPointF(m, size - m - 1), QPointF(size - m, m + 1))
     elif kind == "trim":
         # scissors: two blades crossing, rings at the bottom
         b1 = QPointF(size * 0.28, size - m - 1)

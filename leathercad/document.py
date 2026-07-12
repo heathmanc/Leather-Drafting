@@ -55,6 +55,7 @@ def _shape_to_dict(sh: Shape) -> dict:
         "shape_id": sh.shape_id,
         "transform": _transform_to_dict(sh.transform),
         "stitch": _stitch_to_dict(sh.stitch),
+        "construction": sh.construction,
     }
     if isinstance(sh, Rectangle):
         base.update(width=sh.width, height=sh.height,
@@ -99,6 +100,7 @@ def _shape_from_dict(d: dict) -> Shape:
         opacity=d.get("opacity", 1.0),
         transform=_transform_from_dict(d.get("transform", {})),
         stitch=_stitch_from_dict(d.get("stitch")),
+        construction=d.get("construction", False),
     )
     if "shape_id" in d:
         common["shape_id"] = d["shape_id"]

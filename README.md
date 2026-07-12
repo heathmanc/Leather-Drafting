@@ -88,11 +88,13 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 
 | | |
 |---|---|
-| **Draw** | Rectangle `R`, Rounded rect `O`, Ellipse `E`, Circle `C`, Polygon `P` (click points, double-click to finish) |
+| **Draw** | Rectangle `R`, Rounded rect `O`, Ellipse `E`, Circle `C`, Polygon `P` (click points, double-click to finish), Line `I` (2-point) |
+| **Construction line** | `G` — a dashed guide you drag out; it's a snap/alignment reference only, never cut or exported |
 | **Holes / slots / fold lines** | Hole `H` (hardware), Slot `T` (stadium), Score line `K` (fold/skive on the Score layer) |
 | **Seam** | Stitch line `L` — a shared seam for cross-piece registration |
 | **Select / move** | `S` — drag to move, drag one piece over another to check fit |
-| **Snapping** | toolbar *Snap* toggle + grid size; snaps to grid and to other shapes' corners while drawing and moving |
+| **Snapping** | toolbar *Snap* toggle + grid size; snaps to grid and to other shapes' **corners, centres, side-centres and edge midpoints** while drawing and moving |
+| **Alignment guides** | while drawing, when the cursor lines up with another object's node/centre the point locks to that x/y and a dashed **guide line** appears (smart snapping, Fusion/Illustrator style) |
 | **Exact sizes** | live W×H shown while dragging; after drawing, the size field is focused so you can type an exact value |
 | **Select by outline** | shapes are grabbed by clicking their outline, not the filled interior — click "inside" to reach shapes behind or draw there |
 | **Edit nodes** | double-click a polygon/seam, or right-click a shape → *Convert to editable nodes* (`Ctrl+K`). Rounded corners keep their **arcs**: each arc shows its two endpoints plus a midpoint handle you drag to reshape the curve. The shape locks while editing so clicks grab the nodes. |
@@ -126,6 +128,20 @@ stays an arc); a closed shape opens up, and an open path clicked in the middle
 splits into two. Clicking a piece that nothing crosses removes it outright.
 
 ![trim: click a segment to cut it back to its intersections](docs/trim.png)
+
+### Smart snapping & construction lines
+
+While a drawing tool is active, the point you're placing snaps to nearby
+**nodes, centres, side-centres and edge midpoints** of other shapes. When it
+lines up (same x or y) with one of those, it **locks to that alignment** and a
+dashed orange **guide line** is drawn so you can see what it lined up with — the
+same inference snapping as Fusion 360 / Illustrator. Line up with two things at
+once and it snaps to the crossing point.
+
+Drag out a **construction line** (`G`) for a reusable guide of your own: it's
+dashed, snappable, and never cut or exported.
+
+![alignment guides lock onto other shapes' centres; a construction line up top](docs/smart_snap.png)
 
 ### Group / ungroup holes (removing individual ones)
 
@@ -235,8 +251,8 @@ examples/  tests/  docs/
 - [x] Flip-symmetric hole distribution + back-to-back symmetry validation
 - [x] Symmetric rounded-corner holes (apex / straddle) + make-back-piece (mirror)
 - [x] Trim to intersections (Fusion / LightBurn style), arcs preserved
+- [x] Alignment guides (smart snapping) + Line and construction-line tools
 - [ ] Boolean ops (windows, cut-outs) and true seam-allowance offset
-- [ ] Alignment guides (smart snapping lines) while dragging
 - [ ] Import reference images / trace an existing pattern
 - [ ] Print-to-scale PDF tiling for hand cutting
 

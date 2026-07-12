@@ -28,6 +28,8 @@ TOOLS = [
     ("Ellipse", canvas_mod.ELLIPSE, "E"),
     ("Circle", canvas_mod.CIRCLE, "C"),
     ("Polygon", canvas_mod.POLYGON, "P"),
+    ("Line", canvas_mod.LINE, "I"),
+    ("Construction line", canvas_mod.CONSTRUCTION, "G"),
     ("Hole", canvas_mod.HOLE, "H"),
     ("Slot", canvas_mod.SLOT, "T"),
     ("Score line", canvas_mod.SCORE, "K"),
@@ -41,7 +43,8 @@ _ICON_FOR = {
     canvas_mod.CIRCLE: "circle", canvas_mod.POLYGON: "polygon",
     canvas_mod.HOLE: "hole", canvas_mod.SLOT: "slot",
     canvas_mod.SCORE: "score", canvas_mod.STITCHLINE: "stitchline",
-    canvas_mod.TRIM: "trim",
+    canvas_mod.TRIM: "trim", canvas_mod.LINE: "line",
+    canvas_mod.CONSTRUCTION: "construction",
 }
 
 

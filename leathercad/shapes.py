@@ -80,6 +80,9 @@ class Shape:
     # shape instead of being computed from ``stitch`` -- the "grouped" state.
     # Each entry is a stitching.Hole. Never redistributed.
     baked_holes: Optional[list] = None
+    # A construction/guide line: drawn dashed, used only as a snap/alignment
+    # reference, never cut or exported.
+    construction: bool = False
 
     # -- geometry (subclasses implement local_path) ---------------------
     def local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:  # pragma: no cover

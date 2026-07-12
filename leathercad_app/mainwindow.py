@@ -279,6 +279,8 @@ class MainWindow(QMainWindow):
         self.canvas.tool = mode
         cur = Qt.CrossCursor if mode == canvas_mod.TRIM else Qt.ArrowCursor
         self.canvas.viewport().setCursor(cur)
+        if mode != canvas_mod.TRIM:
+            self.canvas._clear_trim_hover()
         if mode == canvas_mod.TRIM:
             self.canvas.statusMessage.emit(
                 "Trim: click the part of an outline to cut back to where it "

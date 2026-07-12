@@ -134,6 +134,26 @@ def intersection_arclengths(segments: Sequence[Segment],
     return _dedup(sorted(hits), max(0.02, 1e-4 * total)), total
 
 
+def _cell_to_remove(pieces, cum, total, hits, click_s, closed):
+    """(start_arclength, length) of the cell containing the pick, or None.
+    For a closed entity with nothing crossing it, the whole loop is the cell."""
+    if closed:
+        if len(hits) < 2:
+            return (0.0, total)                       # whole loop
+        cells = [(hits[i], hits[i + 1]) for i in range(len(hits) - 1)]
+        cells.append((hits[-1], hits[0] + total))     # the wrap cell
+        for lo, hi in cells:
+            cs = click_s if click_s >= lo - 1e-9 else click_s + total
+            if lo - 1e-6 <= cs <= hi + 1e-6:
+                return (lo % total, hi - lo)
+        return None
+    bounds = sorted(set([0.0, total] + hits))
+    for i in range(len(bounds) - 1):
+        if bounds[i] - 1e-6 <= click_s <= bounds[i + 1] + 1e-6:
+            return (bounds[i], bounds[i + 1] - bounds[i])
+    return None
+
+
 def trim(segments: Sequence[Segment], cutters: Sequence[Sequence[Vec2]],
          click_point: Vec2, closed: bool,
          flatness: float = 0.05) -> Optional[List[List[Segment]]]:
@@ -144,39 +164,50 @@ def trim(segments: Sequence[Segment], cutters: Sequence[Sequence[Vec2]],
         return None
     hits, _ = intersection_arclengths(segments, cutters, flatness)
     click_s = _project(pieces, cum, click_point)
-
-    if closed:
-        if len(hits) < 2:
-            return None                       # nothing brackets the pick
-        cells = [(hits[i], hits[i + 1]) for i in range(len(hits) - 1)]
-        cells.append((hits[-1], hits[0] + total))   # the wrap cell
-        remove = None
-        for lo, hi in cells:
-            cs = click_s if click_s >= lo - 1e-9 else click_s + total
-            if lo - 1e-6 <= cs <= hi + 1e-6:
-                remove = (lo, hi)
-                break
-        if remove is None:
-            return None
-        keep_start, keep_len = remove[1] % total, total - (remove[1] - remove[0])
-        chain = _walk(pieces, cum, total, keep_start, keep_len)
-        return [chain] if chain else None
-
-    bounds = sorted(set([0.0, total] + hits))
-    lo = hi = None
-    for i in range(len(bounds) - 1):
-        if bounds[i] - 1e-6 <= click_s <= bounds[i + 1] + 1e-6:
-            lo, hi = bounds[i], bounds[i + 1]
-            break
-    if lo is None:
+    cell = _cell_to_remove(pieces, cum, total, hits, click_s, closed)
+    if cell is None:
         return None
+    s0, clen = cell
+    if closed:
+        if clen >= total - 1e-6:
+            return None                               # nothing brackets it
+        chain = _walk(pieces, cum, total, (s0 + clen) % total, total - clen)
+        return [chain] if chain else None
     chains: List[List[Segment]] = []
-    if lo > 1e-6:
-        chains.append(_walk(pieces, cum, total, 0.0, lo))
-    if total - hi > 1e-6:
-        chains.append(_walk(pieces, cum, total, hi, total - hi))
+    if s0 > 1e-6:
+        chains.append(_walk(pieces, cum, total, 0.0, s0))
+    end = s0 + clen
+    if total - end > 1e-6:
+        chains.append(_walk(pieces, cum, total, end, total - end))
     chains = [c for c in chains if c]
     return chains or None
+
+
+def removed_cell_polyline(segments: Sequence[Segment],
+                          cutters: Sequence[Sequence[Vec2]],
+                          click_point: Vec2, closed: bool,
+                          flatness: float = 0.05) -> Optional[List[Vec2]]:
+    """The portion that ``trim`` would remove for this pick, flattened to a
+    polyline for highlighting. ``None`` if nothing is under the pick."""
+    pieces, cum, total = _build(segments)
+    if total <= _EPS:
+        return None
+    hits, _ = intersection_arclengths(segments, cutters, flatness)
+    click_s = _project(pieces, cum, click_point)
+    cell = _cell_to_remove(pieces, cum, total, hits, click_s, closed)
+    if cell is None:
+        return None
+    removed = _walk(pieces, cum, total, cell[0], cell[1])
+    out: List[Vec2] = []
+    for kind, pts in removed:
+        piece = _Piece(kind, pts[0], pts[-1],
+                       pts[1] if kind == "arc" and len(pts) >= 3 else None)
+        fl = piece.flatten(flatness)
+        if out and (out[-1] - fl[0]).length() < 1e-6:
+            out.extend(fl[1:])
+        else:
+            out.extend(fl)
+    return out or None
 
 
 # ---------------------------------------------------------------------------

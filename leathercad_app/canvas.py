@@ -14,7 +14,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (QColor, QPainter, QPen, QPainterPath, QPolygonF,
                            QTransform)
 from PySide6.QtWidgets import (QGraphicsScene, QGraphicsView, QGraphicsPathItem,
-                               QGraphicsItem, QMenu)
+                               QGraphicsItem, QGraphicsLineItem, QMenu)
 
 from leathercad.geometry import Vec2
 from leathercad.document import Document
@@ -192,6 +192,8 @@ class Canvas(QGraphicsView):
         self.snap_grid = 1.0      # mm
         self.snap_vertices = True
         self._snap_marker: Optional[QGraphicsPathItem] = None
+        self._trim_hover: Optional[QGraphicsPathItem] = None
+        self._align_guides: List[QGraphicsLineItem] = []
 
         self.scene_obj.selectionChanged.connect(self.selectionChangedSig)
 
@@ -383,6 +385,11 @@ class Canvas(QGraphicsView):
             return
         raw = self.mapToScene(event.position().toPoint())
         self.cursorMoved.emit(raw.x(), raw.y())
+        if self.tool == TRIM:
+            self._hide_snap_marker()
+            self._update_trim_hover(Vec2(raw.x(), raw.y()))
+            super().mouseMoveEvent(event)
+            return
         pos = raw
         if self.tool != SELECT:
             pos, vtx = self.snap(raw)
@@ -670,6 +677,8 @@ class Canvas(QGraphicsView):
         self._live.clear()
         self._preview = None
         self._snap_marker = None
+        self._trim_hover = None
+        self._align_guides = []
         self._handles = []
         self._edit_owner = None
         for sh in self.doc.shapes:
@@ -1026,6 +1035,38 @@ class Canvas(QGraphicsView):
                     cutters.append(poly)
         return cutters
 
+    def _update_trim_hover(self, click: Vec2) -> None:
+        """Highlight, in red, the span the Trim tool would remove for this pick."""
+        from leathercad.trim import removed_cell_polyline
+        it = self._entity_for_trim(click)
+        poly = None
+        if it is not None:
+            segs = self._segments_world(it.model)
+            if segs:
+                closed = it.model.world_polyline()[2]
+                poly = removed_cell_polyline(segs, self._trim_cutters(it),
+                                             click, closed)
+        if not poly or len(poly) < 2:
+            self._clear_trim_hover()
+            return
+        if self._trim_hover is None:
+            self._trim_hover = QGraphicsPathItem()
+            self._trim_hover.setZValue(999)
+            self.scene_obj.addItem(self._trim_hover)
+        path = QPainterPath()
+        path.moveTo(poly[0].x, poly[0].y)
+        for p in poly[1:]:
+            path.lineTo(p.x, p.y)
+        pen = QPen(QColor(230, 40, 40), 3.2)
+        pen.setCosmetic(True)
+        self._trim_hover.setPath(path)
+        self._trim_hover.setPen(pen)
+        self._trim_hover.setVisible(True)
+
+    def _clear_trim_hover(self) -> None:
+        if self._trim_hover is not None:
+            self._trim_hover.setVisible(False)
+
     def _do_trim(self, click: Vec2) -> None:
         import copy
         from leathercad.trim import trim as _trim
@@ -1060,6 +1101,7 @@ class Canvas(QGraphicsView):
         self.scene_obj.clearSelection()
         for m in made:
             m.setSelected(True)
+        self._clear_trim_hover()
         self.documentChangedSig.emit()
         self.selectionChangedSig.emit()
         self._emit_commit()

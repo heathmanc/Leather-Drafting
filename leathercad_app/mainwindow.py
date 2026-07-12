@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow, QDockWidget, QFileDialog, QToolBar, QLabel, QMessageBox,
-    QWidget, QScrollArea,
+    QWidget, QScrollArea, QComboBox,
 )
 
 from leathercad.document import Document
@@ -53,8 +53,9 @@ class MainWindow(QMainWindow):
 
         self.canvas.selectionChangedSig.connect(self._selection_changed)
         self.canvas.documentChangedSig.connect(self._document_changed)
-        self.canvas.toolFinished.connect(lambda: self._select_tool_action(0))
+        self.canvas.toolFinished.connect(self._tool_finished)
         self.canvas.cursorMoved.connect(self._cursor_moved)
+        self.canvas.statusMessage.connect(self.sb_dims.setText)
         self.canvas.commitRequested.connect(self.commit)
         self.properties.committed.connect(self.commit)
         self.layers.committed.connect(self.commit)
@@ -113,6 +114,24 @@ class MainWindow(QMainWindow):
         fit.triggered.connect(self.canvas.fit_to_content)
         tb.addAction(fit)
 
+        tb.addSeparator()
+        self.act_snap = QAction("Snap", self)
+        self.act_snap.setCheckable(True)
+        self.act_snap.setChecked(True)
+        self.act_snap.setToolTip("Snap to grid and vertices while drawing/moving")
+        self.act_snap.toggled.connect(
+            lambda on: setattr(self.canvas, "snap_enabled", on))
+        tb.addAction(self.act_snap)
+
+        tb.addWidget(QLabel(" grid "))
+        self.grid_combo = QComboBox()
+        for mm in (0.5, 1.0, 2.0, 2.5, 5.0, 10.0):
+            self.grid_combo.addItem(f"{mm:g} mm", mm)
+        self.grid_combo.setCurrentIndex(1)  # 1 mm
+        self.grid_combo.currentIndexChanged.connect(
+            lambda: setattr(self.canvas, "snap_grid", self.grid_combo.currentData()))
+        tb.addWidget(self.grid_combo)
+
     def _make_menus(self):
         m = self.menuBar()
         fm = m.addMenu("&File")
@@ -163,8 +182,10 @@ class MainWindow(QMainWindow):
 
     def _make_statusbar(self):
         self.sb_pos = QLabel("—")
+        self.sb_dims = QLabel("")
         self.sb_holes = QLabel("0 holes")
-        self.statusBar().addWidget(self.sb_pos, 1)
+        self.statusBar().addWidget(self.sb_pos)
+        self.statusBar().addWidget(self.sb_dims, 1)
         self.statusBar().addPermanentWidget(self.sb_holes)
 
     # -- slots ----------------------------------------------------------
@@ -174,6 +195,11 @@ class MainWindow(QMainWindow):
     def _select_tool_action(self, index):
         self._tool_actions[index].setChecked(True)
         self.canvas.tool = TOOLS[index][1]
+
+    def _tool_finished(self):
+        self._select_tool_action(0)
+        # let the user type an exact size for the shape just created
+        self.properties.focus_primary_dimension()
 
     def _selection_changed(self):
         self.properties.show_selection(self.canvas.selected_items())

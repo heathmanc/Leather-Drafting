@@ -106,6 +106,30 @@ def test_align_left(qapp):
     assert len(lefts) == 1
 
 
+def test_snapping(qapp):
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.snap_enabled = True
+    c.snap_grid = 1.0
+
+    p, vtx = c.snap(QPointF(12.3, 7.8))
+    assert (round(p.x()), round(p.y())) == (12, 8) and not vtx
+
+    c.add_shape(Rectangle(width=40, height=30, transform=Transform(x=0, y=0),
+                          stitch=StitchSettings(pitch_mm=4.0, inset=3.0),
+                          layer="Cut"))
+    p, vtx = c.snap(QPointF(19.4, 14.6))
+    assert (round(p.x()), round(p.y())) == (20, 15) and vtx
+
+    item = [it for it in c.scene_obj.items() if hasattr(it, "shape")][0]
+    item.setPos(10.4, -3.7)
+    assert (item.pos().x(), item.pos().y()) == (10.0, -4.0)
+
+
 def test_export_from_document(qapp, tmp_path):
     from leathercad_app.mainwindow import MainWindow
     from leathercad.document import Document

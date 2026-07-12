@@ -40,6 +40,7 @@ class Canvas(QGraphicsView):
     toolFinished = Signal()
     cursorMoved = Signal(float, float)
     commitRequested = Signal()   # a discrete edit finished -> push undo snapshot
+    statusMessage = Signal(str)  # transient hint (live dimensions while drawing)
 
     def __init__(self, document: Document):
         super().__init__()
@@ -66,6 +67,12 @@ class Canvas(QGraphicsView):
         self._poly_pts: List[QPointF] = []
         self._moved_during_press = False
         self._suppress_commit = False
+
+        # snapping
+        self.snap_enabled = True
+        self.snap_grid = 1.0      # mm
+        self.snap_vertices = True
+        self._snap_marker: Optional[QGraphicsPathItem] = None
 
         self.scene_obj.selectionChanged.connect(self.selectionChangedSig)
 
@@ -94,12 +101,73 @@ class Canvas(QGraphicsView):
         self._apply_zoom()
         self.centerOn(rect.center())
 
+    # -- snapping -------------------------------------------------------
+    def _snap_candidates(self, exclude=None):
+        pts = []
+        for it in self.scene_obj.items():
+            if it is exclude:
+                continue
+            if isinstance(it, ShapeItem):
+                sh = it.shape
+                _, corners, closed = sh.world_polyline()
+                pts.extend(corners)
+                b = sh.bounds()
+                pts.append(Vec2((b[0] + b[2]) / 2, (b[1] + b[3]) / 2))
+                wp = sh.world_polyline()[0]
+                if not closed and wp:
+                    pts.append(wp[0]); pts.append(wp[-1])
+            elif isinstance(it, StitchLineItem):
+                pts.extend(it.line.points)
+        return pts
+
+    def snap(self, pos: QPointF):
+        """Return (snapped QPointF, is_vertex_snap)."""
+        if not self.snap_enabled:
+            return pos, False
+        thr = 10.0 / self._zoom  # ~10 px in mm
+        if self.snap_vertices:
+            best = None
+            best_d = thr
+            for c in self._snap_candidates():
+                d = ((pos.x() - c.x) ** 2 + (pos.y() - c.y) ** 2) ** 0.5
+                if d < best_d:
+                    best_d = d
+                    best = c
+            if best is not None:
+                return QPointF(best.x, best.y), True
+        g = self.snap_grid
+        if g > 0:
+            return QPointF(round(pos.x() / g) * g, round(pos.y() / g) * g), False
+        return pos, False
+
+    def _show_snap_marker(self, pt: QPointF, vertex: bool):
+        if self._snap_marker is None:
+            self._snap_marker = QGraphicsPathItem()
+            self._snap_marker.setZValue(1000)
+            self.scene_obj.addItem(self._snap_marker)
+        path = QPainterPath()
+        r = 6.0 / self._zoom
+        path.addEllipse(pt, r, r)
+        path.moveTo(pt.x() - r * 1.6, pt.y()); path.lineTo(pt.x() + r * 1.6, pt.y())
+        path.moveTo(pt.x(), pt.y() - r * 1.6); path.lineTo(pt.x(), pt.y() + r * 1.6)
+        self._snap_marker.setPath(path)
+        pen = QPen(QColor(255, 120, 0) if vertex else QColor(150, 150, 150), 0)
+        pen.setCosmetic(True)
+        self._snap_marker.setPen(pen)
+        self._snap_marker.setVisible(True)
+
+    def _hide_snap_marker(self):
+        if self._snap_marker is not None:
+            self._snap_marker.setVisible(False)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MiddleButton:
             self._pan_last = event.position()
             self.setCursor(Qt.ClosedHandCursor)
             return
         pos = self.mapToScene(event.position().toPoint())
+        if self.tool != SELECT:
+            pos, _v = self.snap(pos)
         if self.tool == SELECT:
             return super().mousePressEvent(event)
         if event.button() == Qt.LeftButton:
@@ -121,12 +189,28 @@ class Canvas(QGraphicsView):
             self._pan_last = event.position()
             self.translate(delta.x() / self._zoom, -delta.y() / self._zoom)
             return
-        pos = self.mapToScene(event.position().toPoint())
-        self.cursorMoved.emit(pos.x(), pos.y())
+        raw = self.mapToScene(event.position().toPoint())
+        self.cursorMoved.emit(raw.x(), raw.y())
+        pos = raw
+        if self.tool != SELECT:
+            pos, vtx = self.snap(raw)
+            self._show_snap_marker(pos, vtx)
+        else:
+            self._hide_snap_marker()
         if self._preview is not None and self._start is not None:
             self._preview.setPath(self._preview_path(self._start, pos))
+            w = abs(pos.x() - self._start.x())
+            h = abs(pos.y() - self._start.y())
+            if self.tool in (CIRCLE,):
+                r = max(w, h)
+                self.statusMessage.emit(f"r {r:.1f} mm   ø {2*r:.1f} mm")
+            else:
+                self.statusMessage.emit(f"{w:.1f} × {h:.1f} mm")
         elif self._poly_pts and self.tool in (POLYGON, STITCHLINE):
             self._update_poly_preview(pos)
+            last = self._poly_pts[-1]
+            seg = ((pos.x() - last.x()) ** 2 + (pos.y() - last.y()) ** 2) ** 0.5
+            self.statusMessage.emit(f"segment {seg:.1f} mm   ({len(self._poly_pts)} pts)")
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -134,11 +218,15 @@ class Canvas(QGraphicsView):
             self.setCursor(Qt.ArrowCursor)
             return
         pos = self.mapToScene(event.position().toPoint())
+        if self.tool != SELECT:
+            pos, _v = self.snap(pos)
         if self._preview is not None and self._start is not None:
             self.scene_obj.removeItem(self._preview)
             self._preview = None
             self._finalize_drag(self._start, pos)
             self._start = None
+            self._hide_snap_marker()
+            self.statusMessage.emit("")
             event.accept()
             return
         super().mouseReleaseEvent(event)

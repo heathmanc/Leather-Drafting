@@ -308,6 +308,19 @@ class PropertiesPanel(QWidget):
         st.slit_length = self.slit_len.value()
         st.slit_angle = self.slit_angle.value()
 
+    def focus_primary_dimension(self):
+        """Focus the main size field so the user can type an exact value."""
+        target = None
+        if self.g_rect.isVisible():
+            target = self.w
+        elif self.g_ellipse.isVisible():
+            target = self.rx
+        elif self.g_poly.isVisible():
+            target = self.poly_radius
+        if target is not None:
+            target.setFocus()
+            target.selectAll()
+
     def _update_readout(self):
         it = self._item
         if it is None:

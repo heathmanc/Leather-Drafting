@@ -139,6 +139,14 @@ class ShapeItem(QGraphicsItem):
             painter.drawRect(self._outline.boundingRect())
 
     def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemPositionChange:
+            if (self.canvas is not None and self.canvas.snap_enabled
+                    and self.canvas.snap_grid > 0):
+                g = self.canvas.snap_grid
+                from PySide6.QtCore import QPointF
+                value = QPointF(round(value.x() / g) * g,
+                                round(value.y() / g) * g)
+            return value
         if change == QGraphicsItem.ItemPositionHasChanged:
             self.shape.transform.x = self.pos().x()
             self.shape.transform.y = self.pos().y()

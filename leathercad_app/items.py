@@ -26,6 +26,63 @@ def _qpoly(points: List[Vec2]) -> QPolygonF:
     return QPolygonF([QPointF(p.x, p.y) for p in points])
 
 
+class VertexHandle(QGraphicsItem):
+    """A constant-size draggable handle for editing a polygon/seam vertex."""
+
+    SIZE = 4.0  # pixels (item ignores view transform)
+
+    def __init__(self, owner, index: int, world: Vec2, canvas):
+        super().__init__()
+        self.owner = owner
+        self.index = index
+        self.canvas = canvas
+        self._dragged = False
+        self.setFlags(
+            QGraphicsItem.ItemIsMovable
+            | QGraphicsItem.ItemSendsGeometryChanges
+            | QGraphicsItem.ItemIgnoresTransformations
+        )
+        self.setZValue(2000)
+        self.setPos(world.x, world.y)
+
+    def boundingRect(self) -> QRectF:
+        s = self.SIZE + 2
+        return QRectF(-s, -s, 2 * s, 2 * s)
+
+    def paint(self, painter, option, widget=None):
+        painter.setRenderHint(painter.RenderHint.Antialiasing, True)
+        painter.setPen(QPen(QColor(30, 110, 220), 1))
+        painter.setBrush(QBrush(QColor(255, 255, 255)))
+        s = self.SIZE
+        painter.drawRect(QRectF(-s, -s, 2 * s, 2 * s))
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemPositionHasChanged:
+            self._dragged = True
+            self._write_back(value.x(), value.y())
+        return super().itemChange(change, value)
+
+    def _write_back(self, wx, wy):
+        w = Vec2(wx, wy)
+        if isinstance(self.owner, ShapeItem):
+            sh = self.owner.shape
+            local = sh.transform.inverse_apply(w)
+            if 0 <= self.index < len(sh.points):
+                sh.points[self.index] = local
+                self.owner.sync_from_model()
+        elif isinstance(self.owner, StitchLineItem):
+            ln = self.owner.line
+            if 0 <= self.index < len(ln.points):
+                ln.points[self.index] = w
+                self.owner.sync_from_model()
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if self._dragged and self.canvas is not None:
+            self._dragged = False
+            self.canvas.commitRequested.emit()
+
+
 class ShapeItem(QGraphicsItem):
     """Renders a model ``Shape`` (outline + stitch holes)."""
 

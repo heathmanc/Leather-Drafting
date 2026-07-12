@@ -27,6 +27,9 @@ TOOLS = [
     ("Ellipse", canvas_mod.ELLIPSE, "E"),
     ("Circle", canvas_mod.CIRCLE, "C"),
     ("Polygon", canvas_mod.POLYGON, "P"),
+    ("Hole", canvas_mod.HOLE, "H"),
+    ("Slot", canvas_mod.SLOT, "T"),
+    ("Score line", canvas_mod.SCORE, "K"),
     ("Stitch line (seam)", canvas_mod.STITCHLINE, "L"),
 ]
 

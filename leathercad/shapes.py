@@ -42,6 +42,14 @@ class Transform:
         c, s = math.cos(r), math.sin(r)
         return Vec2(dx * c - dy * s, dx * s + dy * c)
 
+    def inverse_apply(self, p: Vec2) -> Vec2:
+        """World point -> local point (inverse of ``apply``)."""
+        q = Vec2(p.x - self.x, p.y - self.y)
+        r = math.radians(-self.rotation)
+        c, s = math.cos(r), math.sin(r)
+        u = Vec2(q.x * c - q.y * s, q.x * s + q.y * c)
+        return Vec2(-u.x if self.mirror_x else u.x, u.y)
+
 
 # ---------------------------------------------------------------------------
 # Shape base

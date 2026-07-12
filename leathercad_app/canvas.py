@@ -21,7 +21,7 @@ from leathercad.shapes import (Rectangle, Ellipse, Circle, Polygon, PathShape,
                                Transform)
 from leathercad.stitchsettings import StitchSettings
 from leathercad.stitchline import StitchLine
-from .items import ShapeItem, StitchLineItem
+from .items import ShapeItem, StitchLineItem, VertexHandle
 
 
 # tool modes
@@ -32,6 +32,12 @@ ELLIPSE = "ellipse"
 CIRCLE = "circle"
 POLYGON = "polygon"
 STITCHLINE = "stitchline"
+HOLE = "hole"
+SLOT = "slot"
+SCORE = "score"
+
+_DRAG_TOOLS = (RECT, ROUNDED, ELLIPSE, CIRCLE, SLOT)
+_POLY_TOOLS = (POLYGON, STITCHLINE, SCORE)
 
 
 class Canvas(QGraphicsView):
@@ -67,6 +73,9 @@ class Canvas(QGraphicsView):
         self._poly_pts: List[QPointF] = []
         self._moved_during_press = False
         self._suppress_commit = False
+        self.hole_tool_diameter = 4.0
+        self._handles: List[VertexHandle] = []
+        self._edit_owner = None
 
         # snapping
         self.snap_enabled = True
@@ -171,14 +180,16 @@ class Canvas(QGraphicsView):
         if self.tool == SELECT:
             return super().mousePressEvent(event)
         if event.button() == Qt.LeftButton:
-            if self.tool in (RECT, ROUNDED, ELLIPSE, CIRCLE):
+            if self.tool == HOLE:
+                self._place_hole(pos)
+            elif self.tool in _DRAG_TOOLS:
                 self._start = pos
                 self._preview = QGraphicsPathItem()
                 pen = QPen(QColor(120, 120, 120), 0, Qt.DashLine)
                 pen.setCosmetic(True)
                 self._preview.setPen(pen)
                 self.scene_obj.addItem(self._preview)
-            elif self.tool in (POLYGON, STITCHLINE):
+            elif self.tool in _POLY_TOOLS:
                 self._poly_pts.append(pos)
                 self._update_poly_preview(pos)
         event.accept()
@@ -206,7 +217,7 @@ class Canvas(QGraphicsView):
                 self.statusMessage.emit(f"r {r:.1f} mm   ø {2*r:.1f} mm")
             else:
                 self.statusMessage.emit(f"{w:.1f} × {h:.1f} mm")
-        elif self._poly_pts and self.tool in (POLYGON, STITCHLINE):
+        elif self._poly_pts and self.tool in _POLY_TOOLS:
             self._update_poly_preview(pos)
             last = self._poly_pts[-1]
             seg = ((pos.x() - last.x()) ** 2 + (pos.y() - last.y()) ** 2) ** 0.5
@@ -235,15 +246,28 @@ class Canvas(QGraphicsView):
             self._emit_commit()
 
     def mouseDoubleClickEvent(self, event):
-        if self.tool in (POLYGON, STITCHLINE) and self._poly_pts:
+        if self.tool in _POLY_TOOLS and self._poly_pts:
             self._finalize_poly()
             event.accept()
             return
+        if self.tool == SELECT:
+            pos = self.mapToScene(event.position().toPoint())
+            it = self.itemAt(event.position().toPoint())
+            owner = it
+            while owner is not None and not isinstance(owner, (ShapeItem, StitchLineItem)):
+                owner = owner.parentItem()
+            if isinstance(owner, StitchLineItem) or (
+                    isinstance(owner, ShapeItem)
+                    and isinstance(owner.shape, (Polygon, PathShape))):
+                self.enter_vertex_edit(owner)
+                event.accept()
+                return
         super().mouseDoubleClickEvent(event)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
             self._cancel_poly()
+            self.clear_vertex_handles()
         elif event.key() in (Qt.Key_Return, Qt.Key_Enter):
             if self._poly_pts:
                 self._finalize_poly()
@@ -263,6 +287,9 @@ class Canvas(QGraphicsView):
                 path.addEllipse(x0, y0, w, h)
         elif self.tool == ROUNDED:
             r = min(w, h) * 0.18
+            path.addRoundedRect(x0, y0, w, h, r, r)
+        elif self.tool == SLOT:
+            r = min(w, h) / 2.0
             path.addRoundedRect(x0, y0, w, h, r, r)
         else:
             path.addRect(x0, y0, w, h)
@@ -308,8 +335,19 @@ class Canvas(QGraphicsView):
         elif self.tool == ELLIPSE:
             sh = Ellipse(rx=w / 2, ry=h / 2, transform=Transform(x=cx, y=cy),
                          stitch=self._default_stitch(), layer=self._current_layer)
+        elif self.tool == SLOT:
+            sh = Rectangle(width=w, height=h, corner_radius=min(w, h) / 2.0,
+                           transform=Transform(x=cx, y=cy),
+                           layer=self._current_layer)  # slot: cut only, no stitch
         else:
             return
+        self.add_shape(sh)
+        self.toolFinished.emit()
+
+    def _place_hole(self, pos: QPointF) -> None:
+        d = self.hole_tool_diameter
+        sh = Circle(rx=d / 2, ry=d / 2, transform=Transform(x=pos.x(), y=pos.y()),
+                    layer=self._current_layer)  # hardware hole: cut only
         self.add_shape(sh)
         self.toolFinished.emit()
 
@@ -327,6 +365,12 @@ class Canvas(QGraphicsView):
                          transform=Transform(x=cx, y=cy),
                          stitch=self._default_stitch(), layer=self._current_layer)
             self.add_shape(sh)
+        elif self.tool == SCORE:
+            score_layer = "Score" if self.doc.layer("Score") else self._current_layer
+            sh = PathShape(points=[Vec2(p.x(), p.y()) for p in pts],
+                           close_path=False, transform=Transform(),
+                           layer=score_layer)  # fold / skive / decoration line
+            self.add_shape(sh)
         else:  # STITCHLINE
             sl = StitchLine(points=[Vec2(p.x(), p.y()) for p in pts],
                             closed=False,
@@ -339,11 +383,34 @@ class Canvas(QGraphicsView):
         self._poly_pts = []
         self._clear_preview()
 
+    # -- vertex editing -------------------------------------------------
+    def enter_vertex_edit(self, owner) -> None:
+        self.clear_vertex_handles()
+        self._edit_owner = owner
+        if isinstance(owner, ShapeItem):
+            sh = owner.shape
+            worlds = [sh.transform.apply(p) for p in sh.points]
+        else:  # StitchLineItem
+            worlds = list(owner.line.points)
+        for i, w in enumerate(worlds):
+            h = VertexHandle(owner, i, w, self)
+            self.scene_obj.addItem(h)
+            self._handles.append(h)
+
+    def clear_vertex_handles(self) -> None:
+        for h in self._handles:
+            self.scene_obj.removeItem(h)
+        self._handles = []
+        self._edit_owner = None
+
     # -- document <-> scene --------------------------------------------
     def rebuild(self) -> None:
         """Rebuild all items from the document (after open/load)."""
         self.scene_obj.clear()
         self._preview = None
+        self._snap_marker = None
+        self._handles = []
+        self._edit_owner = None
         for sh in self.doc.shapes:
             self.scene_obj.addItem(ShapeItem(sh, self))
         for sl in self.doc.stitch_lines:
@@ -472,6 +539,8 @@ class Canvas(QGraphicsView):
         self.documentChangedSig.emit()
 
     def selection_changed(self) -> None:
+        if self._edit_owner is not None and not self._edit_owner.isSelected():
+            self.clear_vertex_handles()
         self.selectionChangedSig.emit()
 
     def refresh_item(self, item) -> None:

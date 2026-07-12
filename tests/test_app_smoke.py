@@ -130,6 +130,58 @@ def test_snapping(qapp):
     assert (item.pos().x(), item.pos().y()) == (10.0, -4.0)
 
 
+def test_hole_slot_score_tools(qapp):
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document
+    from leathercad.shapes import Circle, Rectangle, PathShape
+
+    win = MainWindow(Document())
+    c = win.canvas
+
+    c.tool = cm.HOLE
+    c.hole_tool_diameter = 5.0
+    c._place_hole(QPointF(20, 10))
+    assert isinstance(win.doc.shapes[-1], Circle)
+    assert win.doc.shapes[-1].stitch is None  # hardware hole, cut only
+
+    c.tool = cm.SLOT
+    c._finalize_drag(QPointF(0, 0), QPointF(40, 12))
+    slot = win.doc.shapes[-1]
+    assert isinstance(slot, Rectangle) and abs(slot.corner_radius - 6.0) < 1e-6
+
+    c.tool = cm.SCORE
+    c._poly_pts = [QPointF(0, 0), QPointF(30, 0), QPointF(30, 20)]
+    c._finalize_poly()
+    score = win.doc.shapes[-1]
+    assert isinstance(score, PathShape) and score.layer == "Score"
+    assert not score.close_path
+
+
+def test_vertex_editing(qapp):
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.canvas import Transform
+    from leathercad.document import Document
+    from leathercad.shapes import Polygon
+    from leathercad.geometry import Vec2
+
+    win = MainWindow(Document())
+    c = win.canvas
+    poly = Polygon(points=[Vec2(-20, -20), Vec2(20, -20), Vec2(20, 20),
+                           Vec2(-20, 20)],
+                   close_path=True, transform=Transform(x=100, y=0))
+    item = c.add_shape(poly)
+    c.enter_vertex_edit(item)
+    assert len(c._handles) == 4
+    c._handles[0].setPos(70, -30)   # world -> local (-30,-30) via inverse xform
+    assert abs(poly.points[0].x - (-30)) < 1e-6
+    assert abs(poly.points[0].y - (-30)) < 1e-6
+    c.clear_vertex_handles()
+    assert c._handles == []
+
+
 def test_export_from_document(qapp, tmp_path):
     from leathercad_app.mainwindow import MainWindow
     from leathercad.document import Document

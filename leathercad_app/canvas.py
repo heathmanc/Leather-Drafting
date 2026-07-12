@@ -24,7 +24,8 @@ from leathercad.stitchsettings import StitchSettings
 from leathercad.stitchline import StitchLine
 from leathercad.holes import LooseHole
 from leathercad.stitching import stitch_polyline, Hole, StitchResult, flip_symmetry
-from .items import ShapeItem, StitchLineItem, VertexHandle, HoleItem
+from .items import (ShapeItem, StitchLineItem, VertexHandle, HoleItem,
+                    ResizeHandle)
 
 try:
     import shiboken6
@@ -192,6 +193,7 @@ class Canvas(QGraphicsView):
         self.drag_to_draw = False
         self._handles: List[VertexHandle] = []
         self._edit_owner = None
+        self._resize_handles = []
         # Hold strong Python refs to every scene item we create. PySide6 can
         # otherwise garbage-collect a live item's wrapper and free the C++
         # object while it is still selected -> crash in clearSelection().
@@ -1000,6 +1002,7 @@ class Canvas(QGraphicsView):
     # -- vertex editing -------------------------------------------------
     def enter_vertex_edit(self, owner) -> None:
         self.clear_vertex_handles()
+        self.clear_resize_handles()
         self._edit_owner = owner
         # Lock the shape while editing so clicks hit the node handles, not the
         # shape (which would drag the whole outline and leave nodes behind).
@@ -1016,6 +1019,32 @@ class Canvas(QGraphicsView):
             self.scene_obj.removeItem(h)
         self._handles = []
         self._edit_owner = None
+
+    # -- box resize handles --------------------------------------------
+    def show_resize_handles(self, owner) -> None:
+        """Put 8 box-resize grips (4 corners + 4 edge midpoints) on ``owner``."""
+        self.clear_resize_handles()
+        if owner is None or owner.resize_extents() is None:
+            return
+        grips = [(-1, -1), (0, -1), (1, -1), (1, 0),
+                 (1, 1), (0, 1), (-1, 1), (-1, 0)]
+        for g in grips:
+            h = ResizeHandle(g, owner, self)
+            self.scene_obj.addItem(h)
+            self._resize_handles.append(h)
+
+    def clear_resize_handles(self) -> None:
+        for h in self._resize_handles:
+            self.scene_obj.removeItem(h)
+        self._resize_handles = []
+
+    def resize_handle_moved(self, dragged) -> None:
+        # the shape geometry changed: move the sibling grips to the new box and
+        # keep the Properties fields in step (also refreshes any snap caches).
+        for h in self._resize_handles:
+            if h is not dragged:
+                h.reposition()
+        self.documentChangedSig.emit()
 
     # -- tracked scene item lifetime -----------------------------------
     def _add_item(self, item):
@@ -1044,6 +1073,7 @@ class Canvas(QGraphicsView):
         self._trim_hover = None
         self._align_guides = []
         self._handles = []
+        self._resize_handles = []
         self._edit_owner = None
         for sh in self.doc.shapes:
             self._add_item(ShapeItem(sh, self))
@@ -1215,17 +1245,37 @@ class Canvas(QGraphicsView):
 
     def item_moved(self, item) -> None:
         self._moved_during_press = True
+        self._reposition_resize_handles()
         self.documentChangedSig.emit()
 
     def selection_changed(self) -> None:
         if self._edit_owner is not None and not self._edit_owner.isSelected():
             self.clear_vertex_handles()
+        self._refresh_resize_handles()
         self.selectionChangedSig.emit()
+
+    def _refresh_resize_handles(self) -> None:
+        """Show box-resize grips when exactly one resizable shape is selected
+        and we're not in vertex-edit mode; otherwise hide them."""
+        if self._edit_owner is not None:
+            self.clear_resize_handles()
+            return
+        sel = [it for it in self.selected_items() if isinstance(it, ShapeItem)]
+        if len(sel) == 1 and sel[0].resize_extents() is not None:
+            self.show_resize_handles(sel[0])
+        else:
+            self.clear_resize_handles()
+
+    def _reposition_resize_handles(self) -> None:
+        for h in self._resize_handles:
+            if _alive(h) and _alive(h.owner):
+                h.reposition()
 
     def refresh_item(self, item) -> None:
         if item is None or not _alive(item):
             return
         item.sync_from_model()
+        self._reposition_resize_handles()
         self.documentChangedSig.emit()
 
     def refresh_all(self) -> None:

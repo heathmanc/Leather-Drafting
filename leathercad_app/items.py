@@ -163,6 +163,118 @@ class VertexHandle(QGraphicsItem):
         return super().itemChange(change, value)
 
 
+class ResizeHandle(QGraphicsItem):
+    """A constant-size box-resize grip on a shape's bounding box. ``grip`` is a
+    (gx, gy) pair in {-1, 0, 1}: corners scale both axes, edge midpoints one.
+    Dragging keeps the opposite corner/edge pinned in world space (Illustrator /
+    Fusion style) and resizes the shape's width/height (or rx/ry)."""
+
+    SIZE = 3.5  # pixels (ignores view transform)
+
+    def __init__(self, grip, owner, canvas):
+        super().__init__()
+        self.grip = grip                 # (gx, gy)
+        self.owner = owner
+        self.canvas = canvas
+        self._dragged = False
+        self.setFlags(
+            QGraphicsItem.ItemIsMovable
+            | QGraphicsItem.ItemSendsGeometryChanges
+            | QGraphicsItem.ItemIgnoresTransformations
+        )
+        self.setZValue(2100)
+        gx, gy = grip
+        if gx and gy:
+            self.setCursor(Qt.SizeFDiagCursor if gx == gy else Qt.SizeBDiagCursor)
+        elif gx:
+            self.setCursor(Qt.SizeHorCursor)
+        else:
+            self.setCursor(Qt.SizeVerCursor)
+        self.reposition()
+
+    # world position of this grip on the current shape box
+    def _grip_world(self):
+        t = self.owner.model.transform
+        ext = self.owner.resize_extents()
+        if ext is None:
+            return None
+        hx, hy = ext
+        gx, gy = self.grip
+        return t.apply(Vec2(gx * hx, gy * hy))
+
+    def reposition(self):
+        w = self._grip_world()
+        if w is not None:
+            self._syncing = True
+            self.setPos(w.x, w.y)
+            self._syncing = False
+
+    def boundingRect(self) -> QRectF:
+        s = self.SIZE + 4
+        return QRectF(-s, -s, 2 * s, 2 * s)
+
+    def shape(self):
+        p = QPainterPath()
+        s = self.SIZE + 3
+        p.addRect(QRectF(-s, -s, 2 * s, 2 * s))
+        return p
+
+    def paint(self, painter, option, widget=None):
+        painter.setRenderHint(painter.RenderHint.Antialiasing, True)
+        s = self.SIZE
+        painter.setPen(QPen(QColor(30, 110, 220), 1))
+        painter.setBrush(QBrush(QColor(255, 255, 255)))
+        painter.drawRect(QRectF(-s, -s, 2 * s, 2 * s))
+
+    def mousePressEvent(self, event):
+        if self.canvas is not None:
+            self.canvas.begin_node_snap(self)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if self.canvas is not None:
+            self.canvas.end_node_snap()
+        if self._dragged and self.canvas is not None:
+            self._dragged = False
+            self.canvas.commitRequested.emit()
+
+    def itemChange(self, change, value):
+        if getattr(self, "_syncing", False):
+            return super().itemChange(change, value)
+        if change == QGraphicsItem.ItemPositionChange and self.canvas is not None:
+            return self.canvas.snap_node(value)
+        if change == QGraphicsItem.ItemPositionHasChanged:
+            self._dragged = True
+            self._apply_resize(Vec2(self.pos().x(), self.pos().y()))
+        return super().itemChange(change, value)
+
+    def _apply_resize(self, grip_world: Vec2) -> None:
+        owner = self.owner
+        ext = owner.resize_extents()
+        if ext is None:
+            return
+        hx, hy = ext
+        t = owner.model.transform
+        gx, gy = self.grip
+        anchor_local = Vec2(-gx * hx, -gy * hy)      # opposite corner/edge
+        anchor_world = t.apply(anchor_local)         # stays fixed
+        g_local = t.inverse_apply(grip_world)
+        hx_new = abs(g_local.x - anchor_local.x) / 2.0 if gx else hx
+        hy_new = abs(g_local.y - anchor_local.y) / 2.0 if gy else hy
+        hx_new = max(0.5, hx_new)
+        hy_new = max(0.5, hy_new)
+        owner.set_resize_extents(hx_new, hy_new)
+        # keep the anchor pinned: place the new (symmetric) box so its opposite
+        # corner still lands on anchor_world.
+        anchor_new = Vec2(-gx * hx_new, -gy * hy_new)
+        o = anchor_world - t.apply_dir(anchor_new)
+        t.x, t.y = o.x, o.y
+        owner.sync_from_model()
+        if self.canvas is not None:
+            self.canvas.resize_handle_moved(self)
+
+
 class HoleItem(QGraphicsItem):
     """One individual (ungrouped) stitch hole: selectable, movable, deletable."""
 
@@ -450,6 +562,30 @@ class ShapeItem(QGraphicsItem):
             if not any((p - q).length() < 1e-6 for q, _ in out):
                 out.append((p, k))
         return out
+
+    # -- box resize (drag-handle) support ------------------------------
+    def resize_extents(self):
+        """Local half-extents (hx, hy) of a box-resizable shape, or None.
+        Rectangles resize by width/height, circles/ellipses by rx/ry."""
+        from leathercad.shapes import Rectangle, Circle, Ellipse
+        sh = self.model
+        if isinstance(sh, Rectangle):
+            return sh.width / 2.0, sh.height / 2.0
+        if isinstance(sh, (Circle, Ellipse)):
+            return sh.rx, sh.ry
+        return None
+
+    def set_resize_extents(self, hx: float, hy: float) -> None:
+        from leathercad.shapes import Rectangle, Circle, Ellipse
+        sh = self.model
+        hx = max(0.5, hx)
+        hy = max(0.5, hy)
+        if isinstance(sh, Rectangle):
+            sh.width, sh.height = 2.0 * hx, 2.0 * hy
+        elif isinstance(sh, Circle):
+            sh.rx = sh.ry = max(hx, hy)     # a circle stays round
+        elif isinstance(sh, Ellipse):
+            sh.rx, sh.ry = hx, hy
 
     def world_snap_nodes(self):
         t = self.model.transform

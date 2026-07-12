@@ -126,6 +126,9 @@ def test_item_does_not_shadow_qt_shape_method(qapp):
     # shape() is Qt's method -> QPainterPath; the model lives on .model
     assert isinstance(item.shape(), QPainterPath)
     assert isinstance(item.model, Rectangle)
+    # clear selection so box-resize handles aren't sitting on the outline
+    win.canvas.scene_obj.clearSelection()
+    win.canvas.selection_changed()
     # hit-testing succeeds ON THE OUTLINE (interior is not clickable now);
     # the 80x50 rect's right edge is at x=40
     hit = win.canvas.scene_obj.itemAt(QPointF(40, 0), QTransform())
@@ -387,6 +390,7 @@ def test_outline_hit_testing(qapp):
     item = c.add_shape(Rectangle(width=80, height=50, transform=Transform(x=0, y=0),
                                  layer="Cut"))
     scene = c.scene_obj
+    scene.clearSelection(); c.selection_changed()   # drop box-resize handles
     assert scene.itemAt(QPointF(40, 0), QTransform()) is item   # on right edge
     assert scene.itemAt(QPointF(0, 0), QTransform()) is None     # empty interior
 
@@ -1218,6 +1222,40 @@ def test_toggle_stitch_after_move_keeps_position(qapp):
     win.properties.g_stitch.setChecked(True)  # toggling stitching runs _apply
     win.properties._apply()
     assert rect.transform.x == 80.0 and rect.transform.y == 20.0
+
+
+def test_resize_handles_appear_and_resize(qapp):
+    # Selecting a single box-shape shows 8 resize grips; dragging a corner grip
+    # resizes the shape and keeps the OPPOSITE corner pinned in world space.
+    from leathercad_app import canvas as cm
+    from leathercad_app.items import ResizeHandle
+    from leathercad.shapes import Rectangle, Transform
+    from leathercad.document import Document
+
+    doc = Document()
+    rect = Rectangle(width=40, height=30, transform=Transform(x=50, y=50))
+    doc.add_shape(rect)
+    c = cm.Canvas(doc)
+    c.snap_to_nodes = False
+    c.snap_to_grid = False
+    c.rebuild()
+    item = next(it for it in c.scene_obj.items()
+                if getattr(it, "model", None) is rect)
+    item.setSelected(True)
+    c.selection_changed()
+    handles = [h for h in c.scene_obj.items() if isinstance(h, ResizeHandle)]
+    assert len(handles) == 8
+    tr = next(h for h in handles if h.grip == (1, 1))     # top-right grip
+    assert (round(tr.pos().x()), round(tr.pos().y())) == (70, 65)
+    tr.setPos(80, 75)                                     # drag it out
+    assert round(rect.width) == 50 and round(rect.height) == 40
+    # opposite (bottom-left) corner must stay at (30, 35)
+    assert round(rect.transform.x - rect.width / 2) == 30
+    assert round(rect.transform.y - rect.height / 2) == 35
+    # deselecting removes the grips
+    c.scene_obj.clearSelection()
+    c.selection_changed()
+    assert not [h for h in c.scene_obj.items() if isinstance(h, ResizeHandle)]
 
 
 def test_line_length_and_angle_field(qapp):

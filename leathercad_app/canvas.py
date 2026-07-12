@@ -48,6 +48,7 @@ STITCHLINE = "stitchline"
 HOLE = "hole"
 SLOT = "slot"
 SCORE = "score"
+TRIM = "trim"
 
 _DRAG_TOOLS = (RECT, ROUNDED, ELLIPSE, CIRCLE, SLOT)
 _POLY_TOOLS = (POLYGON, STITCHLINE, SCORE)
@@ -111,6 +112,18 @@ def _path_from_chain(chain, tol, layer):
     sh.transform = Transform(x=cx, y=cy)
     sh.layer = layer
     return sh
+
+
+def _point_polyline_dist(p: Vec2, poly) -> float:
+    """Shortest distance from point ``p`` to a polyline (list of Vec2)."""
+    best = float("inf")
+    for i in range(len(poly) - 1):
+        a, b = poly[i], poly[i + 1]
+        ab = b - a
+        d2 = ab.length_sq()
+        t = 0.0 if d2 <= 1e-12 else max(0.0, min(1.0, (p - a).dot(ab) / d2))
+        best = min(best, (a.lerp(b, t) - p).length())
+    return best
 
 
 def _segment_shape(kind, wpts, layer):
@@ -336,7 +349,13 @@ class Canvas(QGraphicsView):
             self._pan_last = event.position()
             self.setCursor(Qt.ClosedHandCursor)
             return
-        pos = self.mapToScene(event.position().toPoint())
+        raw = self.mapToScene(event.position().toPoint())
+        if self.tool == TRIM:
+            if event.button() == Qt.LeftButton:
+                self._do_trim(Vec2(raw.x(), raw.y()))
+            event.accept()
+            return
+        pos = raw
         if self.tool != SELECT:
             pos, _v = self.snap(pos)
         if self.tool == SELECT:
@@ -971,6 +990,81 @@ class Canvas(QGraphicsView):
         self._emit_commit()
 
     # -- break a shape into individually movable segments --------------
+    # -- trim: cut the segment under the cursor back to its intersections ---
+    def _trim_targets(self):
+        return [it for it in self._live
+                if isinstance(it, ShapeItem) and _alive(it)]
+
+    def _entity_for_trim(self, click: Vec2):
+        """The ShapeItem whose outline passes nearest ``click`` (within a few
+        px), or None."""
+        best, best_d = None, float("inf")
+        for it in self._trim_targets():
+            wpts, _c, _cl = it.model.world_polyline()
+            d = _point_polyline_dist(click, [Vec2(p.x, p.y) for p in wpts])
+            if d < best_d:
+                best_d, best = d, it
+        tol = 12.0 / max(self._zoom, 1e-3)     # ~12 px in mm
+        return best if (best is not None and best_d <= tol) else None
+
+    def _trim_cutters(self, exclude):
+        """World polylines of every other outline/seam, used as cut lines."""
+        cutters = []
+        for it in self._live:
+            if it is exclude or not _alive(it):
+                continue
+            if isinstance(it, ShapeItem):
+                wpts, _c, closed = it.model.world_polyline()
+                poly = [Vec2(p.x, p.y) for p in wpts]
+                if closed and poly and (poly[0] - poly[-1]).length() > 1e-9:
+                    poly.append(poly[0])
+                if len(poly) >= 2:
+                    cutters.append(poly)
+            elif isinstance(it, StitchLineItem):
+                poly = [Vec2(p.x, p.y) for p in it.line.points]
+                if len(poly) >= 2:
+                    cutters.append(poly)
+        return cutters
+
+    def _do_trim(self, click: Vec2) -> None:
+        import copy
+        from leathercad.trim import trim as _trim
+        it = self._entity_for_trim(click)
+        if it is None:
+            self.statusMessage.emit("Trim: click on part of an outline to cut")
+            return
+        model = it.model
+        segs = self._segments_world(model)
+        if not segs:
+            return
+        closed = model.world_polyline()[2]
+        result = _trim(segs, self._trim_cutters(it), click, closed)
+
+        self._suppress_commit = True
+        self.doc.remove_shape(model)
+        self._remove_item(it)
+        made = []
+        if result:
+            for chain in result:
+                conv = [(pts[0], pts[-1], kind,
+                         (pts[1] if kind == "arc" and len(pts) >= 3 else None))
+                        for kind, pts in chain]
+                sh = _path_from_chain(conv, 0.6, model.layer)
+                if model.stitch is not None:
+                    sh.stitch = copy.deepcopy(model.stitch)
+                sh.opacity = model.opacity
+                self.doc.add_shape(sh)
+                made.append(self._add_item(ShapeItem(sh, self)))
+        self._suppress_commit = False
+
+        self.scene_obj.clearSelection()
+        for m in made:
+            m.setSelected(True)
+        self.documentChangedSig.emit()
+        self.selectionChangedSig.emit()
+        self._emit_commit()
+        self.statusMessage.emit("Trimmed" if result else "Removed (nothing crossed it)")
+
     def break_apart_selected(self) -> None:
         """Explode selected shapes into one open path per edge (lines and arcs),
         each recentred with its own transform so you can move them separately."""

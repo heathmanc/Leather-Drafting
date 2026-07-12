@@ -32,6 +32,7 @@ TOOLS = [
     ("Slot", canvas_mod.SLOT, "T"),
     ("Score line", canvas_mod.SCORE, "K"),
     ("Stitch line (seam)", canvas_mod.STITCHLINE, "L"),
+    ("Trim to intersections", canvas_mod.TRIM, "X"),
 ]
 
 _ICON_FOR = {
@@ -40,6 +41,7 @@ _ICON_FOR = {
     canvas_mod.CIRCLE: "circle", canvas_mod.POLYGON: "polygon",
     canvas_mod.HOLE: "hole", canvas_mod.SLOT: "slot",
     canvas_mod.SCORE: "score", canvas_mod.STITCHLINE: "stitchline",
+    canvas_mod.TRIM: "trim",
 }
 
 
@@ -275,6 +277,12 @@ class MainWindow(QMainWindow):
     # -- slots ----------------------------------------------------------
     def _set_tool(self, mode):
         self.canvas.tool = mode
+        cur = Qt.CrossCursor if mode == canvas_mod.TRIM else Qt.ArrowCursor
+        self.canvas.viewport().setCursor(cur)
+        if mode == canvas_mod.TRIM:
+            self.canvas.statusMessage.emit(
+                "Trim: click the part of an outline to cut back to where it "
+                "crosses another shape")
 
     def _select_tool_action(self, index):
         self._tool_actions[index].setChecked(True)

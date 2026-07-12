@@ -655,6 +655,42 @@ def test_make_back_piece_mirrors_and_registers(qapp):
                    for b in bh), "front hole has no mirrored partner on the back"
 
 
+def test_trim_tool_cuts_outline_at_intersections(qapp):
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.canvas import TRIM
+    from leathercad_app.items import ShapeItem
+    from leathercad.document import Document
+    from leathercad.geometry import Vec2
+
+    doc = Document()
+    # two overlapping sharp rectangles; the right edge of A (x=30) passes
+    # through B, and B's left edge (x=20) passes through A.
+    a = Rectangle(width=60, height=40, transform=Transform(x=0, y=0), layer="Cut")
+    b = Rectangle(width=60, height=40, transform=Transform(x=40, y=0), layer="Cut")
+    doc.add_shape(a)
+    doc.add_shape(b)
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    n_before = len(_shape_items(c))
+    assert n_before == 2
+
+    # Trim A's right edge (x=30) at the point where B overlaps it. A spans
+    # x in [-30, 30], B spans [10, 70]; A's right edge x=30 lies inside B,
+    # so clicking it removes that edge back to B's top/bottom crossings.
+    c.tool = TRIM
+    c._do_trim(Vec2(30.0, 0.0))
+
+    items = _shape_items(c)
+    # A became an open path (still one item), B untouched -> still 2 items
+    assert len(items) == 2
+    # the trimmed piece is now an open outline (not a closed Rectangle)
+    from leathercad.shapes import Rectangle as R
+    kinds = sorted(type(it.model).__name__ for it in items)
+    assert "Rectangle" in kinds            # B is still a rectangle
+    assert any(not isinstance(it.model, R) for it in items)   # A was trimmed
+
+
 def test_export_from_document(qapp, tmp_path):
     from leathercad_app.mainwindow import MainWindow
     from leathercad.document import Document

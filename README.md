@@ -99,6 +99,7 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Snap to nodes** | with Snap on, dragging a shape (or a node while editing) magnetically snaps to other shapes'/holes' nodes |
 | **Break apart** | right-click a shape → *Break apart into segments* (`Ctrl+B`) — each edge (line or arc) becomes its own movable piece |
 | **Join / weld** | select 2+ pieces → *Join / weld segments* (`Ctrl+J`) — chains segments whose endpoints touch into one path (arcs kept) |
+| **Trim** | Trim tool (`X`) — click the part of an outline you want gone; it's cut back to wherever it crosses another shape, just like Fusion 360 / LightBurn. Arcs are preserved; a closed shape opens, an open one splits |
 | **Group / ungroup holes** | right-click (or `Ctrl+G` / `Ctrl+Shift+G`) — ungroup to delete individual holes (below) |
 | **Right-click menu** | Group / Ungroup / Convert to nodes / Duplicate / Delete on the selection |
 | **Radius corners** | select a rectangle/polygon, set *Corner radius* in Properties |
@@ -115,6 +116,16 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Export** | SVG `Ctrl+E` or DXF — millimetre-accurate, layer-coloured |
 
 Everything is in **millimetres**, Y-up, and the canvas is WYSIWYG with the export.
+
+### Trim
+
+Pick the **Trim** tool (`X`) and click the part of an outline you want gone. It
+is cut back to the two points where it crosses other geometry — the classic
+2D-sketch trim from Fusion 360 / LightBurn. Curve type is kept (a trimmed arc
+stays an arc); a closed shape opens up, and an open path clicked in the middle
+splits into two. Clicking a piece that nothing crosses removes it outright.
+
+![trim: click a segment to cut it back to its intersections](docs/trim.png)
 
 ### Group / ungroup holes (removing individual ones)
 
@@ -223,6 +234,7 @@ examples/  tests/  docs/
 - [x] Break a shape apart into movable line/arc segments, and join/weld them back
 - [x] Flip-symmetric hole distribution + back-to-back symmetry validation
 - [x] Symmetric rounded-corner holes (apex / straddle) + make-back-piece (mirror)
+- [x] Trim to intersections (Fusion / LightBurn style), arcs preserved
 - [ ] Boolean ops (windows, cut-outs) and true seam-allowance offset
 - [ ] Alignment guides (smart snapping lines) while dragging
 - [ ] Import reference images / trace an existing pattern

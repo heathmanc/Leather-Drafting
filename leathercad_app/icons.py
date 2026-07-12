@@ -83,6 +83,15 @@ def tool_icon(kind: str, size: int = 22) -> QIcon:
         p.drawRect(QRectF(m, m, 8, 8))
         p.drawRect(QRectF(size - m - 8, size - m - 8, 8, 8))
         _dots_along(p, [QPointF(size / 2, size / 2)], _ACCENT, 1.4)
+    elif kind == "trim":
+        # scissors: two blades crossing, rings at the bottom
+        b1 = QPointF(size * 0.28, size - m - 1)
+        b2 = QPointF(size * 0.72, size - m - 1)
+        p.drawLine(QPointF(size * 0.78, m), b1)
+        p.drawLine(QPointF(size * 0.22, m), b2)
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(b1, 2.3, 2.3)
+        p.drawEllipse(b2, 2.3, 2.3)
     else:
         p.drawRect(rect)
     p.end()

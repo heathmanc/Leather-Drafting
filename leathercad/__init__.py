@@ -31,6 +31,7 @@ from .stitchline import StitchLine
 from .holes import LooseHole
 from .document import Document
 from .svg import SvgDocument
+from .trim import trim, intersection_arclengths
 from . import export
 
 __version__ = "0.2.0"
@@ -48,6 +49,6 @@ __all__ = [
     "PathShape", "EditablePath", "Edge", "arc_through",
     "Layer", "default_layers", "CUT", "SCORE", "ENGRAVE", "STITCH",
     "StitchLine", "LooseHole", "Document",
-    "SvgDocument", "export",
+    "SvgDocument", "trim", "intersection_arclengths", "export",
     "__version__",
 ]

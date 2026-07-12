@@ -68,11 +68,17 @@ need PySide6 for the GUI.
 | | |
 |---|---|
 | **Draw** | Rectangle `R`, Rounded rect `O`, Ellipse `E`, Circle `C`, Polygon `P` (click points, double-click to finish) |
+| **Holes / slots / fold lines** | Hole `H` (hardware), Slot `T` (stadium), Score line `K` (fold/skive on the Score layer) |
 | **Seam** | Stitch line `L` — a shared seam for cross-piece registration |
 | **Select / move** | `S` — drag to move, drag one piece over another to check fit |
+| **Snapping** | toolbar *Snap* toggle + grid size; snaps to grid and to other shapes' corners while drawing and moving |
+| **Exact sizes** | live W×H shown while dragging; after drawing, the size field is focused so you can type an exact value |
+| **Edit vertices** | double-click a polygon or seam to drag its points |
 | **Radius corners** | select a rectangle/polygon, set *Corner radius* in Properties |
-| **Iron & holes** | per shape: pick an iron (mm or SPI), inset, round or slanted-slit holes, live hole count + spacing readout |
+| **Iron & holes** | per shape: pick an iron (mm or SPI), inset, round or slanted-slit holes, single or **double row** (saddle stitch) + backstitch, live hole count + spacing readout |
 | **Layers → laser jobs** | colour-coded Cut / Score / Engrave / Stitch layers with visibility |
+| **Arrange** | align (left/centre/right/top/middle/bottom) and distribute selected shapes |
+| **Undo / redo** | `Ctrl+Z` / `Ctrl+Shift+Z` |
 | **Duplicate / Delete / Fit** | `Ctrl+D` / `Del` / `F` |
 | **Zoom / pan** | mouse wheel / middle-drag |
 | **Save / Open** | `Ctrl+S` / `Ctrl+O` (JSON project files) |
@@ -153,11 +159,15 @@ examples/  tests/  docs/
 - [x] Cross-piece registration (deterministic + mirror-safe + shared seams)
 - [x] Colour layers → laser jobs
 - [x] SVG + DXF export, JSON project save/load
-- [ ] Snapping / alignment guides / numeric dimension entry while drawing
-- [ ] Edit polygon/seam vertices after creation; add holes/skives/slots
-- [ ] Two-row saddle-stitch offset and backstitch conventions
+- [x] Undo/redo history
+- [x] Grid + vertex snapping, live and type-in dimensions
+- [x] Align / distribute
+- [x] Edit polygon/seam vertices; add holes / slots / skive (score) lines
+- [x] Two-row saddle stitch + backstitch markers
 - [ ] Boolean ops (windows, cut-outs) and true seam-allowance offset
-- [ ] Undo/redo history
+- [ ] Alignment guides (smart snapping lines) while dragging
+- [ ] Import reference images / trace an existing pattern
+- [ ] Print-to-scale PDF tiling for hand cutting
 
 ## License
 

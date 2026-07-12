@@ -1364,6 +1364,39 @@ def test_make_back_piece_mirrors_loose_holes(qapp):
     assert mirrored == [(100.0, 50.0), (120.0, 50.0)]
 
 
+def test_group_drag_self_heals_frozen_members(qapp):
+    # A group drag temporarily freezes the non-leader members; if that drag's
+    # release is ever missed, grabbing any member again must un-freeze the group
+    # so it can always be moved (regression: "sometimes can't move a group").
+    from PySide6.QtWidgets import QGraphicsItem
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document, LooseHole
+    from leathercad.geometry import Vec2
+
+    doc = Document()
+    for x in (10, 20, 30):
+        doc.holes.append(LooseHole(point=Vec2(x, 10)))
+    c = cm.Canvas(doc)
+    c.snap_to_nodes = True
+    c.snap_to_grid = False
+    c.rebuild()
+    holes = {round(it.hole.point.x): it for it in c.scene_obj.items()
+             if getattr(it, "hole", None) is not None}
+    for h in holes.values():
+        h.setSelected(True)
+    c.make_group()
+
+    def movable(it):
+        return bool(it.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
+
+    # begin a group drag then never end it -> members 10 and 20 are frozen
+    c.begin_move_snap(holes[30])
+    assert not movable(holes[10]) and not movable(holes[20])
+    # pressing any member heals the whole group (select_group_of on press)
+    c.select_group_of(holes[10])
+    assert movable(holes[10]) and movable(holes[20]) and movable(holes[30])
+
+
 def test_move_group_survives_save_load(qapp):
     from leathercad.document import Document, LooseHole
     from leathercad.geometry import Vec2

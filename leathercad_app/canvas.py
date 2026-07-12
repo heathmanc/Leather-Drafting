@@ -217,6 +217,7 @@ class Canvas(QGraphicsView):
         self._live = set()
         self._snap_cache = None   # static snap nodes captured at drag start
         self._group_drag = None   # active move-group drag state
+        self._nonmovable_members = []   # items we temporarily froze for a group drag
 
         # snapping -- grid and node snapping toggle independently
         self.snap_to_nodes = True    # ends / midpoints / centres / intersections
@@ -565,9 +566,21 @@ class Canvas(QGraphicsView):
         self._clear_align_guides()
 
     # -- magnetic node snapping while dragging shapes -------------------
+    def _restore_group_movability(self) -> None:
+        """Re-enable ItemIsMovable on any items a group drag temporarily froze.
+        Self-healing: called at the start of every drag so a leftover frozen
+        member (e.g. if a release was missed) can always be moved again."""
+        for m in self._nonmovable_members:
+            if _alive(m):
+                m.setFlag(QGraphicsItem.ItemIsMovable, True)
+        self._nonmovable_members = []
+
     def begin_move_snap(self, item) -> None:
         # capture other shapes' nodes (+ their intersections) once, at drag start
+        self._restore_group_movability()
         self._group_drag = None
+        if _alive(item):
+            item.setFlag(QGraphicsItem.ItemIsMovable, True)   # leader always moves
         if not self.snap_to_nodes:
             self._snap_cache = None
             return
@@ -601,13 +614,11 @@ class Canvas(QGraphicsView):
         }
         for m in members:
             m.setFlag(QGraphicsItem.ItemIsMovable, False)
+        self._nonmovable_members = list(members)
 
     def end_move_snap(self) -> None:
-        if self._group_drag is not None:
-            for m in self._group_drag["members"]:
-                if _alive(m):
-                    m.setFlag(QGraphicsItem.ItemIsMovable, True)
-            self._group_drag = None
+        self._restore_group_movability()
+        self._group_drag = None
         self._snap_cache = None
         self._hide_snap_marker()
 
@@ -1154,6 +1165,8 @@ class Canvas(QGraphicsView):
         self._handles = []
         self._resize_handles = []
         self._edit_owner = None
+        self._group_drag = None
+        self._nonmovable_members = []
         for sh in self.doc.shapes:
             self._add_item(ShapeItem(sh, self))
         for sl in self.doc.stitch_lines:
@@ -1837,6 +1850,11 @@ class Canvas(QGraphicsView):
         so Qt's multi-item drag moves every member together. Driven by the mouse
         press -- NOT by selection_changed, whose cascade would re-select members
         while Qt is trying to deselect them (leaving the group 'stuck')."""
+        # heal any member a previous group drag left frozen, and make sure the
+        # item now being pressed can move (runs on every item's press)
+        self._restore_group_movability()
+        if _alive(item):
+            item.setFlag(QGraphicsItem.ItemIsMovable, True)
         m = self._item_model(item)
         gid = getattr(m, "group_id", None) if m is not None else None
         if not gid:

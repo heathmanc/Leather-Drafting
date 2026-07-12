@@ -1796,3 +1796,43 @@ def test_stitchline_node_drag_moves_only_that_node(qapp):
     assert (sl.line.points[0].x, sl.line.points[0].y) == (0.0, 0.0)
     assert (h0.pos().x(), h0.pos().y()) == (0.0, 0.0)     # other handle unmoved
     assert (h1.pos().x(), h1.pos().y()) == (40.0, 20.0)
+
+
+def test_press_unselected_item_drops_prior_selection(qapp):
+    """With item A selected, plain-pressing item B must select ONLY B (drop A) so
+    a drag moves B alone -- not A and B together as an accidental group."""
+    from PySide6.QtCore import QPointF, QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import ShapeItem
+    from leathercad.document import Document
+    from leathercad.shapes import Rectangle, Transform
+
+    doc = Document()
+    doc.add_shape(Rectangle(width=20, height=20, transform=Transform(x=-40, y=0),
+                            layer="Cut"))
+    doc.add_shape(Rectangle(width=20, height=20, transform=Transform(x=40, y=0),
+                            layer="Cut"))
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    items = [it for it in c.scene_obj.items() if isinstance(it, ShapeItem)]
+    A = [it for it in items if it.model.transform.x == -40][0]
+    B = [it for it in items if it.model.transform.x == 40][0]
+
+    A.setSelected(True)
+    ev = QMouseEvent(QEvent.MouseButtonPress, QPointF(0, 0),
+                     Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+    c.press_select(B, ev)
+    c.begin_move_snap(B)
+    assert B.isSelected() and not A.isSelected()   # only B now
+    assert c._group_drag is None                    # no accidental group drag
+    c.end_move_snap()
+
+    # Ctrl-press keeps the multi-selection intact (does not drop A)
+    c.scene_obj.clearSelection()
+    A.setSelected(True)
+    ctrl = QMouseEvent(QEvent.MouseButtonPress, QPointF(0, 0),
+                       Qt.LeftButton, Qt.LeftButton, Qt.ControlModifier)
+    c.press_select(B, ctrl)
+    assert A.isSelected()                            # A preserved for multi-select

@@ -2273,6 +2273,26 @@ class Canvas(QGraphicsView):
         return any(getattr(self._item_model(it), "group_id", None)
                    for it in self.selected_items())
 
+    def press_select(self, item, event=None) -> None:
+        """Left-press selection. Make ``item`` (plus its move-group) the current
+        selection, clearing any previous selection FIRST -- unless Ctrl/Shift is
+        held for multi-select, or the item is already selected (so an existing
+        multi-selection can still be dragged as one).
+
+        Doing this on the press, before the drag begins, is what stops a
+        previously-selected item from being dragged along with a freshly-pressed
+        one: Qt commits its own press-selection only after our handlers run, so
+        without this the stale selection is still live when the group-drag setup
+        (begin_move_snap) samples it.
+        """
+        mods = event.modifiers() if event is not None else Qt.NoModifier
+        multi = bool(mods & (Qt.ControlModifier | Qt.ShiftModifier))
+        if not multi and not item.isSelected():
+            self.scene_obj.clearSelection()
+            if _alive(item):
+                item.setSelected(True)
+        self.select_group_of(item)
+
     def select_group_of(self, item) -> None:
         """On pressing a grouped item, select the whole group (itself included)
         so Qt's multi-item drag moves every member together. Driven by the mouse

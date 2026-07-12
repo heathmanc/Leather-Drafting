@@ -1260,7 +1260,6 @@ class Canvas(QGraphicsView):
     def selection_changed(self) -> None:
         if self._edit_owner is not None and not self._edit_owner.isSelected():
             self.clear_vertex_handles()
-        self._expand_selection_to_groups()
         self._refresh_resize_handles()
         self.selectionChangedSig.emit()
 
@@ -1736,25 +1735,19 @@ class Canvas(QGraphicsView):
         return any(getattr(self._item_model(it), "group_id", None)
                    for it in self.selected_items())
 
-    def _expand_selection_to_groups(self) -> None:
-        """When any selected item belongs to a move-group, select the whole
-        group so a drag moves every member together (Qt moves all selected)."""
-        if getattr(self, "_expanding_sel", False):
+    def select_group_of(self, item) -> None:
+        """On pressing a grouped item, select the whole group (itself included)
+        so Qt's multi-item drag moves every member together. Driven by the mouse
+        press -- NOT by selection_changed, whose cascade would re-select members
+        while Qt is trying to deselect them (leaving the group 'stuck')."""
+        m = self._item_model(item)
+        gid = getattr(m, "group_id", None) if m is not None else None
+        if not gid:
             return
-        gids = {getattr(self._item_model(it), "group_id", None)
-                for it in self.selected_items()}
-        gids.discard(None)
-        if not gids:
-            return
-        self._expanding_sel = True
-        try:
-            for it in self.scene_obj.items():
-                m = self._item_model(it)
-                if (m is not None and getattr(m, "group_id", None) in gids
-                        and not it.isSelected()):
-                    it.setSelected(True)
-        finally:
-            self._expanding_sel = False
+        for it in self.scene_obj.items():
+            mm = self._item_model(it)
+            if mm is not None and getattr(mm, "group_id", None) == gid:
+                it.setSelected(True)
 
     # -- grid -----------------------------------------------------------
     def drawBackground(self, painter, rect):

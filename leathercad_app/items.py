@@ -332,6 +332,7 @@ class HoleItem(QGraphicsItem):
 
     def mousePressEvent(self, event):
         if self.canvas is not None:
+            self.canvas.select_group_of(self)   # grouped -> grab the whole group
             self.canvas.begin_move_snap(self)
         super().mousePressEvent(event)
 
@@ -504,6 +505,7 @@ class ShapeItem(QGraphicsItem):
 
     def mousePressEvent(self, event):
         if self.canvas is not None:
+            self.canvas.select_group_of(self)   # grouped -> grab the whole group
             self.canvas.begin_move_snap(self)
         super().mousePressEvent(event)
 
@@ -725,6 +727,11 @@ class StitchLineItem(QGraphicsItem):
             if self.canvas is not None:
                 self.canvas.selection_changed()
         return super().itemChange(change, value)
+
+    def mousePressEvent(self, event):
+        if self.canvas is not None:
+            self.canvas.select_group_of(self)   # grouped -> grab the whole group
+        super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)

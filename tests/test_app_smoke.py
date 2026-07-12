@@ -1244,18 +1244,19 @@ def test_move_group_select_and_move_together(qapp):
     gids = {h.group_id for h in doc.holes}
     assert len(gids) == 1 and None not in gids            # one shared group id
 
-    # selecting a single member expands the selection to the whole group
+    # pressing a single member grabs the whole group (press-driven, so a drag
+    # moves them together and the cascade can't leave the group 'stuck')
     c.scene_obj.clearSelection()
     holes[0].setSelected(True)
-    c.selection_changed()
+    c.select_group_of(holes[0])
     assert len(c.selected_items()) == 3
 
-    # ungroup clears membership; a single click then stays single
+    # ungroup clears membership; pressing a member then stays single
     c.ungroup_group()
     assert {h.group_id for h in doc.holes} == {None}
     c.scene_obj.clearSelection()
     holes[0].setSelected(True)
-    c.selection_changed()
+    c.select_group_of(holes[0])
     assert len(c.selected_items()) == 1
 
 

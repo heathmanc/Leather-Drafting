@@ -1737,3 +1737,62 @@ def test_layers_reload_keeps_selection(qapp):
         keep = panel.list.currentRow()
         panel.reload()
         assert panel.list.currentRow() == keep
+
+
+def test_stitchline_node_edit_keeps_line_locked(qapp):
+    """Node-editing a seam must not let a stray press on the line body drag the
+    whole seam away and strand its node handles (select_group_of used to force
+    the item movable again on every press)."""
+    from PySide6.QtWidgets import QGraphicsItem
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import StitchLineItem
+    from leathercad.document import Document
+    from leathercad.stitchline import StitchLine
+    from leathercad.geometry import Vec2
+
+    doc = Document()
+    doc.add_stitch_line(StitchLine(points=[Vec2(0, 0), Vec2(40, 0)],
+                                   settings=StitchSettings(pitch_mm=4.0, inset=0.0)))
+    win = MainWindow(doc)
+    win.canvas.rebuild()
+    sl = [it for it in win.canvas.scene_obj.items()
+          if isinstance(it, StitchLineItem)][0]
+    sl.setSelected(True)
+    win.canvas.enter_vertex_edit(sl)
+    assert not (sl.flags() & QGraphicsItem.ItemIsMovable)   # frozen for editing
+    # a press on the seam body (what StitchLineItem.mousePressEvent triggers)
+    win.canvas.select_group_of(sl)
+    assert not (sl.flags() & QGraphicsItem.ItemIsMovable)   # stays frozen
+    win.canvas.begin_move_snap(sl)
+    assert not (sl.flags() & QGraphicsItem.ItemIsMovable)   # still frozen
+    # leaving node-edit restores normal movability
+    win.canvas.clear_vertex_handles()
+    assert sl.flags() & QGraphicsItem.ItemIsMovable
+
+
+def test_stitchline_node_drag_moves_only_that_node(qapp):
+    """Dragging a seam node moves that node's handle and endpoint together; the
+    other node (and its handle) stay put."""
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import StitchLineItem
+    from leathercad.document import Document
+    from leathercad.stitchline import StitchLine
+    from leathercad.geometry import Vec2
+
+    doc = Document()
+    doc.add_stitch_line(StitchLine(points=[Vec2(0, 0), Vec2(40, 0)],
+                                   settings=StitchSettings(pitch_mm=4.0, inset=0.0)))
+    win = MainWindow(doc)
+    win.canvas.rebuild()
+    sl = [it for it in win.canvas.scene_obj.items()
+          if isinstance(it, StitchLineItem)][0]
+    sl.setSelected(True)
+    win.canvas.enter_vertex_edit(sl)
+    h0, h1 = win.canvas._handles
+    h1._drag_start = QPointF(h1.pos())
+    h1.setPos(40, 20)                       # drag the endpoint up
+    assert (sl.line.points[1].x, sl.line.points[1].y) == (40.0, 20.0)
+    assert (sl.line.points[0].x, sl.line.points[0].y) == (0.0, 0.0)
+    assert (h0.pos().x(), h0.pos().y()) == (0.0, 0.0)     # other handle unmoved
+    assert (h1.pos().x(), h1.pos().y()) == (40.0, 20.0)

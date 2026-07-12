@@ -640,6 +640,10 @@ class Canvas(QGraphicsView):
         self._nonmovable_members = []
 
     def begin_move_snap(self, item) -> None:
+        # Don't fight the node-edit lock: the item being edited stays frozen so a
+        # stray press on its body can't drag it out from under its handles.
+        if self._edit_owner is not None and item is self._edit_owner:
+            return
         # capture other shapes' nodes (+ their intersections) once, at drag start
         self._restore_group_movability()
         self._group_drag = None
@@ -2274,6 +2278,12 @@ class Canvas(QGraphicsView):
         so Qt's multi-item drag moves every member together. Driven by the mouse
         press -- NOT by selection_changed, whose cascade would re-select members
         while Qt is trying to deselect them (leaving the group 'stuck')."""
+        # While node-editing an item, pressing it (a click on the line/outline
+        # body, or a near-miss on a node handle) must NOT re-enable its
+        # movability -- that would let the whole item drag away and leave its
+        # node handles stranded behind it.
+        if self._edit_owner is not None and item is self._edit_owner:
+            return
         # heal any member a previous group drag left frozen, and make sure the
         # item now being pressed can move (runs on every item's press)
         self._restore_group_movability()

@@ -83,7 +83,7 @@ class VertexHandle(QGraphicsItem):
     def _write_back(self, wx, wy):
         w = Vec2(wx, wy)
         if isinstance(self.owner, ShapeItem):
-            sh = self.owner.shape
+            sh = self.owner.model
             local = sh.transform.inverse_apply(w)
             if 0 <= self.index < len(sh.points):
                 sh.points[self.index] = local
@@ -106,7 +106,7 @@ class ShapeItem(QGraphicsItem):
 
     def __init__(self, shape: Shape, canvas=None):
         super().__init__()
-        self.shape = shape
+        self.model = shape
         self.canvas = canvas
         self._outline: QPolygonF = QPolygonF()
         self._holes: Optional[StitchResult] = None
@@ -124,14 +124,14 @@ class ShapeItem(QGraphicsItem):
     def sync_from_model(self) -> None:
         """Rebuild geometry + holes from the model and reposition."""
         self.prepareGeometryChange()
-        t = self.shape.transform
+        t = self.model.transform
         # oriented (rotation+mirror), pre-translation -- matches Transform.apply
-        local = self.shape.local_path().flatten()
+        local = self.model.local_path().flatten()
         oriented = [t.apply_dir(p) for p in local]
         self._outline = _qpoly(oriented)
 
         self._holes = None
-        st = self.shape.stitch
+        st = self.model.stitch
         if st is not None and st.enabled:
             _, corner_pts, closed = self._local_geometry()
             res = stitch_polyline([Vec2(p.x, p.y) for p in local],
@@ -146,14 +146,14 @@ class ShapeItem(QGraphicsItem):
             self._holes = res
 
         if self.canvas is not None:
-            self._color = QColor(self.canvas.layer_color(self.shape.layer))
+            self._color = QColor(self.canvas.layer_color(self.model.layer))
         self.setPos(t.x, t.y)
-        self.setOpacity(max(0.05, min(1.0, self.shape.opacity)))
+        self.setOpacity(max(0.05, min(1.0, self.model.opacity)))
         self._recompute_bounds()
         self.update()
 
     def _local_geometry(self):
-        path = self.shape.local_path()
+        path = self.model.local_path()
         pts = path.flatten()
         return pts, list(path.corner_points), path.closed
 
@@ -161,8 +161,8 @@ class ShapeItem(QGraphicsItem):
         r = self._outline.boundingRect()
         pad = 2.0
         if self._holes:
-            pad += max(1.0, (self.shape.stitch.hole_diameter
-                             if self.shape.stitch else 1.0))
+            pad += max(1.0, (self.model.stitch.hole_diameter
+                             if self.model.stitch else 1.0))
         self._brect = r.adjusted(-pad, -pad, pad, pad)
 
     # -- QGraphicsItem interface ---------------------------------------
@@ -187,7 +187,7 @@ class ShapeItem(QGraphicsItem):
             hp.setCosmetic(True)
             hp.setWidthF(1.0)
             painter.setPen(hp)
-            st = self.shape.stitch
+            st = self.model.stitch
             if st and st.hole_style == "slit":
                 half = st.slit_length / 2.0
                 import math
@@ -224,8 +224,8 @@ class ShapeItem(QGraphicsItem):
                                 round(value.y() / g) * g)
             return value
         if change == QGraphicsItem.ItemPositionHasChanged:
-            self.shape.transform.x = self.pos().x()
-            self.shape.transform.y = self.pos().y()
+            self.model.transform.x = self.pos().x()
+            self.model.transform.y = self.pos().y()
             if self.canvas is not None:
                 self.canvas.item_moved(self)
         elif change == QGraphicsItem.ItemSelectedHasChanged:

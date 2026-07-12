@@ -117,7 +117,7 @@ class Canvas(QGraphicsView):
             if it is exclude:
                 continue
             if isinstance(it, ShapeItem):
-                sh = it.shape
+                sh = it.model
                 _, corners, closed = sh.world_polyline()
                 pts.extend(corners)
                 b = sh.bounds()
@@ -258,7 +258,7 @@ class Canvas(QGraphicsView):
                 owner = owner.parentItem()
             if isinstance(owner, StitchLineItem) or (
                     isinstance(owner, ShapeItem)
-                    and isinstance(owner.shape, (Polygon, PathShape))):
+                    and isinstance(owner.model, (Polygon, PathShape))):
                 self.enter_vertex_edit(owner)
                 event.accept()
                 return
@@ -388,7 +388,7 @@ class Canvas(QGraphicsView):
         self.clear_vertex_handles()
         self._edit_owner = owner
         if isinstance(owner, ShapeItem):
-            sh = owner.shape
+            sh = owner.model
             worlds = [sh.transform.apply(p) for p in sh.points]
         else:  # StitchLineItem
             worlds = list(owner.line.points)
@@ -442,7 +442,7 @@ class Canvas(QGraphicsView):
     def delete_selected(self) -> None:
         for it in self.selected_items():
             if isinstance(it, ShapeItem):
-                self.doc.remove_shape(it.shape)
+                self.doc.remove_shape(it.model)
             else:
                 self.doc.remove_stitch_line(it.line)
             self.scene_obj.removeItem(it)
@@ -456,7 +456,7 @@ class Canvas(QGraphicsView):
         self._suppress_commit = True
         for it in self.selected_items():
             if isinstance(it, ShapeItem):
-                sh = copy.deepcopy(it.shape)
+                sh = copy.deepcopy(it.model)
                 sh.transform.x += 8
                 sh.transform.y -= 8
                 from leathercad.shapes import _next_id
@@ -481,33 +481,33 @@ class Canvas(QGraphicsView):
         items = self._shape_items()
         if len(items) < 2:
             return
-        boxes = [(it, it.shape.bounds()) for it in items]
+        boxes = [(it, it.model.bounds()) for it in items]
         if mode in ("left", "hcenter", "right"):
             if mode == "left":
                 target = min(b[0] for _, b in boxes)
                 for it, b in boxes:
-                    it.shape.transform.x += target - b[0]
+                    it.model.transform.x += target - b[0]
             elif mode == "right":
                 target = max(b[2] for _, b in boxes)
                 for it, b in boxes:
-                    it.shape.transform.x += target - b[2]
+                    it.model.transform.x += target - b[2]
             else:
                 target = sum((b[0] + b[2]) / 2 for _, b in boxes) / len(boxes)
                 for it, b in boxes:
-                    it.shape.transform.x += target - (b[0] + b[2]) / 2
+                    it.model.transform.x += target - (b[0] + b[2]) / 2
         else:  # top/vcenter/bottom
             if mode == "bottom":
                 target = min(b[1] for _, b in boxes)
                 for it, b in boxes:
-                    it.shape.transform.y += target - b[1]
+                    it.model.transform.y += target - b[1]
             elif mode == "top":
                 target = max(b[3] for _, b in boxes)
                 for it, b in boxes:
-                    it.shape.transform.y += target - b[3]
+                    it.model.transform.y += target - b[3]
             else:
                 target = sum((b[1] + b[3]) / 2 for _, b in boxes) / len(boxes)
                 for it, b in boxes:
-                    it.shape.transform.y += target - (b[1] + b[3]) / 2
+                    it.model.transform.y += target - (b[1] + b[3]) / 2
         for it, _ in boxes:
             it.sync_from_model()
         self.documentChangedSig.emit()
@@ -518,7 +518,7 @@ class Canvas(QGraphicsView):
         if len(items) < 3:
             return
         def center(it):
-            b = it.shape.bounds()
+            b = it.model.bounds()
             return ((b[0] + b[2]) / 2) if horizontal else ((b[1] + b[3]) / 2)
         items.sort(key=center)
         lo, hi = center(items[0]), center(items[-1])
@@ -527,9 +527,9 @@ class Canvas(QGraphicsView):
             c = center(it)
             target = lo + step * i
             if horizontal:
-                it.shape.transform.x += target - c
+                it.model.transform.x += target - c
             else:
-                it.shape.transform.y += target - c
+                it.model.transform.y += target - c
             it.sync_from_model()
         self.documentChangedSig.emit()
         self._emit_commit()

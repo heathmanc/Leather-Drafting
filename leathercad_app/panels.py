@@ -197,7 +197,7 @@ class PropertiesPanel(QWidget):
         self.g_transform.setVisible(is_shape)
 
         if is_shape:
-            sh = it.shape
+            sh = it.model
             self.pos_x.setValue(sh.transform.x)
             self.pos_y.setValue(sh.transform.y)
             self.rot.setValue(sh.transform.rotation)
@@ -281,7 +281,7 @@ class PropertiesPanel(QWidget):
             return
         it = self._item
         if isinstance(it, ShapeItem):
-            sh = it.shape
+            sh = it.model
             sh.transform.x = self.pos_x.value()
             sh.transform.y = self.pos_y.value()
             sh.transform.rotation = self.rot.value()

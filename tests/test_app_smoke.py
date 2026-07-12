@@ -19,6 +19,11 @@ def qapp():
     yield app
 
 
+def _shape_items(canvas):
+    from leathercad_app.items import ShapeItem
+    return [it for it in canvas.scene_obj.items() if isinstance(it, ShapeItem)]
+
+
 def test_mainwindow_builds_and_edits(qapp):
     from leathercad_app.mainwindow import MainWindow
     from leathercad.document import Document
@@ -31,7 +36,7 @@ def test_mainwindow_builds_and_edits(qapp):
     win = MainWindow(doc)
     win.canvas.rebuild()
 
-    items = [it for it in win.canvas.scene_obj.items() if hasattr(it, "shape")]
+    items = _shape_items(win.canvas)
     assert items
     item = items[0]
     n0 = item.hole_count
@@ -84,7 +89,7 @@ def test_undo_redo(qapp):
     win.properties.show_selection([item])
     win.properties.w.setValue(88.0)
     win.properties.w.editingFinished.emit()
-    assert item.shape.width == 88.0
+    assert item.model.width == 88.0
     win.undo()
     assert all(s.width != 88.0 for s in win.doc.shapes)
 
@@ -98,12 +103,32 @@ def test_align_left(qapp):
         win.canvas.add_shape(Rectangle(
             width=20, height=20, transform=Transform(x=x, y=0),
             stitch=StitchSettings(pitch_mm=4.0, inset=3.0), layer="Cut"))
-    for it in win.canvas.scene_obj.items():
-        if hasattr(it, "shape"):
-            it.setSelected(True)
+    for it in _shape_items(win.canvas):
+        it.setSelected(True)
     win.canvas.align_selected("left")
-    lefts = {round(it.shape.bounds()[0], 3) for it in win.canvas._shape_items()}
+    lefts = {round(it.model.bounds()[0], 3) for it in win.canvas._shape_items()}
     assert len(lefts) == 1
+
+
+def test_item_does_not_shadow_qt_shape_method(qapp):
+    """Regression: ShapeItem must not shadow QGraphicsItem.shape() (a method Qt
+    calls during mouse hit-testing) with the model object, or moving the mouse
+    over a shape raises 'Rectangle object is not callable'."""
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QPainterPath, QTransform
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    item = win.canvas.add_shape(Rectangle(
+        width=80, height=50, transform=Transform(x=0, y=0),
+        stitch=StitchSettings(pitch_mm=4.0, inset=3.0), layer="Cut"))
+    # shape() is Qt's method -> QPainterPath; the model lives on .model
+    assert isinstance(item.shape(), QPainterPath)
+    assert isinstance(item.model, Rectangle)
+    # the hit-testing call that crashed must succeed
+    hit = win.canvas.scene_obj.itemAt(QPointF(0, 0), QTransform())
+    assert hit is item
 
 
 def test_snapping(qapp):
@@ -125,7 +150,7 @@ def test_snapping(qapp):
     p, vtx = c.snap(QPointF(19.4, 14.6))
     assert (round(p.x()), round(p.y())) == (20, 15) and vtx
 
-    item = [it for it in c.scene_obj.items() if hasattr(it, "shape")][0]
+    item = _shape_items(c)[0]
     item.setPos(10.4, -3.7)
     assert (item.pos().x(), item.pos().y()) == (10.0, -4.0)
 

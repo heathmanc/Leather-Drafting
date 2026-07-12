@@ -19,7 +19,25 @@ from PySide6.QtWidgets import QGraphicsItem
 from leathercad.geometry import Vec2
 from leathercad.shapes import Shape
 from leathercad.stitchline import StitchLine
-from leathercad.stitching import stitch_polyline, StitchResult
+from leathercad.stitching import stitch_polyline, StitchResult, Hole
+from leathercad.holegroup import HoleGroup
+
+
+def _draw_holes(painter, holes, style, diameter, slit_len, slit_angle):
+    import math
+    if style == "slit":
+        half = slit_len / 2.0
+        ca = math.cos(math.radians(slit_angle))
+        sa = math.sin(math.radians(slit_angle))
+        for h in holes:
+            dx = h.tangent.x * ca - h.tangent.y * sa
+            dy = h.tangent.x * sa + h.tangent.y * ca
+            painter.drawLine(QPointF(h.point.x - dx * half, h.point.y - dy * half),
+                             QPointF(h.point.x + dx * half, h.point.y + dy * half))
+    else:
+        r = diameter / 2.0
+        for h in holes:
+            painter.drawEllipse(QPointF(h.point.x, h.point.y), r, r)
 
 
 def _qpoly(points: List[Vec2]) -> QPolygonF:
@@ -99,6 +117,103 @@ class VertexHandle(QGraphicsItem):
         if self._dragged and self.canvas is not None:
             self._dragged = False
             self.canvas.commitRequested.emit()
+
+
+class HoleGroupItem(QGraphicsItem):
+    """Renders a HoleGroup (baked, hand-editable holes). Move as a whole;
+    double-click to edit individual holes."""
+
+    def __init__(self, group: HoleGroup, canvas=None):
+        super().__init__()
+        self.group = group
+        self.canvas = canvas
+        self._brect = QRectF()
+        self.setFlags(
+            QGraphicsItem.ItemIsSelectable
+            | QGraphicsItem.ItemIsMovable
+            | QGraphicsItem.ItemSendsGeometryChanges
+        )
+        self.sync_from_model()
+
+    def sync_from_model(self):
+        self.prepareGeometryChange()
+        b = self.group.bounds()
+        pad = 2.0 + self.group.hole_diameter
+        self._brect = QRectF(b[0] - pad, b[1] - pad,
+                             (b[2] - b[0]) + 2 * pad, (b[3] - b[1]) + 2 * pad)
+        self.setPos(0, 0)
+        self.update()
+
+    def boundingRect(self):
+        return self._brect
+
+    def paint(self, painter, option, widget=None):
+        painter.setRenderHint(painter.RenderHint.Antialiasing, True)
+        color = (self.canvas.layer_color(self.group.layer)
+                 if self.canvas else "#0066ff")
+        pen = QPen(QColor(color))
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        g = self.group
+        _draw_holes(painter, g.holes, g.hole_style, g.hole_diameter,
+                    g.slit_length, g.slit_angle)
+        if self.isSelected():
+            sel = QPen(QColor(30, 140, 255), 0, Qt.DashLine)
+            sel.setCosmetic(True)
+            painter.setPen(sel)
+            painter.drawRect(self._brect.adjusted(1, 1, -1, -1))
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemPositionHasChanged:
+            dx, dy = self.pos().x(), self.pos().y()
+            if dx or dy:
+                self.group.translate(dx, dy)
+                self.setPos(0, 0)
+                self.sync_from_model()
+                if self.canvas is not None:
+                    self.canvas.item_moved(self)
+        elif change == QGraphicsItem.ItemSelectedHasChanged:
+            if self.canvas is not None:
+                self.canvas.selection_changed()
+        return super().itemChange(change, value)
+
+    @property
+    def hole_count(self):
+        return self.group.count
+
+
+class HoleHandle(QGraphicsItem):
+    """A constant-size, selectable marker for one baked hole (delete to remove)."""
+
+    SIZE = 3.5  # pixels
+
+    def __init__(self, group: HoleGroup, hole: Hole, canvas):
+        super().__init__()
+        self.group = group
+        self.hole = hole
+        self.canvas = canvas
+        self.setFlags(
+            QGraphicsItem.ItemIsSelectable
+            | QGraphicsItem.ItemIgnoresTransformations
+        )
+        self.setZValue(2000)
+        self.setPos(hole.point.x, hole.point.y)
+
+    def boundingRect(self):
+        s = self.SIZE + 2
+        return QRectF(-s, -s, 2 * s, 2 * s)
+
+    def paint(self, painter, option, widget=None):
+        painter.setRenderHint(painter.RenderHint.Antialiasing, True)
+        if self.isSelected():
+            painter.setPen(QPen(QColor(220, 40, 40), 1.4))
+            painter.setBrush(QBrush(QColor(255, 210, 210)))
+        else:
+            painter.setPen(QPen(QColor(30, 110, 220), 1.0))
+            painter.setBrush(QBrush(QColor(255, 255, 255)))
+        s = self.SIZE
+        painter.drawEllipse(QPointF(0, 0), s, s)
 
 
 class ShapeItem(QGraphicsItem):

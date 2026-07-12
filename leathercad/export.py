@@ -48,6 +48,11 @@ def collect(doc: Document):
         res = sl.result()
         if res.count:
             stitches.append((res, sl.settings, stitch_color))
+
+    for hg in getattr(doc, "hole_groups", []):
+        if hg.count:
+            res = StitchResult(holes=list(hg.holes))
+            stitches.append((res, hg, stitch_color))  # hg has hole_* fields
     return outlines, stitches
 
 

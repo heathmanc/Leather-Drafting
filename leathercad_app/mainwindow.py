@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize, QSettings
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow, QDockWidget, QFileDialog, QToolBar, QLabel, QMessageBox,
@@ -18,6 +18,7 @@ from . import canvas as canvas_mod
 from .canvas import Canvas
 from .panels import PropertiesPanel, LayersPanel
 from .history import History
+from .icons import tool_icon
 
 
 TOOLS = [
@@ -32,6 +33,14 @@ TOOLS = [
     ("Score line", canvas_mod.SCORE, "K"),
     ("Stitch line (seam)", canvas_mod.STITCHLINE, "L"),
 ]
+
+_ICON_FOR = {
+    canvas_mod.SELECT: "select", canvas_mod.RECT: "rect",
+    canvas_mod.ROUNDED: "rounded", canvas_mod.ELLIPSE: "ellipse",
+    canvas_mod.CIRCLE: "circle", canvas_mod.POLYGON: "polygon",
+    canvas_mod.HOLE: "hole", canvas_mod.SLOT: "slot",
+    canvas_mod.SCORE: "score", canvas_mod.STITCHLINE: "stitchline",
+}
 
 
 class MainWindow(QMainWindow):
@@ -50,7 +59,8 @@ class MainWindow(QMainWindow):
         self.properties.set_layers(self.doc.layers)
 
         self._make_docks()
-        self._make_toolbar()
+        self._make_tool_palette()
+        self._make_action_toolbar()
         self._make_menus()
         self._make_statusbar()
 
@@ -69,11 +79,34 @@ class MainWindow(QMainWindow):
         self.history = History()
         self.history.reset(self.doc.to_dict())
         self._update_undo_actions()
+        self._restore_ui_state()
         self._update_title()
+
+    # -- persist toolbar/window layout across sessions ------------------
+    def _settings(self) -> QSettings:
+        return QSettings("Leather-Drafting", "Leather-Drafting")
+
+    def _restore_ui_state(self):
+        s = self._settings()
+        geo = s.value("geometry")
+        state = s.value("windowState")
+        if geo is not None:
+            self.restoreGeometry(geo)
+        if state is not None:
+            self.restoreState(state)
+        self.act_pin.setChecked(s.value("toolbarPinned", False, type=bool))
+
+    def closeEvent(self, event):
+        s = self._settings()
+        s.setValue("geometry", self.saveGeometry())
+        s.setValue("windowState", self.saveState())
+        s.setValue("toolbarPinned", self.act_pin.isChecked())
+        super().closeEvent(event)
 
     # -- UI construction ------------------------------------------------
     def _make_docks(self):
         d1 = QDockWidget("Properties", self)
+        d1.setObjectName("PropertiesDock")
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.properties)
@@ -81,17 +114,36 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, d1)
 
         d2 = QDockWidget("Layers", self)
+        d2.setObjectName("LayersDock")
         d2.setWidget(self.layers)
         self.addDockWidget(Qt.RightDockWidgetArea, d2)
 
-    def _make_toolbar(self):
+    def _make_tool_palette(self):
+        """Traditional vertical tool palette, docked left, drag/float/pinnable."""
         tb = QToolBar("Tools")
-        tb.setMovable(False)
-        self.addToolBar(Qt.TopToolBarArea, tb)
+        tb.setObjectName("ToolPalette")
+        tb.setMovable(True)
+        tb.setFloatable(True)
+        tb.setAllowedAreas(Qt.LeftToolBarArea | Qt.RightToolBarArea
+                           | Qt.TopToolBarArea | Qt.BottomToolBarArea)
+        tb.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        tb.setIconSize(QSize(22, 22))
+        self.addToolBar(Qt.LeftToolBarArea, tb)
+        self._tool_palette = tb
+
+        # Pin toggle: locks the palette in place (removes the drag handle).
+        self.act_pin = QAction(tool_icon("pin"), "Pin toolbar", self)
+        self.act_pin.setCheckable(True)
+        self.act_pin.setToolTip("Pin the toolbar in place (lock/unlock dragging)")
+        self.act_pin.toggled.connect(
+            lambda on: self._tool_palette.setMovable(not on))
+        tb.addAction(self.act_pin)
+        tb.addSeparator()
+
         self._tool_group = QActionGroup(self)
         self._tool_actions = []
         for i, (label, mode, key) in enumerate(TOOLS):
-            act = QAction(label, self)
+            act = QAction(tool_icon(_ICON_FOR.get(mode, "rect")), label, self)
             act.setCheckable(True)
             act.setShortcut(QKeySequence(key))
             act.setToolTip(f"{label}  ({key})")
@@ -100,20 +152,36 @@ class MainWindow(QMainWindow):
             tb.addAction(act)
             self._tool_actions.append(act)
         self._tool_actions[0].setChecked(True)
+
+    def _make_action_toolbar(self):
+        """Top toolbar for edit actions and snapping controls."""
+        tb = QToolBar("Actions")
+        tb.setObjectName("ActionToolbar")
+        tb.setMovable(True)
+        self.addToolBar(Qt.TopToolBarArea, tb)
+
+        self.act_undo_tb = QAction(self.style().standardIcon(
+            self.style().StandardPixmap.SP_ArrowBack), "Undo", self)
+        self.act_undo_tb.triggered.connect(self.undo)
+        self.act_redo_tb = QAction(self.style().standardIcon(
+            self.style().StandardPixmap.SP_ArrowForward), "Redo", self)
+        self.act_redo_tb.triggered.connect(self.redo)
+        tb.addAction(self.act_undo_tb)
+        tb.addAction(self.act_redo_tb)
         tb.addSeparator()
 
         dup = QAction("Duplicate", self)
-        dup.setShortcut(QKeySequence("Ctrl+D"))
         dup.triggered.connect(self.canvas.duplicate_selected)
         tb.addAction(dup)
-
         dele = QAction("Delete", self)
-        dele.setShortcut(QKeySequence(Qt.Key_Delete))
         dele.triggered.connect(self.canvas.delete_selected)
         tb.addAction(dele)
-
+        self.act_ungroup = QAction(tool_icon("ungroup"), "Ungroup stitching", self)
+        self.act_ungroup.setToolTip(
+            "Bake this shape's stitch holes so you can delete them individually")
+        self.act_ungroup.triggered.connect(self.canvas.ungroup_selected)
+        tb.addAction(self.act_ungroup)
         fit = QAction("Fit", self)
-        fit.setShortcut(QKeySequence("F"))
         fit.triggered.connect(self.canvas.fit_to_content)
         tb.addAction(fit)
 
@@ -125,7 +193,6 @@ class MainWindow(QMainWindow):
         self.act_snap.toggled.connect(
             lambda on: setattr(self.canvas, "snap_enabled", on))
         tb.addAction(self.act_snap)
-
         tb.addWidget(QLabel(" grid "))
         self.grid_combo = QComboBox()
         for mm in (0.5, 1.0, 2.0, 2.5, 5.0, 10.0):
@@ -248,6 +315,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, "act_undo"):
             self.act_undo.setEnabled(self.history.can_undo())
             self.act_redo.setEnabled(self.history.can_redo())
+        if hasattr(self, "act_undo_tb"):
+            self.act_undo_tb.setEnabled(self.history.can_undo())
+            self.act_redo_tb.setEnabled(self.history.can_redo())
 
     def _select_all(self):
         for it in self.canvas.scene_obj.items():

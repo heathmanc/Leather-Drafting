@@ -16,6 +16,8 @@ from .shapes import (Shape, Rectangle, Ellipse, Circle, Polygon, PathShape,
                      Transform)
 from .stitchsettings import StitchSettings
 from .stitchline import StitchLine
+from .holegroup import HoleGroup
+from .stitching import Hole
 
 
 FILE_VERSION = 1
@@ -102,6 +104,36 @@ def _shape_from_dict(d: dict) -> Shape:
     raise ValueError(f"unknown shape kind {kind!r}")
 
 
+def _holegroup_to_dict(hg: HoleGroup) -> dict:
+    return {
+        "holes": [[h.point.x, h.point.y, h.tangent.x, h.tangent.y]
+                  for h in hg.holes],
+        "hole_style": hg.hole_style,
+        "hole_diameter": hg.hole_diameter,
+        "slit_length": hg.slit_length,
+        "slit_angle": hg.slit_angle,
+        "layer": hg.layer,
+        "name": hg.name,
+        "group_id": hg.group_id,
+    }
+
+
+def _holegroup_from_dict(d: dict) -> HoleGroup:
+    hg = HoleGroup(
+        holes=[Hole(Vec2(x, y), Vec2(tx, ty))
+               for x, y, tx, ty in d.get("holes", [])],
+        hole_style=d.get("hole_style", "round"),
+        hole_diameter=d.get("hole_diameter", 1.0),
+        slit_length=d.get("slit_length", 1.6),
+        slit_angle=d.get("slit_angle", 30.0),
+        layer=d.get("layer", "Stitch"),
+        name=d.get("name", ""),
+    )
+    if "group_id" in d:
+        hg.group_id = d["group_id"]
+    return hg
+
+
 def _stitchline_to_dict(sl: StitchLine) -> dict:
     return {
         "points": [[p.x, p.y] for p in sl.points],
@@ -138,6 +170,7 @@ class Document:
         self.layers: List[Layer] = default_layers()
         self.shapes: List[Shape] = []
         self.stitch_lines: List[StitchLine] = []
+        self.hole_groups: List[HoleGroup] = []
 
     # -- collection helpers --------------------------------------------
     def add_shape(self, shape: Shape) -> Shape:
@@ -155,6 +188,14 @@ class Document:
     def remove_stitch_line(self, line: StitchLine) -> None:
         if line in self.stitch_lines:
             self.stitch_lines.remove(line)
+
+    def add_hole_group(self, group: HoleGroup) -> HoleGroup:
+        self.hole_groups.append(group)
+        return group
+
+    def remove_hole_group(self, group: HoleGroup) -> None:
+        if group in self.hole_groups:
+            self.hole_groups.remove(group)
 
     def layer(self, name: str) -> Optional[Layer]:
         for lyr in self.layers:
@@ -175,6 +216,7 @@ class Document:
             "layers": [lyr.to_dict() for lyr in self.layers],
             "shapes": [_shape_to_dict(s) for s in self.shapes],
             "stitch_lines": [_stitchline_to_dict(sl) for sl in self.stitch_lines],
+            "hole_groups": [_holegroup_to_dict(hg) for hg in self.hole_groups],
         }
 
     @classmethod
@@ -186,6 +228,8 @@ class Document:
         doc.shapes = [_shape_from_dict(x) for x in d.get("shapes", [])]
         doc.stitch_lines = [_stitchline_from_dict(x)
                             for x in d.get("stitch_lines", [])]
+        doc.hole_groups = [_holegroup_from_dict(x)
+                           for x in d.get("hole_groups", [])]
         return doc
 
     def save(self, path: str) -> None:

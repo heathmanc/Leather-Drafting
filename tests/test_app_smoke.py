@@ -207,6 +207,57 @@ def test_vertex_editing(qapp):
     assert c._handles == []
 
 
+def test_tool_palette_left_and_pinnable(qapp):
+    from PySide6.QtCore import Qt
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    tp = win._tool_palette
+    assert win.toolBarArea(tp) == Qt.LeftToolBarArea
+    assert tp.isMovable()               # draggable when unpinned
+    win.act_pin.setChecked(True)
+    assert not tp.isMovable()           # pinned = locked in place
+    win.act_pin.setChecked(False)
+    assert tp.isMovable()
+
+
+def test_ungroup_bakes_holes_and_stops_redistribution(qapp):
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import HoleGroupItem
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    item = c.add_shape(Rectangle(
+        width=80, height=50, corner_radius=6, transform=Transform(x=0, y=0),
+        stitch=StitchSettings(pitch_mm=4.0, inset=3.0), layer="Cut"))
+    n = item.hole_count
+    assert n > 0
+    c.scene_obj.clearSelection()
+    item.setSelected(True)
+    c.ungroup_selected()
+
+    # shape stitching is turned off; a baked group holds the holes
+    assert item.model.stitch.enabled is False
+    assert item.hole_count == 0
+    groups = [it for it in c.scene_obj.items() if isinstance(it, HoleGroupItem)]
+    assert len(groups) == 1 and groups[0].hole_count == n
+
+    # delete 3 individual holes
+    grp = groups[0]
+    c.enter_hole_edit(grp)
+    for h in c._hole_handles[:3]:
+        h.setSelected(True)
+    c.delete_selected()
+    assert grp.group.count == n - 3
+
+    # fiddling the (disabled) shape settings must NOT redistribute baked holes
+    item.model.stitch.pitch_mm = 2.0
+    item.sync_from_model()
+    assert grp.group.count == n - 3
+
+
 def test_export_from_document(qapp, tmp_path):
     from leathercad_app.mainwindow import MainWindow
     from leathercad.document import Document

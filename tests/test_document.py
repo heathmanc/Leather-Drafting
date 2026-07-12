@@ -129,6 +129,23 @@ def test_export_svg_and_dxf(tmp_path):
     assert "SECTION" in dxf_txt and "CIRCLE" in dxf_txt and "EOF" in dxf_txt
 
 
+def test_hole_group_roundtrip(tmp_path):
+    from leathercad import HoleGroup
+    from leathercad.stitching import Hole
+    doc = Document("t")
+    hg = HoleGroup(holes=[Hole(Vec2(0, 0), Vec2(1, 0)),
+                          Hole(Vec2(5, 0), Vec2(1, 0))],
+                   hole_style="slit", slit_angle=25.0)
+    doc.add_hole_group(hg)
+    p = tmp_path / "hg.json"
+    doc.save(str(p))
+    doc2 = Document.load(str(p))
+    assert len(doc2.hole_groups) == 1
+    g = doc2.hole_groups[0]
+    assert g.count == 2 and g.hole_style == "slit"
+    assert abs(g.holes[1].point.x - 5.0) < 1e-9
+
+
 def test_two_row_saddle_stitch():
     """rows=2 doubles the holes into two parallel rows offset by row_spacing."""
     sl1 = StitchLine(points=[Vec2(0, 0), Vec2(40, 0)],

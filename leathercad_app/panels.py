@@ -16,7 +16,7 @@ from leathercad.irons import PRESETS
 from leathercad.stitchsettings import StitchSettings
 from leathercad.shapes import Rectangle, Ellipse, Circle, Polygon, PathShape
 from leathercad.layers import Layer, ROLES
-from .items import ShapeItem, StitchLineItem
+from .items import ShapeItem, StitchLineItem, HoleGroupItem
 
 
 def _spin(lo, hi, step=1.0, decimals=2, suffix=" mm") -> QDoubleSpinBox:
@@ -102,6 +102,7 @@ class PropertiesPanel(QWidget):
         self.g_stitch = QGroupBox("Stitching")
         self.g_stitch.setCheckable(True)
         fs = QFormLayout(self.g_stitch)
+        self._stitch_form = fs
         self.iron = QComboBox()
         self._iron_keys = list(PRESETS.keys())
         for k in self._iron_keys:
@@ -190,11 +191,25 @@ class PropertiesPanel(QWidget):
         self._loading = True
         it = self._item
         is_shape = isinstance(it, ShapeItem)
+        is_group = isinstance(it, HoleGroupItem)
         self.g_rect.setVisible(False)
         self.g_ellipse.setVisible(False)
         self.g_poly.setVisible(False)
         self.g_appear.setVisible(is_shape)
         self.g_transform.setVisible(is_shape)
+        # Baked hole groups have no path/pitch -- only hole appearance applies.
+        self._set_path_rows_visible(not is_group)
+        self.g_stitch.setCheckable(not is_group)
+
+        if is_group:
+            g = it.group
+            self.g_stitch.setChecked(True)
+            self.g_stitch.setTitle(f"Holes (baked · {g.count})")
+            self._load_hole_style(g)
+            self._loading = False
+            self._update_readout()
+            return
+        self.g_stitch.setTitle("Stitching")
 
         if is_shape:
             sh = it.model
@@ -228,6 +243,22 @@ class PropertiesPanel(QWidget):
             self._load_stitch(st)
         self._loading = False
         self._update_readout()
+
+    def _set_path_rows_visible(self, vis: bool):
+        for w in (self.iron, self.pitch, self.inset, self.fit, self.rows,
+                  self.row_spacing, self.backstitch):
+            self._stitch_form.setRowVisible(w, vis)
+
+    def _load_hole_style(self, g):
+        i = self.hole_style.findText(g.hole_style)
+        self.hole_style.setCurrentIndex(i if i >= 0 else 0)
+        self.hole_dia.setValue(g.hole_diameter)
+        self.slit_len.setValue(g.slit_length)
+        self.slit_angle.setValue(g.slit_angle)
+        slit = g.hole_style == "slit"
+        self.hole_dia.setVisible(not slit)
+        self.slit_len.setVisible(slit)
+        self.slit_angle.setVisible(slit)
 
     def _load_stitch(self, st: StitchSettings):
         self.pitch.setValue(st.pitch_mm)
@@ -280,6 +311,18 @@ class PropertiesPanel(QWidget):
         if self._loading or self._item is None:
             return
         it = self._item
+        if isinstance(it, HoleGroupItem):
+            g = it.group
+            g.hole_style = self.hole_style.currentText()
+            g.hole_diameter = self.hole_dia.value()
+            g.slit_length = self.slit_len.value()
+            g.slit_angle = self.slit_angle.value()
+            slit = g.hole_style == "slit"
+            self.hole_dia.setVisible(not slit)
+            self.slit_len.setVisible(slit)
+            self.slit_angle.setVisible(slit)
+            self.canvas.refresh_item(it)
+            return
         if isinstance(it, ShapeItem):
             sh = it.model
             sh.transform.x = self.pos_x.value()
@@ -348,6 +391,11 @@ class PropertiesPanel(QWidget):
         it = self._item
         if it is None:
             self.readout.setText("")
+            return
+        if isinstance(it, HoleGroupItem):
+            self.readout.setText(
+                f"<b>{it.group.count} baked holes</b><br>"
+                "double-click to edit; select holes and press Delete to remove")
             return
         res = it._holes if isinstance(it, ShapeItem) else it.line.result()
         if res and res.count:

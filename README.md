@@ -65,6 +65,11 @@ need PySide6 for the GUI.
 
 ## Using the app
 
+The drawing tools live in a **vertical tool palette docked on the left**. It is
+a normal draggable toolbar — grab its handle to move or float it, drop it on any
+edge, and use the **pin** button at the top to lock it in place. Its position
+(and the window layout) is remembered between sessions.
+
 | | |
 |---|---|
 | **Draw** | Rectangle `R`, Rounded rect `O`, Ellipse `E`, Circle `C`, Polygon `P` (click points, double-click to finish) |
@@ -74,6 +79,7 @@ need PySide6 for the GUI.
 | **Snapping** | toolbar *Snap* toggle + grid size; snaps to grid and to other shapes' corners while drawing and moving |
 | **Exact sizes** | live W×H shown while dragging; after drawing, the size field is focused so you can type an exact value |
 | **Edit vertices** | double-click a polygon or seam to drag its points |
+| **Ungroup stitching** | bake a shape's holes so you can delete individual ones (below) |
 | **Radius corners** | select a rectangle/polygon, set *Corner radius* in Properties |
 | **Iron & holes** | per shape: pick an iron (mm or SPI), inset, round or slanted-slit holes, single or **double row** (saddle stitch) + backstitch, live hole count + spacing readout |
 | **Layers → laser jobs** | colour-coded Cut / Score / Engrave / Stitch layers with visibility |
@@ -85,6 +91,24 @@ need PySide6 for the GUI.
 | **Export** | SVG `Ctrl+E` or DXF — millimetre-accurate, layer-coloured |
 
 Everything is in **millimetres**, Y-up, and the canvas is WYSIWYG with the export.
+
+### Removing individual holes (ungroup / bake)
+
+By default a shape's holes are *computed* from its stitch settings, so they stay
+evenly spaced when you change the iron or resize — but that also means the engine
+would redistribute them if you tried to delete one. When you want to hand-remove
+specific holes (say, to clear a spot for a rivet), select the shape and hit
+**Ungroup stitching**. That **bakes** the current holes into an independent set
+and turns the shape's auto-spacing off, so:
+
+- the holes are now plain data — deleting one leaves a gap, nothing reflows;
+- the shape's Stitching box no longer governs them (no accidental redistribute).
+
+Then **double-click the baked holes** to edit them: each hole gets a small
+handle — click (or rubber-band) to select, press **Delete** to remove. The gap
+stays exactly where you made it.
+
+![ungroup and delete individual holes](docs/ungroup.png)
 
 ## Scripting API (no GUI needed)
 
@@ -164,6 +188,8 @@ examples/  tests/  docs/
 - [x] Align / distribute
 - [x] Edit polygon/seam vertices; add holes / slots / skive (score) lines
 - [x] Two-row saddle stitch + backstitch markers
+- [x] Left tool palette (draggable / floatable / pinnable, layout remembered)
+- [x] Ungroup/bake stitching → delete individual holes without redistribution
 - [ ] Boolean ops (windows, cut-outs) and true seam-allowance offset
 - [ ] Alignment guides (smart snapping lines) while dragging
 - [ ] Import reference images / trace an existing pattern

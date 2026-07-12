@@ -200,6 +200,7 @@ class Canvas(QGraphicsView):
         # object while it is still selected -> crash in clearSelection().
         self._live = set()
         self._snap_cache = None   # static snap nodes captured at drag start
+        self._group_drag = None   # active move-group drag state
 
         # snapping -- grid and node snapping toggle independently
         self.snap_to_nodes = True    # ends / midpoints / centres / intersections
@@ -239,9 +240,10 @@ class Canvas(QGraphicsView):
 
     # -- snapping -------------------------------------------------------
     def _snap_candidates(self, exclude=None):
+        excl = exclude if isinstance(exclude, (set, list, tuple)) else {exclude}
         pts = []
         for it in self.scene_obj.items():
-            if it is exclude:
+            if it in excl:
                 continue
             if isinstance(it, ShapeItem):
                 pts.extend(it.world_snap_nodes())
@@ -404,9 +406,10 @@ class Canvas(QGraphicsView):
         """Every point where two different outlines cross (for the move / node
         drag snap cache). Bounded work, skipped on very busy scenes."""
         from leathercad.trim import _seg_intersect
+        excl = exclude if isinstance(exclude, (set, list, tuple)) else {exclude}
         entries = []
         for it in self.scene_obj.items():
-            if it is exclude:
+            if it in excl:
                 continue
             poly = None
             if isinstance(it, ShapeItem):
@@ -548,13 +551,47 @@ class Canvas(QGraphicsView):
     # -- magnetic node snapping while dragging shapes -------------------
     def begin_move_snap(self, item) -> None:
         # capture other shapes' nodes (+ their intersections) once, at drag start
-        if self.snap_to_nodes and len(self.selected_items()) <= 1:
+        self._group_drag = None
+        if not self.snap_to_nodes:
+            self._snap_cache = None
+            return
+        sel = self.selected_items()
+        if len(sel) <= 1:
             self._snap_cache = (self._snap_candidates(exclude=item)
                                 + self._all_intersections(exclude=item))
-        else:
-            self._snap_cache = None
+            return
+        # A move-group is being dragged: snap the whole group by its leader (the
+        # pressed item) and move the other members to match. Exclude every group
+        # member from the targets so the group can't snap to itself, and drive
+        # the members by hand (Qt would otherwise move each by the raw delta,
+        # ignoring the snap and distorting the group).
+        self._snap_cache = (self._snap_candidates(exclude=set(sel))
+                            + self._all_intersections(exclude=set(sel)))
+        leader = item
+        members = [it for it in sel if it is not leader]
+        lp = leader.pos()
+        offsets = []
+        for m in sel:
+            mp = m.pos()
+            bx, by = mp.x() - lp.x(), mp.y() - lp.y()
+            for o in getattr(m, "_snap_offsets", None) or [Vec2(0.0, 0.0)]:
+                offsets.append(Vec2(bx + o.x, by + o.y))
+        self._group_drag = {
+            "leader": leader,
+            "members": members,
+            "leader_start": QPointF(lp),
+            "starts": {id(m): QPointF(m.pos()) for m in members},
+            "offsets": offsets,
+        }
+        for m in members:
+            m.setFlag(QGraphicsItem.ItemIsMovable, False)
 
     def end_move_snap(self) -> None:
+        if self._group_drag is not None:
+            for m in self._group_drag["members"]:
+                if _alive(m):
+                    m.setFlag(QGraphicsItem.ItemIsMovable, True)
+            self._group_drag = None
         self._snap_cache = None
         self._hide_snap_marker()
 
@@ -562,9 +599,9 @@ class Canvas(QGraphicsView):
         """Snap a dragged shape so one of its nodes lands on a nearby node."""
         if not self.snap_to_nodes or self._snap_cache is None:
             return value
-        offsets = getattr(item, "_snap_offsets", None)
-        if not offsets:
-            return value
+        gd = self._group_drag
+        if gd is not None and item is not gd["leader"]:
+            return value          # members are driven from the leader (below)
         thr = 12.0 / self._zoom
         vx, vy = value.x(), value.y()
 
@@ -578,21 +615,36 @@ class Canvas(QGraphicsView):
                         bd, bp, bt = d, QPointF(s.x - off.x, s.y - off.y), s
             return bp, bt
 
+        if gd is not None:
+            offsets = gd["offsets"]           # group nodes, relative to leader
+        else:
+            offsets = getattr(item, "_snap_offsets", None)
+        if not offsets:
+            return value
+
         best = best_target = None
         # Circles / ellipses lock by their centre first: try centre-only, and
         # only fall back to quadrants if the centre finds no target in range.
-        if getattr(item, "_center_snap_priority", False):
+        if gd is None and getattr(item, "_center_snap_priority", False):
             kinds = getattr(item, "_snap_offset_kinds", [])
             centre = [o for o, k in zip(offsets, kinds) if k == "center"]
             if centre:
                 best, best_target = _best(centre)
         if best is None:
             best, best_target = _best(offsets)
-        if best is not None:
+
+        if best is None:
+            self._hide_snap_marker()
+            best = value
+        else:
             self._show_snap_marker(QPointF(best_target.x, best_target.y), "end")
-            return best
-        self._hide_snap_marker()
-        return value
+        if gd is not None:                    # drag the rest of the group along
+            dx = best.x() - gd["leader_start"].x()
+            dy = best.y() - gd["leader_start"].y()
+            for m in gd["members"]:
+                st = gd["starts"][id(m)]
+                m.setPos(st.x() + dx, st.y() + dy)
+        return best
 
     # -- node-to-node snapping while editing nodes ----------------------
     def begin_node_snap(self, handle) -> None:

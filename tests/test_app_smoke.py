@@ -1267,6 +1267,56 @@ def test_move_group_select_and_move_together(qapp):
     assert len(c.selected_items()) == 1
 
 
+def test_group_drag_snaps_to_node_and_stays_rigid(qapp):
+    # Dragging a group of loose holes must snap the group onto a nearby node
+    # (e.g. a line endpoint) while keeping the members' spacing rigid.
+    from PySide6.QtCore import QPointF, QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document, LooseHole
+    from leathercad.shapes import PathShape, Transform
+    from leathercad.geometry import Vec2
+
+    doc = Document()
+    doc.add_shape(PathShape(points=[Vec2(60, 50), Vec2(100, 50)],
+                            close_path=False, transform=Transform(x=0, y=0),
+                            layer="Cut"))
+    for x in (10, 20, 30):
+        doc.holes.append(LooseHole(point=Vec2(x, 10)))
+    c = cm.Canvas(doc)
+    c.snap_to_nodes = True
+    c.snap_to_grid = False
+    c.tool = cm.SELECT
+    c.rebuild()
+    c.resize(700, 700)
+    c.show()
+    holes = {round(it.hole.point.x): it for it in c.scene_obj.items()
+             if getattr(it, "hole", None) is not None}
+    for h in holes.values():
+        h.setSelected(True)
+    c.make_group()
+    c.scene_obj.clearSelection()
+    vp = c.viewport()
+
+    def send(kind, world, btns=Qt.LeftButton, btn=Qt.LeftButton):
+        pt = c.mapFromScene(QPointF(world))
+        QApplication.sendEvent(vp, QMouseEvent(
+            kind, QPointF(pt), vp.mapToGlobal(pt), btn, btns, Qt.NoModifier))
+
+    send(QEvent.MouseButtonPress, QPointF(30, 10))       # grab the (30,10) hole
+    qapp.processEvents()
+    send(QEvent.MouseMove, QPointF(70, 30))
+    qapp.processEvents()
+    send(QEvent.MouseMove, QPointF(99.4, 49.6))          # near the line end
+    qapp.processEvents()
+    send(QEvent.MouseButtonRelease, QPointF(99.4, 49.6), Qt.NoButton)
+    qapp.processEvents()
+
+    pts = sorted((round(h.point.x, 2), round(h.point.y, 2)) for h in doc.holes)
+    assert (100.0, 50.0) in pts                          # leader snapped to end
+    assert pts == [(80.0, 50.0), (90.0, 50.0), (100.0, 50.0)]  # spacing rigid
+
+
 def test_move_group_survives_save_load(qapp):
     from leathercad.document import Document, LooseHole
     from leathercad.geometry import Vec2

@@ -501,7 +501,7 @@ def march_chord_n(poly: Polyline, pitch: float, n_steps: int, start_s: float,
 def _build_anchors(path: Path, poly: Polyline, fit: str,
                    use_corners: bool) -> Optional[List[float]]:
     corners = [c for c in path.corners if 0.0 < c < poly.length] if use_corners else []
-    if fit == "none" and not corners:
+    if fit == "none":
         return None
     if path.closed:
         anchors = sorted(set([0.0] + corners))
@@ -766,9 +766,13 @@ def _apply_rows(result: StitchResult, settings) -> StitchResult:
 
 def _anchors_from(corners: List[float], total: float, closed: bool,
                   fit: str) -> Optional[List[float]]:
-    cor = [c for c in corners if 1e-6 < c < total - 1e-6]
-    if fit == "none" and not cor:
+    # "none": march at the exact pitch with nothing forced -- no endpoint fit,
+    # no corner anchoring -- and let the last hole fall where it may. This is
+    # what makes the Fit dropdown visibly change a closed shape (which otherwise
+    # always anchors on its corners regardless of the mode).
+    if fit == "none":
         return None
+    cor = [c for c in corners if 1e-6 < c < total - 1e-6]
     if closed:
         return sorted(set([0.0] + cor))
     return sorted(set([0.0, total] + cor))

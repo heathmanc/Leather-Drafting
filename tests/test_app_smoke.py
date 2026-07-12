@@ -1649,3 +1649,91 @@ def test_export_from_document(qapp, tmp_path):
     svg = tmp_path / "a.svg"
     export.export_svg(win.doc, str(svg))
     assert svg.read_text().count("<circle") > 5
+
+
+def test_fit_none_differs_from_fitted_closed(qapp):
+    """The Fit dropdown must visibly change a closed shape: 'none' plain-marches
+    (last hole wherever) instead of anchoring holes on every corner."""
+    from leathercad.geometry import Vec2
+    from leathercad.stitching import stitch_polyline
+
+    pts = [Vec2(0, 0), Vec2(50, 0), Vec2(50, 30), Vec2(0, 30), Vec2(0, 0)]
+    corners = [Vec2(0, 0), Vec2(50, 0), Vec2(50, 30), Vec2(0, 30)]
+    fitted = stitch_polyline(list(pts), list(corners), True,
+                             StitchSettings(pitch_mm=3.85, fit="auto", inset=0.0))
+    none = stitch_polyline(list(pts), list(corners), True,
+                           StitchSettings(pitch_mm=3.85, fit="none", inset=0.0))
+    # 'none' marches at the raw pitch; fitting nudges it -> different results.
+    assert none.count != fitted.count or none.points != fitted.points
+    gaps = none.chord_spacings()
+    assert all(abs(g - 3.85) < 1e-6 for g in gaps[:-1])   # exact raw pitch
+
+
+def test_stitchline_exposes_pitch_and_fit(qapp):
+    """Selecting a drawn seam must show the pitch / fit controls so the user can
+    change stitch spacing -- and hide the (meaningless) inset field."""
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import StitchLineItem
+    from leathercad.document import Document
+    from leathercad.stitchline import StitchLine
+    from leathercad.geometry import Vec2
+
+    doc = Document()
+    doc.add_stitch_line(StitchLine(points=[Vec2(0, 0), Vec2(40, 0)],
+                                   settings=StitchSettings(pitch_mm=4.0)))
+    win = MainWindow(doc)
+    win.canvas.rebuild()
+    items = [it for it in win.canvas.scene_obj.items()
+             if isinstance(it, StitchLineItem)]
+    assert items
+    sl = items[0]
+    n0 = sl.hole_count
+    p = win.properties
+    p.show_selection([sl])
+    fs = p._stitch_form
+    assert fs.isRowVisible(p.pitch)                # pitch row visible
+    assert fs.isRowVisible(p.fit)
+    assert not fs.isRowVisible(p.inset)            # a seam is never inset
+
+    # changing the pitch through the panel must recompute the seam's holes
+    p.pitch.setValue(2.0)
+    assert sl.hole_count > n0
+
+
+def test_layer_checkbox_toggles_visibility(qapp):
+    """Ticking a layer's checkbox in the Layers panel shows/hides that layer."""
+    from PySide6.QtCore import Qt
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+
+    doc = Document()
+    doc.add_shape(Rectangle(width=40, height=30, layer="Cut"))
+    win = MainWindow(doc)
+    win.canvas.rebuild()
+    panel = win.layers
+    # find the Cut row
+    row = None
+    for i in range(panel.list.count()):
+        if panel.list.item(i).data(Qt.UserRole) == "Cut":
+            row = i
+            break
+    assert row is not None
+    item = panel.list.item(row)
+    assert item.checkState() == Qt.Checked
+    item.setCheckState(Qt.Unchecked)               # user unticks -> hide layer
+    assert doc.layer("Cut").visible is False
+
+
+def test_layers_reload_keeps_selection(qapp):
+    """Toggling a layer must not bounce the selection back to the first row."""
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+
+    doc = Document()
+    win = MainWindow(doc)
+    panel = win.layers
+    if panel.list.count() >= 2:
+        panel.list.setCurrentRow(panel.list.count() - 1)
+        keep = panel.list.currentRow()
+        panel.reload()
+        assert panel.list.currentRow() == keep

@@ -915,11 +915,14 @@ class StitchLineItem(QGraphicsItem):
         _paint_backstitch(painter, StitchResult(holes=self._rel_holes,
                                                 closed=self._holes.closed),
                           self.line.settings)
-        if self.isSelected():
-            sel = QPen(QColor(30, 140, 255), 0, Qt.DashLine)
+        if self.isSelected() and self._poly.size() >= 2:
+            # Highlight the seam itself, not a bounding box -- it is just a line.
+            sel = QPen(QColor(30, 140, 255))
             sel.setCosmetic(True)
+            sel.setWidthF((self.canvas.outline_width(True)
+                           if self.canvas else 2.0) + 0.6)
             painter.setPen(sel)
-            painter.drawRect(self._poly.boundingRect())
+            painter.drawPolyline(self._poly)
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionHasChanged:

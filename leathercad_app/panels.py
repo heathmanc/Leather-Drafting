@@ -233,6 +233,7 @@ class PropertiesPanel(QWidget):
         it = self._item
         is_shape = isinstance(it, ShapeItem)
         is_hole = isinstance(it, HoleItem)
+        is_stitchline = isinstance(it, StitchLineItem)
         is_baked = is_shape and bool(it.model.baked_holes)
         self.g_rect.setVisible(False)
         self.g_ellipse.setVisible(False)
@@ -240,8 +241,11 @@ class PropertiesPanel(QWidget):
         self.g_line.setVisible(False)
         self.g_appear.setVisible(is_shape)
         self.g_transform.setVisible(is_shape)
-        # Only auto-spaced shapes expose path/pitch controls.
-        self._set_path_rows_visible(is_shape and not is_baked)
+        # Auto-spaced shapes AND drawn seams expose the pitch / fit controls.
+        self._set_path_rows_visible((is_shape and not is_baked) or is_stitchline)
+        # A drawn seam is the stitch line itself -- it is never inset.
+        if is_stitchline:
+            self._stitch_form.setRowVisible(self.inset, False)
         self.g_stitch.setCheckable(is_shape and not is_baked)
 
         if is_hole:
@@ -302,6 +306,7 @@ class PropertiesPanel(QWidget):
                 self._load_stitch(st or StitchSettings(enabled=False))
         else:  # StitchLine
             st = it.line.settings
+            self.g_stitch.setTitle("Seam stitching")
             self.g_stitch.setChecked(True)
             self._load_stitch(st)
         self._loading = False
@@ -565,6 +570,7 @@ class LayersPanel(QWidget):
         root.addWidget(QLabel("Layers (colour → laser job)"))
         self.list = QListWidget()
         self.list.currentRowChanged.connect(self._row_changed)
+        self.list.itemChanged.connect(self._item_checked)
         root.addWidget(self.list)
 
         row = QHBoxLayout()
@@ -596,16 +602,20 @@ class LayersPanel(QWidget):
 
     def reload(self):
         self.list.blockSignals(True)
+        cur = self.list.currentRow()
         self.list.clear()
         for lyr in self.canvas.doc.layers:
-            vis = "●" if lyr.visible else "○"
             item = QListWidgetItem(self._swatch(lyr.color),
-                                   f"{vis}  {lyr.name}  [{lyr.role}]")
+                                   f"{lyr.name}  [{lyr.role}]")
             item.setData(Qt.UserRole, lyr.name)
+            # A real checkbox toggles visibility (click to show/hide the layer).
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if lyr.visible else Qt.Unchecked)
+            item.setToolTip("Tick to show this layer, untick to hide it")
             self.list.addItem(item)
         self.list.blockSignals(False)
         if self.list.count():
-            self.list.setCurrentRow(0)
+            self.list.setCurrentRow(cur if 0 <= cur < self.list.count() else 0)
 
     def current_layer(self) -> Optional[Layer]:
         it = self.list.currentItem()
@@ -646,6 +656,18 @@ class LayersPanel(QWidget):
         lyr.visible = not lyr.visible
         self.canvas.refresh_all()
         self.reload()
+        self.committed.emit()
+
+    def _item_checked(self, item):
+        """A layer's visibility checkbox was ticked/unticked in the list."""
+        lyr = self.canvas.doc.layer(item.data(Qt.UserRole))
+        if not lyr:
+            return
+        vis = item.checkState() == Qt.Checked
+        if vis == lyr.visible:
+            return
+        lyr.visible = vis
+        self.canvas.refresh_all()
         self.committed.emit()
 
     def _role_changed(self):

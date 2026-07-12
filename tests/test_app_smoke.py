@@ -1317,6 +1317,53 @@ def test_group_drag_snaps_to_node_and_stays_rigid(qapp):
     assert pts == [(80.0, 50.0), (90.0, 50.0), (100.0, 50.0)]  # spacing rigid
 
 
+def test_duplicate_does_not_inherit_group(qapp):
+    # Duplicating grouped items must NOT leave the copies in the original group
+    # (otherwise every new duplicate "latches" onto the group).
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document, LooseHole
+    from leathercad.geometry import Vec2
+
+    doc = Document()
+    for x in (10, 20, 30):
+        doc.holes.append(LooseHole(point=Vec2(x, 10)))
+    c = cm.Canvas(doc)
+    c.rebuild()
+    holes = [it for it in c.scene_obj.items()
+             if getattr(it, "hole", None) is not None]
+    for h in holes:
+        h.setSelected(True)
+    c.make_group()
+    c.duplicate_selected()
+    assert {h.group_id for h in doc.holes[3:]} == {None}   # copies ungrouped
+
+
+def test_make_back_piece_mirrors_loose_holes(qapp):
+    # Mirroring a shape must also mirror the loose holes inside it, registered
+    # to the mirrored copy for back-to-back stitching.
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document, LooseHole
+    from leathercad.shapes import Rectangle, Transform
+    from leathercad.geometry import Vec2
+
+    doc = Document()
+    rect = Rectangle(width=40, height=30, transform=Transform(x=50, y=50))
+    doc.add_shape(rect)
+    doc.holes.append(LooseHole(point=Vec2(40, 50)))   # inside the rect
+    doc.holes.append(LooseHole(point=Vec2(60, 50)))
+    c = cm.Canvas(doc)
+    c.rebuild()
+    item = next(it for it in c.scene_obj.items()
+                if getattr(it, "model", None) is rect)
+    item.setSelected(True)
+    c.make_back_piece_selected()
+    assert len(doc.holes) == 4                         # both holes mirrored
+    mirrored = sorted((round(h.point.x, 1), round(h.point.y, 1))
+                      for h in doc.holes[2:])
+    # mirror registration: front x=40 -> back x=120, front x=60 -> back x=100
+    assert mirrored == [(100.0, 50.0), (120.0, 50.0)]
+
+
 def test_move_group_survives_save_load(qapp):
     from leathercad.document import Document, LooseHole
     from leathercad.geometry import Vec2

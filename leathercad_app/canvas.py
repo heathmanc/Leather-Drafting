@@ -133,6 +133,22 @@ def _point_polyline_dist(p: Vec2, poly) -> float:
     return best
 
 
+def _point_in_poly(p: Vec2, poly) -> bool:
+    """Ray-cast point-in-polygon test (poly is a list of Vec2)."""
+    n = len(poly)
+    inside = False
+    j = n - 1
+    for i in range(n):
+        xi, yi = poly[i].x, poly[i].y
+        xj, yj = poly[j].x, poly[j].y
+        if (yi > p.y) != (yj > p.y):
+            x_cross = xi + (p.y - yi) * (xj - xi) / (yj - yi)
+            if p.x < x_cross:
+                inside = not inside
+        j = i
+    return inside
+
+
 def _segment_shape(kind, wpts, layer):
     """Build a standalone open path for one segment, recentred on its own
     centroid so it has an independent transform for moving."""
@@ -1191,12 +1207,14 @@ class Canvas(QGraphicsView):
                 sh.transform.y -= 8
                 from leathercad.shapes import _next_id
                 sh.shape_id = _next_id("shape")
+                sh.group_id = None          # a copy is not in the original group
                 new_items.append(self.add_shape(sh))
             elif isinstance(it, HoleItem):
                 from leathercad.holes import _next_id as _next_hole_id
                 lh = copy.deepcopy(it.hole)
                 lh.point = Vec2(it.hole.point.x + 8, it.hole.point.y - 8)
                 lh.hole_id = _next_hole_id()
+                lh.group_id = None
                 self.doc.holes.append(lh)
                 new_items.append(self._add_item(HoleItem(lh, self)))
             elif isinstance(it, StitchLineItem):
@@ -1204,6 +1222,7 @@ class Canvas(QGraphicsView):
                 sl = copy.deepcopy(it.line)
                 sl.points = [Vec2(p.x + 8, p.y - 8) for p in it.line.points]
                 sl.line_id = _next_line_id()
+                sl.group_id = None
                 self.doc.add_stitch_line(sl)
                 new_items.append(self._add_item(StitchLineItem(sl, self)))
         self._suppress_commit = False
@@ -1221,6 +1240,7 @@ class Canvas(QGraphicsView):
         together back-to-back. The copy is placed just to the right."""
         import copy
         from leathercad.shapes import _next_id
+        from leathercad.holes import _next_id as _next_hole_id
         new_items = []
         self._suppress_commit = True
         for it in self._shape_items():
@@ -1231,9 +1251,28 @@ class Canvas(QGraphicsView):
             m_minx, _, _, _ = sh.bounds()
             sh.transform.x += (o_maxx + 20.0) - m_minx
             sh.shape_id = _next_id("shape")
+            sh.group_id = None
             if sh.name:
                 sh.name = sh.name + " (back)"
             new_items.append(self.add_shape(sh))
+            # Mirror any LOOSE holes that live inside this shape too, registered
+            # to the mirrored copy (baked holes already ride with the shape).
+            ot, mt = it.model.transform, sh.transform
+            poly = [Vec2(p.x, p.y) for p in it.model.world_polyline()[0]]
+            for h in list(self.doc.holes):
+                if len(poly) >= 3 and not _point_in_poly(h.point, poly):
+                    continue
+                if len(poly) < 3:
+                    continue
+                local = ot.inverse_apply(h.point)
+                ltan = ot.inverse_apply_dir(h.tangent)
+                nh = copy.deepcopy(h)
+                nh.hole_id = _next_hole_id()
+                nh.group_id = None
+                nh.point = mt.apply(local)
+                nh.tangent = mt.apply_dir(ltan)
+                self.doc.holes.append(nh)
+                new_items.append(self._add_item(HoleItem(nh, self)))
         self._suppress_commit = False
         self.scene_obj.clearSelection()
         for it in new_items:

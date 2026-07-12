@@ -133,6 +133,10 @@ class MainWindow(QMainWindow):
         d2.setWidget(self.layers)
         self.addDockWidget(Qt.RightDockWidgetArea, d2)
 
+        # keep references so the View menu can toggle them back after closing
+        self.properties_dock = d1
+        self.layers_dock = d2
+
     def _make_tool_palette(self):
         """Traditional vertical tool palette, docked left, drag/float/pinnable."""
         tb = QToolBar("Tools")
@@ -293,6 +297,17 @@ class MainWindow(QMainWindow):
         self._add(vm, "Zoom in", "Ctrl++", lambda: self._zoom(1.2))
         self._add(vm, "Zoom out", "Ctrl+-", lambda: self._zoom(1 / 1.2))
         vm.addSeparator()
+        # toggles to reopen the docks after they've been closed
+        pa = self.properties_dock.toggleViewAction()
+        pa.setText("Properties panel")
+        pa.setShortcut(QKeySequence("Ctrl+1"))
+        vm.addAction(pa)
+        la = self.layers_dock.toggleViewAction()
+        la.setText("Layers panel")
+        la.setShortcut(QKeySequence("Ctrl+2"))
+        vm.addAction(la)
+        self._add(vm, "Reset panels", None, self._reset_panels)
+        vm.addSeparator()
         self.act_drag_draw = QAction("Drag to draw (hold && release)", self)
         self.act_drag_draw.setCheckable(True)
         self.act_drag_draw.setChecked(self.canvas.drag_to_draw)
@@ -427,6 +442,15 @@ class MainWindow(QMainWindow):
         else:
             self.canvas.array_circular(p["count"], p["cx"], p["cy"],
                                        p["total_deg"], p["rotate_items"])
+
+    def _reset_panels(self):
+        """Re-dock and show the Properties and Layers panels in their default
+        spot (rescues them if closed, floating or dragged off-screen)."""
+        for dock in (self.properties_dock, self.layers_dock):
+            dock.setFloating(False)
+            self.addDockWidget(Qt.RightDockWidgetArea, dock)
+            dock.show()
+            dock.raise_()
 
     def _zoom(self, factor):
         self.canvas._zoom = max(0.3, min(40.0, self.canvas._zoom * factor))

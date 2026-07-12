@@ -92,6 +92,7 @@ class VertexHandle(QGraphicsItem):
         self.owner = owner
         self.canvas = canvas
         self._dragged = False
+        self._shift = False
         self.setFlags(
             QGraphicsItem.ItemIsMovable
             | QGraphicsItem.ItemSendsGeometryChanges
@@ -123,12 +124,20 @@ class VertexHandle(QGraphicsItem):
             painter.drawRect(QRectF(-s, -s, 2 * s, 2 * s))
 
     def mousePressEvent(self, event):
+        self._shift = bool(event.modifiers() & Qt.ShiftModifier)
         if self.canvas is not None:
             self.canvas.begin_node_snap(self)
         super().mousePressEvent(event)
 
+    def mouseMoveEvent(self, event):
+        # read Shift from the live event -- QApplication.keyboardModifiers() is
+        # unreliable mid-drag (notably on macOS).
+        self._shift = bool(event.modifiers() & Qt.ShiftModifier)
+        super().mouseMoveEvent(event)
+
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
+        self._shift = False
         if self.canvas is not None:
             self.canvas.end_node_snap()
         if self._dragged and self.canvas is not None:
@@ -138,7 +147,8 @@ class VertexHandle(QGraphicsItem):
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange and self.canvas is not None:
             ref = getattr(self.node, "ref", None)
-            shift = bool(QApplication.keyboardModifiers() & Qt.ShiftModifier)
+            shift = self._shift or bool(
+                QApplication.keyboardModifiers() & Qt.ShiftModifier)
             if shift and ref is not None:
                 # constrain the segment to this node's neighbour to 0 / 90 deg
                 dx, dy = value.x() - ref.x, value.y() - ref.y

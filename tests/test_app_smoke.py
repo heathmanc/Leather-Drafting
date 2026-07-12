@@ -1060,6 +1060,18 @@ def test_line_node_has_ortho_reference(qapp):
     assert nodes[0].ref is not None and nodes[1].ref is not None
     assert (round(nodes[0].ref.x), round(nodes[0].ref.y)) == (30, 8)
 
+    # with Shift captured from the drag, the segment locks to 0 / 90 degrees
+    from PySide6.QtWidgets import QGraphicsItem
+    from PySide6.QtCore import QPointF
+    from leathercad_app.items import VertexHandle
+    h = VertexHandle(nodes[1], it, win.canvas)      # endpoint (30,8), ref (0,0)
+    win.canvas.scene_obj.addItem(h)
+    h._shift = True
+    r = h.itemChange(QGraphicsItem.ItemPositionChange, QPointF(35, 20))
+    assert (round(r.x()), round(r.y())) == (35, 0)  # mostly horizontal -> y locks
+    r = h.itemChange(QGraphicsItem.ItemPositionChange, QPointF(5, 40))
+    assert (round(r.x()), round(r.y())) == (0, 40)  # mostly vertical -> x locks
+
 
 def test_line_length_and_angle_field(qapp):
     import math

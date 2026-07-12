@@ -852,6 +852,46 @@ def test_line_and_construction_tools_create_shapes(qapp):
     assert any(getattr(s, "construction", False) for s in shapes)
 
 
+def test_click_to_place_vs_drag_drawing(qapp):
+    from PySide6.QtCore import QPointF, QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.resize(400, 400)
+
+    def press(x, y):
+        vp = QPointF(c.mapFromScene(QPointF(x, y)))
+        c.mousePressEvent(QMouseEvent(QEvent.MouseButtonPress, vp,
+                                      Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+
+    def release(x, y):
+        vp = QPointF(c.mapFromScene(QPointF(x, y)))
+        c.mouseReleaseEvent(QMouseEvent(QEvent.MouseButtonRelease, vp,
+                                        Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+
+    # click-to-place (default): first press+release makes nothing; 2nd click does
+    c.drag_to_draw = False
+    c.tool = cm.RECT
+    n = len(win.doc.shapes)
+    press(-40, -25)
+    release(-40, -25)
+    assert len(win.doc.shapes) == n            # waiting for the second click
+    press(40, 25)
+    assert len(win.doc.shapes) == n + 1        # second click finishes it
+
+    # drag mode: a single press-drag-release makes one shape
+    c.drag_to_draw = True
+    c.tool = cm.RECT
+    n = len(win.doc.shapes)
+    press(-60, -60)
+    release(60, 60)
+    assert len(win.doc.shapes) == n + 1
+
+
 def test_export_from_document(qapp, tmp_path):
     from leathercad_app.mainwindow import MainWindow
     from leathercad.document import Document

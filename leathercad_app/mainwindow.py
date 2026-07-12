@@ -100,12 +100,16 @@ class MainWindow(QMainWindow):
         if state is not None:
             self.restoreState(state)
         self.act_pin.setChecked(s.value("toolbarPinned", False, type=bool))
+        drag = s.value("dragToDraw", False, type=bool)
+        self.canvas.drag_to_draw = drag
+        self.act_drag_draw.setChecked(drag)
 
     def closeEvent(self, event):
         s = self._settings()
         s.setValue("geometry", self.saveGeometry())
         s.setValue("windowState", self.saveState())
         s.setValue("toolbarPinned", self.act_pin.isChecked())
+        s.setValue("dragToDraw", self.act_drag_draw.isChecked())
         super().closeEvent(event)
 
     # -- UI construction ------------------------------------------------
@@ -272,6 +276,16 @@ class MainWindow(QMainWindow):
         self._add(vm, "Fit to content", "F", self.canvas.fit_to_content)
         self._add(vm, "Zoom in", "Ctrl++", lambda: self._zoom(1.2))
         self._add(vm, "Zoom out", "Ctrl+-", lambda: self._zoom(1 / 1.2))
+        vm.addSeparator()
+        self.act_drag_draw = QAction("Drag to draw (hold && release)", self)
+        self.act_drag_draw.setCheckable(True)
+        self.act_drag_draw.setChecked(self.canvas.drag_to_draw)
+        self.act_drag_draw.setToolTip(
+            "On: press, drag and release to draw a shape/line.\n"
+            "Off: click the first point, then click the second point.")
+        self.act_drag_draw.toggled.connect(
+            lambda on: setattr(self.canvas, "drag_to_draw", on))
+        vm.addAction(self.act_drag_draw)
 
     def _add(self, menu, text, shortcut, slot):
         act = QAction(text, self)

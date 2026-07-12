@@ -90,6 +90,7 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 |---|---|
 | **Draw** | Rectangle `R`, Rounded rect `O`, Ellipse `E`, Circle `C`, Polygon `P` (click points, double-click to finish), Line `I` (2-point) |
 | **Construction line** | `G` — a dashed guide you drag out; it's a snap/alignment reference only, never cut or exported |
+| **Drawing style** | shapes/lines default to **click first point, click second point**. Prefer press-drag-release? Toggle **View → Drag to draw** (remembered between sessions). `Esc` cancels a point you're mid-placing |
 | **Holes / slots / fold lines** | Hole `H` (hardware), Slot `T` (stadium), Score line `K` (fold/skive on the Score layer) |
 | **Seam** | Stitch line `L` — a shared seam for cross-piece registration |
 | **Select / move** | `S` — drag to move, drag one piece over another to check fit |

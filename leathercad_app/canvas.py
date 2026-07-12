@@ -185,6 +185,9 @@ class Canvas(QGraphicsView):
         self._moved_during_press = False
         self._suppress_commit = False
         self.hole_tool_diameter = 4.0
+        # drawing style: False = click first point, click second point (default);
+        # True = press-drag-release. Tunable from the View menu.
+        self.drag_to_draw = False
         self._handles: List[VertexHandle] = []
         self._edit_owner = None
         # Hold strong Python refs to every scene item we create. PySide6 can
@@ -585,12 +588,22 @@ class Canvas(QGraphicsView):
             if self.tool == HOLE:
                 self._place_hole(pos)
             elif self.tool in _DRAG_TOOLS:
-                self._start = pos
-                self._preview = QGraphicsPathItem()
-                pen = QPen(QColor(120, 120, 120), 0, Qt.DashLine)
-                pen.setCosmetic(True)
-                self._preview.setPen(pen)
-                self.scene_obj.addItem(self._preview)
+                if not self.drag_to_draw and self._start is not None:
+                    # click-to-place: this is the second click -> finish
+                    start = self._start
+                    self._start = None
+                    self._clear_preview()
+                    self._finalize_drag(start, pos)
+                    self._hide_snap_marker()
+                    self.statusMessage.emit("")
+                else:
+                    # begin (drag-mode press, or first click of click-to-place)
+                    self._start = pos
+                    self._preview = QGraphicsPathItem()
+                    pen = QPen(QColor(120, 120, 120), 0, Qt.DashLine)
+                    pen.setCosmetic(True)
+                    self._preview.setPen(pen)
+                    self.scene_obj.addItem(self._preview)
             elif self.tool in _POLY_TOOLS:
                 self._poly_pts.append(pos)
                 self._update_poly_preview(pos)
@@ -641,7 +654,10 @@ class Canvas(QGraphicsView):
         pos = self.mapToScene(event.position().toPoint())
         if self.tool != SELECT:
             pos, _v = self.snap(pos)
-        if self._preview is not None and self._start is not None:
+        # In drag mode, releasing finishes the shape. In click-to-place mode the
+        # release after the first click does nothing (the second click finishes).
+        if (self.drag_to_draw and self._preview is not None
+                and self._start is not None):
             self.scene_obj.removeItem(self._preview)
             self._preview = None
             self._finalize_drag(self._start, pos)
@@ -741,6 +757,11 @@ class Canvas(QGraphicsView):
         if event.key() == Qt.Key_Escape:
             self._cancel_poly()
             self.clear_vertex_handles()
+            if self._start is not None:      # cancel an in-progress click-draw
+                self._start = None
+                self._clear_preview()
+                self._hide_snap_marker()
+                self.statusMessage.emit("")
         elif event.key() in (Qt.Key_Return, Qt.Key_Enter):
             if self._poly_pts:
                 self._finalize_poly()

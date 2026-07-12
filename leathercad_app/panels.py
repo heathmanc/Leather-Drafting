@@ -39,6 +39,12 @@ def _spin(lo, hi, step=1.0, decimals=2, suffix=" mm") -> QDoubleSpinBox:
     return s
 
 
+def _is_line(sh) -> bool:
+    """A straight 2-point open path (a line or construction line)."""
+    return (isinstance(sh, PathShape) and len(sh.points) == 2
+            and not sh.close_path)
+
+
 class PropertiesPanel(QWidget):
     committed = Signal()   # a discrete edit finished -> caller pushes undo state
 
@@ -96,6 +102,15 @@ class PropertiesPanel(QWidget):
         fp.addRow("Corner radius", self.poly_radius)
         fp.addRow("Points", self.poly_info)
         root.addWidget(self.g_poly)
+
+        # Line geometry (a 2-point path): length + angle, first point pinned
+        self.g_line = QGroupBox("Line")
+        fl = QFormLayout(self.g_line)
+        self.line_len = _spin(0.01, 100000, 1.0)
+        self.line_angle = _spin(-360, 360, 1.0, 1, " °")
+        fl.addRow("Length", self.line_len)
+        fl.addRow("Angle", self.line_angle)
+        root.addWidget(self.g_line)
 
         # Appearance
         self.g_appear = QGroupBox("Appearance")
@@ -168,6 +183,7 @@ class PropertiesPanel(QWidget):
         # wire up: valueChanged does live preview; editingFinished commits undo
         for wdg in (self.pos_x, self.pos_y, self.rot, self.w, self.h,
                     self.corner, self.rx, self.ry, self.poly_radius,
+                    self.line_len, self.line_angle,
                     self.pitch, self.inset, self.hole_dia, self.slit_len,
                     self.slit_angle):
             wdg.valueChanged.connect(self._apply)
@@ -221,6 +237,7 @@ class PropertiesPanel(QWidget):
         self.g_rect.setVisible(False)
         self.g_ellipse.setVisible(False)
         self.g_poly.setVisible(False)
+        self.g_line.setVisible(False)
         self.g_appear.setVisible(is_shape)
         self.g_transform.setVisible(is_shape)
         # Only auto-spaced shapes expose path/pitch controls.
@@ -257,6 +274,15 @@ class PropertiesPanel(QWidget):
                 self.g_poly.setVisible(True)
                 self.poly_radius.setValue(sh.corner_radius)
                 self.poly_info.setText(str(len(sh.points)))
+            elif _is_line(sh):
+                import math
+                p0 = sh.transform.apply(sh.points[0])
+                p1 = sh.transform.apply(sh.points[1])
+                self.g_line.setVisible(True)
+                self.line_len.setValue(((p1.x - p0.x) ** 2
+                                        + (p1.y - p0.y) ** 2) ** 0.5)
+                self.line_angle.setValue(
+                    math.degrees(math.atan2(p1.y - p0.y, p1.x - p0.x)))
             if is_baked:
                 self.g_stitch.setTitle(f"Holes (grouped · {len(sh.baked_holes)})")
                 self._load_hole_style(sh.stitch or StitchSettings())
@@ -403,6 +429,15 @@ class PropertiesPanel(QWidget):
             sh.ry = self.ry.value()
         elif isinstance(sh, Polygon):
             sh.corner_radius = self.poly_radius.value()
+        elif _is_line(sh):
+            import math
+            from leathercad.geometry import Vec2
+            p0 = sh.transform.apply(sh.points[0])       # keep the first point
+            length = self.line_len.value()
+            ang = math.radians(self.line_angle.value())
+            p1 = Vec2(p0.x + length * math.cos(ang),
+                      p0.y + length * math.sin(ang))
+            sh.points[1] = sh.transform.inverse_apply(p1)
 
     def _write_hole_style(self, obj):
         obj.hole_style = self.hole_style.currentText()

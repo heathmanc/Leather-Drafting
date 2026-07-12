@@ -15,7 +15,7 @@ from typing import List, Optional
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (QColor, QPainterPath, QPainterPathStroker, QPen,
                            QPolygonF, QBrush)
-from PySide6.QtWidgets import QGraphicsItem
+from PySide6.QtWidgets import QGraphicsItem, QApplication
 
 # Click tolerance (mm) around an outline for selection/hit-testing.
 OUTLINE_HIT_MM = 2.0
@@ -137,6 +137,14 @@ class VertexHandle(QGraphicsItem):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange and self.canvas is not None:
+            ref = getattr(self.node, "ref", None)
+            shift = bool(QApplication.keyboardModifiers() & Qt.ShiftModifier)
+            if shift and ref is not None:
+                # constrain the segment to this node's neighbour to 0 / 90 deg
+                dx, dy = value.x() - ref.x, value.y() - ref.y
+                if abs(dx) >= abs(dy):
+                    return QPointF(value.x(), ref.y)     # horizontal
+                return QPointF(ref.x, value.y())         # vertical
             return self.canvas.snap_node(value)
         if change == QGraphicsItem.ItemPositionHasChanged:
             self._dragged = True
@@ -426,12 +434,23 @@ class ShapeItem(QGraphicsItem):
         sh = self.model
         t = sh.transform
         out = []
+
+        def neighbour(pts, i, closed):
+            n = len(pts)
+            if n < 2:
+                return None
+            j = i - 1 if i > 0 else (n - 1 if closed else 1)
+            return t.apply(pts[j])          # world pos of the adjacent node
+
         if isinstance(sh, (Polygon, PathShape)):
+            closed = getattr(sh, "close_path", False)
             for i in range(len(sh.points)):
-                out.append(NodeRef(t.apply(sh.points[i]), self._set_point(i)))
+                out.append(NodeRef(t.apply(sh.points[i]), self._set_point(i),
+                                   ref=neighbour(sh.points, i, closed)))
         elif isinstance(sh, EditablePath):
             for i in range(len(sh.nodes)):
-                out.append(NodeRef(t.apply(sh.nodes[i]), self._set_epnode(i)))
+                out.append(NodeRef(t.apply(sh.nodes[i]), self._set_epnode(i),
+                                   ref=neighbour(sh.nodes, i, sh.closed)))
             for e in sh.edges:
                 if e.kind == "arc" and e.mid is not None:
                     out.append(NodeRef(t.apply(e.mid), self._set_epmid(e),
@@ -458,12 +477,13 @@ class NodeRef:
     """One editable node: its world position + a setter that takes a new world
     point and writes it back to the model (converting to local)."""
 
-    __slots__ = ("world", "setter", "is_mid")
+    __slots__ = ("world", "setter", "is_mid", "ref")
 
-    def __init__(self, world: Vec2, setter, is_mid: bool = False):
+    def __init__(self, world: Vec2, setter, is_mid: bool = False, ref=None):
         self.world = world
         self.setter = setter
         self.is_mid = is_mid
+        self.ref = ref     # world pos of the adjacent node (for Shift-ortho)
 
 
 class StitchLineItem(QGraphicsItem):

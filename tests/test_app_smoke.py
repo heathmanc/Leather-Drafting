@@ -1026,6 +1026,68 @@ def test_open_line_is_clickable_and_not_a_closed_sliver(qapp):
     assert it.shape().contains(it.mapFromScene(QPointF(0, 0)))    # on the line
 
 
+def test_split_midpoints_from_intersection(qapp):
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.shapes import PathShape
+    from leathercad.geometry import Vec2
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    # a 10-long line bisected at x=5 -> quarter points at 2.5 and 7.5
+    c.add_shape(PathShape(points=[Vec2(0, 0), Vec2(10, 0)], close_path=False,
+                          transform=Transform(x=0, y=0), layer="Cut"))
+    c.add_shape(PathShape(points=[Vec2(5, -5), Vec2(5, 5)], close_path=False,
+                          transform=Transform(x=0, y=0), layer="Cut"))
+    c.snap_to_nodes, c.snap_to_grid = True, False
+    p, vtx, guides, kind = c._smart_snap(QPointF(2.4, 0.2))
+    assert (round(p.x(), 1), round(p.y(), 1)) == (2.5, 0.0) and kind == "mid"
+
+
+def test_line_node_has_ortho_reference(qapp):
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.shapes import PathShape
+    from leathercad.geometry import Vec2
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    it = win.canvas.add_shape(PathShape(points=[Vec2(0, 0), Vec2(30, 8)],
+                                        close_path=False,
+                                        transform=Transform(x=0, y=0), layer="Cut"))
+    nodes = it.editable_nodes()
+    # each line endpoint knows its neighbour, so Shift can force 0/90 degrees
+    assert nodes[0].ref is not None and nodes[1].ref is not None
+    assert (round(nodes[0].ref.x), round(nodes[0].ref.y)) == (30, 8)
+
+
+def test_line_length_and_angle_field(qapp):
+    import math
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.shapes import PathShape
+    from leathercad.geometry import Vec2
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    it = c.add_shape(PathShape(points=[Vec2(-20, 0), Vec2(20, 0)],
+                               close_path=False, transform=Transform(x=0, y=0),
+                               layer="Cut"))
+    c.scene_obj.clearSelection()
+    it.setSelected(True)
+    p = win.properties
+    p.show_selection([it])
+    assert not p.g_line.isHidden()                  # Line group is shown
+    assert abs(p.line_len.value() - 40.0) < 1e-6
+
+    p.line_len.setValue(100.0)
+    p.line_len.editingFinished.emit()
+    a = it.model.transform.apply(it.model.points[0])
+    b = it.model.transform.apply(it.model.points[1])
+    assert abs(math.hypot(b.x - a.x, b.y - a.y) - 100.0) < 1e-6
+    assert (round(a.x), round(a.y)) == (-20, 0)     # first point stays put
+
+
 def test_export_from_document(qapp, tmp_path):
     from leathercad_app.mainwindow import MainWindow
     from leathercad.document import Document

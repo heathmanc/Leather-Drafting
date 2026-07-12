@@ -310,7 +310,8 @@ class Canvas(QGraphicsView):
 
     def _typed_candidates(self, near: Vec2, radius: float):
         """All snap targets as (Vec2, kind): shape nodes (typed), seam points,
-        hole centres, and nearby outline intersections ('cross')."""
+        hole centres, nearby outline intersections ('cross') and the midpoints
+        of the sub-segments those intersections carve out ('mid')."""
         out = []
         for it in self.scene_obj.items():
             if isinstance(it, ShapeItem):
@@ -319,14 +320,15 @@ class Canvas(QGraphicsView):
                 out.extend((p, "end") for p in it.line.points)
             elif isinstance(it, HoleItem):
                 out.append((it.hole.point, "center"))
+        edges = self._edges_near(near, radius)
         out.extend((x, "cross")
-                   for x in self._intersection_candidates(near, radius))
+                   for x in self._intersection_candidates(edges, near, radius))
+        out.extend((p, "mid")
+                   for p in self._split_midpoints(edges, near, radius))
         return out
 
-    def _intersection_candidates(self, near: Vec2, radius: float):
-        """Points where two different outlines cross, limited to edges within
-        ``radius`` of ``near`` so this stays cheap on every mouse move."""
-        from leathercad.trim import _seg_intersect
+    def _edges_near(self, near: Vec2, radius: float):
+        """Outline edges (a, b, owner) within ``radius`` of ``near``."""
         edges = []
         for it in self.scene_obj.items():
             poly = None
@@ -341,6 +343,11 @@ class Canvas(QGraphicsView):
                 a, b = poly[k], poly[k + 1]
                 if _point_polyline_dist(near, [a, b]) <= radius:
                     edges.append((a, b, owner))
+        return edges
+
+    def _intersection_candidates(self, edges, near: Vec2, radius: float):
+        """Points where two different outlines cross among ``edges``."""
+        from leathercad.trim import _seg_intersect
         out = []
         for i in range(len(edges)):
             for j in range(i + 1, len(edges)):
@@ -350,6 +357,35 @@ class Canvas(QGraphicsView):
                                    edges[j][0], edges[j][1])
                 if x is not None and (x - near).length() <= radius:
                     out.append(x)
+        return out
+
+    def _split_midpoints(self, edges, near: Vec2, radius: float):
+        """Midpoints of the pieces an edge is cut into by other outlines --
+        e.g. a line bisected at its centre gives you the 1/4 and 3/4 points."""
+        from leathercad.trim import _seg_intersect
+        out = []
+        for a, b, owner in edges:
+            ab = b - a
+            length2 = ab.length_sq()
+            if length2 <= 1e-12:
+                continue
+            ts = [0.0, 1.0]
+            for c, d, o2 in edges:
+                if o2 == owner:
+                    continue
+                x = _seg_intersect(a, b, c, d)
+                if x is None:
+                    continue
+                t = (x - a).dot(ab) / length2
+                if 1e-6 < t < 1 - 1e-6:
+                    ts.append(t)
+            if len(ts) <= 2:                       # nothing cut this edge
+                continue
+            ts = sorted(set(round(t, 6) for t in ts))
+            for i in range(len(ts) - 1):
+                p = a.lerp(b, 0.5 * (ts[i] + ts[i + 1]))
+                if (p - near).length() <= radius:
+                    out.append(p)
         return out
 
     def _all_intersections(self, exclude=None):

@@ -94,11 +94,12 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Holes / slots / fold lines** | Hole `H` (hardware), Slot `T` (stadium), Score line `K` (fold/skive on the Score layer) |
 | **Seam** | Stitch line `M` — a shared seam for cross-piece registration |
 | **Select / move** | `S` — drag to move, drag one piece over another to check fit |
-| **Snapping** | two independent toolbar toggles — **Nodes** and **Grid** — plus grid size. Node snap catches real geometry: **endpoints, edge & arc midpoints, arc/shape centres, circle quadrants, stitch-hole centres and intersections** (no phantom bounding-box points). Turn Grid off to snap only to geometry (points off a node stay free). Both apply while drawing and moving |
+| **Snapping** | two independent toolbar toggles — **Nodes** and **Grid** — plus grid size. Node snap catches real geometry: **endpoints, edge & arc midpoints, arc/shape centres, circle quadrants, stitch-hole centres, intersections, and the midpoints of the pieces an intersection carves out** (bisect a line and you can grab its quarter points) — no phantom bounding-box points. Turn Grid off to snap only to geometry (points off a node stay free). Both apply while drawing and moving |
 | **Alignment guides** | while drawing, when the cursor lines up with another object's node/centre the point locks to that x/y and a dashed **guide line** appears (smart snapping, Fusion/Illustrator style) |
 | **Exact sizes** | live W×H shown while dragging; after drawing, the size field is focused so you can type an exact value |
 | **Select by outline** | shapes are grabbed by clicking their outline, not the filled interior — click "inside" to reach shapes behind or draw there |
-| **Edit nodes** | double-click a polygon/seam, or right-click a shape → *Convert to editable nodes* (`Ctrl+K`). Rounded corners keep their **arcs**: each arc shows its two endpoints plus a midpoint handle you drag to reshape the curve. The shape locks while editing so clicks grab the nodes. |
+| **Edit nodes** | double-click a polygon/seam, or right-click a shape → *Convert to editable nodes* (`Ctrl+K`). Rounded corners keep their **arcs**: each arc shows its two endpoints plus a midpoint handle you drag to reshape the curve. The shape locks while editing so clicks grab the nodes. Hold **Shift** while dragging a node to lock its segment to **0° / 90°**. |
+| **Line length / angle** | select a line and type its **Length** and **Angle** in Properties (the first point stays put) — not just its x/y position |
 | **Snap to nodes** | with Snap on, dragging a shape (or a node while editing) magnetically snaps to other shapes'/holes' nodes |
 | **Break apart** | right-click a shape → *Break apart into segments* (`Ctrl+B`) — each edge (line or arc) becomes its own movable piece |
 | **Join / weld** | select 2+ pieces → *Join / weld segments* (`Ctrl+J`) — chains segments whose endpoints touch into one path (arcs kept) |

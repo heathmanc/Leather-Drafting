@@ -79,8 +79,10 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Snapping** | toolbar *Snap* toggle + grid size; snaps to grid and to other shapes' corners while drawing and moving |
 | **Exact sizes** | live W×H shown while dragging; after drawing, the size field is focused so you can type an exact value |
 | **Edit vertices** | double-click a polygon or seam to drag its points |
+| **Convert to nodes** | right-click a rectangle/ellipse (or `Ctrl+K`) → editable corner nodes you can drag |
+| **Snap to nodes** | with Snap on, dragging a shape magnetically snaps its corners to other shapes' corners |
 | **Group / ungroup holes** | right-click (or `Ctrl+G` / `Ctrl+Shift+G`) — ungroup to delete individual holes (below) |
-| **Right-click menu** | Group / Ungroup / Duplicate / Delete on the selection |
+| **Right-click menu** | Group / Ungroup / Convert to nodes / Duplicate / Delete on the selection |
 | **Radius corners** | select a rectangle/polygon, set *Corner radius* in Properties |
 | **Iron & holes** | per shape: pick an iron (mm or SPI), inset, round or slanted-slit holes, single or **double row** (saddle stitch) + backstitch, live hole count + spacing readout |
 | **Layers → laser jobs** | colour-coded Cut / Score / Engrave / Stitch layers with visibility |
@@ -194,7 +196,8 @@ examples/  tests/  docs/
 - [x] Two-row saddle stitch + backstitch markers
 - [x] Left tool palette (draggable / floatable / pinnable, layout remembered)
 - [x] Group / ungroup holes (individual selectable holes; group back to a shape)
-- [x] Right-click context menu (group / ungroup / duplicate / delete)
+- [x] Right-click context menu (group / ungroup / convert-to-nodes / duplicate / delete)
+- [x] Convert a shape to editable nodes; magnetic snap-to-node while dragging
 - [ ] Boolean ops (windows, cut-outs) and true seam-allowance offset
 - [ ] Alignment guides (smart snapping lines) while dragging
 - [ ] Import reference images / trace an existing pattern

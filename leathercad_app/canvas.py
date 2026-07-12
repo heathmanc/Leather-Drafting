@@ -93,6 +93,7 @@ class Canvas(QGraphicsView):
         # otherwise garbage-collect a live item's wrapper and free the C++
         # object while it is still selected -> crash in clearSelection().
         self._live = set()
+        self._snap_cache = None   # static snap nodes captured at drag start
 
         # snapping
         self.snap_enabled = True
@@ -185,6 +186,44 @@ class Canvas(QGraphicsView):
     def _hide_snap_marker(self):
         if self._snap_marker is not None:
             self._snap_marker.setVisible(False)
+
+    # -- magnetic node snapping while dragging shapes -------------------
+    def begin_move_snap(self, item) -> None:
+        # capture other shapes'/holes' nodes once, at the start of the drag
+        if self.snap_enabled and len(self.selected_items()) <= 1:
+            self._snap_cache = self._snap_candidates(exclude=item)
+        else:
+            self._snap_cache = None
+
+    def end_move_snap(self) -> None:
+        self._snap_cache = None
+        self._hide_snap_marker()
+
+    def snap_move(self, item, value: QPointF) -> QPointF:
+        """Snap a dragged shape so one of its nodes lands on a nearby node."""
+        if not self.snap_enabled or self._snap_cache is None:
+            return value
+        offsets = getattr(item, "_snap_offsets", None)
+        if not offsets:
+            return value
+        thr = 12.0 / self._zoom
+        best = None
+        best_target = None
+        best_d = thr
+        vx, vy = value.x(), value.y()
+        for off in offsets:
+            nx, ny = vx + off.x, vy + off.y
+            for s in self._snap_cache:
+                d = ((nx - s.x) ** 2 + (ny - s.y) ** 2) ** 0.5
+                if d < best_d:
+                    best_d = d
+                    best = QPointF(s.x - off.x, s.y - off.y)
+                    best_target = s
+        if best is not None:
+            self._show_snap_marker(QPointF(best_target.x, best_target.y), True)
+            return best
+        self._hide_snap_marker()
+        return value
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MiddleButton:
@@ -303,11 +342,18 @@ class Canvas(QGraphicsView):
                      or (i.model.stitch and i.model.stitch.enabled)))
             for i in sel)
 
+        can_nodes = len(shapes) == 1
+        parametric = can_nodes and not isinstance(
+            shapes[0].model, (Polygon, PathShape))
+
         menu = QMenu(self)
         a_group = menu.addAction("Group holes into shape")
         a_group.setEnabled(can_group)
         a_ungroup = menu.addAction("Ungroup stitching → individual holes")
         a_ungroup.setEnabled(can_ungroup)
+        a_nodes = menu.addAction("Convert to editable nodes"
+                                 if parametric else "Edit nodes")
+        a_nodes.setEnabled(can_nodes)
         menu.addSeparator()
         a_dup = menu.addAction("Duplicate")
         a_dup.setEnabled(bool(shapes))
@@ -318,6 +364,8 @@ class Canvas(QGraphicsView):
             self.group_selected()
         elif chosen is a_ungroup:
             self.ungroup_selected()
+        elif chosen is a_nodes:
+            self.convert_to_nodes()
         elif chosen is a_dup:
             self.duplicate_selected()
         elif chosen is a_del:
@@ -694,6 +742,49 @@ class Canvas(QGraphicsView):
             self.doc.add_hole(lh)
             items.append(self._add_item(HoleItem(lh, self)))
         return items
+
+    # -- convert a parametric shape into editable nodes ----------------
+    def convert_to_nodes(self) -> None:
+        """Turn the selected parametric shape (rect/rounded/ellipse/circle) into
+        a Polygon/PathShape whose nodes you can drag, then show its nodes."""
+        shapes = [it for it in self.selected_items() if isinstance(it, ShapeItem)]
+        if len(shapes) != 1:
+            self.statusMessage.emit("Select one shape to convert to nodes")
+            return
+        it = shapes[0]
+        sh = it.model
+        if isinstance(sh, (Polygon, PathShape)):
+            self.enter_vertex_edit(it)   # already has nodes
+            return
+
+        path = sh.local_path()
+        pts = path.flatten()
+        closed = path.closed
+        if closed and len(pts) > 1 and (pts[0] - pts[-1]).length() < 1e-9:
+            pts = pts[:-1]
+        if isinstance(sh, Rectangle) and sh.corner_radius <= 0:
+            new = Polygon(points=[Vec2(p.x, p.y) for p in pts], close_path=True,
+                          sharp_corners=True)
+        else:
+            new = PathShape(points=[Vec2(p.x, p.y) for p in pts],
+                            close_path=closed)
+        # preserve everything else
+        new.transform = sh.transform
+        new.layer = sh.layer
+        new.opacity = sh.opacity
+        new.stitch = sh.stitch
+        new.baked_holes = sh.baked_holes
+
+        idx = self.doc.shapes.index(sh)
+        self.doc.shapes[idx] = new
+        self._remove_item(it)
+        new_item = self._add_item(ShapeItem(new, self))
+        self.scene_obj.clearSelection()
+        new_item.setSelected(True)
+        self.enter_vertex_edit(new_item)
+        self.documentChangedSig.emit()
+        self.selectionChangedSig.emit()
+        self._emit_commit()
 
     # -- group: individual holes -> baked into a shape -----------------
     def group_selected(self) -> None:

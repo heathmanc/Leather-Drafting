@@ -262,16 +262,20 @@ class PropertiesPanel(QWidget):
                   self.row_spacing, self.backstitch):
             self._stitch_form.setRowVisible(w, vis)
 
+    def _sync_hole_vis(self):
+        """Show Hole ø for round holes, slit length/angle for slits."""
+        slit = self.hole_style.currentText() == "slit"
+        self._stitch_form.setRowVisible(self.hole_dia, not slit)
+        self._stitch_form.setRowVisible(self.slit_len, slit)
+        self._stitch_form.setRowVisible(self.slit_angle, slit)
+
     def _load_hole_style(self, g):
         i = self.hole_style.findText(g.hole_style)
         self.hole_style.setCurrentIndex(i if i >= 0 else 0)
         self.hole_dia.setValue(g.hole_diameter)
         self.slit_len.setValue(g.slit_length)
         self.slit_angle.setValue(g.slit_angle)
-        slit = g.hole_style == "slit"
-        self.hole_dia.setVisible(not slit)
-        self.slit_len.setVisible(slit)
-        self.slit_angle.setVisible(slit)
+        self._sync_hole_vis()
 
     def _load_stitch(self, st: StitchSettings):
         self.pitch.setValue(st.pitch_mm)
@@ -287,10 +291,7 @@ class PropertiesPanel(QWidget):
         self.row_spacing.setValue(getattr(st, "row_spacing", 3.0))
         self.backstitch.setValue(getattr(st, "backstitch", 0))
         self._sync_iron_combo(st.pitch_mm)
-        slit = st.hole_style == "slit"
-        self.hole_dia.setVisible(not slit)
-        self.slit_len.setVisible(slit)
-        self.slit_angle.setVisible(slit)
+        self._sync_hole_vis()
         self.row_spacing.setVisible(self.rows.currentIndex() == 1)
 
     def _sync_iron_combo(self, pitch):
@@ -321,12 +322,15 @@ class PropertiesPanel(QWidget):
 
     # -- apply ----------------------------------------------------------
     def _apply(self):
-        if self._loading or not _alive(self._item):
+        if self._loading:
+            return
+        if not _alive(self._item):
             self._item = None
             return
         it = self._item
         if isinstance(it, HoleItem):
             self._write_hole_style(it.hole)
+            self._sync_hole_vis()
             self.canvas.refresh_item(it)
             return
         if isinstance(it, ShapeItem) and it.model.baked_holes:
@@ -341,6 +345,7 @@ class PropertiesPanel(QWidget):
             if sh.stitch is None:
                 sh.stitch = StitchSettings(enabled=False)
             self._write_hole_style(sh.stitch)
+            self._sync_hole_vis()
             self.canvas.refresh_item(it)
             self._update_readout()
             return
@@ -364,10 +369,7 @@ class PropertiesPanel(QWidget):
             self._write_stitch(it.line.settings)
             it.line.settings.inset = 0.0
         self._sync_iron_combo(self.pitch.value())
-        slit = self.hole_style.currentText() == "slit"
-        self.hole_dia.setVisible(not slit)
-        self.slit_len.setVisible(slit)
-        self.slit_angle.setVisible(slit)
+        self._sync_hole_vis()
         self.row_spacing.setVisible(self.rows.currentIndex() == 1)
         self.canvas.refresh_item(it)
         self._update_readout()

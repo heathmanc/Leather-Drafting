@@ -225,6 +225,7 @@ class MainWindow(QMainWindow):
         em.addSeparator()
         self._add(em, "Group holes into shape", "Ctrl+G", self.canvas.group_selected)
         self._add(em, "Ungroup stitching", "Ctrl+Shift+G", self.canvas.ungroup_selected)
+        self._add(em, "Convert to editable nodes", "Ctrl+K", self.canvas.convert_to_nodes)
         em.addSeparator()
         self._add(em, "Duplicate", "Ctrl+D", self.canvas.duplicate_selected)
         self._add(em, "Delete", None, self.canvas.delete_selected)

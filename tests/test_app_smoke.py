@@ -168,6 +168,77 @@ def test_items_deselected_and_tracked_to_avoid_use_after_free(qapp):
     assert win.properties._item is None
 
 
+def test_hole_style_visibility_toggles(qapp):
+    """Switching a hole slit<->round must update which size fields show, and
+    the edit must reach the model (regression: _apply nulled _item on reload)."""
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import HoleItem
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    item = c.add_shape(Rectangle(
+        width=60, height=40, transform=Transform(x=0, y=0),
+        stitch=StitchSettings(pitch_mm=4.0, inset=3.0, hole_style="slit"),
+        layer="Cut"))
+    c.scene_obj.clearSelection(); item.setSelected(True); c.ungroup_selected()
+    hole = [it for it in c.scene_obj.items() if isinstance(it, HoleItem)][0]
+    c.scene_obj.clearSelection(); hole.setSelected(True)
+    p = win.properties
+    p.show_selection([hole])
+    form = p._stitch_form
+    assert form.isRowVisible(p.slit_len) and not form.isRowVisible(p.hole_dia)
+    p.hole_style.setCurrentText("round")
+    assert hole.hole.hole_style == "round"
+    assert form.isRowVisible(p.hole_dia) and not form.isRowVisible(p.slit_len)
+    p.hole_style.setCurrentText("slit")
+    assert hole.hole.hole_style == "slit"
+    assert form.isRowVisible(p.slit_len) and not form.isRowVisible(p.hole_dia)
+
+
+def test_convert_shape_to_nodes(qapp):
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    from leathercad.shapes import Polygon, PathShape
+
+    win = MainWindow(Document())
+    c = win.canvas
+    r = c.add_shape(Rectangle(width=60, height=40, transform=Transform(x=0, y=0),
+                              stitch=StitchSettings(pitch_mm=4.0, inset=3.0),
+                              layer="Cut"))
+    c.scene_obj.clearSelection(); r.setSelected(True)
+    c.convert_to_nodes()
+    new = win.doc.shapes[0]
+    assert isinstance(new, Polygon) and len(new.points) == 4
+    assert new.stitch is not None            # stitching preserved
+    assert len(c._handles) == 4              # entered vertex-edit mode
+    xs = sorted({round(p.x, 1) for p in new.points})
+    ys = sorted({round(p.y, 1) for p in new.points})
+    assert xs == [-30.0, 30.0] and ys == [-20.0, 20.0]
+
+
+def test_magnetic_node_snap_on_move(qapp):
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.snap_enabled = True
+    c.add_shape(Rectangle(width=60, height=40, transform=Transform(x=0, y=0), layer="Cut"))
+    b = c.add_shape(Rectangle(width=20, height=20, transform=Transform(x=100, y=100), layer="Cut"))
+    c.scene_obj.clearSelection(); b.setSelected(True)
+    c.begin_move_snap(b)
+    # dragging B so its +10,+10 corner nears A's corner (30,20) snaps exactly
+    res = c.snap_move(b, QPointF(20.6, 10.5))
+    assert abs(res.x() - 20) < 1e-6 and abs(res.y() - 10) < 1e-6
+    # far away: unchanged (free movement)
+    res2 = c.snap_move(b, QPointF(300, 300))
+    assert (res2.x(), res2.y()) == (300, 300)
+    c.end_move_snap()
+    assert c._snap_cache is None
+
+
 def test_seam_move_bakes_on_release_not_per_tick(qapp):
     """Regression: moving a seam must not reset setPos(0,0) mid-drag (which made
     items jump). Points bake to the final position on release."""

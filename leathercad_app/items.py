@@ -209,10 +209,22 @@ class ShapeItem(QGraphicsItem):
         """Rebuild geometry + holes from the model and reposition."""
         self.prepareGeometryChange()
         t = self.model.transform
+        path = self.model.local_path()
         # oriented (rotation+mirror), pre-translation -- matches Transform.apply
-        local = self.model.local_path().flatten()
+        local = path.flatten()
         oriented = [t.apply_dir(p) for p in local]
         self._outline = _qpoly(oriented)
+
+        # snap nodes (offsets from the item origin): bbox corners, sharp
+        # corners, and the origin -- used for magnetic node snapping on drag.
+        node_locals = [Vec2(0.0, 0.0)]
+        if local:
+            xs = [p.x for p in local]
+            ys = [p.y for p in local]
+            node_locals += [Vec2(min(xs), min(ys)), Vec2(max(xs), min(ys)),
+                            Vec2(max(xs), max(ys)), Vec2(min(xs), max(ys))]
+        node_locals += list(path.corner_points)
+        self._snap_offsets = [t.apply_dir(p) for p in node_locals]
 
         self._holes = None
         st = self.model.stitch
@@ -300,8 +312,20 @@ class ShapeItem(QGraphicsItem):
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(self._outline.boundingRect())
 
+    def mousePressEvent(self, event):
+        if self.canvas is not None:
+            self.canvas.begin_move_snap(self)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if self.canvas is not None:
+            self.canvas.end_move_snap()
+
     def itemChange(self, change, value):
-        # Move follows the cursor exactly (no grid snap while dragging).
+        # Magnetic node snapping while dragging; free otherwise.
+        if change == QGraphicsItem.ItemPositionChange and self.canvas is not None:
+            return self.canvas.snap_move(self, value)
         if change == QGraphicsItem.ItemPositionHasChanged:
             self.model.transform.x = self.pos().x()
             self.model.transform.y = self.pos().y()

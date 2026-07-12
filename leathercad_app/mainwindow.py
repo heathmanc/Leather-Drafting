@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt, QSize, QSettings
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow, QDockWidget, QFileDialog, QToolBar, QLabel, QMessageBox,
-    QWidget, QScrollArea, QComboBox, QInputDialog,
+    QWidget, QScrollArea, QComboBox, QInputDialog, QDoubleSpinBox,
 )
 
 from leathercad.document import Document
@@ -235,6 +235,24 @@ class MainWindow(QMainWindow):
         self.grid_combo.currentIndexChanged.connect(
             lambda: setattr(self.canvas, "snap_grid", self.grid_combo.currentData()))
         tb.addWidget(self.grid_combo)
+
+        tb.addSeparator()
+        tb.addWidget(QLabel(" line "))
+        self.line_width_spin = QDoubleSpinBox()
+        self.line_width_spin.setRange(0.3, 8.0)
+        self.line_width_spin.setSingleStep(0.5)
+        self.line_width_spin.setDecimals(1)
+        self.line_width_spin.setSuffix(" px")
+        self.line_width_spin.setToolTip("On-screen outline / line stroke width")
+        w = self._settings().value("lineWidth", 1.0, type=float)
+        self.line_width_spin.setValue(w)
+        self.canvas.line_width = w
+        self.line_width_spin.valueChanged.connect(self._line_width_changed)
+        tb.addWidget(self.line_width_spin)
+
+    def _line_width_changed(self, w):
+        self.canvas.set_line_width(w)
+        self._settings().setValue("lineWidth", w)
 
     def _make_menus(self):
         m = self.menuBar()

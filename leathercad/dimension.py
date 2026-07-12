@@ -28,6 +28,10 @@ class Dimension:
     layer: str = "Dimension"
     dim_id: str = field(default_factory=_next_id)
     kind: str = "dimension"
+    # optional associativity: (shape_id, u, v) fractional bbox positions so the
+    # endpoints follow a shape when it moves/resizes and the length updates.
+    a_ref: tuple | None = None
+    b_ref: tuple | None = None
 
     def length(self) -> float:
         return (self.p2 - self.p1).length()
@@ -60,14 +64,20 @@ class Dimension:
             "offset": self.offset,
             "layer": self.layer,
             "dim_id": self.dim_id,
+            "a_ref": list(self.a_ref) if self.a_ref else None,
+            "b_ref": list(self.b_ref) if self.b_ref else None,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "Dimension":
+        def _ref(x):
+            return (x[0], x[1], x[2]) if x else None
         return cls(
             p1=Vec2(*d.get("p1", [0, 0])),
             p2=Vec2(*d.get("p2", [0, 0])),
             offset=d.get("offset", 8.0),
             layer=d.get("layer", "Dimension"),
             dim_id=d.get("dim_id", _next_id()),
+            a_ref=_ref(d.get("a_ref")),
+            b_ref=_ref(d.get("b_ref")),
         )

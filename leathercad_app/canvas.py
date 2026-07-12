@@ -221,6 +221,7 @@ class Canvas(QGraphicsView):
         self._snap_cache = None   # static snap nodes captured at drag start
         self._group_drag = None   # active move-group drag state
         self._nonmovable_members = []   # items we temporarily froze for a group drag
+        self.line_width = 1.0     # on-screen outline stroke width (cosmetic px)
 
         # snapping -- grid and node snapping toggle independently
         self.snap_to_nodes = True    # ends / midpoints / centres / intersections
@@ -854,13 +855,57 @@ class Canvas(QGraphicsView):
     def _add_dimension(self, a: QPointF, b: QPointF) -> None:
         from leathercad.dimension import Dimension
         dim = Dimension(p1=Vec2(a.x(), a.y()), p2=Vec2(b.x(), b.y()),
-                        offset=8.0, layer="Dimension")
+                        offset=8.0, layer="Dimension",
+                        a_ref=self._dim_attach(a), b_ref=self._dim_attach(b))
         self.doc.dimensions.append(dim)
         self._add_item(DimensionItem(dim, self))
         self.statusMessage.emit(self._measure_text(a, b))
         self.documentChangedSig.emit()
         self._emit_commit()
         self.toolFinished.emit()
+
+    def _dim_attach(self, world: QPointF):
+        """If ``world`` sits on a shape's snap node, return (shape_id, u, v) --
+        fractional position in that shape's bounding box -- so the dimension
+        endpoint tracks the shape through moves and resizes."""
+        tol = 1.5
+        best, best_d = None, tol
+        for it in self.scene_obj.items():
+            if not isinstance(it, ShapeItem):
+                continue
+            for n in it.world_snap_nodes():
+                d = ((n.x - world.x()) ** 2 + (n.y - world.y()) ** 2) ** 0.5
+                if d < best_d:
+                    best_d, best = d, it
+        if best is None:
+            return None
+        minx, miny, maxx, maxy = best.model.bounds()
+        w = (maxx - minx) or 1e-9
+        h = (maxy - miny) or 1e-9
+        return (best.model.shape_id, (world.x() - minx) / w,
+                (world.y() - miny) / h)
+
+    def _dim_world(self, ref, fallback: Vec2) -> Vec2:
+        if not ref:
+            return fallback
+        sid, u, v = ref
+        sh = next((s for s in self.doc.shapes if s.shape_id == sid), None)
+        if sh is None:
+            return fallback
+        minx, miny, maxx, maxy = sh.bounds()
+        return Vec2(minx + u * (maxx - minx), miny + v * (maxy - miny))
+
+    def update_dimensions(self) -> None:
+        """Recompute associative dimension endpoints from their shapes (called
+        after a move/resize) and refresh the dimension items' geometry + label."""
+        dims = {id(dm): dm for dm in getattr(self.doc, "dimensions", [])}
+        for dm in dims.values():
+            if dm.a_ref or dm.b_ref:
+                dm.p1 = self._dim_world(dm.a_ref, dm.p1)
+                dm.p2 = self._dim_world(dm.b_ref, dm.p2)
+        for it in self.scene_obj.items():
+            if isinstance(it, DimensionItem):
+                it.sync_from_model()
 
     def _place_text(self, pos: QPointF) -> None:
         from PySide6.QtWidgets import QInputDialog
@@ -1691,6 +1736,7 @@ class Canvas(QGraphicsView):
     def item_moved(self, item) -> None:
         self._moved_during_press = True
         self._reposition_resize_handles()
+        self.update_dimensions()
         self.documentChangedSig.emit()
 
     def selection_changed(self) -> None:
@@ -1725,6 +1771,7 @@ class Canvas(QGraphicsView):
             return
         item.sync_from_model()
         self._reposition_resize_handles()
+        self.update_dimensions()
         self.documentChangedSig.emit()
 
     def refresh_all(self) -> None:
@@ -1732,6 +1779,16 @@ class Canvas(QGraphicsView):
             if isinstance(it, (ShapeItem, StitchLineItem)):
                 it.sync_from_model()
         self.apply_layer_visibility()
+
+    def outline_width(self, selected: bool = False) -> float:
+        """Cosmetic stroke width for outlines / lines (user-tunable)."""
+        return self.line_width + (0.8 if selected else 0.0)
+
+    def set_line_width(self, w: float) -> None:
+        self.line_width = max(0.2, w)
+        for it in self.scene_obj.items():
+            if hasattr(it, "update"):
+                it.update()
 
     def _layer_visible(self, name: str) -> bool:
         lyr = self.doc.layer(name)

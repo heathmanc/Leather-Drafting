@@ -68,3 +68,47 @@ def test_properties_panel_handles_annotation_selection():
     win._selection_changed()
     assert "Text" in win.properties.readout.text()
     win.properties._apply()   # must be a no-op, not a crash
+
+
+def test_dimension_tracks_shape_resize():
+    from PySide6.QtWidgets import QApplication
+    from PySide6.QtCore import QPointF
+    QApplication.instance() or QApplication([])
+    import leathercad_app.canvas as cm
+    from leathercad_app.items import ShapeItem, ResizeHandle
+    from leathercad.shapes import Rectangle, Transform
+    from leathercad.geometry import Vec2
+
+    doc = Document()
+    rect = Rectangle(width=40, height=30, transform=Transform(x=50, y=50),
+                     layer="Cut")
+    doc.add_shape(rect)
+    c = cm.Canvas(doc)
+    c.snap_to_nodes = True
+    c.snap_to_grid = False
+    c.rebuild()
+    # dimension across the bottom edge (BL 30,35 -> BR 70,35)
+    c._add_dimension(QPointF(30, 35), QPointF(70, 35))
+    dm = doc.dimensions[0]
+    assert dm.a_ref is not None and dm.b_ref is not None
+    assert dm.label() == "40.0 mm"
+    # resize to 60 wide with the bottom-left corner pinned
+    item = next(it for it in c.scene_obj.items() if isinstance(it, ShapeItem))
+    item.setSelected(True)
+    c.selection_changed()
+    tr = next(h for h in c.scene_obj.items()
+              if isinstance(h, ResizeHandle) and h.grip == (1, 1))
+    tr._apply_resize(Vec2(90, 85))
+    c.update_dimensions()
+    assert dm.label() == "60.0 mm"        # length followed the resize
+
+
+def test_line_width_control():
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    import leathercad_app.canvas as cm
+    c = cm.Canvas(Document())
+    assert c.outline_width(False) == 1.0
+    c.set_line_width(3.0)
+    assert c.line_width == 3.0
+    assert c.outline_width(False) == 3.0 and c.outline_width(True) == 3.8

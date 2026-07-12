@@ -356,7 +356,7 @@ class TextItem(QGraphicsItem):
         sel = self.isSelected()
         pen = QPen(QColor(30, 140, 255) if sel else self._color)
         pen.setCosmetic(True)
-        pen.setWidthF(1.6 if sel else 1.0)
+        pen.setWidthF(self.canvas.outline_width(sel) if self.canvas else 1.0)
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)
         painter.drawPath(self._path)
@@ -436,7 +436,8 @@ class DimensionItem(QGraphicsItem):
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
         pen = QPen(QColor(30, 140, 255) if self.isSelected() else QColor(120, 120, 130))
         pen.setCosmetic(True)
-        pen.setWidthF(1.4 if self.isSelected() else 0.9)
+        base = self.canvas.line_width if self.canvas else 1.0
+        pen.setWidthF(base + (0.5 if self.isSelected() else 0.0))
         painter.setPen(pen)
         painter.drawLine(self._p1, self._a)      # extension lines
         painter.drawLine(self._p2, self._b)
@@ -659,7 +660,8 @@ class ShapeItem(QGraphicsItem):
         else:
             pen = QPen(self._color)
         pen.setCosmetic(True)
-        pen.setWidthF(2.0 if selected else 1.0)
+        w = self.canvas.outline_width(selected) if self.canvas else 1.0
+        pen.setWidthF(w)
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)
         if outline_vis and self._outline.size() >= 2:
@@ -670,7 +672,7 @@ class ShapeItem(QGraphicsItem):
             hp = QPen(QColor(self.canvas.layer_color("Stitch"))
                       if self.canvas else QColor("#0066ff"))
             hp.setCosmetic(True)
-            hp.setWidthF(1.0)
+            hp.setWidthF(self.canvas.line_width if self.canvas else 1.0)
             painter.setPen(hp)
             st = self.model.stitch
             if st and st.hole_style == "slit":
@@ -906,6 +908,7 @@ class StitchLineItem(QGraphicsItem):
         hp = QPen(QColor(self.canvas.layer_color("Stitch"))
                   if self.canvas else QColor("#0066ff"))
         hp.setCosmetic(True)
+        hp.setWidthF(self.canvas.line_width if self.canvas else 1.0)
         painter.setPen(hp)
         for h in self._rel_holes:
             painter.drawEllipse(QPointF(h.point.x, h.point.y), 0.5, 0.5)

@@ -758,10 +758,40 @@ def test_smart_snap_alignment_and_guides(qapp):
     c.rebuild()
     c.tool = LINE
     # near rect-B's left edge (x=40) and rect-A's centre line (y=0)
-    p, vtx, guides = c._smart_snap(QPointF(39.4, 0.6))
+    p, vtx, guides, kind = c._smart_snap(QPointF(39.4, 0.6))
     assert abs(p.x() - 40.0) < 1e-6      # locked to B's edge x
     assert abs(p.y() - 0.0) < 1e-6       # locked to A's centre y
-    assert vtx and len(guides) == 2      # a vertical and a horizontal guide
+    assert vtx and len(guides) == 2 and kind == "align"
+
+
+def test_snap_reports_kind_including_circle_centre(qapp):
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.shapes import Circle
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.snap_to_nodes, c.snap_to_grid = True, False
+    c.add_shape(Circle(rx=15, ry=15, transform=Transform(x=30, y=20), layer="Cut"))
+    p, vtx, guides, kind = c._smart_snap(QPointF(30.5, 19.6))   # near the centre
+    assert kind == "center" and (round(p.x()), round(p.y())) == (30, 20)
+
+
+def test_construction_line_ends_where_drawn(qapp):
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.canvas import CONSTRUCTION
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.tool = CONSTRUCTION
+    c._finalize_drag(QPointF(-10, 0), QPointF(10, 0))
+    g = [it.model for it in _shape_items(c)
+         if getattr(it.model, "construction", False)][0]
+    xs = sorted(p.x for p in g.world_polyline()[0])
+    assert abs(xs[0] + 10) < 1e-6 and abs(xs[-1] - 10) < 1e-6   # no overshoot
 
 
 def test_line_and_construction_tools_create_shapes(qapp):

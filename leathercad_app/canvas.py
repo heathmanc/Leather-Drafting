@@ -55,6 +55,9 @@ CONSTRUCTION = "construction"
 _DRAG_TOOLS = (RECT, ROUNDED, ELLIPSE, CIRCLE, SLOT, LINE, CONSTRUCTION)
 _POLY_TOOLS = (POLYGON, STITCHLINE, SCORE)
 
+_SNAP_LABEL = {"center": "centre", "end": "endpoint", "mid": "midpoint",
+               "cross": "intersection", "align": "aligned", "grid": ""}
+
 
 def _rev(seg):
     a, b, kind, mid = seg
@@ -194,6 +197,7 @@ class Canvas(QGraphicsView):
         self.snap_to_grid = True
         self.snap_grid = 1.0         # mm
         self._snap_marker: Optional[QGraphicsPathItem] = None
+        self._node_hl: Optional[QGraphicsPathItem] = None
         self._trim_hover: Optional[QGraphicsPathItem] = None
         self._align_guides: List[QGraphicsLineItem] = []
 
@@ -239,10 +243,8 @@ class Canvas(QGraphicsView):
         return pts
 
     def snap(self, pos: QPointF):
-        """Return (snapped QPointF, is_vertex_snap). Also refreshes alignment
-        guides as a side effect so drawing tools show smart-snap lines."""
-        p, vtx, guides = self._smart_snap(pos)
-        self._show_align_guides(guides)
+        """Return (snapped QPointF, is_node_snap). Pure -- no visuals."""
+        p, vtx, _guides, _kind = self._smart_snap(pos)
         return p, vtx
 
     def _smart_snap(self, pos: QPointF):
@@ -250,29 +252,29 @@ class Canvas(QGraphicsView):
         independently: node snap catches ends / midpoints / centres /
         intersections (and alignment with them); grid snap rounds to the grid.
         With node snap on and grid snap off, points that aren't on a node stay
-        free. Returns (snapped QPointF, is_node_snap, guides)."""
+        free. Returns (snapped QPointF, is_node_snap, guides, kind) where kind is
+        'center'|'end'|'mid'|'cross'|'align'|'grid'|None."""
         guides = []
         gridok = self.snap_to_grid and self.snap_grid > 0
         thr = 10.0 / self._zoom          # ~10 px in mm
 
         if self.snap_to_nodes:
             near = Vec2(pos.x(), pos.y())
-            cands = self._snap_candidates() + \
-                self._intersection_candidates(near, thr * 1.5)
+            cands = self._typed_candidates(near, thr * 1.5)
 
             # 1. direct point snap wins (end / midpoint / centre / intersection)
-            best, best_d = None, thr
-            for c in cands:
+            best, best_d, best_kind = None, thr, None
+            for c, kind in cands:
                 d = ((pos.x() - c.x) ** 2 + (pos.y() - c.y) ** 2) ** 0.5
                 if d < best_d:
-                    best_d, best = d, c
+                    best_d, best, best_kind = d, c, kind
             if best is not None:
-                return QPointF(best.x, best.y), True, guides
+                return QPointF(best.x, best.y), True, guides, best_kind
 
             # 2. alignment snap: lock x and/or y to an aligned node (guides)
             ax = ay = None
             dx = dy = thr
-            for c in cands:
+            for c, _kind in cands:
                 if abs(c.x - pos.x()) < dx:
                     dx, ax = abs(c.x - pos.x()), c
                 if abs(c.y - pos.y()) < dy:
@@ -285,16 +287,31 @@ class Canvas(QGraphicsView):
                     guides.append((ax, "v"))
                 if ay is not None:
                     guides.append((ay, "h"))
-                return QPointF(nx, ny), True, guides
+                return QPointF(nx, ny), True, guides, "align"
 
         # 3. grid snap (only if enabled)
         if gridok:
             g = self.snap_grid
             return QPointF(round(pos.x() / g) * g, round(pos.y() / g) * g), \
-                False, guides
+                False, guides, "grid"
 
         # 4. free
-        return pos, False, guides
+        return pos, False, guides, None
+
+    def _typed_candidates(self, near: Vec2, radius: float):
+        """All snap targets as (Vec2, kind): shape nodes (typed), seam points,
+        hole centres, and nearby outline intersections ('cross')."""
+        out = []
+        for it in self.scene_obj.items():
+            if isinstance(it, ShapeItem):
+                out.extend(it.world_snap_nodes_typed())
+            elif isinstance(it, StitchLineItem):
+                out.extend((p, "end") for p in it.line.points)
+            elif isinstance(it, HoleItem):
+                out.append((it.hole.point, "center"))
+        out.extend((x, "cross")
+                   for x in self._intersection_candidates(near, radius))
+        return out
 
     def _intersection_candidates(self, near: Vec2, radius: float):
         """Points where two different outlines cross, limited to edges within
@@ -385,23 +402,85 @@ class Canvas(QGraphicsView):
         for ln in self._align_guides:
             ln.setVisible(False)
 
-    def _show_snap_marker(self, pt: QPointF, vertex: bool):
+    # marker glyph per snap kind: square=end, circle=centre, diamond=midpoint,
+    # X=intersection, small dot=grid, plus-with-ring for alignment.
+    def _glyph_path(self, pt, kind, r):
+        path = QPainterPath()
+        xa, ya = getattr(pt, "x"), getattr(pt, "y")
+        x = xa() if callable(xa) else xa          # QPointF (method) or Vec2 (attr)
+        y = ya() if callable(ya) else ya
+        if kind == "center":
+            path.addEllipse(QPointF(x, y), r, r)
+        elif kind == "mid":                       # diamond
+            path.moveTo(x, y - r); path.lineTo(x + r, y)
+            path.lineTo(x, y + r); path.lineTo(x - r, y); path.closeSubpath()
+        elif kind == "cross":                     # X
+            path.moveTo(x - r, y - r); path.lineTo(x + r, y + r)
+            path.moveTo(x - r, y + r); path.lineTo(x + r, y - r)
+        elif kind == "grid":
+            path.addEllipse(QPointF(x, y), r * 0.35, r * 0.35)
+        else:                                     # 'end' / default: square
+            path.addRect(x - r, y - r, 2 * r, 2 * r)
+        return path
+
+    def _show_snap_marker(self, pt: QPointF, kind):
+        if not kind:
+            if self._snap_marker is not None:
+                self._snap_marker.setVisible(False)
+            return
         if self._snap_marker is None:
             self._snap_marker = QGraphicsPathItem()
             self._snap_marker.setZValue(1000)
             self.scene_obj.addItem(self._snap_marker)
-        path = QPainterPath()
         r = 6.0 / self._zoom
-        path.addEllipse(pt, r, r)
-        path.moveTo(pt.x() - r * 1.6, pt.y()); path.lineTo(pt.x() + r * 1.6, pt.y())
-        path.moveTo(pt.x(), pt.y() - r * 1.6); path.lineTo(pt.x(), pt.y() + r * 1.6)
+        path = QPainterPath() if kind == "align" else self._glyph_path(pt, kind, r)
+        if kind in ("align", "grid"):             # crosshair through the point
+            path.moveTo(pt.x() - r * 1.6, pt.y()); path.lineTo(pt.x() + r * 1.6, pt.y())
+            path.moveTo(pt.x(), pt.y() - r * 1.6); path.lineTo(pt.x(), pt.y() + r * 1.6)
         self._snap_marker.setPath(path)
-        pen = QPen(QColor(255, 120, 0) if vertex else QColor(150, 150, 150), 0)
+        color = QColor(150, 150, 150) if kind == "grid" else QColor(255, 120, 0)
+        pen = QPen(color, 0)
         pen.setCosmetic(True)
         self._snap_marker.setPen(pen)
+        self._snap_marker.setBrush(Qt.NoBrush)
         self._snap_marker.setVisible(True)
 
+    def _show_snap_nodes(self, cursor: QPointF):
+        """Faintly mark the snap targets near the cursor so you can see where a
+        click will land (circle centres, midpoints, ends, intersections)."""
+        if not self.snap_to_nodes:
+            self._hide_snap_nodes()
+            return
+        near = Vec2(cursor.x(), cursor.y())
+        hl = 60.0 / self._zoom
+        r = 3.0 / self._zoom
+        path = QPainterPath()
+        seen = set()
+        for pt, kind in self._typed_candidates(near, hl):
+            if (pt - near).length() > hl:
+                continue
+            key = (round(pt.x, 2), round(pt.y, 2), kind)
+            if key in seen:
+                continue
+            seen.add(key)
+            path.addPath(self._glyph_path(pt, kind, r))
+        if self._node_hl is None:
+            self._node_hl = QGraphicsPathItem()
+            self._node_hl.setZValue(996)
+            self.scene_obj.addItem(self._node_hl)
+        self._node_hl.setPath(path)
+        pen = QPen(QColor(255, 150, 40, 190), 0)
+        pen.setCosmetic(True)
+        self._node_hl.setPen(pen)
+        self._node_hl.setBrush(Qt.NoBrush)
+        self._node_hl.setVisible(True)
+
+    def _hide_snap_nodes(self):
+        if self._node_hl is not None:
+            self._node_hl.setVisible(False)
+
     def _hide_snap_marker(self):
+        self._hide_snap_nodes()
         if self._snap_marker is not None:
             self._snap_marker.setVisible(False)
         self._clear_align_guides()
@@ -440,7 +519,7 @@ class Canvas(QGraphicsView):
                     best = QPointF(s.x - off.x, s.y - off.y)
                     best_target = s
         if best is not None:
-            self._show_snap_marker(QPointF(best_target.x, best_target.y), True)
+            self._show_snap_marker(QPointF(best_target.x, best_target.y), "end")
             return best
         self._hide_snap_marker()
         return value
@@ -469,7 +548,7 @@ class Canvas(QGraphicsView):
                 best_d = d
                 best = QPointF(s.x, s.y)
         if best is not None:
-            self._show_snap_marker(best, True)
+            self._show_snap_marker(best, "end")
             return best
         self._hide_snap_marker()
         return value
@@ -524,8 +603,11 @@ class Canvas(QGraphicsView):
             return
         pos = raw
         if self.tool != SELECT:
-            pos, vtx = self.snap(raw)
-            self._show_snap_marker(pos, vtx)
+            pos, vtx, guides, kind = self._smart_snap(raw)
+            self._show_align_guides(guides)
+            self._show_snap_nodes(raw)
+            self._show_snap_marker(pos, kind)
+            self.statusMessage.emit(_SNAP_LABEL.get(kind, ""))
         else:
             self._hide_snap_marker()
         if self._preview is not None and self._start is not None:
@@ -731,16 +813,10 @@ class Canvas(QGraphicsView):
                            close_path=False, transform=Transform(x=cx, y=cy),
                            layer=self._current_layer)
         elif self.tool == CONSTRUCTION:
-            ax, ay, bx, by = a.x(), a.y(), b.x(), b.y()
-            dx, dy = bx - ax, by - ay
-            length = (dx * dx + dy * dy) ** 0.5
-            if length > 1e-6:                       # extend so it reads as a guide
-                ux, uy = dx / length, dy / length
-                ax -= ux * length * 0.5; ay -= uy * length * 0.5
-                bx += ux * length * 0.5; by += uy * length * 0.5
-            gx, gy = (ax + bx) / 2, (ay + by) / 2
-            sh = PathShape(points=[Vec2(ax - gx, ay - gy), Vec2(bx - gx, by - gy)],
-                           close_path=False, transform=Transform(x=gx, y=gy),
+            # a guide that ends exactly where you snapped -- no overshoot.
+            sh = PathShape(points=[Vec2(a.x() - cx, a.y() - cy),
+                                   Vec2(b.x() - cx, b.y() - cy)],
+                           close_path=False, transform=Transform(x=cx, y=cy),
                            layer=self._current_layer)
             sh.construction = True
         else:
@@ -830,6 +906,7 @@ class Canvas(QGraphicsView):
         self._live.clear()
         self._preview = None
         self._snap_marker = None
+        self._node_hl = None
         self._trim_hover = None
         self._align_guides = []
         self._handles = []

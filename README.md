@@ -131,12 +131,17 @@ splits into two. Clicking a piece that nothing crosses removes it outright.
 
 ### Smart snapping & construction lines
 
-While a drawing tool is active, the point you're placing snaps to nearby
-**ends, midpoints, centres, side-centres and intersections** of other shapes.
-When it lines up (same x or y) with one of those, it **locks to that alignment**
-and a dashed orange **guide line** is drawn so you can see what it lined up with
-— the same inference snapping as Fusion 360 / Illustrator. Line up with two
-things at once and it snaps to the crossing point.
+While a drawing tool is active, the snap targets near the cursor are **marked on
+screen** so you always know where a click will land — a **square** for an
+end/corner, a **diamond** for a midpoint or side-centre, a **circle** for a
+shape/circle centre, an **✕** for an intersection — and the point you're placing
+snaps to the nearest one (its type is named in the status bar). When it lines up
+(same x or y) with one of those, it **locks to that alignment** and a dashed
+orange **guide line** is drawn so you can see what it lined up with — the same
+inference snapping as Fusion 360 / Illustrator. Line up with two things at once
+and it snaps to the crossing point.
+
+![snap markers: a circle's centre highlighted while drawing](docs/snap_center.png)
 
 Node snapping and grid snapping are **separate toolbar toggles** (*Nodes* and
 *Grid*). Turn *Grid* off to snap purely to geometry — points that aren't on a

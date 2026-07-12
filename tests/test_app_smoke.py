@@ -273,6 +273,28 @@ def test_break_apart_into_segments(qapp):
     assert len(win.doc.shapes) == n - 1 + 4
 
 
+def test_break_apart_preserves_stitch_holes(qapp):
+    """Breaking apart a stitched shape must keep its holes (baked to
+    individual holes that stay in place), not drop them."""
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import HoleItem
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    r = c.add_shape(Rectangle(width=100, height=64, corner_radius=14,
+                              transform=Transform(x=0, y=0),
+                              stitch=StitchSettings(pitch_mm=3.85, inset=3.5),
+                              layer="Cut"))
+    n = c.total_holes()
+    assert n > 0
+    c.scene_obj.clearSelection(); r.setSelected(True)
+    c.break_apart_selected()
+    holes = [it for it in c.scene_obj.items() if isinstance(it, HoleItem)]
+    assert len(holes) == n                     # every hole preserved
+    assert len(win.doc.holes) == n
+
+
 def test_rubberband_inside_shape_selects_holes_not_shape(qapp):
     from PySide6.QtCore import QRectF, Qt
     from PySide6.QtGui import QPainterPath

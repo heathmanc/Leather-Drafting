@@ -23,7 +23,7 @@ from leathercad.shapes import (Rectangle, Ellipse, Circle, Polygon, PathShape,
 from leathercad.stitchsettings import StitchSettings
 from leathercad.stitchline import StitchLine
 from leathercad.holes import LooseHole
-from leathercad.stitching import stitch_polyline, Hole
+from leathercad.stitching import stitch_polyline, Hole, StitchResult
 from .items import ShapeItem, StitchLineItem, VertexHandle, HoleItem
 
 try:
@@ -806,6 +806,18 @@ class Canvas(QGraphicsView):
         return n
 
     # -- ungroup: shape/seam stitching -> individual holes -------------
+    def _shape_world_holes(self, sh):
+        """(StitchResult in world coords, style) for a shape's current holes,
+        or (None, None) if it has none."""
+        if sh.baked_holes:
+            res = StitchResult(holes=[
+                Hole(sh.transform.apply(h.point), sh.transform.apply_dir(h.tangent))
+                for h in sh.baked_holes])
+            return res, (sh.stitch or StitchSettings())
+        if sh.stitch and sh.stitch.enabled:
+            return stitch_polyline(*sh.world_polyline(), sh.stitch), sh.stitch
+        return None, None
+
     def ungroup_selected(self) -> None:
         """Explode selected shapes'/seams' holes into individual, directly
         selectable/deletable holes (auto-spacing is turned off)."""
@@ -814,17 +826,7 @@ class Canvas(QGraphicsView):
         for it in list(self.selected_items()):
             if isinstance(it, ShapeItem):
                 sh = it.model
-                res = None
-                if sh.baked_holes:
-                    from leathercad.stitching import StitchResult
-                    res = StitchResult(holes=[
-                        Hole(sh.transform.apply(h.point),
-                             sh.transform.apply_dir(h.tangent))
-                        for h in sh.baked_holes])
-                    style = sh.stitch or StitchSettings()
-                elif sh.stitch and sh.stitch.enabled:
-                    res = stitch_polyline(*sh.world_polyline(), sh.stitch)
-                    style = sh.stitch
+                res, style = self._shape_world_holes(sh)
                 if res and res.count:
                     made += self._explode(res, style)
                     sh.baked_holes = None
@@ -918,6 +920,11 @@ class Canvas(QGraphicsView):
             segs = self._segments_world(it.model)
             if len(segs) <= 1:
                 continue
+            # keep the stitching: bake the shape's holes into individual holes
+            # (they stay exactly where they are) before splitting the outline.
+            res, style = self._shape_world_holes(it.model)
+            if res and res.count:
+                made += self._explode(res, style)
             for kind, wpts in segs:
                 new = _segment_shape(kind, wpts, it.model.layer)
                 self.doc.add_shape(new)

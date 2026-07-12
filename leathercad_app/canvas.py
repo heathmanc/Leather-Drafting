@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QGraphicsScene, QGraphicsView, QGraphicsPathItem,
 from leathercad.geometry import Vec2
 from leathercad.document import Document
 from leathercad.shapes import (Rectangle, Ellipse, Circle, Polygon, PathShape,
-                               EditablePath, Transform)
+                               EditablePath, Edge, Transform)
 from leathercad.stitchsettings import StitchSettings
 from leathercad.stitchline import StitchLine
 from leathercad.holes import LooseHole
@@ -51,6 +51,22 @@ SCORE = "score"
 
 _DRAG_TOOLS = (RECT, ROUNDED, ELLIPSE, CIRCLE, SLOT)
 _POLY_TOOLS = (POLYGON, STITCHLINE, SCORE)
+
+
+def _segment_shape(kind, wpts, layer):
+    """Build a standalone open path for one segment, recentred on its own
+    centroid so it has an independent transform for moving."""
+    cx = sum(p.x for p in wpts) / len(wpts)
+    cy = sum(p.y for p in wpts) / len(wpts)
+    local = [Vec2(p.x - cx, p.y - cy) for p in wpts]
+    if kind == "arc" and len(local) == 3:
+        sh = EditablePath(nodes=[local[0], local[2]],
+                          edges=[Edge("arc", local[1])], closed=False)
+    else:
+        sh = PathShape(points=[local[0], local[-1]], close_path=False)
+    sh.transform = Transform(x=cx, y=cy)
+    sh.layer = layer
+    return sh
 
 
 class Canvas(QGraphicsView):
@@ -383,6 +399,8 @@ class Canvas(QGraphicsView):
         a_nodes = menu.addAction("Convert to editable nodes"
                                  if parametric else "Edit nodes")
         a_nodes.setEnabled(can_nodes)
+        a_break = menu.addAction("Break apart into segments")
+        a_break.setEnabled(bool(shapes))
         menu.addSeparator()
         a_dup = menu.addAction("Duplicate")
         a_dup.setEnabled(bool(shapes))
@@ -395,6 +413,8 @@ class Canvas(QGraphicsView):
             self.ungroup_selected()
         elif chosen is a_nodes:
             self.convert_to_nodes()
+        elif chosen is a_break:
+            self.break_apart_selected()
         elif chosen is a_dup:
             self.duplicate_selected()
         elif chosen is a_del:
@@ -819,6 +839,74 @@ class Canvas(QGraphicsView):
         self.documentChangedSig.emit()
         self.selectionChangedSig.emit()
         self._emit_commit()
+
+    # -- break a shape into individually movable segments --------------
+    def break_apart_selected(self) -> None:
+        """Explode selected shapes into one open path per edge (lines and arcs),
+        each recentred with its own transform so you can move them separately."""
+        shapes = [it for it in self.selected_items() if isinstance(it, ShapeItem)]
+        if not shapes:
+            return
+        made = []
+        self._suppress_commit = True
+        for it in shapes:
+            segs = self._segments_world(it.model)
+            if len(segs) <= 1:
+                continue
+            for kind, wpts in segs:
+                new = _segment_shape(kind, wpts, it.model.layer)
+                self.doc.add_shape(new)
+                made.append(self._add_item(ShapeItem(new, self)))
+            self.doc.remove_shape(it.model)
+            self._remove_item(it)
+        self._suppress_commit = False
+        if made:
+            self.scene_obj.clearSelection()
+            for m in made:
+                m.setSelected(True)
+            self.documentChangedSig.emit()
+            self.selectionChangedSig.emit()
+            self._emit_commit()
+
+    def _segments_world(self, sh):
+        """Return [(kind, [world points]), ...] -- 'line' has [a,b], 'arc'
+        has [a, mid, b]."""
+        t = sh.transform
+        segs = []
+        if isinstance(sh, EditablePath):
+            n = len(sh.nodes)
+            for i in range(len(sh.edges)):
+                a = sh.nodes[i]
+                b = sh.nodes[(i + 1) % n]
+                e = sh.edges[i]
+                if e.kind == "arc" and e.mid is not None:
+                    segs.append(("arc", [t.apply(a), t.apply(e.mid), t.apply(b)]))
+                else:
+                    segs.append(("line", [t.apply(a), t.apply(b)]))
+        elif isinstance(sh, (Polygon, PathShape)):
+            pts = sh.points
+            n = len(pts)
+            rng = n if getattr(sh, "close_path", False) else n - 1
+            for i in range(rng):
+                segs.append(("line", [t.apply(pts[i]), t.apply(pts[(i + 1) % n])]))
+        elif isinstance(sh, Rectangle) and sh.corner_radius <= 0:
+            hw, hh = sh.width / 2.0, sh.height / 2.0
+            c = [Vec2(-hw, -hh), Vec2(hw, -hh), Vec2(hw, hh), Vec2(-hw, hh)]
+            for i in range(4):
+                segs.append(("line", [t.apply(c[i]), t.apply(c[(i + 1) % 4])]))
+        elif isinstance(sh, Rectangle):
+            ep = EditablePath.from_rounded_rect(sh.width, sh.height, sh.corner_radius)
+            ep.transform = sh.transform
+            return self._segments_world(ep)
+        elif isinstance(sh, Ellipse) and abs(sh.rx - sh.ry) < 1e-9:
+            ep = EditablePath.from_ellipse(sh.rx, sh.ry)
+            ep.transform = sh.transform
+            return self._segments_world(ep)
+        else:  # true ellipse / other: flatten into straight segments
+            pts = sh.local_path().flatten()
+            for i in range(len(pts) - 1):
+                segs.append(("line", [t.apply(pts[i]), t.apply(pts[i + 1])]))
+        return segs
 
     # -- group: individual holes -> baked into a shape -----------------
     def group_selected(self) -> None:

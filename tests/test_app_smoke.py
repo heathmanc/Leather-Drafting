@@ -241,6 +241,38 @@ def test_editablepath_roundtrip(tmp_path):
     assert sum(1 for e in got.edges if e.kind == "arc" and e.mid is not None) == 4
 
 
+def test_break_apart_into_segments(qapp):
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import ShapeItem
+    from leathercad.document import Document
+    from leathercad.shapes import PathShape, EditablePath
+
+    win = MainWindow(Document())
+    c = win.canvas
+    r = c.add_shape(Rectangle(width=80, height=50, corner_radius=10,
+                              transform=Transform(x=0, y=0), layer="Cut"))
+    c.scene_obj.clearSelection(); r.setSelected(True)
+    c.break_apart_selected()
+    shapes = win.doc.shapes
+    lines = [s for s in shapes if isinstance(s, PathShape)]
+    arcs = [s for s in shapes if isinstance(s, EditablePath)]
+    assert len(shapes) == 8 and len(lines) == 4 and len(arcs) == 4
+
+    # each piece has its own transform: moving one leaves the others put
+    items = [it for it in c.scene_obj.items() if isinstance(it, ShapeItem)]
+    other_before = (items[1].model.transform.x, items[1].model.transform.y)
+    items[0].setPos(items[0].pos().x() + 40, items[0].pos().y() + 40)
+    assert (items[1].model.transform.x, items[1].model.transform.y) == other_before
+
+    # sharp rectangle -> 4 line segments
+    s = c.add_shape(Rectangle(width=40, height=30, transform=Transform(x=200, y=0),
+                              layer="Cut"))
+    c.scene_obj.clearSelection(); s.setSelected(True)
+    n = len(win.doc.shapes)
+    c.break_apart_selected()
+    assert len(win.doc.shapes) == n - 1 + 4
+
+
 def test_node_snap_while_editing(qapp):
     from PySide6.QtCore import QPointF
     from leathercad_app.mainwindow import MainWindow

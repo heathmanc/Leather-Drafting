@@ -137,6 +137,13 @@ class PropertiesPanel(QWidget):
         self.symmetry.addItems(["none", "vertical", "horizontal"])
         self.symmetry.setToolTip(
             "Force flip-symmetric holes so a flipped piece lines up back-to-back")
+        self.corner_style = QComboBox()
+        self.corner_style.addItems(["auto", "midpoint", "straddle"])
+        self.corner_style.setToolTip(
+            "Rounded-corner holes are always symmetric about the arc midpoint.\n"
+            "auto: best-fitting count for your iron.\n"
+            "midpoint: force a hole on the corner apex.\n"
+            "straddle: force an even pair around the apex, none on it.")
         fs.addRow("Iron", self.iron)
         fs.addRow("Pitch", self.pitch)
         fs.addRow("Inset from edge", self.inset)
@@ -149,6 +156,7 @@ class PropertiesPanel(QWidget):
         fs.addRow("Row spacing", self.row_spacing)
         fs.addRow("Backstitch", self.backstitch)
         fs.addRow("Symmetry", self.symmetry)
+        fs.addRow("Corners", self.corner_style)
         root.addWidget(self.g_stitch)
 
         self.readout = QLabel("")
@@ -170,6 +178,7 @@ class PropertiesPanel(QWidget):
         self.backstitch.editingFinished.connect(self._commit)
         self.rows.currentIndexChanged.connect(self._apply_commit)
         self.symmetry.currentIndexChanged.connect(self._apply_commit)
+        self.corner_style.currentIndexChanged.connect(self._apply_commit)
         self.mirror.stateChanged.connect(self._apply_commit)
         self.opacity.valueChanged.connect(self._apply)
         self.opacity.sliderReleased.connect(self._commit)
@@ -298,6 +307,8 @@ class PropertiesPanel(QWidget):
         self.backstitch.setValue(getattr(st, "backstitch", 0))
         i = self.symmetry.findText(getattr(st, "symmetry", "none"))
         self.symmetry.setCurrentIndex(i if i >= 0 else 0)
+        i = self.corner_style.findText(getattr(st, "corner_style", "auto"))
+        self.corner_style.setCurrentIndex(i if i >= 0 else 0)
         self._sync_iron_combo(st.pitch_mm)
         self._sync_hole_vis()
         self.row_spacing.setVisible(self.rows.currentIndex() == 1)
@@ -411,6 +422,7 @@ class PropertiesPanel(QWidget):
         st.row_spacing = self.row_spacing.value()
         st.backstitch = self.backstitch.value()
         st.symmetry = self.symmetry.currentText()
+        st.corner_style = self.corner_style.currentText()
 
     def focus_primary_dimension(self):
         """Focus the main size field so the user can type an exact value."""

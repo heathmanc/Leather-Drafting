@@ -31,6 +31,13 @@ class StitchSettings:
     # force flip-symmetric holes so a flipped piece lines up back-to-back:
     # "none" | "vertical" (mirror left<->right) | "horizontal" (top<->bottom).
     symmetry: str = "none"
+    # how holes sit on a rounded corner's arc. Every rounded corner is always
+    # its own span, so the holes are symmetric about the arc midpoint either
+    # way; this only forces the parity:
+    #   "auto"     -> whichever count best matches the iron pitch (symmetric)
+    #   "midpoint" -> a hole exactly on the arc midpoint (even count)
+    #   "straddle" -> an even pair straddling the midpoint, none on it (odd)
+    corner_style: str = "auto"
 
     def iron_label(self) -> str:
         from .irons import mm_to_spi

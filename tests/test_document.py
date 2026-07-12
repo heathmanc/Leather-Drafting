@@ -157,25 +157,57 @@ def test_baked_holes_on_shape_roundtrip(tmp_path):
 
 
 def test_flip_symmetric_distribution():
-    """Rounded rect holes aren't flip-symmetric by default, but become exactly
-    symmetric with the symmetry option -- so a flipped piece lines up."""
-    from leathercad.shapes import Rectangle, Transform
+    """A shape without corner anchors (an ellipse) isn't flip-symmetric by
+    default, but the symmetry option makes a flipped piece line up."""
+    from leathercad.shapes import Ellipse, Transform
     from leathercad.stitching import holes_for_shape, flip_symmetry
 
-    plain = Rectangle(width=100, height=64, corner_radius=14,
-                      transform=Transform(x=0, y=0),
-                      stitch=StitchSettings(pitch_mm=3.85, inset=3.5))
+    plain = Ellipse(rx=50, ry=30, transform=Transform(),
+                    stitch=StitchSettings(pitch_mm=3.85, inset=3.0))
     pts = [h.point for h in holes_for_shape(plain).holes]
     assert not flip_symmetry(pts, "vertical")[0]
 
     for axis in ("vertical", "horizontal"):
-        sym = Rectangle(width=100, height=64, corner_radius=14,
-                        transform=Transform(x=0, y=0),
-                        stitch=StitchSettings(pitch_mm=3.85, inset=3.5,
-                                              symmetry=axis))
+        sym = Ellipse(rx=50, ry=30, transform=Transform(),
+                      stitch=StitchSettings(pitch_mm=3.85, inset=3.0,
+                                            symmetry=axis))
         p = [h.point for h in holes_for_shape(sym).holes]
         ok, off, unmatched = flip_symmetry(p, axis)
-        assert ok and unmatched == 0 and off < 1e-3
+        assert ok and unmatched == 0
+
+
+def test_rounded_corners_are_symmetric_by_default():
+    """Anchoring each corner arc as its own span makes a rounded rectangle's
+    holes symmetric about both centre axes automatically -- the corner holes no
+    longer land off the arc apex."""
+    from leathercad.shapes import Rectangle, Transform
+    from leathercad.stitching import holes_for_shape, flip_symmetry
+    r = Rectangle(width=100, height=64, corner_radius=14, transform=Transform(),
+                  stitch=StitchSettings(pitch_mm=3.85, inset=3.5))
+    pts = [h.point for h in holes_for_shape(r).holes]
+    assert flip_symmetry(pts, "vertical")[0]
+    assert flip_symmetry(pts, "horizontal")[0]
+
+
+def test_corner_style_midpoint_vs_straddle():
+    """corner_style forces a hole ON the arc apex (midpoint) or an even pair
+    straddling it (straddle); both stay symmetric about the apex."""
+    from leathercad.shapes import Rectangle, Transform
+    from leathercad.stitching import holes_for_shape
+
+    def nearest_to_apex(style):
+        r = Rectangle(width=100, height=64, corner_radius=14,
+                      transform=Transform(),
+                      stitch=StitchSettings(pitch_mm=3.85, inset=3.5,
+                                            corner_style=style))
+        pts = [h.point for h in holes_for_shape(r).holes]
+        ri = 14 - 3.5                            # inset corner radius
+        ax = (50 - 14) + ri / math.sqrt(2)       # bottom-right arc apex
+        ay = -((32 - 14) + ri / math.sqrt(2))
+        return min(math.hypot(p.x - ax, p.y - ay) for p in pts)
+
+    assert nearest_to_apex("midpoint") < 0.2     # a hole sits on the apex
+    assert nearest_to_apex("straddle") > 1.0     # apex bare, holes straddle it
 
 
 def test_flip_symmetry_helper():

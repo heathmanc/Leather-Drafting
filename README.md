@@ -32,6 +32,15 @@ It also nudges the pitch a few percent (within a limit you set) so a whole numbe
 of holes lands cleanly on **every corner** and on **both ends** of an open seam —
 the thing leatherworkers do by hand.
 
+On a **rounded corner** every arc is fitted as its own span, so the holes come
+out **symmetric about the arc's midpoint** — either a stitch sitting right on the
+45° apex or an even pair straddling it, never a lone hole landing off-centre. Pick
+`auto` (whichever count best matches your iron), `midpoint`, or `straddle` per
+shape. A happy side effect: a symmetric outline now gets flip-symmetric holes for
+free.
+
+![corner hole placement: auto / midpoint / straddle](docs/corner_zoom.png)
+
 ### 2. Registration across overlapping pieces
 Two pieces stitched together (front + lining, gusset + panel) must have their
 holes in **identical positions** or they won't line up. Leather-Drafting
@@ -47,6 +56,12 @@ guarantees this three ways:
 
 Verify any of it visually by dragging one piece on top of another and dropping the
 opacity — the tool is built for exactly that overlay check.
+
+Need the matching reverse-side piece? **Make back piece** (`Ctrl+M`) drops a
+mirror-image copy whose holes stay registered hole-for-hole — ready to laser from
+the back. The slanted slits mirror too, so they line up when the piece is flipped:
+
+![make back piece — a piece and its mirrored back](docs/back_piece.png)
 
 ## Install & run
 
@@ -87,7 +102,9 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Right-click menu** | Group / Ungroup / Convert to nodes / Duplicate / Delete on the selection |
 | **Radius corners** | select a rectangle/polygon, set *Corner radius* in Properties |
 | **Iron & holes** | per shape: pick an iron (mm or SPI), inset, round or slanted-slit holes, single or **double row** (saddle stitch) + backstitch, live hole count + spacing readout |
+| **Corner holes** | rounded-corner holes are always **symmetric about the arc midpoint**. Stitching → *Corners*: `auto` (best count for your iron), `midpoint` (a hole on the apex), `straddle` (an even pair around it) |
 | **Back-to-back symmetry** | Stitching → *Symmetry* (vertical/horizontal) forces flip-symmetric holes; Edit → *Check back-to-back symmetry* validates that a flipped piece lines up |
+| **Make back piece** | Edit → *Make back piece* (`Ctrl+M`), or right-click → *Make back piece (mirror)* — drops a mirror-image copy whose holes stay registered with the front so the two stitch together back-to-back |
 | **Layers → laser jobs** | colour-coded Cut / Score / Engrave / Stitch layers with visibility |
 | **Arrange** | align (left/centre/right/top/middle/bottom) and distribute selected shapes |
 | **Undo / redo** | `Ctrl+Z` / `Ctrl+Shift+Z` |
@@ -204,6 +221,7 @@ examples/  tests/  docs/
       endpoint handles); outline-based selection; node-to-node snapping (move + edit)
 - [x] Break a shape apart into movable line/arc segments, and join/weld them back
 - [x] Flip-symmetric hole distribution + back-to-back symmetry validation
+- [x] Symmetric rounded-corner holes (apex / straddle) + make-back-piece (mirror)
 - [ ] Boolean ops (windows, cut-outs) and true seam-allowance offset
 - [ ] Alignment guides (smart snapping lines) while dragging
 - [ ] Import reference images / trace an existing pattern

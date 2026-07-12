@@ -253,8 +253,16 @@ class PathBuilder:
         c = Vec2(center_x, center_y)
         r = (self._current - c).length() if self._current else 0.0
         arc = Arc(c, r, a0, a1, ccw)
+        # Tag both tangent points (where the arc meets its neighbours) as
+        # corners. This makes every rounded corner its *own* fitted stitch span,
+        # so the holes on the arc come out symmetric about the arc midpoint --
+        # either a hole on the apex or an even pair straddling it. Without this
+        # a corner is just part of one long march and its holes land off-centre.
+        if self._current is not None:
+            self._corner_points.append(self._current)   # tangent in
         self._segments.append(arc)
         self._current = arc.end()
+        self._corner_points.append(self._current)        # tangent out
         return self
 
     def corner(self) -> "PathBuilder":

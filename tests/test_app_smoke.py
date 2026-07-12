@@ -619,6 +619,42 @@ def test_grouped_holes_move_with_shape(qapp):
     assert abs(world.x - 50) < 1e-6 and abs(world.y - 20) < 1e-6
 
 
+def test_make_back_piece_mirrors_and_registers(qapp):
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    from leathercad.stitching import holes_for_shape
+
+    doc = Document()
+    doc.add_shape(Rectangle(width=90, height=60, corner_radius=10,
+                            transform=Transform(x=0, y=0),
+                            stitch=StitchSettings(pitch_mm=3.85, inset=3.5),
+                            layer="Cut"))
+    win = MainWindow(doc)
+    c = win.canvas
+    front = _shape_items(c)[0]
+    c.scene_obj.clearSelection()
+    front.setSelected(True)
+    c.make_back_piece_selected()
+
+    items = _shape_items(c)
+    assert len(items) == 2
+    back = [it for it in items if it.model is not front.model][0]
+    # the back piece is the mirror image, placed clear of the original
+    assert back.model.transform.mirror_x != front.model.transform.mirror_x
+    assert back.hole_count == front.hole_count
+    assert back.model.bounds()[0] >= front.model.bounds()[2]  # to the right
+
+    # registration: every front hole has a partner on the back that is its
+    # exact mirror image about the midline between the two pieces.
+    fh = holes_for_shape(front.model).holes
+    bh = holes_for_shape(back.model).holes
+    axis = 0.5 * (front.model.transform.x + back.model.transform.x)
+    for h in fh:
+        mx, my = 2 * axis - h.point.x, h.point.y
+        assert any(abs(b.point.x - mx) < 1e-6 and abs(b.point.y - my) < 1e-6
+                   for b in bh), "front hole has no mirrored partner on the back"
+
+
 def test_export_from_document(qapp, tmp_path):
     from leathercad_app.mainwindow import MainWindow
     from leathercad.document import Document

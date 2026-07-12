@@ -229,6 +229,8 @@ class MainWindow(QMainWindow):
         self._add(em, "Break apart into segments", "Ctrl+B", self.canvas.break_apart_selected)
         self._add(em, "Join / weld segments", "Ctrl+J", lambda: self.canvas.join_selected())
         em.addSeparator()
+        self._add(em, "Make back piece (mirror)", "Ctrl+M",
+                  self.canvas.make_back_piece_selected)
         self._add(em, "Check back-to-back symmetry…", None, self._check_symmetry)
         em.addSeparator()
         self._add(em, "Duplicate", "Ctrl+D", self.canvas.duplicate_selected)

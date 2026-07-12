@@ -467,6 +467,8 @@ class Canvas(QGraphicsView):
         menu.addSeparator()
         a_dup = menu.addAction("Duplicate")
         a_dup.setEnabled(bool(shapes))
+        a_back = menu.addAction("Make back piece (mirror)")
+        a_back.setEnabled(bool(shapes))
         a_del = menu.addAction("Delete")
         a_del.setEnabled(bool(sel))
         chosen = menu.exec(event.globalPos())
@@ -482,6 +484,8 @@ class Canvas(QGraphicsView):
             self.join_selected()
         elif chosen is a_dup:
             self.duplicate_selected()
+        elif chosen is a_back:
+            self.make_back_piece_selected()
         elif chosen is a_del:
             self.delete_selected()
 
@@ -702,6 +706,33 @@ class Canvas(QGraphicsView):
                 from leathercad.shapes import _next_id
                 sh.shape_id = _next_id("shape")
                 new_items.append(self.add_shape(sh))
+        self._suppress_commit = False
+        self.scene_obj.clearSelection()
+        for it in new_items:
+            it.setSelected(True)
+        if new_items:
+            self._emit_commit()
+
+    def make_back_piece_selected(self) -> None:
+        """Duplicate each selected shape as its mirror image -- the matching
+        back piece you laser from the reverse side. The mirror keeps every hole
+        registered with the front hole-for-hole, so the two pieces stitch
+        together back-to-back. The copy is placed just to the right."""
+        import copy
+        from leathercad.shapes import _next_id
+        new_items = []
+        self._suppress_commit = True
+        for it in self._shape_items():
+            sh = copy.deepcopy(it.model)
+            sh.transform.mirror_x = not sh.transform.mirror_x
+            # place the mirrored copy flush to the right of the original
+            o_minx, o_miny, o_maxx, o_maxy = it.model.bounds()
+            m_minx, _, _, _ = sh.bounds()
+            sh.transform.x += (o_maxx + 20.0) - m_minx
+            sh.shape_id = _next_id("shape")
+            if sh.name:
+                sh.name = sh.name + " (back)"
+            new_items.append(self.add_shape(sh))
         self._suppress_commit = False
         self.scene_obj.clearSelection()
         for it in new_items:

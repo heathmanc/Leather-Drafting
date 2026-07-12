@@ -246,15 +246,45 @@ def fit_pitch_for_count(poly: Polyline, n_intervals: int, start_s: float,
 
 
 def _best_fit_span(poly: Polyline, target_pitch: float, start_s: float,
-                   end_s: float, max_dev: float):
-    """Choose an integer hole count for one span and return (pitch, n)."""
+                   end_s: float, max_dev: float, parity: Optional[str] = None,
+                   force: bool = False):
+    """Choose an integer hole count for one span and return (pitch, n).
+
+    ``parity`` ('even' | 'odd' | None) restricts the number of intervals so a
+    rounded corner arc lands a hole on its apex (even) or straddles it (odd).
+    When ``force`` is set the parity is honoured even if it means exceeding
+    ``max_dev`` -- the user asked for that corner look, so spacing fidelity
+    yields to it; otherwise a parity that can't be met within ``max_dev`` just
+    falls back like any unfittable span.
+    """
     span = end_s - start_s
     if span <= _EPS:
         return target_pitch, 0
     n0 = max(1, int(round(span / target_pitch)))
+
+    def ok_parity(n: int) -> bool:
+        if parity == "even":
+            return n % 2 == 0 and n >= 2   # >=2 so a hole lands on the apex
+        if parity == "odd":
+            return n % 2 == 1 and n >= 1
+        return True
+
+    if force and parity:
+        best = None
+        for n in range(max(1, n0 - 3), n0 + 4):
+            if not ok_parity(n):
+                continue
+            p = fit_pitch_for_count(poly, n, start_s, end_s)
+            if p is None:
+                continue
+            dev = abs(p - target_pitch) / target_pitch
+            if best is None or dev < best[2]:
+                best = (p, n, dev)
+        return (best[0], best[1]) if best else (target_pitch, None)
+
     best = None
     for n in (n0 - 1, n0, n0 + 1, n0 + 2):
-        if n < 1:
+        if n < 1 or not ok_parity(n):
             continue
         p = fit_pitch_for_count(poly, n, start_s, end_s)
         if p is None:
@@ -265,6 +295,24 @@ def _best_fit_span(poly: Polyline, target_pitch: float, start_s: float,
     if best is None:
         return target_pitch, None  # caller falls back to plain marching
     return best[0], best[1]
+
+
+def _span_is_arc(poly: Polyline, a: float, b: float, tol: float = 0.1) -> bool:
+    """True if the outline between arc-lengths ``a`` and ``b`` curves (an arc),
+    as opposed to a straight edge. Detected by the bulge of interior samples off
+    the chord -- a 90-degree corner arc bulges far more than the flattening
+    tolerance, a straight edge not at all."""
+    pa, pb = poly.point_at(a), poly.point_at(b)
+    chord = pb - pa
+    length = chord.length()
+    if length <= _EPS:
+        return False
+    max_dev = 0.0
+    for k in range(1, 8):
+        p = poly.point_at(a + (b - a) * k / 8.0)
+        dev = abs((p.x - pa.x) * chord.y - (p.y - pa.y) * chord.x) / length
+        max_dev = max(max_dev, dev)
+    return max_dev > tol
 
 
 # ---------------------------------------------------------------------------
@@ -577,10 +625,19 @@ def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
         return _apply_rows(_result_from_positions(
             poly, positions, [settings.pitch_mm], closed), settings)
 
+    corner_style = getattr(settings, "corner_style", "auto")
+    want_parity = corner_style in ("midpoint", "straddle")
+
     positions: List[float] = []
     pitches: List[float] = []
     for a, b in _spans(anchors, closed, poly.length):
-        p_eff, n = _best_fit_span(poly, settings.pitch_mm, a, b, settings.max_dev)
+        parity = None
+        force = False
+        if want_parity and _span_is_arc(poly, a, b):
+            parity = "even" if corner_style == "midpoint" else "odd"
+            force = True
+        p_eff, n = _best_fit_span(poly, settings.pitch_mm, a, b,
+                                  settings.max_dev, parity, force)
         if n is None:
             span_positions = march_chord(poly, settings.pitch_mm, a, b)
             pitches.append(settings.pitch_mm)

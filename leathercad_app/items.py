@@ -18,7 +18,7 @@ from PySide6.QtGui import (QColor, QPainterPath, QPainterPathStroker, QPen,
 from PySide6.QtWidgets import QGraphicsItem, QApplication
 
 # Click tolerance (mm) around an outline for selection/hit-testing.
-OUTLINE_HIT_MM = 2.0
+OUTLINE_HIT_MM = 3.5
 
 
 def _outline_hit_shape(poly: QPolygonF, closed: bool = False) -> QPainterPath:
@@ -466,21 +466,30 @@ class ShapeItem(QGraphicsItem):
 
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
-        # outline
+        selected = self.isSelected()
+        # the outline follows the shape's own layer; the stitch holes follow the
+        # stitch layer -- so hiding Cut hides the outline but keeps the blue holes
+        outline_vis = (self.canvas._layer_visible(self.model.layer)
+                       if self.canvas else True)
+        holes_vis = self.canvas.stitch_layer_visible() if self.canvas else True
+        # outline -- when selected, the outline itself recolours to the selection
+        # blue (so a highlighted arc/line reads clearly, not just a bounding box)
         if getattr(self.model, "construction", False):
-            pen = QPen(QColor(150, 150, 160))
+            pen = QPen(QColor(30, 140, 255) if selected else QColor(150, 150, 160))
             pen.setStyle(Qt.DashLine)
+        elif selected:
+            pen = QPen(QColor(30, 140, 255))
         else:
             pen = QPen(self._color)
         pen.setCosmetic(True)
-        pen.setWidthF(1.6 if self.isSelected() else 1.0)
+        pen.setWidthF(2.0 if selected else 1.0)
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)
-        if self._outline.size() >= 2:
+        if outline_vis and self._outline.size() >= 2:
             painter.drawPolyline(self._outline)
 
         # holes
-        if self._holes and self._holes.count:
+        if holes_vis and self._holes and self._holes.count:
             hp = QPen(QColor(self.canvas.layer_color("Stitch"))
                       if self.canvas else QColor("#0066ff"))
             hp.setCosmetic(True)
@@ -506,7 +515,10 @@ class ShapeItem(QGraphicsItem):
                     painter.drawEllipse(QPointF(h.point.x, h.point.y), r, r)
             _paint_backstitch(painter, self._holes, st)
 
-        if self.isSelected():
+        # a dashed bounding box only for CLOSED shapes -- open segments (lines,
+        # arcs from a broken-apart piece) are shown selected by their recoloured
+        # outline instead, so you don't get a box floating around every corner.
+        if selected and getattr(self, "_closed", True):
             sel = QPen(QColor(30, 140, 255), 0, Qt.DashLine)
             sel.setCosmetic(True)
             painter.setPen(sel)

@@ -1478,6 +1478,35 @@ def test_layer_hide_show_toggles_item_visibility(qapp):
     assert vis("Cut") and vis("Score")         # shown again
 
 
+def test_hiding_cut_keeps_stitch_holes(qapp):
+    # A cut shape's blue stitch holes belong to the STITCH layer: hiding Cut
+    # hides its outline but the shape stays visible so the holes still show.
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    from leathercad.shapes import Rectangle, Transform
+    from leathercad.stitchsettings import StitchSettings
+
+    doc = Document()
+    r = Rectangle(width=40, height=30, transform=Transform(x=30, y=30),
+                  layer="Cut", stitch=StitchSettings(pitch_mm=4, inset=3))
+    r.stitch.enabled = True
+    doc.add_shape(r)
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    item = next(it for it in c.scene_obj.items() if hasattr(it, "model"))
+    assert item._holes and item._holes.count > 0
+
+    doc.layer("Cut").visible = False
+    c.apply_layer_visibility()
+    assert item.isVisible()                       # holes keep the shape visible
+    assert c.stitch_layer_visible()               # stitch holes still drawn
+    # hiding the stitch layer too finally hides the whole shape
+    doc.layer("Stitch").visible = False
+    c.apply_layer_visibility()
+    assert not item.isVisible()
+
+
 def test_move_group_survives_save_load(qapp):
     from leathercad.document import Document, LooseHole
     from leathercad.geometry import Vec2

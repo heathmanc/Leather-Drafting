@@ -113,7 +113,7 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Corner holes** | rounded-corner holes are always **symmetric about the arc midpoint**. Stitching → *Corners*: `auto` (best count for your iron), `midpoint` (a hole on the apex), `straddle` (an even pair around it) |
 | **Back-to-back symmetry** | Stitching → *Symmetry* (vertical/horizontal) forces flip-symmetric holes; Edit → *Check back-to-back symmetry* validates that a flipped piece lines up |
 | **Make back piece** | Edit → *Make back piece* (`Ctrl+M`), or right-click → *Make back piece (mirror)* — drops a mirror-image copy whose holes stay registered with the front so the two stitch together back-to-back |
-| **Layers → laser jobs** | colour-coded Cut / Score / Engrave / Stitch layers with visibility |
+| **Layers → laser jobs** | colour-coded Cut / Score / Engrave / Stitch layers with **Show/Hide** visibility. A piece's blue stitch holes follow the **Stitch** layer, so you can hide **Cut** to see just the stitch pattern (or hide Stitch to see the bare outline) |
 | **Arrange** | align (left/centre/right/top/middle/bottom) and distribute selected shapes |
 | **Undo / redo** | `Ctrl+Z` / `Ctrl+Shift+Z` |
 | **Duplicate / Delete / Fit** | `Ctrl+D` / `Del` or `Backspace` / `F` |

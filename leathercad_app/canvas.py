@@ -1468,18 +1468,32 @@ class Canvas(QGraphicsView):
         lyr = self.doc.layer(name)
         return lyr.visible if lyr else True
 
+    def stitch_layer_visible(self) -> bool:
+        """Visibility of the stitch layer -- the blue stitch holes a shape draws
+        belong to it, not to the shape's own (cut) layer."""
+        for lyr in self.doc.layers:
+            if getattr(lyr, "role", None) == "stitch" or lyr.name == "Stitch":
+                return lyr.visible
+        return True
+
     def apply_layer_visibility(self) -> None:
-        """Show/hide each scene item according to its layer's ``visible`` flag."""
+        """Show/hide each scene item according to its layer's ``visible`` flag.
+        A shape stays visible if EITHER its outline layer is on, OR it carries
+        stitch holes and the stitch layer is on -- so hiding Cut still lets its
+        blue stitching show (and vice-versa)."""
+        stitch_vis = self.stitch_layer_visible()
         for it in self.scene_obj.items():
             if isinstance(it, ShapeItem):
-                layer = it.model.layer
+                outline_vis = self._layer_visible(it.model.layer)
+                has_holes = bool(it._holes and it._holes.count)
+                vis = outline_vis or (has_holes and stitch_vis)
+                it.update()            # re-evaluate which parts to draw
             elif isinstance(it, StitchLineItem):
-                layer = it.line.layer
+                vis = self._layer_visible(it.line.layer)
             elif isinstance(it, HoleItem):
-                layer = it.hole.layer
+                vis = self._layer_visible(it.hole.layer)
             else:
                 continue
-            vis = self._layer_visible(layer)
             if not vis and it.isSelected():
                 it.setSelected(False)      # don't leave hidden items selected
             it.setVisible(vis)

@@ -14,12 +14,12 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (QColor, QPainter, QPen, QPainterPath, QPolygonF,
                            QTransform)
 from PySide6.QtWidgets import (QGraphicsScene, QGraphicsView, QGraphicsPathItem,
-                               QMenu)
+                               QGraphicsItem, QMenu)
 
 from leathercad.geometry import Vec2
 from leathercad.document import Document
 from leathercad.shapes import (Rectangle, Ellipse, Circle, Polygon, PathShape,
-                               Transform)
+                               EditablePath, Transform)
 from leathercad.stitchsettings import StitchSettings
 from leathercad.stitchline import StitchLine
 from leathercad.holes import LooseHole
@@ -72,6 +72,8 @@ class Canvas(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.NoAnchor)
         self.setResizeAnchor(QGraphicsView.NoAnchor)
         self.setDragMode(QGraphicsView.RubberBandDrag)
+        # rubber-band selects anything its box touches (forgiving box-select)
+        self.setRubberBandSelectionMode(Qt.IntersectsItemBoundingRect)
 
         self._zoom = 3.0  # px per mm
         self._apply_zoom()
@@ -135,16 +137,11 @@ class Canvas(QGraphicsView):
             if it is exclude:
                 continue
             if isinstance(it, ShapeItem):
-                sh = it.model
-                _, corners, closed = sh.world_polyline()
-                pts.extend(corners)
-                b = sh.bounds()
-                pts.append(Vec2((b[0] + b[2]) / 2, (b[1] + b[3]) / 2))
-                wp = sh.world_polyline()[0]
-                if not closed and wp:
-                    pts.append(wp[0]); pts.append(wp[-1])
+                pts.extend(it.world_snap_nodes())
             elif isinstance(it, StitchLineItem):
                 pts.extend(it.line.points)
+            elif isinstance(it, HoleItem):
+                pts.append(it.hole.point)
         return pts
 
     def snap(self, pos: QPointF):
@@ -224,6 +221,38 @@ class Canvas(QGraphicsView):
             return best
         self._hide_snap_marker()
         return value
+
+    # -- node-to-node snapping while editing nodes ----------------------
+    def begin_node_snap(self, handle) -> None:
+        if not self.snap_enabled:
+            self._snap_cache = None
+            return
+        start = handle.pos()
+        cands = self._snap_candidates()
+        # exclude the dragged node's own current position
+        self._snap_cache = [c for c in cands
+                            if (c.x - start.x()) ** 2 + (c.y - start.y()) ** 2 > 0.25]
+
+    def snap_node(self, value: QPointF) -> QPointF:
+        if not self.snap_enabled or self._snap_cache is None:
+            return value
+        thr = 10.0 / self._zoom
+        best = None
+        best_d = thr
+        for s in self._snap_cache:
+            d = ((value.x() - s.x) ** 2 + (value.y() - s.y) ** 2) ** 0.5
+            if d < best_d:
+                best_d = d
+                best = QPointF(s.x, s.y)
+        if best is not None:
+            self._show_snap_marker(best, True)
+            return best
+        self._hide_snap_marker()
+        return value
+
+    def end_node_snap(self) -> None:
+        self._snap_cache = None
+        self._hide_snap_marker()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MiddleButton:
@@ -344,7 +373,7 @@ class Canvas(QGraphicsView):
 
         can_nodes = len(shapes) == 1
         parametric = can_nodes and not isinstance(
-            shapes[0].model, (Polygon, PathShape))
+            shapes[0].model, (Polygon, PathShape, EditablePath))
 
         menu = QMenu(self)
         a_group = menu.addAction("Group holes into shape")
@@ -494,17 +523,17 @@ class Canvas(QGraphicsView):
     def enter_vertex_edit(self, owner) -> None:
         self.clear_vertex_handles()
         self._edit_owner = owner
-        if isinstance(owner, ShapeItem):
-            sh = owner.model
-            worlds = [sh.transform.apply(p) for p in sh.points]
-        else:  # StitchLineItem
-            worlds = list(owner.line.points)
-        for i, w in enumerate(worlds):
-            h = VertexHandle(owner, i, w, self)
+        # Lock the shape while editing so clicks hit the node handles, not the
+        # shape (which would drag the whole outline and leave nodes behind).
+        owner.setFlag(QGraphicsItem.ItemIsMovable, False)
+        for node in owner.editable_nodes():
+            h = VertexHandle(node, owner, self)
             self.scene_obj.addItem(h)
             self._handles.append(h)
 
     def clear_vertex_handles(self) -> None:
+        if self._edit_owner is not None and _alive(self._edit_owner):
+            self._edit_owner.setFlag(QGraphicsItem.ItemIsMovable, True)
         for h in self._handles:
             self.scene_obj.removeItem(h)
         self._handles = []
@@ -753,21 +782,26 @@ class Canvas(QGraphicsView):
             return
         it = shapes[0]
         sh = it.model
-        if isinstance(sh, (Polygon, PathShape)):
+        if isinstance(sh, (Polygon, PathShape, EditablePath)):
             self.enter_vertex_edit(it)   # already has nodes
             return
 
-        path = sh.local_path()
-        pts = path.flatten()
-        closed = path.closed
-        if closed and len(pts) > 1 and (pts[0] - pts[-1]).length() < 1e-9:
-            pts = pts[:-1]
         if isinstance(sh, Rectangle) and sh.corner_radius <= 0:
-            new = Polygon(points=[Vec2(p.x, p.y) for p in pts], close_path=True,
-                          sharp_corners=True)
-        else:
-            new = PathShape(points=[Vec2(p.x, p.y) for p in pts],
-                            close_path=closed)
+            hw, hh = sh.width / 2.0, sh.height / 2.0
+            new = Polygon(points=[Vec2(-hw, -hh), Vec2(hw, -hh),
+                                  Vec2(hw, hh), Vec2(-hw, hh)],
+                          close_path=True, sharp_corners=True)
+        elif isinstance(sh, Rectangle):                 # rounded rect: keep arcs
+            new = EditablePath.from_rounded_rect(sh.width, sh.height, sh.corner_radius)
+        elif isinstance(sh, Ellipse) and abs(sh.rx - sh.ry) < 1e-9:  # circle: exact arcs
+            new = EditablePath.from_ellipse(sh.rx, sh.ry)
+        else:                                           # true ellipse etc: flatten
+            path = sh.local_path()
+            pts = path.flatten()
+            closed = path.closed
+            if closed and len(pts) > 1 and (pts[0] - pts[-1]).length() < 1e-9:
+                pts = pts[:-1]
+            new = PathShape(points=[Vec2(p.x, p.y) for p in pts], close_path=closed)
         # preserve everything else
         new.transform = sh.transform
         new.layer = sh.layer

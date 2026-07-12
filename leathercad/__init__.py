@@ -23,7 +23,7 @@ from .stitchsettings import StitchSettings
 from .irons import Iron, spi_to_mm, mm_to_spi, get as get_iron, PRESETS
 from .offset import offset_closed_inward
 from .shapes import (Transform, Shape, Rectangle, Ellipse, Circle, Polygon,
-                     PathShape)
+                     PathShape, EditablePath, Edge, arc_through)
 from .layers import Layer, default_layers, CUT, SCORE, ENGRAVE, STITCH
 from .stitchline import StitchLine
 from .holes import LooseHole
@@ -42,7 +42,7 @@ __all__ = [
     "Iron", "spi_to_mm", "mm_to_spi", "get_iron", "PRESETS",
     "offset_closed_inward",
     "Transform", "Shape", "Rectangle", "Ellipse", "Circle", "Polygon",
-    "PathShape",
+    "PathShape", "EditablePath", "Edge", "arc_through",
     "Layer", "default_layers", "CUT", "SCORE", "ENGRAVE", "STITCH",
     "StitchLine", "LooseHole", "Document",
     "SvgDocument", "export",

@@ -13,7 +13,7 @@ from typing import List, Optional
 from .geometry import Vec2
 from .layers import Layer, default_layers
 from .shapes import (Shape, Rectangle, Ellipse, Circle, Polygon, PathShape,
-                     Transform)
+                     EditablePath, Edge, Transform)
 from .stitchsettings import StitchSettings
 from .stitchline import StitchLine
 from .holes import LooseHole
@@ -71,6 +71,13 @@ def _shape_to_dict(sh: Shape) -> dict:
     elif isinstance(sh, PathShape):
         base.update(points=[[p.x, p.y] for p in sh.points],
                     close_path=sh.close_path)
+    elif isinstance(sh, EditablePath):
+        base.update(
+            nodes=[[p.x, p.y] for p in sh.nodes],
+            edges=[{"kind": e.kind,
+                    "mid": [e.mid.x, e.mid.y] if e.mid is not None else None}
+                   for e in sh.edges],
+            closed=sh.closed)
     if sh.baked_holes:
         base["baked_holes"] = [[h.point.x, h.point.y, h.tangent.x, h.tangent.y]
                                for h in sh.baked_holes]
@@ -110,6 +117,13 @@ def _shape_from_dict(d: dict) -> Shape:
     elif kind == "path":
         pts = [Vec2(x, y) for x, y in d.get("points", [])]
         sh = PathShape(points=pts, close_path=d.get("close_path", False), **common)
+    elif kind == "editpath":
+        nodes = [Vec2(x, y) for x, y in d.get("nodes", [])]
+        edges = [Edge(e.get("kind", "line"),
+                      Vec2(*e["mid"]) if e.get("mid") else None)
+                 for e in d.get("edges", [])]
+        sh = EditablePath(nodes=nodes, edges=edges,
+                          closed=d.get("closed", True), **common)
     else:
         raise ValueError(f"unknown shape kind {kind!r}")
     return _apply_baked(sh, d)

@@ -78,9 +78,9 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Select / move** | `S` — drag to move, drag one piece over another to check fit |
 | **Snapping** | toolbar *Snap* toggle + grid size; snaps to grid and to other shapes' corners while drawing and moving |
 | **Exact sizes** | live W×H shown while dragging; after drawing, the size field is focused so you can type an exact value |
-| **Edit vertices** | double-click a polygon or seam to drag its points |
-| **Convert to nodes** | right-click a rectangle/ellipse (or `Ctrl+K`) → editable corner nodes you can drag |
-| **Snap to nodes** | with Snap on, dragging a shape magnetically snaps its corners to other shapes' corners |
+| **Select by outline** | shapes are grabbed by clicking their outline, not the filled interior — click "inside" to reach shapes behind or draw there |
+| **Edit nodes** | double-click a polygon/seam, or right-click a shape → *Convert to editable nodes* (`Ctrl+K`). Rounded corners keep their **arcs**: each arc shows its two endpoints plus a midpoint handle you drag to reshape the curve. The shape locks while editing so clicks grab the nodes. |
+| **Snap to nodes** | with Snap on, dragging a shape (or a node while editing) magnetically snaps to other shapes'/holes' nodes |
 | **Group / ungroup holes** | right-click (or `Ctrl+G` / `Ctrl+Shift+G`) — ungroup to delete individual holes (below) |
 | **Right-click menu** | Group / Ungroup / Convert to nodes / Duplicate / Delete on the selection |
 | **Radius corners** | select a rectangle/polygon, set *Corner radius* in Properties |
@@ -197,7 +197,8 @@ examples/  tests/  docs/
 - [x] Left tool palette (draggable / floatable / pinnable, layout remembered)
 - [x] Group / ungroup holes (individual selectable holes; group back to a shape)
 - [x] Right-click context menu (group / ungroup / convert-to-nodes / duplicate / delete)
-- [x] Convert a shape to editable nodes; magnetic snap-to-node while dragging
+- [x] Convert a shape to editable nodes (rounded corners keep arcs: midpoint +
+      endpoint handles); outline-based selection; node-to-node snapping (move + edit)
 - [ ] Boolean ops (windows, cut-outs) and true seam-allowance offset
 - [ ] Alignment guides (smart snapping lines) while dragging
 - [ ] Import reference images / trace an existing pattern

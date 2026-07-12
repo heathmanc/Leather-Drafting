@@ -13,8 +13,25 @@ from __future__ import annotations
 from typing import List, Optional
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QPainterPath, QPen, QPolygonF, QBrush
+from PySide6.QtGui import (QColor, QPainterPath, QPainterPathStroker, QPen,
+                           QPolygonF, QBrush)
 from PySide6.QtWidgets import QGraphicsItem
+
+# Click tolerance (mm) around an outline for selection/hit-testing.
+OUTLINE_HIT_MM = 2.0
+
+
+def _outline_hit_shape(poly: QPolygonF, closed: bool = False) -> QPainterPath:
+    """A thin band around a polyline, so only the OUTLINE is clickable (not the
+    filled interior). Lets you click inside a shape to reach what's behind it."""
+    path = QPainterPath()
+    if poly.size() >= 2:
+        path.addPolygon(poly)
+        if closed and not poly.isClosed():
+            path.closeSubpath()
+    stroker = QPainterPathStroker()
+    stroker.setWidth(OUTLINE_HIT_MM)
+    return stroker.createStroke(path)
 
 from leathercad.geometry import Vec2
 from leathercad.shapes import Shape
@@ -63,14 +80,16 @@ def _paint_backstitch(painter, result, settings) -> None:
 
 
 class VertexHandle(QGraphicsItem):
-    """A constant-size draggable handle for editing a polygon/seam vertex."""
+    """A constant-size draggable handle for one editable node. Square = an
+    on-path node; round/orange = an arc midpoint. Uses a NodeRef callback so
+    lines, arcs, polygons and seams all edit through one mechanism."""
 
     SIZE = 4.0  # pixels (item ignores view transform)
 
-    def __init__(self, owner, index: int, world: Vec2, canvas):
+    def __init__(self, node, owner, canvas):
         super().__init__()
+        self.node = node
         self.owner = owner
-        self.index = index
         self.canvas = canvas
         self._dragged = False
         self.setFlags(
@@ -79,44 +98,51 @@ class VertexHandle(QGraphicsItem):
             | QGraphicsItem.ItemIgnoresTransformations
         )
         self.setZValue(2000)
-        self.setPos(world.x, world.y)
+        self.setPos(node.world.x, node.world.y)
 
     def boundingRect(self) -> QRectF:
-        s = self.SIZE + 2
+        s = self.SIZE + 4      # generous hit area so nodes are easy to grab
         return QRectF(-s, -s, 2 * s, 2 * s)
+
+    def shape(self):
+        p = QPainterPath()
+        s = self.SIZE + 3
+        p.addEllipse(QPointF(0, 0), s, s)
+        return p
 
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
-        painter.setPen(QPen(QColor(30, 110, 220), 1))
-        painter.setBrush(QBrush(QColor(255, 255, 255)))
         s = self.SIZE
-        painter.drawRect(QRectF(-s, -s, 2 * s, 2 * s))
+        if self.node.is_mid:   # arc midpoint
+            painter.setPen(QPen(QColor(210, 120, 0), 1))
+            painter.setBrush(QBrush(QColor(255, 235, 200)))
+            painter.drawEllipse(QPointF(0, 0), s, s)
+        else:                  # on-path node
+            painter.setPen(QPen(QColor(30, 110, 220), 1))
+            painter.setBrush(QBrush(QColor(255, 255, 255)))
+            painter.drawRect(QRectF(-s, -s, 2 * s, 2 * s))
 
-    def itemChange(self, change, value):
-        if change == QGraphicsItem.ItemPositionHasChanged:
-            self._dragged = True
-            self._write_back(value.x(), value.y())
-        return super().itemChange(change, value)
-
-    def _write_back(self, wx, wy):
-        w = Vec2(wx, wy)
-        if isinstance(self.owner, ShapeItem):
-            sh = self.owner.model
-            local = sh.transform.inverse_apply(w)
-            if 0 <= self.index < len(sh.points):
-                sh.points[self.index] = local
-                self.owner.sync_from_model()
-        elif isinstance(self.owner, StitchLineItem):
-            ln = self.owner.line
-            if 0 <= self.index < len(ln.points):
-                ln.points[self.index] = w
-                self.owner.sync_from_model()
+    def mousePressEvent(self, event):
+        if self.canvas is not None:
+            self.canvas.begin_node_snap(self)
+        super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
+        if self.canvas is not None:
+            self.canvas.end_node_snap()
         if self._dragged and self.canvas is not None:
             self._dragged = False
             self.canvas.commitRequested.emit()
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemPositionChange and self.canvas is not None:
+            return self.canvas.snap_node(value)
+        if change == QGraphicsItem.ItemPositionHasChanged:
+            self._dragged = True
+            self.node.setter(Vec2(self.pos().x(), self.pos().y()))
+            self.owner.sync_from_model()
+        return super().itemChange(change, value)
 
 
 class HoleItem(QGraphicsItem):
@@ -215,15 +241,24 @@ class ShapeItem(QGraphicsItem):
         oriented = [t.apply_dir(p) for p in local]
         self._outline = _qpoly(oriented)
 
-        # snap nodes (offsets from the item origin): bbox corners, sharp
-        # corners, and the origin -- used for magnetic node snapping on drag.
+        # snap nodes (local): the shape's editable nodes + bbox corners +
+        # origin -- used both for magnetic move-snap and as snap targets.
+        from leathercad.shapes import Polygon, PathShape, EditablePath
         node_locals = [Vec2(0.0, 0.0)]
         if local:
             xs = [p.x for p in local]
             ys = [p.y for p in local]
             node_locals += [Vec2(min(xs), min(ys)), Vec2(max(xs), min(ys)),
                             Vec2(max(xs), max(ys)), Vec2(min(xs), max(ys))]
-        node_locals += list(path.corner_points)
+        if isinstance(self.model, (Polygon, PathShape)):
+            node_locals += list(self.model.points)
+        elif isinstance(self.model, EditablePath):
+            node_locals += list(self.model.nodes)
+            node_locals += [e.mid for e in self.model.edges
+                            if e.kind == "arc" and e.mid is not None]
+        else:
+            node_locals += list(path.corner_points)
+        self._snap_local = node_locals
         self._snap_offsets = [t.apply_dir(p) for p in node_locals]
 
         self._holes = None
@@ -266,6 +301,10 @@ class ShapeItem(QGraphicsItem):
     # -- QGraphicsItem interface ---------------------------------------
     def boundingRect(self) -> QRectF:
         return self._brect
+
+    def shape(self):
+        # Only the outline is clickable (not the filled interior).
+        return _outline_hit_shape(self._outline, closed=True)
 
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
@@ -340,6 +379,55 @@ class ShapeItem(QGraphicsItem):
     def hole_count(self) -> int:
         return self._holes.count if self._holes else 0
 
+    # -- editable nodes (for vertex editing) ---------------------------
+    def world_snap_nodes(self):
+        t = self.model.transform
+        return [t.apply(p) for p in getattr(self, "_snap_local", [])]
+
+    def editable_nodes(self):
+        from leathercad.shapes import Polygon, PathShape, EditablePath
+        sh = self.model
+        t = sh.transform
+        out = []
+        if isinstance(sh, (Polygon, PathShape)):
+            for i in range(len(sh.points)):
+                out.append(NodeRef(t.apply(sh.points[i]), self._set_point(i)))
+        elif isinstance(sh, EditablePath):
+            for i in range(len(sh.nodes)):
+                out.append(NodeRef(t.apply(sh.nodes[i]), self._set_epnode(i)))
+            for e in sh.edges:
+                if e.kind == "arc" and e.mid is not None:
+                    out.append(NodeRef(t.apply(e.mid), self._set_epmid(e),
+                                       is_mid=True))
+        return out
+
+    def _set_point(self, i):
+        def s(world):
+            self.model.points[i] = self.model.transform.inverse_apply(world)
+        return s
+
+    def _set_epnode(self, i):
+        def s(world):
+            self.model.nodes[i] = self.model.transform.inverse_apply(world)
+        return s
+
+    def _set_epmid(self, edge):
+        def s(world):
+            edge.mid = self.model.transform.inverse_apply(world)
+        return s
+
+
+class NodeRef:
+    """One editable node: its world position + a setter that takes a new world
+    point and writes it back to the model (converting to local)."""
+
+    __slots__ = ("world", "setter", "is_mid")
+
+    def __init__(self, world: Vec2, setter, is_mid: bool = False):
+        self.world = world
+        self.setter = setter
+        self.is_mid = is_mid
+
 
 class StitchLineItem(QGraphicsItem):
     """Renders a shared seam (StitchLine): the path plus its holes."""
@@ -377,6 +465,9 @@ class StitchLineItem(QGraphicsItem):
 
     def boundingRect(self) -> QRectF:
         return self._brect
+
+    def shape(self):
+        return _outline_hit_shape(self._poly, closed=self.line.closed)
 
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
@@ -428,3 +519,15 @@ class StitchLineItem(QGraphicsItem):
     @property
     def hole_count(self) -> int:
         return self._holes.count if self._holes else 0
+
+    def editable_nodes(self):
+        out = []
+        for i in range(len(self.line.points)):
+            p = self.line.points[i]
+            out.append(NodeRef(Vec2(p.x, p.y), self._set_pt(i)))
+        return out
+
+    def _set_pt(self, i):
+        def s(world):
+            self.line.points[i] = Vec2(world.x, world.y)
+        return s

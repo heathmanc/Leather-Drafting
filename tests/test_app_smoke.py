@@ -126,9 +126,12 @@ def test_item_does_not_shadow_qt_shape_method(qapp):
     # shape() is Qt's method -> QPainterPath; the model lives on .model
     assert isinstance(item.shape(), QPainterPath)
     assert isinstance(item.model, Rectangle)
-    # the hit-testing call that crashed must succeed
-    hit = win.canvas.scene_obj.itemAt(QPointF(0, 0), QTransform())
+    # hit-testing succeeds ON THE OUTLINE (interior is not clickable now);
+    # the 80x50 rect's right edge is at x=40
+    hit = win.canvas.scene_obj.itemAt(QPointF(40, 0), QTransform())
     assert hit is item
+    # clicking the empty interior does NOT grab the shape
+    assert win.canvas.scene_obj.itemAt(QPointF(0, 0), QTransform()) is None
 
 
 def test_items_deselected_and_tracked_to_avoid_use_after_free(qapp):
@@ -194,6 +197,84 @@ def test_hole_style_visibility_toggles(qapp):
     p.hole_style.setCurrentText("slit")
     assert hole.hole.hole_style == "slit"
     assert form.isRowVisible(p.slit_len) and not form.isRowVisible(p.hole_dia)
+
+
+def test_rounded_rect_converts_to_arc_nodes_and_locks(qapp):
+    from PySide6.QtWidgets import QGraphicsItem
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    from leathercad.shapes import EditablePath
+
+    win = MainWindow(Document())
+    c = win.canvas
+    r = c.add_shape(Rectangle(width=80, height=50, corner_radius=10,
+                              transform=Transform(x=0, y=0), layer="Cut"))
+    c.scene_obj.clearSelection(); r.setSelected(True)
+    c.convert_to_nodes()
+    new = win.doc.shapes[0]
+    assert isinstance(new, EditablePath)
+    assert len(new.nodes) == 8
+    assert sum(1 for e in new.edges if e.kind == "arc") == 4
+    # 8 on-path node handles + 4 arc-midpoint handles
+    mids = [h for h in c._handles if h.node.is_mid]
+    assert len(c._handles) == 12 and len(mids) == 4
+    # shape is locked while editing so clicks hit handles, not the outline
+    assert not (c._edit_owner.flags() & QGraphicsItem.ItemIsMovable)
+    c.clear_vertex_handles()
+    assert c._edit_owner is None
+
+
+def test_editablepath_roundtrip(tmp_path):
+    from leathercad.document import Document
+    from leathercad.shapes import EditablePath, Transform
+
+    doc = Document("t")
+    ep = EditablePath.from_rounded_rect(80, 50, 10)
+    ep.transform = Transform(x=5, y=7)
+    doc.add_shape(ep)
+    p = tmp_path / "ep.json"
+    doc.save(str(p))
+    d2 = Document.load(str(p))
+    got = d2.shapes[0]
+    assert isinstance(got, EditablePath)
+    assert len(got.nodes) == 8
+    assert sum(1 for e in got.edges if e.kind == "arc" and e.mid is not None) == 4
+
+
+def test_node_snap_while_editing(qapp):
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.snap_enabled = True
+    a = c.add_shape(Rectangle(width=40, height=40, transform=Transform(x=0, y=0),
+                              layer="Cut"))          # corner at (20,20)
+    b = c.add_shape(Rectangle(width=30, height=30, transform=Transform(x=100, y=0),
+                              layer="Cut"))
+    c.scene_obj.clearSelection(); b.setSelected(True)
+    c.convert_to_nodes()                             # b -> polygon, editing
+    h = c._handles[0]
+    c.begin_node_snap(h)
+    res = c.snap_node(QPointF(20.4, 19.6))           # near A's corner (20,20)
+    assert abs(res.x() - 20) < 1e-6 and abs(res.y() - 20) < 1e-6
+    c.end_node_snap()
+
+
+def test_outline_hit_testing(qapp):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QTransform
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    item = c.add_shape(Rectangle(width=80, height=50, transform=Transform(x=0, y=0),
+                                 layer="Cut"))
+    scene = c.scene_obj
+    assert scene.itemAt(QPointF(40, 0), QTransform()) is item   # on right edge
+    assert scene.itemAt(QPointF(0, 0), QTransform()) is None     # empty interior
 
 
 def test_convert_shape_to_nodes(qapp):

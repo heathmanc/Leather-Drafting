@@ -302,5 +302,115 @@ def _filleted_polygon(pts: Sequence[Vec2], radius: float, closed: bool,
     return b.build(flatness)
 
 
+# ---------------------------------------------------------------------------
+# EditablePath: keeps line/arc segments so curves stay editable by node
+# ---------------------------------------------------------------------------
+def arc_through(p0: Vec2, pm: Vec2, p1: Vec2):
+    """Circle through 3 points -> (center, radius, a0, a1, ccw) or None if the
+    points are (nearly) collinear."""
+    ax, ay = p0.x, p0.y
+    bx, by = pm.x, pm.y
+    cx, cy = p1.x, p1.y
+    d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(d) < 1e-9:
+        return None
+    a2 = ax * ax + ay * ay
+    b2 = bx * bx + by * by
+    c2 = cx * cx + cy * cy
+    ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d
+    uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d
+    center = Vec2(ux, uy)
+    r = (p0 - center).length()
+    a0 = (p0 - center).angle()
+    a1 = (p1 - center).angle()
+    am = (pm - center).angle()
+    two_pi = 2.0 * math.pi
+    da1 = (a1 - a0) % two_pi
+    dam = (am - a0) % two_pi
+    ccw = dam < da1     # going CCW from a0 we reach the mid before the end
+    return center, r, a0, a1, ccw
+
+
+@dataclass
+class Edge:
+    kind: str = "line"            # "line" or "arc"
+    mid: Optional[Vec2] = None    # arc: a point the arc passes through (local)
+
+
+@dataclass
+class EditablePath(Shape):
+    """A path of on-path ``nodes`` joined by line/arc ``edges``. Arcs are kept
+    (not flattened) so every node -- including each arc's midpoint -- is
+    individually editable. edge[i] joins nodes[i] -> nodes[i+1] (wrapping when
+    ``closed``)."""
+    nodes: List[Vec2] = field(default_factory=list)
+    edges: List[Edge] = field(default_factory=list)
+    closed: bool = True
+    kind: str = "editpath"
+
+    def local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:
+        n = len(self.nodes)
+        if n < 2:
+            return Path()
+        b = PathBuilder()
+        b.move_to(self.nodes[0].x, self.nodes[0].y)
+        m = len(self.edges)
+        for i in range(m):
+            a = self.nodes[i]
+            nb = self.nodes[(i + 1) % n]
+            edge = self.edges[i]
+            if edge.kind == "arc" and edge.mid is not None:
+                arc = arc_through(a, edge.mid, nb)
+                if arc is not None:
+                    c, r, a0, a1, ccw = arc
+                    b.arc_to(c.x, c.y, a0, a1, ccw)
+                    continue
+            b.line_to(nb.x, nb.y)
+        if self.closed:
+            b.close(corner=False)
+        return b.build(flatness)
+
+    # -- constructors that keep arcs -----------------------------------
+    @staticmethod
+    def from_rounded_rect(w: float, h: float, r: float) -> "EditablePath":
+        hw, hh = w / 2.0, h / 2.0
+        r = max(0.0, min(r, min(hw, hh)))
+        d = r * math.sin(math.pi / 4)  # arc-midpoint offset from the corner box
+        nodes = [
+            Vec2(-hw + r, -hh), Vec2(hw - r, -hh),          # bottom edge
+            Vec2(hw, -hh + r), Vec2(hw, hh - r),            # right edge
+            Vec2(hw - r, hh), Vec2(-hw + r, hh),            # top edge
+            Vec2(-hw, hh - r), Vec2(-hw, -hh + r),          # left edge
+        ]
+        # corner centres
+        br = Vec2(hw - r, -hh + r)
+        tr = Vec2(hw - r, hh - r)
+        tl = Vec2(-hw + r, hh - r)
+        bl = Vec2(-hw + r, -hh + r)
+        edges = [
+            Edge("line"),
+            Edge("arc", Vec2(br.x + d, br.y - d)),          # bottom-right
+            Edge("line"),
+            Edge("arc", Vec2(tr.x + d, tr.y + d)),          # top-right
+            Edge("line"),
+            Edge("arc", Vec2(tl.x - d, tl.y + d)),          # top-left
+            Edge("line"),
+            Edge("arc", Vec2(bl.x - d, bl.y - d)),          # bottom-left
+        ]
+        return EditablePath(nodes=nodes, edges=edges, closed=True)
+
+    @staticmethod
+    def from_ellipse(rx: float, ry: float) -> "EditablePath":
+        c = math.cos(math.pi / 4)
+        nodes = [Vec2(rx, 0), Vec2(0, ry), Vec2(-rx, 0), Vec2(0, -ry)]
+        edges = [
+            Edge("arc", Vec2(rx * c, ry * c)),
+            Edge("arc", Vec2(-rx * c, ry * c)),
+            Edge("arc", Vec2(-rx * c, -ry * c)),
+            Edge("arc", Vec2(rx * c, -ry * c)),
+        ]
+        return EditablePath(nodes=nodes, edges=edges, closed=True)
+
+
 # Imported here to avoid a circular import at module top.
 from .stitchsettings import StitchSettings  # noqa: E402

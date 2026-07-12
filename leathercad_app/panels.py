@@ -18,6 +18,15 @@ from leathercad.shapes import Rectangle, Ellipse, Circle, Polygon, PathShape
 from leathercad.layers import Layer, ROLES
 from .items import ShapeItem, StitchLineItem, HoleItem
 
+try:
+    import shiboken6
+
+    def _alive(obj) -> bool:
+        return obj is not None and shiboken6.isValid(obj)
+except Exception:  # pragma: no cover
+    def _alive(obj) -> bool:
+        return obj is not None
+
 
 def _spin(lo, hi, step=1.0, decimals=2, suffix=" mm") -> QDoubleSpinBox:
     s = QDoubleSpinBox()
@@ -177,6 +186,7 @@ class PropertiesPanel(QWidget):
         self._loading = False
 
     def show_selection(self, items):
+        items = [it for it in items if _alive(it)]
         if len(items) != 1:
             self._item = None
             self.setEnabled(False)
@@ -302,7 +312,7 @@ class PropertiesPanel(QWidget):
             self._commit()
 
     def _commit(self):
-        if not self._loading and self._item is not None:
+        if not self._loading and _alive(self._item):
             self.committed.emit()
 
     def _apply_commit(self):
@@ -311,7 +321,8 @@ class PropertiesPanel(QWidget):
 
     # -- apply ----------------------------------------------------------
     def _apply(self):
-        if self._loading or self._item is None:
+        if self._loading or not _alive(self._item):
+            self._item = None
             return
         it = self._item
         if isinstance(it, HoleItem):
@@ -405,7 +416,7 @@ class PropertiesPanel(QWidget):
 
     def _update_readout(self):
         it = self._item
-        if it is None:
+        if not _alive(it):
             self.readout.setText("")
             return
         if isinstance(it, HoleItem):

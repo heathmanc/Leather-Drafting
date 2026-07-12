@@ -26,6 +26,16 @@ from leathercad.holes import LooseHole
 from leathercad.stitching import stitch_polyline, Hole
 from .items import ShapeItem, StitchLineItem, VertexHandle, HoleItem
 
+try:
+    import shiboken6
+
+    def _alive(obj) -> bool:
+        """True if the C++ object behind a PySide wrapper still exists."""
+        return shiboken6.isValid(obj)
+except Exception:  # pragma: no cover
+    def _alive(obj) -> bool:
+        return obj is not None
+
 
 # tool modes
 SELECT = "select"
@@ -79,6 +89,10 @@ class Canvas(QGraphicsView):
         self.hole_tool_diameter = 4.0
         self._handles: List[VertexHandle] = []
         self._edit_owner = None
+        # Hold strong Python refs to every scene item we create. PySide6 can
+        # otherwise garbage-collect a live item's wrapper and free the C++
+        # object while it is still selected -> crash in clearSelection().
+        self._live = set()
 
         # snapping
         self.snap_enabled = True
@@ -448,26 +462,42 @@ class Canvas(QGraphicsView):
         self._handles = []
         self._edit_owner = None
 
+    # -- tracked scene item lifetime -----------------------------------
+    def _add_item(self, item):
+        self.scene_obj.addItem(item)
+        self._live.add(item)
+        return item
+
+    def _remove_item(self, item) -> None:
+        # Deselect first so the item is never freed while still in the scene's
+        # selection set (the cause of the clearSelection use-after-free crash).
+        if item.isSelected():
+            item.setSelected(False)
+        self._live.discard(item)
+        self.scene_obj.removeItem(item)
+
     # -- document <-> scene --------------------------------------------
     def rebuild(self) -> None:
         """Rebuild all items from the document (after open/load)."""
+        self.scene_obj.clearSelection()   # drop selection before freeing items
+        self.selectionChangedSig.emit()   # let panels release their item refs
         self.scene_obj.clear()
+        self._live.clear()
         self._preview = None
         self._snap_marker = None
         self._handles = []
         self._edit_owner = None
         for sh in self.doc.shapes:
-            self.scene_obj.addItem(ShapeItem(sh, self))
+            self._add_item(ShapeItem(sh, self))
         for sl in self.doc.stitch_lines:
-            self.scene_obj.addItem(StitchLineItem(sl, self))
+            self._add_item(StitchLineItem(sl, self))
         for h in self.doc.holes:
-            self.scene_obj.addItem(HoleItem(h, self))
+            self._add_item(HoleItem(h, self))
         self.documentChangedSig.emit()
 
     def add_shape(self, shape) -> ShapeItem:
         self.doc.add_shape(shape)
-        item = ShapeItem(shape, self)
-        self.scene_obj.addItem(item)
+        item = self._add_item(ShapeItem(shape, self))
         self.scene_obj.clearSelection()
         item.setSelected(True)
         self.documentChangedSig.emit()
@@ -476,8 +506,7 @@ class Canvas(QGraphicsView):
 
     def add_stitch_line(self, line) -> StitchLineItem:
         self.doc.add_stitch_line(line)
-        item = StitchLineItem(line, self)
-        self.scene_obj.addItem(item)
+        item = self._add_item(StitchLineItem(line, self))
         self.documentChangedSig.emit()
         self._emit_commit()
         return item
@@ -494,7 +523,7 @@ class Canvas(QGraphicsView):
                 self.doc.remove_stitch_line(it.line)
             else:  # HoleItem
                 self.doc.remove_hole(it.hole)
-            self.scene_obj.removeItem(it)
+            self._remove_item(it)
         self.documentChangedSig.emit()
         self.selectionChangedSig.emit()
         self._emit_commit()
@@ -593,6 +622,8 @@ class Canvas(QGraphicsView):
         self.selectionChangedSig.emit()
 
     def refresh_item(self, item) -> None:
+        if item is None or not _alive(item):
+            return
         item.sync_from_model()
         self.documentChangedSig.emit()
 
@@ -643,7 +674,7 @@ class Canvas(QGraphicsView):
                 if res.count:
                     made += self._explode(res, it.line.settings)
                     self.doc.remove_stitch_line(it.line)
-                    self.scene_obj.removeItem(it)
+                    self._remove_item(it)
         self._suppress_commit = False
         if made:
             self.scene_obj.clearSelection()
@@ -661,9 +692,7 @@ class Canvas(QGraphicsView):
                 slit_length=style.slit_length, slit_angle=style.slit_angle,
                 layer="Stitch")
             self.doc.add_hole(lh)
-            item = HoleItem(lh, self)
-            self.scene_obj.addItem(item)
-            items.append(item)
+            items.append(self._add_item(HoleItem(lh, self)))
         return items
 
     # -- group: individual holes -> baked into a shape -----------------
@@ -685,7 +714,7 @@ class Canvas(QGraphicsView):
             tan = sh.transform.inverse_apply_dir(h.hole.tangent)
             baked.append(Hole(local, tan))
             self.doc.remove_hole(h.hole)
-            self.scene_obj.removeItem(h)
+            self._remove_item(h)
         sh.baked_holes = baked
         # keep a style on the shape for baked-hole rendering
         if sh.stitch is None:

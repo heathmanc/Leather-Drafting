@@ -131,6 +131,43 @@ def test_item_does_not_shadow_qt_shape_method(qapp):
     assert hit is item
 
 
+def test_items_deselected_and_tracked_to_avoid_use_after_free(qapp):
+    """Regression for the macOS crash in QGraphicsScene::clearSelection(): a
+    selected item must be deselected before removal and kept referenced so
+    PySide never frees a live, still-selected item."""
+    import shiboken6
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import HoleItem
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    item = c.add_shape(Rectangle(
+        width=80, height=50, corner_radius=6, transform=Transform(x=0, y=0),
+        stitch=StitchSettings(pitch_mm=4.0, inset=3.0), layer="Cut"))
+    assert item in c._live                      # strong ref held
+    c.scene_obj.clearSelection()
+    item.setSelected(True)
+    c.ungroup_selected()
+    holes = [it for it in c.scene_obj.items() if isinstance(it, HoleItem)]
+    assert all(h in c._live for h in holes)
+
+    victims = holes[:4]
+    c.scene_obj.clearSelection()
+    for h in victims:
+        h.setSelected(True)
+    c.delete_selected()
+    for h in victims:
+        assert h not in c._live
+        # deleted items are not left selected in the scene
+        assert (not shiboken6.isValid(h)) or (not h.isSelected())
+
+    # after a rebuild (undo) the properties panel must not hold a stale item
+    win.properties.show_selection([holes[6]])
+    win.undo()
+    assert win.properties._item is None
+
+
 def test_seam_move_bakes_on_release_not_per_tick(qapp):
     """Regression: moving a seam must not reset setPos(0,0) mid-drag (which made
     items jump). Points bake to the final position on release."""

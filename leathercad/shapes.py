@@ -83,6 +83,9 @@ class Shape:
     # A construction/guide line: drawn dashed, used only as a snap/alignment
     # reference, never cut or exported.
     construction: bool = False
+    # Move-group membership: items sharing a group_id move together. None -> not
+    # grouped.
+    group_id: Optional[str] = None
 
     # -- geometry (subclasses implement local_path) ---------------------
     def local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:  # pragma: no cover

@@ -1224,6 +1224,58 @@ def test_toggle_stitch_after_move_keeps_position(qapp):
     assert rect.transform.x == 80.0 and rect.transform.y == 20.0
 
 
+def test_move_group_select_and_move_together(qapp):
+    # Grouping several loose holes lets you select and move them as a unit:
+    # clicking one member selects the whole group (Qt then moves all together).
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document, LooseHole
+    from leathercad.geometry import Vec2
+
+    doc = Document()
+    for x in (10, 20, 30):
+        doc.holes.append(LooseHole(point=Vec2(x, 10)))
+    c = cm.Canvas(doc)
+    c.rebuild()
+    holes = [it for it in c.scene_obj.items()
+             if getattr(it, "hole", None) is not None]
+    for h in holes:
+        h.setSelected(True)
+    c.make_group()
+    gids = {h.group_id for h in doc.holes}
+    assert len(gids) == 1 and None not in gids            # one shared group id
+
+    # selecting a single member expands the selection to the whole group
+    c.scene_obj.clearSelection()
+    holes[0].setSelected(True)
+    c.selection_changed()
+    assert len(c.selected_items()) == 3
+
+    # ungroup clears membership; a single click then stays single
+    c.ungroup_group()
+    assert {h.group_id for h in doc.holes} == {None}
+    c.scene_obj.clearSelection()
+    holes[0].setSelected(True)
+    c.selection_changed()
+    assert len(c.selected_items()) == 1
+
+
+def test_move_group_survives_save_load(qapp):
+    from leathercad.document import Document, LooseHole
+    from leathercad.geometry import Vec2
+    from leathercad.shapes import Rectangle, Transform
+
+    doc = Document()
+    r = Rectangle(width=10, height=10, transform=Transform(x=0, y=0))
+    r.group_id = "g1"
+    doc.add_shape(r)
+    h = LooseHole(point=Vec2(5, 5))
+    h.group_id = "g1"
+    doc.holes.append(h)
+    doc2 = Document.from_dict(doc.to_dict())
+    assert doc2.shapes[0].group_id == "g1"
+    assert doc2.holes[0].group_id == "g1"
+
+
 def test_resize_handles_appear_and_resize(qapp):
     # Selecting a single box-shape shows 8 resize grips; dragging a corner grip
     # resizes the shape and keeps the OPPOSITE corner pinned in world space.

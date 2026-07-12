@@ -31,3 +31,6 @@ class LooseHole:
     slit_angle: float = 30.0
     layer: str = "Stitch"
     hole_id: str = field(default_factory=_next_id)
+    # Move-group membership: items sharing a group_id are selected and moved
+    # together. None -> not grouped.
+    group_id: str | None = None

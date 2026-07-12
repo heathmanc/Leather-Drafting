@@ -39,6 +39,8 @@ class StitchLine:
     layer: str = "Stitch"
     line_id: str = field(default_factory=_next_id)
     kind: str = "stitchline"
+    # Move-group membership: items sharing a group_id move together.
+    group_id: str | None = None
 
     def __post_init__(self):
         # A drawn seam is the stitch line itself -- never inset it.

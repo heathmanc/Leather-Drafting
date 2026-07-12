@@ -56,6 +56,7 @@ def _shape_to_dict(sh: Shape) -> dict:
         "transform": _transform_to_dict(sh.transform),
         "stitch": _stitch_to_dict(sh.stitch),
         "construction": sh.construction,
+        "group_id": sh.group_id,
     }
     if isinstance(sh, Rectangle):
         base.update(width=sh.width, height=sh.height,
@@ -101,6 +102,7 @@ def _shape_from_dict(d: dict) -> Shape:
         transform=_transform_from_dict(d.get("transform", {})),
         stitch=_stitch_from_dict(d.get("stitch")),
         construction=d.get("construction", False),
+        group_id=d.get("group_id"),
     )
     if "shape_id" in d:
         common["shape_id"] = d["shape_id"]
@@ -140,6 +142,7 @@ def _hole_to_dict(h: LooseHole) -> dict:
         "slit_length": h.slit_length,
         "slit_angle": h.slit_angle,
         "layer": h.layer,
+        "group_id": h.group_id,
     }
 
 
@@ -152,6 +155,7 @@ def _hole_from_dict(d: dict) -> LooseHole:
         slit_length=d.get("slit_length", 1.6),
         slit_angle=d.get("slit_angle", 30.0),
         layer=d.get("layer", "Stitch"),
+        group_id=d.get("group_id"),
     )
 
 
@@ -164,6 +168,7 @@ def _stitchline_to_dict(sl: StitchLine) -> dict:
         "name": sl.name,
         "layer": sl.layer,
         "line_id": sl.line_id,
+        "group_id": sl.group_id,
     }
 
 
@@ -175,6 +180,7 @@ def _stitchline_from_dict(d: dict) -> StitchLine:
         settings=StitchSettings(**d.get("settings", {})),
         name=d.get("name", ""),
         layer=d.get("layer", "Stitch"),
+        group_id=d.get("group_id"),
     )
     if "line_id" in d:
         sl.line_id = d["line_id"]

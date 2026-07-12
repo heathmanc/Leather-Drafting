@@ -818,6 +818,11 @@ class Canvas(QGraphicsView):
             shapes[0].model, (Polygon, PathShape, EditablePath))
 
         menu = QMenu(self)
+        a_mgroup = menu.addAction("Group (move together)")
+        a_mgroup.setEnabled(len(sel) >= 2)
+        a_mungroup = menu.addAction("Ungroup (move group)")
+        a_mungroup.setEnabled(self.selection_has_group())
+        menu.addSeparator()
         a_group = menu.addAction("Group holes into shape")
         a_group.setEnabled(can_group)
         a_ungroup = menu.addAction("Ungroup stitching → individual holes")
@@ -837,7 +842,11 @@ class Canvas(QGraphicsView):
         a_del = menu.addAction("Delete")
         a_del.setEnabled(bool(sel))
         chosen = menu.exec(event.globalPos())
-        if chosen is a_group:
+        if chosen is a_mgroup:
+            self.make_group()
+        elif chosen is a_mungroup:
+            self.ungroup_group()
+        elif chosen is a_group:
             self.group_selected()
         elif chosen is a_ungroup:
             self.ungroup_selected()
@@ -1251,6 +1260,7 @@ class Canvas(QGraphicsView):
     def selection_changed(self) -> None:
         if self._edit_owner is not None and not self._edit_owner.isSelected():
             self.clear_vertex_handles()
+        self._expand_selection_to_groups()
         self._refresh_resize_handles()
         self.selectionChangedSig.emit()
 
@@ -1679,6 +1689,72 @@ class Canvas(QGraphicsView):
         shape_item.setSelected(True)
         self.documentChangedSig.emit()
         self._emit_commit()
+
+    # -- move-groups (select & move several items as one) --------------
+    @staticmethod
+    def _item_model(item):
+        """The model object backing a scene item (shape / hole / seam)."""
+        if isinstance(item, ShapeItem):
+            return item.model
+        if isinstance(item, HoleItem):
+            return item.hole
+        if isinstance(item, StitchLineItem):
+            return item.line
+        return None
+
+    def make_group(self) -> None:
+        """Tag every selected item with a shared group_id so they select and
+        move together (a real group, distinct from welding/baking)."""
+        sel = self.selected_items()
+        if len(sel) < 2:
+            self.statusMessage.emit("Group: select two or more items")
+            return
+        from leathercad.shapes import _next_id
+        gid = _next_id("group")
+        for it in sel:
+            m = self._item_model(it)
+            if m is not None:
+                m.group_id = gid
+        self.documentChangedSig.emit()
+        self._emit_commit()
+
+    def ungroup_group(self) -> None:
+        """Clear move-group membership from the selected items' groups."""
+        gids = {self._item_model(it).group_id for it in self.selected_items()
+                if self._item_model(it) is not None}
+        gids.discard(None)
+        if not gids:
+            return
+        for it in self.scene_obj.items():
+            m = self._item_model(it)
+            if m is not None and getattr(m, "group_id", None) in gids:
+                m.group_id = None
+        self.documentChangedSig.emit()
+        self._emit_commit()
+
+    def selection_has_group(self) -> bool:
+        return any(getattr(self._item_model(it), "group_id", None)
+                   for it in self.selected_items())
+
+    def _expand_selection_to_groups(self) -> None:
+        """When any selected item belongs to a move-group, select the whole
+        group so a drag moves every member together (Qt moves all selected)."""
+        if getattr(self, "_expanding_sel", False):
+            return
+        gids = {getattr(self._item_model(it), "group_id", None)
+                for it in self.selected_items()}
+        gids.discard(None)
+        if not gids:
+            return
+        self._expanding_sel = True
+        try:
+            for it in self.scene_obj.items():
+                m = self._item_model(it)
+                if (m is not None and getattr(m, "group_id", None) in gids
+                        and not it.isSelected()):
+                    it.setSelected(True)
+        finally:
+            self._expanding_sel = False
 
     # -- grid -----------------------------------------------------------
     def drawBackground(self, painter, rect):

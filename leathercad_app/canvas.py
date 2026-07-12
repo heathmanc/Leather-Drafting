@@ -974,6 +974,8 @@ class Canvas(QGraphicsView):
         a_break.setEnabled(bool(shapes))
         a_join = menu.addAction("Join / weld segments")
         a_join.setEnabled(len(shapes) >= 2)
+        a_offset = menu.addAction("Offset / seam allowance…")
+        a_offset.setEnabled(bool(shapes))
         menu.addSeparator()
         a_dup = menu.addAction("Duplicate")
         a_dup.setEnabled(bool(shapes))
@@ -996,6 +998,10 @@ class Canvas(QGraphicsView):
             self.break_apart_selected()
         elif chosen is a_join:
             self.join_selected()
+        elif chosen is a_offset:
+            dist, ok = self._ask_offset_distance()
+            if ok:
+                self.offset_selected(dist)
         elif chosen is a_dup:
             self.duplicate_selected()
         elif chosen is a_back:
@@ -1304,6 +1310,58 @@ class Canvas(QGraphicsView):
         for it in new_items:
             it.setSelected(True)
         if new_items:
+            self.documentChangedSig.emit()
+            self._emit_commit()
+
+    def _ask_offset_distance(self):
+        from PySide6.QtWidgets import QInputDialog
+        return QInputDialog.getDouble(
+            self, "Offset / seam allowance",
+            "Distance (mm)   —   positive = outward, negative = inward:",
+            3.0, -100.0, 100.0, 2)
+
+    def offset_selected(self, dist: float) -> None:
+        """Offset each selected shape's outline by ``dist`` mm (>0 outward / seam
+        allowance, <0 inward) as a NEW shape on the same layer. Arcs are
+        flattened -- the result is a polygon following the offset outline."""
+        from leathercad.offset import offset_closed, offset_open
+        from leathercad.shapes import Polygon, PathShape, _next_id
+        if abs(dist) < 1e-9:
+            return
+        made = []
+        self._suppress_commit = True
+        for it in self._shape_items():
+            wpts, _corners, closed = it.model.world_polyline()
+            if len(wpts) < 2:
+                continue
+            if closed:
+                ring = offset_closed(wpts, dist)
+                if len(ring) >= 2 and (ring[0] - ring[-1]).length() < 1e-6:
+                    ring = ring[:-1]
+                if len(ring) < 3:
+                    continue
+                cx = sum(p.x for p in ring) / len(ring)
+                cy = sum(p.y for p in ring) / len(ring)
+                sh = Polygon(points=[Vec2(p.x - cx, p.y - cy) for p in ring],
+                             close_path=True, transform=Transform(x=cx, y=cy),
+                             layer=it.model.layer)
+            else:
+                line = offset_open(wpts, dist)
+                if len(line) < 2:
+                    continue
+                cx = sum(p.x for p in line) / len(line)
+                cy = sum(p.y for p in line) / len(line)
+                sh = PathShape(points=[Vec2(p.x - cx, p.y - cy) for p in line],
+                               close_path=False, transform=Transform(x=cx, y=cy),
+                               layer=it.model.layer)
+            sh.shape_id = _next_id("shape")
+            self.doc.add_shape(sh)
+            made.append(self._add_item(ShapeItem(sh, self)))
+        self._suppress_commit = False
+        self.scene_obj.clearSelection()
+        for m in made:
+            m.setSelected(True)
+        if made:
             self.documentChangedSig.emit()
             self._emit_commit()
 

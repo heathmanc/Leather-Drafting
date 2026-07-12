@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt, QSize, QSettings
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow, QDockWidget, QFileDialog, QToolBar, QLabel, QMessageBox,
-    QWidget, QScrollArea, QComboBox,
+    QWidget, QScrollArea, QComboBox, QInputDialog,
 )
 
 from leathercad.document import Document
@@ -253,6 +253,8 @@ class MainWindow(QMainWindow):
         self._add(em, "Convert to editable nodes", "Ctrl+K", self.canvas.convert_to_nodes)
         self._add(em, "Break apart into segments", "Ctrl+B", self.canvas.break_apart_selected)
         self._add(em, "Join / weld segments", "Ctrl+J", lambda: self.canvas.join_selected())
+        self._add(em, "Offset / seam allowance…", "Ctrl+Shift+O",
+                  self._offset_selected)
         em.addSeparator()
         self._add(em, "Make back piece (mirror)", "Ctrl+M",
                   self.canvas.make_back_piece_selected)
@@ -390,6 +392,19 @@ class MainWindow(QMainWindow):
     def _check_symmetry(self):
         QMessageBox.information(self, "Back-to-back symmetry",
                                self.canvas.symmetry_report_selected())
+
+    def _offset_selected(self):
+        if not [it for it in self.canvas.selected_items()
+                if hasattr(it, "model")]:
+            QMessageBox.information(self, "Offset",
+                                   "Select a shape to offset first.")
+            return
+        dist, ok = QInputDialog.getDouble(
+            self, "Offset / seam allowance",
+            "Distance (mm)   —   positive = outward, negative = inward:",
+            3.0, -100.0, 100.0, 2)
+        if ok:
+            self.canvas.offset_selected(dist)
 
     def _zoom(self, factor):
         self.canvas._zoom = max(0.3, min(40.0, self.canvas._zoom * factor))

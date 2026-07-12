@@ -75,3 +75,62 @@ def offset_closed_inward(points: Sequence[Vec2], dist: float) -> List[Vec2]:
 
     new_pts.append(new_pts[0])
     return new_pts
+
+
+def offset_closed(points: Sequence[Vec2], dist: float) -> List[Vec2]:
+    """Offset a closed outline by ``dist`` mm: ``dist`` > 0 grows the shape
+    OUTWARD (seam/glue allowance), ``dist`` < 0 shrinks it inward. Returns a
+    closed ring (first point repeated). Mitered corners via edge re-intersection.
+    """
+    ring = _unique_ring(points)
+    n = len(ring)
+    if n < 3 or abs(dist) < _EPS:
+        return list(points)
+    sign = 1.0 if signed_area(ring) > 0 else -1.0     # +1 for CCW
+    offset_edges = []
+    for i in range(n):
+        a = ring[i]
+        b = ring[(i + 1) % n]
+        d = b - a
+        if d.length() < _EPS:
+            continue
+        d = d.normalized()
+        inward = Vec2(-d.y, d.x) * sign               # unit inward normal
+        move = inward * (-dist)                        # +dist -> outward
+        offset_edges.append((a + move, b + move))
+    m = len(offset_edges)
+    new_pts: List[Vec2] = []
+    for i in range(m):
+        prev = offset_edges[(i - 1) % m]
+        cur = offset_edges[i]
+        p = _line_intersection(prev[0], prev[1], cur[0], cur[1])
+        new_pts.append(p if p is not None else cur[0])
+    new_pts.append(new_pts[0])
+    return new_pts
+
+
+def offset_open(points: Sequence[Vec2], dist: float) -> List[Vec2]:
+    """Offset an open polyline sideways by ``dist`` mm (right of travel for
+    ``dist`` > 0). Corners are mitered; the two ends just shift along their
+    edge normals."""
+    pts = list(points)
+    if len(pts) < 2 or abs(dist) < _EPS:
+        return pts
+    edges = []
+    for i in range(len(pts) - 1):
+        a, b = pts[i], pts[i + 1]
+        d = b - a
+        if d.length() < _EPS:
+            continue
+        d = d.normalized()
+        normal = Vec2(d.y, -d.x) * dist               # right-hand normal
+        edges.append((a + normal, b + normal))
+    if not edges:
+        return pts
+    out = [edges[0][0]]
+    for i in range(1, len(edges)):
+        p = _line_intersection(edges[i - 1][0], edges[i - 1][1],
+                               edges[i][0], edges[i][1])
+        out.append(p if p is not None else edges[i][0])
+    out.append(edges[-1][1])
+    return out

@@ -93,7 +93,7 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Holes / slots / fold lines** | Hole `H` (hardware), Slot `T` (stadium), Score line `K` (fold/skive on the Score layer) |
 | **Seam** | Stitch line `L` — a shared seam for cross-piece registration |
 | **Select / move** | `S` — drag to move, drag one piece over another to check fit |
-| **Snapping** | toolbar *Snap* toggle + grid size; snaps to grid and to other shapes' **corners, centres, side-centres and edge midpoints** while drawing and moving |
+| **Snapping** | two independent toolbar toggles — **Nodes** and **Grid** — plus grid size. Node snap catches other shapes' **ends, midpoints, centres, side-centres and intersections**; turn Grid off to snap only to geometry (points off a node stay free). Both apply while drawing and moving |
 | **Alignment guides** | while drawing, when the cursor lines up with another object's node/centre the point locks to that x/y and a dashed **guide line** appears (smart snapping, Fusion/Illustrator style) |
 | **Exact sizes** | live W×H shown while dragging; after drawing, the size field is focused so you can type an exact value |
 | **Select by outline** | shapes are grabbed by clicking their outline, not the filled interior — click "inside" to reach shapes behind or draw there |
@@ -132,11 +132,15 @@ splits into two. Clicking a piece that nothing crosses removes it outright.
 ### Smart snapping & construction lines
 
 While a drawing tool is active, the point you're placing snaps to nearby
-**nodes, centres, side-centres and edge midpoints** of other shapes. When it
-lines up (same x or y) with one of those, it **locks to that alignment** and a
-dashed orange **guide line** is drawn so you can see what it lined up with — the
-same inference snapping as Fusion 360 / Illustrator. Line up with two things at
-once and it snaps to the crossing point.
+**ends, midpoints, centres, side-centres and intersections** of other shapes.
+When it lines up (same x or y) with one of those, it **locks to that alignment**
+and a dashed orange **guide line** is drawn so you can see what it lined up with
+— the same inference snapping as Fusion 360 / Illustrator. Line up with two
+things at once and it snaps to the crossing point.
+
+Node snapping and grid snapping are **separate toolbar toggles** (*Nodes* and
+*Grid*). Turn *Grid* off to snap purely to geometry — points that aren't on a
+node then stay wherever you put them.
 
 Drag out a **construction line** (`G`) for a reusable guide of your own: it's
 dashed, snappable, and never cut or exported.

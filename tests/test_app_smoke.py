@@ -362,7 +362,7 @@ def test_node_snap_while_editing(qapp):
 
     win = MainWindow(Document())
     c = win.canvas
-    c.snap_enabled = True
+    c.snap_to_nodes = True
     a = c.add_shape(Rectangle(width=40, height=40, transform=Transform(x=0, y=0),
                               layer="Cut"))          # corner at (20,20)
     b = c.add_shape(Rectangle(width=30, height=30, transform=Transform(x=100, y=0),
@@ -419,7 +419,7 @@ def test_magnetic_node_snap_on_move(qapp):
 
     win = MainWindow(Document())
     c = win.canvas
-    c.snap_enabled = True
+    c.snap_to_nodes = True
     c.add_shape(Rectangle(width=60, height=40, transform=Transform(x=0, y=0), layer="Cut"))
     b = c.add_shape(Rectangle(width=20, height=20, transform=Transform(x=100, y=100), layer="Cut"))
     c.scene_obj.clearSelection(); b.setSelected(True)
@@ -464,7 +464,7 @@ def test_snapping(qapp):
 
     win = MainWindow(Document())
     c = win.canvas
-    c.snap_enabled = True
+    c.snap_to_nodes = True
     c.snap_grid = 1.0
 
     p, vtx = c.snap(QPointF(12.3, 7.8))
@@ -689,6 +689,55 @@ def test_trim_tool_cuts_outline_at_intersections(qapp):
     kinds = sorted(type(it.model).__name__ for it in items)
     assert "Rectangle" in kinds            # B is still a rectangle
     assert any(not isinstance(it.model, R) for it in items)   # A was trimmed
+
+
+def test_grid_and_node_snap_toggle_independently(qapp):
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.snap_grid = 1.0
+    c.add_shape(Rectangle(width=40, height=30, transform=Transform(x=0, y=0),
+                          layer="Cut"))          # a corner at (20, 15)
+
+    # node only (grid OFF): a point far from any node stays exactly free
+    c.snap_to_nodes, c.snap_to_grid = True, False
+    p, vtx = c.snap(QPointF(12.3, 7.8))
+    assert (round(p.x(), 1), round(p.y(), 1)) == (12.3, 7.8) and not vtx
+    # ...but near a node it still snaps
+    p, vtx = c.snap(QPointF(19.6, 14.7))
+    assert (round(p.x()), round(p.y())) == (20, 15) and vtx
+
+    # grid only (nodes OFF): rounds to the grid, ignores nodes
+    c.snap_to_nodes, c.snap_to_grid = False, True
+    p, vtx = c.snap(QPointF(12.3, 7.8))
+    assert (round(p.x()), round(p.y())) == (12, 8) and not vtx
+
+    # both OFF: fully free
+    c.snap_to_nodes, c.snap_to_grid = False, False
+    p, vtx = c.snap(QPointF(12.3, 7.8))
+    assert (round(p.x(), 1), round(p.y(), 1)) == (12.3, 7.8) and not vtx
+
+
+def test_intersection_snap(qapp):
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    from leathercad.shapes import PathShape
+    from leathercad.geometry import Vec2
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.snap_to_nodes, c.snap_to_grid = True, False
+    # two lines crossing at (10, 10) whose own nodes/midpoints avoid that point
+    c.add_shape(PathShape(points=[Vec2(-10, 10), Vec2(40, 10)], close_path=False,
+                          transform=Transform(x=0, y=0), layer="Cut"))
+    c.add_shape(PathShape(points=[Vec2(10, -5), Vec2(10, 20)], close_path=False,
+                          transform=Transform(x=0, y=0), layer="Cut"))
+    p, vtx = c.snap(QPointF(10.3, 9.7))            # near the crossing
+    assert (round(p.x()), round(p.y())) == (10, 10) and vtx
 
 
 def test_smart_snap_alignment_and_guides(qapp):

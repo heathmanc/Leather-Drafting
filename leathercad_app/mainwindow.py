@@ -195,13 +195,25 @@ class MainWindow(QMainWindow):
         tb.addAction(fit)
 
         tb.addSeparator()
-        self.act_snap = QAction("Snap", self)
-        self.act_snap.setCheckable(True)
-        self.act_snap.setChecked(True)
-        self.act_snap.setToolTip("Snap to grid and vertices while drawing/moving")
-        self.act_snap.toggled.connect(
-            lambda on: setattr(self.canvas, "snap_enabled", on))
-        tb.addAction(self.act_snap)
+        self.act_snap_nodes = QAction("Nodes", self)
+        self.act_snap_nodes.setCheckable(True)
+        self.act_snap_nodes.setChecked(True)
+        self.act_snap_nodes.setToolTip(
+            "Node snap: ends, midpoints, centres and intersections (+ alignment "
+            "guides). Independent of grid snap.")
+        self.act_snap_nodes.toggled.connect(
+            lambda on: setattr(self.canvas, "snap_to_nodes", on))
+        tb.addAction(self.act_snap_nodes)
+
+        self.act_snap_grid = QAction("Grid", self)
+        self.act_snap_grid.setCheckable(True)
+        self.act_snap_grid.setChecked(True)
+        self.act_snap_grid.setToolTip("Grid snap: round points to the grid. "
+                                      "Turn off to use node snap only.")
+        self.act_snap_grid.toggled.connect(
+            lambda on: setattr(self.canvas, "snap_to_grid", on))
+        tb.addAction(self.act_snap_grid)
+
         tb.addWidget(QLabel(" grid "))
         self.grid_combo = QComboBox()
         for mm in (0.5, 1.0, 2.0, 2.5, 5.0, 10.0):

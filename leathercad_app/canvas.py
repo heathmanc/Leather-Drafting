@@ -189,10 +189,10 @@ class Canvas(QGraphicsView):
         self._live = set()
         self._snap_cache = None   # static snap nodes captured at drag start
 
-        # snapping
-        self.snap_enabled = True
-        self.snap_grid = 1.0      # mm
-        self.snap_vertices = True
+        # snapping -- grid and node snapping toggle independently
+        self.snap_to_nodes = True    # ends / midpoints / centres / intersections
+        self.snap_to_grid = True
+        self.snap_grid = 1.0         # mm
         self._snap_marker: Optional[QGraphicsPathItem] = None
         self._trim_hover: Optional[QGraphicsPathItem] = None
         self._align_guides: List[QGraphicsLineItem] = []
@@ -246,19 +246,21 @@ class Canvas(QGraphicsView):
         return p, vtx
 
     def _smart_snap(self, pos: QPointF):
-        """Snap to a nearby node, else to horizontal/vertical *alignment* with a
-        node (returning guide lines to draw), else to the grid.
-
-        Returns (snapped QPointF, is_vertex_snap, guides) where each guide is
-        (Vec2 target, 'v'|'h')."""
+        """Snap the cursor. Node snapping and grid snapping toggle
+        independently: node snap catches ends / midpoints / centres /
+        intersections (and alignment with them); grid snap rounds to the grid.
+        With node snap on and grid snap off, points that aren't on a node stay
+        free. Returns (snapped QPointF, is_node_snap, guides)."""
         guides = []
-        if not self.snap_enabled:
-            return pos, False, guides
+        gridok = self.snap_to_grid and self.snap_grid > 0
         thr = 10.0 / self._zoom          # ~10 px in mm
-        cands = self._snap_candidates()
 
-        # 1. direct point snap wins
-        if self.snap_vertices:
+        if self.snap_to_nodes:
+            near = Vec2(pos.x(), pos.y())
+            cands = self._snap_candidates() + \
+                self._intersection_candidates(near, thr * 1.5)
+
+            # 1. direct point snap wins (end / midpoint / centre / intersection)
             best, best_d = None, thr
             for c in cands:
                 d = ((pos.x() - c.x) ** 2 + (pos.y() - c.y) ** 2) ** 0.5
@@ -267,24 +269,95 @@ class Canvas(QGraphicsView):
             if best is not None:
                 return QPointF(best.x, best.y), True, guides
 
-        # 2. alignment snap: lock x and/or y to an aligned node (smart guides)
-        ax = ay = None
-        if self.snap_vertices:
+            # 2. alignment snap: lock x and/or y to an aligned node (guides)
+            ax = ay = None
             dx = dy = thr
             for c in cands:
                 if abs(c.x - pos.x()) < dx:
                     dx, ax = abs(c.x - pos.x()), c
                 if abs(c.y - pos.y()) < dy:
                     dy, ay = abs(c.y - pos.y()), c
-        g = self.snap_grid
-        nx = ax.x if ax else (round(pos.x() / g) * g if g > 0 else pos.x())
-        ny = ay.y if ay else (round(pos.y() / g) * g if g > 0 else pos.y())
-        if ax is not None:
-            guides.append((ax, "v"))
-        if ay is not None:
-            guides.append((ay, "h"))
-        vtx = ax is not None or ay is not None
-        return QPointF(nx, ny), vtx, guides
+            if ax is not None or ay is not None:
+                g = self.snap_grid
+                nx = ax.x if ax else (round(pos.x() / g) * g if gridok else pos.x())
+                ny = ay.y if ay else (round(pos.y() / g) * g if gridok else pos.y())
+                if ax is not None:
+                    guides.append((ax, "v"))
+                if ay is not None:
+                    guides.append((ay, "h"))
+                return QPointF(nx, ny), True, guides
+
+        # 3. grid snap (only if enabled)
+        if gridok:
+            g = self.snap_grid
+            return QPointF(round(pos.x() / g) * g, round(pos.y() / g) * g), \
+                False, guides
+
+        # 4. free
+        return pos, False, guides
+
+    def _intersection_candidates(self, near: Vec2, radius: float):
+        """Points where two different outlines cross, limited to edges within
+        ``radius`` of ``near`` so this stays cheap on every mouse move."""
+        from leathercad.trim import _seg_intersect
+        edges = []
+        for it in self.scene_obj.items():
+            poly = None
+            if isinstance(it, ShapeItem):
+                poly = [Vec2(p.x, p.y) for p in it.model.world_polyline()[0]]
+            elif isinstance(it, StitchLineItem):
+                poly = [Vec2(p.x, p.y) for p in it.line.points]
+            if not poly or len(poly) < 2:
+                continue
+            owner = id(it)
+            for k in range(len(poly) - 1):
+                a, b = poly[k], poly[k + 1]
+                if _point_polyline_dist(near, [a, b]) <= radius:
+                    edges.append((a, b, owner))
+        out = []
+        for i in range(len(edges)):
+            for j in range(i + 1, len(edges)):
+                if edges[i][2] == edges[j][2]:
+                    continue                       # same object
+                x = _seg_intersect(edges[i][0], edges[i][1],
+                                   edges[j][0], edges[j][1])
+                if x is not None and (x - near).length() <= radius:
+                    out.append(x)
+        return out
+
+    def _all_intersections(self, exclude=None):
+        """Every point where two different outlines cross (for the move / node
+        drag snap cache). Bounded work, skipped on very busy scenes."""
+        from leathercad.trim import _seg_intersect
+        entries = []
+        for it in self.scene_obj.items():
+            if it is exclude:
+                continue
+            poly = None
+            if isinstance(it, ShapeItem):
+                poly = [Vec2(p.x, p.y) for p in it.model.world_polyline()[0]]
+            elif isinstance(it, StitchLineItem):
+                poly = [Vec2(p.x, p.y) for p in it.line.points]
+            if not poly or len(poly) < 2:
+                continue
+            xs = [p.x for p in poly]
+            ys = [p.y for p in poly]
+            entries.append((poly, (min(xs), min(ys), max(xs), max(ys))))
+        if sum(len(p) for p, _ in entries) > 3000:
+            return []                              # too busy -- skip
+        out = []
+        for i in range(len(entries)):
+            for j in range(i + 1, len(entries)):
+                A, ba = entries[i]
+                B, bb = entries[j]
+                if ba[2] < bb[0] or bb[2] < ba[0] or ba[3] < bb[1] or bb[3] < ba[1]:
+                    continue                       # bounding boxes disjoint
+                for k in range(len(A) - 1):
+                    for l in range(len(B) - 1):
+                        x = _seg_intersect(A[k], A[k + 1], B[l], B[l + 1])
+                        if x is not None:
+                            out.append(x)
+        return out
 
     def _show_align_guides(self, guides):
         # ensure two reusable dashed line items
@@ -335,9 +408,10 @@ class Canvas(QGraphicsView):
 
     # -- magnetic node snapping while dragging shapes -------------------
     def begin_move_snap(self, item) -> None:
-        # capture other shapes'/holes' nodes once, at the start of the drag
-        if self.snap_enabled and len(self.selected_items()) <= 1:
-            self._snap_cache = self._snap_candidates(exclude=item)
+        # capture other shapes' nodes (+ their intersections) once, at drag start
+        if self.snap_to_nodes and len(self.selected_items()) <= 1:
+            self._snap_cache = (self._snap_candidates(exclude=item)
+                                + self._all_intersections(exclude=item))
         else:
             self._snap_cache = None
 
@@ -347,7 +421,7 @@ class Canvas(QGraphicsView):
 
     def snap_move(self, item, value: QPointF) -> QPointF:
         """Snap a dragged shape so one of its nodes lands on a nearby node."""
-        if not self.snap_enabled or self._snap_cache is None:
+        if not self.snap_to_nodes or self._snap_cache is None:
             return value
         offsets = getattr(item, "_snap_offsets", None)
         if not offsets:
@@ -373,17 +447,18 @@ class Canvas(QGraphicsView):
 
     # -- node-to-node snapping while editing nodes ----------------------
     def begin_node_snap(self, handle) -> None:
-        if not self.snap_enabled:
+        if not self.snap_to_nodes:
             self._snap_cache = None
             return
         start = handle.pos()
-        cands = self._snap_candidates()
+        cands = self._snap_candidates() + \
+            self._all_intersections()
         # exclude the dragged node's own current position
         self._snap_cache = [c for c in cands
                             if (c.x - start.x()) ** 2 + (c.y - start.y()) ** 2 > 0.25]
 
     def snap_node(self, value: QPointF) -> QPointF:
-        if not self.snap_enabled or self._snap_cache is None:
+        if not self.snap_to_nodes or self._snap_cache is None:
             return value
         thr = 10.0 / self._zoom
         best = None

@@ -1049,32 +1049,39 @@ def test_split_midpoints_from_intersection(qapp):
     assert (round(p.x(), 1), round(p.y(), 1)) == (2.5, 0.0) and kind == "mid"
 
 
-def test_line_node_has_ortho_reference(qapp):
+def test_node_shift_ortho_locks_movement_from_drag_start(qapp):
+    # Shift while dragging a node locks its MOVEMENT to 0/45/90 from where the
+    # drag began (like the drawing tools) -- so an endpoint that starts well off
+    # the neighbour's axis can still be dragged straight up into a vertical line.
     from leathercad_app.mainwindow import MainWindow
     from leathercad.shapes import PathShape
     from leathercad.geometry import Vec2
     from leathercad.document import Document
-
-    win = MainWindow(Document())
-    it = win.canvas.add_shape(PathShape(points=[Vec2(0, 0), Vec2(30, 8)],
-                                        close_path=False,
-                                        transform=Transform(x=0, y=0), layer="Cut"))
-    nodes = it.editable_nodes()
-    # each line endpoint knows its neighbour, so Shift can force 0/90 degrees
-    assert nodes[0].ref is not None and nodes[1].ref is not None
-    assert (round(nodes[0].ref.x), round(nodes[0].ref.y)) == (30, 8)
-
-    # with Shift captured from the drag, the segment locks to 0 / 90 degrees
     from PySide6.QtWidgets import QGraphicsItem
     from PySide6.QtCore import QPointF
     from leathercad_app.items import VertexHandle
-    h = VertexHandle(nodes[1], it, win.canvas)      # endpoint (30,8), ref (0,0)
+
+    win = MainWindow(Document())
+    # far-right endpoint sits up and to the right of its neighbour, like the
+    # 3-point score line in the bug report
+    it = win.canvas.add_shape(PathShape(points=[Vec2(0, 0), Vec2(100, 0),
+                                                Vec2(140, 20)],
+                                        close_path=False,
+                                        transform=Transform(x=0, y=0), layer="Cut"))
+    nodes = it.editable_nodes()
+    end = next(n for n in nodes
+               if (round(n.world.x), round(n.world.y)) == (140, 20))
+    h = VertexHandle(end, it, win.canvas)
     win.canvas.scene_obj.addItem(h)
     h._shift = True
-    r = h.itemChange(QGraphicsItem.ItemPositionChange, QPointF(35, 20))
-    assert (round(r.x()), round(r.y())) == (35, 0)  # mostly horizontal -> y locks
-    r = h.itemChange(QGraphicsItem.ItemPositionChange, QPointF(5, 40))
-    assert (round(r.x()), round(r.y())) == (0, 40)  # mostly vertical -> x locks
+    h._drag_start = QPointF(140, 20)
+    # dragging up (mostly vertical) locks the movement vertical -> x stays 140,
+    # which the old neighbour-relative lock could never reach for this node
+    r = h.itemChange(QGraphicsItem.ItemPositionChange, QPointF(150, 80))
+    assert round(r.x()) == 140
+    # dragging sideways locks horizontal -> y stays 20
+    r = h.itemChange(QGraphicsItem.ItemPositionChange, QPointF(220, 25))
+    assert round(r.y()) == 20
 
 
 def test_shift_ortho_while_drawing(qapp):

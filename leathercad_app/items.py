@@ -93,6 +93,7 @@ class VertexHandle(QGraphicsItem):
         self.canvas = canvas
         self._dragged = False
         self._shift = False
+        self._drag_start = None      # node world pos when the drag began
         self.setFlags(
             QGraphicsItem.ItemIsMovable
             | QGraphicsItem.ItemSendsGeometryChanges
@@ -125,6 +126,7 @@ class VertexHandle(QGraphicsItem):
 
     def mousePressEvent(self, event):
         self._shift = bool(event.modifiers() & Qt.ShiftModifier)
+        self._drag_start = QPointF(self.pos())      # where the node started
         if self.canvas is not None:
             self.canvas.begin_node_snap(self)
         super().mousePressEvent(event)
@@ -138,6 +140,7 @@ class VertexHandle(QGraphicsItem):
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
         self._shift = False
+        self._drag_start = None
         if self.canvas is not None:
             self.canvas.end_node_snap()
         if self._dragged and self.canvas is not None:
@@ -146,15 +149,15 @@ class VertexHandle(QGraphicsItem):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange and self.canvas is not None:
-            ref = getattr(self.node, "ref", None)
             shift = self._shift or bool(
                 QApplication.keyboardModifiers() & Qt.ShiftModifier)
-            if shift and ref is not None:
-                # constrain the segment to this node's neighbour to 0 / 90 deg
-                dx, dy = value.x() - ref.x, value.y() - ref.y
-                if abs(dx) >= abs(dy):
-                    return QPointF(value.x(), ref.y)     # horizontal
-                return QPointF(ref.x, value.y())         # vertical
+            if shift and self._drag_start is not None:
+                # Constrain the node's MOVEMENT to 0 / 45 / 90 degrees from where
+                # the drag began -- the same ortho lock as the drawing tools, so
+                # an endpoint can be dragged straight up into a vertical position
+                # (the old lock was relative to the far neighbour, so a node that
+                # started well off-axis could never reach vertical).
+                return self.canvas._apply_ortho(self._drag_start, value)
             return self.canvas.snap_node(value)
         if change == QGraphicsItem.ItemPositionHasChanged:
             self._dragged = True

@@ -35,6 +35,7 @@ TOOLS = [
     ("Score line", canvas_mod.SCORE, "K"),
     ("Stitch line (seam)", canvas_mod.STITCHLINE, "M"),
     ("Trim to intersections", canvas_mod.TRIM, "X"),
+    ("Text", canvas_mod.TEXT, "A"),
     ("Measure", canvas_mod.MEASURE, "Q"),
     ("Dimension", canvas_mod.DIMENSION, "D"),
 ]
@@ -48,6 +49,7 @@ _ICON_FOR = {
     canvas_mod.TRIM: "trim", canvas_mod.LINE: "line",
     canvas_mod.CONSTRUCTION: "construction",
     canvas_mod.MEASURE: "measure", canvas_mod.DIMENSION: "dimension",
+    canvas_mod.TEXT: "text",
 }
 
 

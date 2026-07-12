@@ -50,6 +50,15 @@ def collect(doc: Document):
             style = sh.stitch or StitchSettings()
             stitches.append((res, style, stitch_color))
 
+    for tx in getattr(doc, "texts", []):
+        lyr = doc.layer(tx.layer)
+        if lyr is not None and not lyr.visible:
+            continue
+        color = lyr.color if lyr else "#888888"
+        for contour in tx.world_contours():
+            if len(contour) >= 2:
+                outlines.append((list(contour) + [contour[0]], color))
+
     for sl in doc.stitch_lines:
         res = sl.result()
         if res.count:

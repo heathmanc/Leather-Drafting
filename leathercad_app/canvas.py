@@ -25,7 +25,7 @@ from leathercad.stitchline import StitchLine
 from leathercad.holes import LooseHole
 from leathercad.stitching import stitch_polyline, Hole, StitchResult, flip_symmetry
 from .items import (ShapeItem, StitchLineItem, VertexHandle, HoleItem,
-                    ResizeHandle, DimensionItem)
+                    ResizeHandle, DimensionItem, TextItem, bake_text_contours)
 
 try:
     import shiboken6
@@ -54,6 +54,7 @@ LINE = "line"
 CONSTRUCTION = "construction"
 MEASURE = "measure"
 DIMENSION = "dimension"
+TEXT = "text"
 
 _DRAG_TOOLS = (RECT, ROUNDED, ELLIPSE, CIRCLE, SLOT, LINE, CONSTRUCTION)
 _POLY_TOOLS = (POLYGON, STITCHLINE, SCORE)
@@ -791,6 +792,8 @@ class Canvas(QGraphicsView):
         if event.button() == Qt.LeftButton:
             if self.tool == HOLE:
                 self._place_hole(pos)
+            elif self.tool == TEXT:
+                self._place_text(pos)
             elif self.tool in (MEASURE, DIMENSION):
                 # two clicks: first sets the start, second finishes.
                 if self._start is None:
@@ -855,6 +858,28 @@ class Canvas(QGraphicsView):
         self.doc.dimensions.append(dim)
         self._add_item(DimensionItem(dim, self))
         self.statusMessage.emit(self._measure_text(a, b))
+        self.documentChangedSig.emit()
+        self._emit_commit()
+        self.toolFinished.emit()
+
+    def _place_text(self, pos: QPointF) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        from leathercad.text import TextShape
+        text, ok = QInputDialog.getText(self, "Text", "Lettering:")
+        if not ok or not text.strip():
+            self.toolFinished.emit()
+            return
+        size = getattr(self, "text_size", 8.0)
+        contours = bake_text_contours(text, "Sans", size)
+        tx = TextShape(text=text,
+                       contours=[[Vec2(p.x, p.y) for p in c] for c in contours],
+                       size=size, font_family="Sans",
+                       transform=Transform(x=pos.x(), y=pos.y()),
+                       layer="Engrave" if self.doc.layer("Engrave") else self._current_layer)
+        self.doc.texts.append(tx)
+        item = self._add_item(TextItem(tx, self))
+        self.scene_obj.clearSelection()
+        item.setSelected(True)
         self.documentChangedSig.emit()
         self._emit_commit()
         self.toolFinished.emit()
@@ -1292,6 +1317,8 @@ class Canvas(QGraphicsView):
             self._add_item(HoleItem(h, self))
         for dm in getattr(self.doc, "dimensions", []):
             self._add_item(DimensionItem(dm, self))
+        for tx in getattr(self.doc, "texts", []):
+            self._add_item(TextItem(tx, self))
         self.apply_layer_visibility()
         self.documentChangedSig.emit()
 
@@ -1314,7 +1341,7 @@ class Canvas(QGraphicsView):
     def selected_items(self):
         return [it for it in self.scene_obj.selectedItems()
                 if isinstance(it, (ShapeItem, StitchLineItem, HoleItem,
-                                   DimensionItem))]
+                                   DimensionItem, TextItem))]
 
     def delete_selected(self) -> None:
         for it in self.selected_items():
@@ -1325,6 +1352,9 @@ class Canvas(QGraphicsView):
             elif isinstance(it, DimensionItem):
                 if it.dim in self.doc.dimensions:
                     self.doc.dimensions.remove(it.dim)
+            elif isinstance(it, TextItem):
+                if it.model in self.doc.texts:
+                    self.doc.texts.remove(it.model)
             else:  # HoleItem
                 self.doc.remove_hole(it.hole)
             self._remove_item(it)
@@ -1731,6 +1761,8 @@ class Canvas(QGraphicsView):
                 vis = self._layer_visible(it.line.layer)
             elif isinstance(it, HoleItem):
                 vis = self._layer_visible(it.hole.layer)
+            elif isinstance(it, TextItem):
+                vis = self._layer_visible(it.model.layer)
             else:
                 continue
             if not vis and it.isSelected():

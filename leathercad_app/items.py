@@ -286,6 +286,107 @@ class ResizeHandle(QGraphicsItem):
             self.canvas.resize_handle_moved(self)
 
 
+def bake_text_contours(text, family, size_mm):
+    """Convert a string into glyph outline contours (local mm, y-up), scaled so
+    the cap height is ``size_mm``. Done here (Qt layer) so the engine stays
+    Qt-free; the result is stored as plain polylines on the text model."""
+    from PySide6.QtGui import QFont, QPainterPath, QFontMetricsF
+    font = QFont(family or "Sans")
+    font.setPointSizeF(100.0)
+    fm = QFontMetricsF(font)
+    cap = fm.capHeight() or fm.ascent() or 100.0
+    scale = size_mm / cap
+    path = QPainterPath()
+    path.addText(0.0, 0.0, font, text or "")
+    contours = []
+    for poly in path.toSubpathPolygons():
+        c = [Vec2(pt.x() * scale, -pt.y() * scale) for pt in poly]  # Qt y-down -> y-up
+        if len(c) >= 2:
+            contours.append(c)
+    return contours
+
+
+class TextItem(QGraphicsItem):
+    """Engrave lettering: renders the baked glyph contours; movable/selectable."""
+
+    def __init__(self, model, canvas=None):
+        super().__init__()
+        self.model = model
+        self.canvas = canvas
+        self.setFlags(
+            QGraphicsItem.ItemIsSelectable
+            | QGraphicsItem.ItemIsMovable
+            | QGraphicsItem.ItemSendsGeometryChanges
+        )
+        self.setZValue(30)
+        self._snap_offsets = [Vec2(0.0, 0.0)]     # snap by the text origin
+        self.sync_from_model()
+
+    def sync_from_model(self):
+        self.prepareGeometryChange()
+        self._path = QPainterPath()
+        for c in self.model.contours:
+            if len(c) < 2:
+                continue
+            self._path.moveTo(c[0].x, c[0].y)
+            for p in c[1:]:
+                self._path.lineTo(p.x, p.y)
+            self._path.closeSubpath()
+        self._color = QColor(self.canvas.layer_color(self.model.layer)
+                             if self.canvas else "#888888")
+        self.setPos(self.model.transform.x, self.model.transform.y)
+        self.setOpacity(max(0.05, min(1.0, self.model.opacity)))
+        r = self._path.boundingRect()
+        self._brect = r.adjusted(-2, -2, 2, 2)
+        self.update()
+
+    def boundingRect(self):
+        return self._brect
+
+    def shape(self):
+        st = QPainterPathStroker()
+        st.setWidth(OUTLINE_HIT_MM)
+        return st.createStroke(self._path)
+
+    def paint(self, painter, option, widget=None):
+        painter.setRenderHint(painter.RenderHint.Antialiasing, True)
+        sel = self.isSelected()
+        pen = QPen(QColor(30, 140, 255) if sel else self._color)
+        pen.setCosmetic(True)
+        pen.setWidthF(1.6 if sel else 1.0)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(self._path)
+
+    @property
+    def hole_count(self):
+        return 0
+
+    def mousePressEvent(self, event):
+        if self.canvas is not None:
+            self.canvas.select_group_of(self)
+            self.canvas.begin_move_snap(self)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if self.canvas is not None:
+            self.canvas.end_move_snap()
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemPositionChange and self.canvas is not None:
+            return self.canvas.snap_move(self, value)
+        if change == QGraphicsItem.ItemPositionHasChanged:
+            self.model.transform.x = self.pos().x()
+            self.model.transform.y = self.pos().y()
+            if self.canvas is not None:
+                self.canvas.item_moved(self)
+        elif change == QGraphicsItem.ItemSelectedHasChanged:
+            if self.canvas is not None:
+                self.canvas.selection_changed()
+        return super().itemChange(change, value)
+
+
 class DimensionItem(QGraphicsItem):
     """A linear dimension annotation: extension lines, an offset dimension line
     with arrowheads, and the measured length as constant-size text. Selectable

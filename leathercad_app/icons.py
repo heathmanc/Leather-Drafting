@@ -108,6 +108,13 @@ def tool_icon(kind: str, size: int = 22) -> QIcon:
             x = m + (size - 2 * m) * i / n
             hgt = 4.0 if i % n == 0 else 2.5
             p.drawLine(QPointF(x, y), QPointF(x, y - hgt))
+    elif kind == "text":
+        # a capital "A"
+        f = p.font()
+        f.setPointSizeF(size * 0.6)
+        f.setBold(True)
+        p.setFont(f)
+        p.drawText(rect, Qt.AlignCenter, "A")
     elif kind == "dimension":
         # dimension line with arrow tips + extension ticks
         y = size * 0.55

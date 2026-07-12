@@ -227,6 +227,7 @@ class MainWindow(QMainWindow):
         self._add(em, "Ungroup stitching", "Ctrl+Shift+G", self.canvas.ungroup_selected)
         self._add(em, "Convert to editable nodes", "Ctrl+K", self.canvas.convert_to_nodes)
         self._add(em, "Break apart into segments", "Ctrl+B", self.canvas.break_apart_selected)
+        self._add(em, "Join / weld segments", "Ctrl+J", lambda: self.canvas.join_selected())
         em.addSeparator()
         self._add(em, "Duplicate", "Ctrl+D", self.canvas.duplicate_selected)
         self._add(em, "Delete", None, self.canvas.delete_selected)

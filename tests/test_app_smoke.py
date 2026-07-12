@@ -273,6 +273,66 @@ def test_break_apart_into_segments(qapp):
     assert len(win.doc.shapes) == n - 1 + 4
 
 
+def test_rubberband_inside_shape_selects_holes_not_shape(qapp):
+    from PySide6.QtCore import QRectF, Qt
+    from PySide6.QtGui import QPainterPath
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import ShapeItem, HoleItem
+    from leathercad.document import Document
+    from leathercad.holes import LooseHole
+    from leathercad.geometry import Vec2
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.add_shape(Rectangle(width=100, height=70, transform=Transform(x=0, y=0),
+                          layer="Cut"))
+    for x in (-10, 0, 10):
+        win.doc.add_hole(LooseHole(point=Vec2(x, 0)))
+    c.rebuild()
+    area = QPainterPath(); area.addRect(QRectF(-15, -8, 30, 16))  # interior box
+    c.scene_obj.setSelectionArea(area, mode=Qt.IntersectsItemShape)
+    sel = c.selected_items()
+    assert len([s for s in sel if isinstance(s, HoleItem)]) == 3
+    assert len([s for s in sel if isinstance(s, ShapeItem)]) == 0
+
+
+def test_join_welds_segments(qapp):
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import ShapeItem
+    from leathercad.document import Document
+    from leathercad.shapes import EditablePath, PathShape
+    from leathercad.geometry import Vec2
+
+    win = MainWindow(Document())
+    c = win.canvas
+    # break a rounded rect apart, then weld it back into one closed arc-path
+    r = c.add_shape(Rectangle(width=80, height=50, corner_radius=10,
+                              transform=Transform(x=0, y=0), layer="Cut"))
+    c.scene_obj.clearSelection(); r.setSelected(True)
+    c.break_apart_selected()
+    pieces = [it for it in c.scene_obj.items() if isinstance(it, ShapeItem)]
+    c.scene_obj.clearSelection()
+    for p in pieces:
+        p.setSelected(True)
+    c.join_selected()
+    assert len(win.doc.shapes) == 1
+    jp = win.doc.shapes[0]
+    assert isinstance(jp, EditablePath) and jp.closed
+    assert sum(1 for e in jp.edges if e.kind == "arc") == 4
+
+    # two separate lines sharing an endpoint weld into one 3-point path
+    doc2 = Document(); c.doc = doc2; c.rebuild()
+    a = c.add_shape(PathShape(points=[Vec2(0, 0), Vec2(20, 0)], close_path=False,
+                              transform=Transform(x=0, y=0), layer="Cut"))
+    b = c.add_shape(PathShape(points=[Vec2(20, 0), Vec2(20, 20)], close_path=False,
+                              transform=Transform(x=0, y=0), layer="Cut"))
+    c.scene_obj.clearSelection(); a.setSelected(True); b.setSelected(True)
+    c.join_selected()
+    assert len(c.doc.shapes) == 1
+    assert isinstance(c.doc.shapes[0], PathShape)
+    assert len(c.doc.shapes[0].points) == 3
+
+
 def test_node_snap_while_editing(qapp):
     from PySide6.QtCore import QPointF
     from leathercad_app.mainwindow import MainWindow

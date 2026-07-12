@@ -53,6 +53,66 @@ _DRAG_TOOLS = (RECT, ROUNDED, ELLIPSE, CIRCLE, SLOT)
 _POLY_TOOLS = (POLYGON, STITCHLINE, SCORE)
 
 
+def _rev(seg):
+    a, b, kind, mid = seg
+    return (b, a, kind, mid)
+
+
+def _chain_segments(segments, tol):
+    """Greedily chain segments sharing endpoints (within tol). Returns
+    (ordered chain, leftover segments)."""
+    remaining = list(segments)
+    chain = [remaining.pop(0)]
+    grew = True
+    while grew:
+        grew = False
+        end = chain[-1][1]
+        for i, s in enumerate(remaining):
+            if (s[0] - end).length() < tol:
+                chain.append(remaining.pop(i)); grew = True; break
+            if (s[1] - end).length() < tol:
+                chain.append(_rev(remaining.pop(i))); grew = True; break
+    grew = True
+    while grew:
+        grew = False
+        start = chain[0][0]
+        for i, s in enumerate(remaining):
+            if (s[1] - start).length() < tol:
+                chain.insert(0, remaining.pop(i)); grew = True; break
+            if (s[0] - start).length() < tol:
+                chain.insert(0, _rev(remaining.pop(i))); grew = True; break
+    return chain, remaining
+
+
+def _path_from_chain(chain, tol, layer):
+    """Build a shape from an ordered chain of world-space segments."""
+    nodes = [chain[0][0]]
+    edges = []
+    for a, b, kind, mid in chain:
+        nodes.append(b)
+        edges.append((kind, mid))
+    closed = len(nodes) > 2 and (nodes[-1] - nodes[0]).length() < tol
+    if closed:
+        nodes = nodes[:-1]
+    allpts = list(nodes) + [m for _, m in edges if m is not None]
+    cx = sum(p.x for p in allpts) / len(allpts)
+    cy = sum(p.y for p in allpts) / len(allpts)
+    def loc(p):
+        return Vec2(p.x - cx, p.y - cy)
+    local_nodes = [loc(p) for p in nodes]
+
+    if any(k == "arc" for k, _ in edges):
+        e_objs = [Edge(k, loc(m) if m is not None else None) for k, m in edges]
+        sh = EditablePath(nodes=local_nodes, edges=e_objs, closed=closed)
+    elif closed:
+        sh = Polygon(points=local_nodes, close_path=True, sharp_corners=True)
+    else:
+        sh = PathShape(points=local_nodes, close_path=False)
+    sh.transform = Transform(x=cx, y=cy)
+    sh.layer = layer
+    return sh
+
+
 def _segment_shape(kind, wpts, layer):
     """Build a standalone open path for one segment, recentred on its own
     centroid so it has an independent transform for moving."""
@@ -88,8 +148,9 @@ class Canvas(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.NoAnchor)
         self.setResizeAnchor(QGraphicsView.NoAnchor)
         self.setDragMode(QGraphicsView.RubberBandDrag)
-        # rubber-band selects anything its box touches (forgiving box-select)
-        self.setRubberBandSelectionMode(Qt.IntersectsItemBoundingRect)
+        # Rubber-band selects by item SHAPE (outline for shapes), so a box drawn
+        # inside a shape selects only the holes there, not the shape itself.
+        self.setRubberBandSelectionMode(Qt.IntersectsItemShape)
 
         self._zoom = 3.0  # px per mm
         self._apply_zoom()
@@ -401,6 +462,8 @@ class Canvas(QGraphicsView):
         a_nodes.setEnabled(can_nodes)
         a_break = menu.addAction("Break apart into segments")
         a_break.setEnabled(bool(shapes))
+        a_join = menu.addAction("Join / weld segments")
+        a_join.setEnabled(len(shapes) >= 2)
         menu.addSeparator()
         a_dup = menu.addAction("Duplicate")
         a_dup.setEnabled(bool(shapes))
@@ -415,6 +478,8 @@ class Canvas(QGraphicsView):
             self.convert_to_nodes()
         elif chosen is a_break:
             self.break_apart_selected()
+        elif chosen is a_join:
+            self.join_selected()
         elif chosen is a_dup:
             self.duplicate_selected()
         elif chosen is a_del:
@@ -867,6 +932,43 @@ class Canvas(QGraphicsView):
             self.documentChangedSig.emit()
             self.selectionChangedSig.emit()
             self._emit_commit()
+
+    # -- join / weld segments back into a continuous path --------------
+    def join_selected(self, tol: float = 0.6) -> None:
+        """Chain selected pieces whose endpoints coincide into continuous
+        paths (arcs preserved). Disconnected pieces form separate paths."""
+        shapes = [it for it in self.selected_items() if isinstance(it, ShapeItem)]
+        if len(shapes) < 2:
+            self.statusMessage.emit("Select 2+ pieces to join")
+            return
+        layer = shapes[0].model.layer
+        # collect every edge as a world-space segment (a, b, kind, mid)
+        segs = []
+        for it in shapes:
+            for kind, wpts in self._segments_world(it.model):
+                if kind == "arc":
+                    segs.append((wpts[0], wpts[2], "arc", wpts[1]))
+                else:
+                    segs.append((wpts[0], wpts[1], "line", None))
+        made = []
+        remaining = segs
+        while remaining:
+            chain, remaining = _chain_segments(remaining, tol)
+            made.append(_path_from_chain(chain, tol, layer))
+
+        self._suppress_commit = True
+        for it in shapes:
+            self.doc.remove_shape(it.model)
+            self._remove_item(it)
+        items = [self._add_item(ShapeItem(self.doc.add_shape(m), self))
+                 for m in made]
+        self._suppress_commit = False
+        self.scene_obj.clearSelection()
+        for m in items:
+            m.setSelected(True)
+        self.documentChangedSig.emit()
+        self.selectionChangedSig.emit()
+        self._emit_commit()
 
     def _segments_world(self, sh):
         """Return [(kind, [world points]), ...] -- 'line' has [a,b], 'arc'

@@ -298,6 +298,40 @@ class PropertiesPanel(QWidget):
         self._loading = False
         self._update_readout()
 
+    def sync_geometry_fields(self):
+        """Reload the position / size fields from the live model without firing
+        _apply. Called when the shape is moved or resized on the canvas so the
+        spinboxes never go stale -- otherwise the next _apply (e.g. toggling
+        Stitching) would write an old position back and the shape would jump."""
+        it = self._item
+        if not isinstance(it, ShapeItem) or not _alive(it):
+            return
+        self._loading = True
+        try:
+            sh = it.model
+            self.pos_x.setValue(sh.transform.x)
+            self.pos_y.setValue(sh.transform.y)
+            self.rot.setValue(sh.transform.rotation)
+            self.mirror.setChecked(sh.transform.mirror_x)
+            if isinstance(sh, Rectangle):
+                self.w.setValue(sh.width)
+                self.h.setValue(sh.height)
+                self.corner.setValue(sh.corner_radius)
+            elif isinstance(sh, (Circle, Ellipse)):
+                self.rx.setValue(sh.rx)
+                self.ry.setValue(sh.ry)
+            elif _is_line(sh):
+                import math
+                p0 = sh.transform.apply(sh.points[0])
+                p1 = sh.transform.apply(sh.points[1])
+                self.line_len.setValue(((p1.x - p0.x) ** 2
+                                        + (p1.y - p0.y) ** 2) ** 0.5)
+                self.line_angle.setValue(
+                    math.degrees(math.atan2(p1.y - p0.y, p1.x - p0.x)))
+        finally:
+            self._loading = False
+        self._update_readout()
+
     def _set_path_rows_visible(self, vis: bool):
         for w in (self.iron, self.pitch, self.inset, self.fit, self.rows,
                   self.row_spacing, self.backstitch):

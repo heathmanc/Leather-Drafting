@@ -1174,6 +1174,52 @@ def test_loose_hole_drag_snaps_center(qapp):
     assert round(res.x(), 2) == 50.0 and round(res.y(), 2) == 50.0
 
 
+def test_duplicate_selected_loose_holes(qapp):
+    # Selecting several loose holes and duplicating must add copies (with fresh
+    # ids), not silently do nothing.
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document, LooseHole
+    from leathercad.geometry import Vec2
+
+    doc = Document()
+    for x in (10, 20, 30):
+        doc.holes.append(LooseHole(point=Vec2(x, 10)))
+    c = cm.Canvas(doc)
+    c.rebuild()
+    for it in c.scene_obj.items():
+        if getattr(it, "hole", None) is not None:
+            it.setSelected(True)
+    c.duplicate_selected()
+    assert len(doc.holes) == 6
+    ids = [h.hole_id for h in doc.holes]
+    assert len(set(ids)) == len(ids)          # ids stay unique
+
+
+def test_toggle_stitch_after_move_keeps_position(qapp):
+    # Moving a shape on the canvas then toggling Stitching must not snap the
+    # shape back to where it was when the panel was last populated.
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.shapes import Rectangle, Transform
+    from leathercad.document import Document
+
+    doc = Document()
+    rect = Rectangle(width=40, height=30, transform=Transform(x=50, y=50))
+    doc.add_shape(rect)
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    item = next(it for it in c.scene_obj.items()
+                if getattr(it, "model", None) is rect)
+    item.setSelected(True)
+    win._selection_changed()                  # panel loaded at (50, 50)
+    rect.transform.x, rect.transform.y = 80, 20
+    c.item_moved(item)                        # canvas drag -> panel must re-sync
+    assert win.properties.pos_x.value() == 80.0
+    win.properties.g_stitch.setChecked(True)  # toggling stitching runs _apply
+    win.properties._apply()
+    assert rect.transform.x == 80.0 and rect.transform.y == 20.0
+
+
 def test_line_length_and_angle_field(qapp):
     import math
     from leathercad_app.mainwindow import MainWindow

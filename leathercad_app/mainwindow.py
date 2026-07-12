@@ -335,6 +335,9 @@ class MainWindow(QMainWindow):
     def _document_changed(self):
         self.sb_holes.setText(f"{self.canvas.total_holes()} holes")
         self.properties.set_layers(self.doc.layers)
+        # keep the Properties position / size fields in step with canvas edits
+        # (drag, node edit, resize) so a later _apply can't write a stale value
+        self.properties.sync_geometry_fields()
         self._update_title()
 
     def _cursor_moved(self, x, y):

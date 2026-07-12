@@ -268,12 +268,20 @@ class Canvas(QGraphicsView):
             near = Vec2(pos.x(), pos.y())
             cands = self._typed_candidates(near, thr * 1.5)
 
-            # 1. direct point snap wins (end / midpoint / centre / intersection)
-            best, best_d, best_kind = None, thr, None
+            # 1. direct point snap wins (end / midpoint / centre / intersection).
+            # High-value osnaps (intersection, endpoint, centre, hole centre) are
+            # made "stickier" with a priority weight so you don't have to hover
+            # pixel-perfect on a centre to catch it over a closer quadrant/edge.
+            prio = {"cross": 0.5, "end": 0.55, "center": 0.55, "hole": 0.65,
+                    "mid": 0.9, "quad": 1.1}
+            best, best_score, best_d, best_kind = None, thr, thr, None
             for c, kind in cands:
                 d = ((pos.x() - c.x) ** 2 + (pos.y() - c.y) ** 2) ** 0.5
-                if d < best_d:
-                    best_d, best, best_kind = d, c, kind
+                if d >= thr:
+                    continue
+                score = d * prio.get(kind, 1.0)
+                if score < best_score:
+                    best_score, best_d, best, best_kind = score, d, c, kind
             if best is not None:
                 return QPointF(best.x, best.y), True, guides, best_kind
 
@@ -1080,6 +1088,7 @@ class Canvas(QGraphicsView):
 
     def duplicate_selected(self) -> None:
         import copy
+        from leathercad.geometry import Vec2
         new_items = []
         self._suppress_commit = True
         for it in self.selected_items():
@@ -1090,11 +1099,26 @@ class Canvas(QGraphicsView):
                 from leathercad.shapes import _next_id
                 sh.shape_id = _next_id("shape")
                 new_items.append(self.add_shape(sh))
+            elif isinstance(it, HoleItem):
+                from leathercad.holes import _next_id as _next_hole_id
+                lh = copy.deepcopy(it.hole)
+                lh.point = Vec2(it.hole.point.x + 8, it.hole.point.y - 8)
+                lh.hole_id = _next_hole_id()
+                self.doc.holes.append(lh)
+                new_items.append(self._add_item(HoleItem(lh, self)))
+            elif isinstance(it, StitchLineItem):
+                from leathercad.stitchline import _next_id as _next_line_id
+                sl = copy.deepcopy(it.line)
+                sl.points = [Vec2(p.x + 8, p.y - 8) for p in it.line.points]
+                sl.line_id = _next_line_id()
+                self.doc.add_stitch_line(sl)
+                new_items.append(self._add_item(StitchLineItem(sl, self)))
         self._suppress_commit = False
         self.scene_obj.clearSelection()
         for it in new_items:
             it.setSelected(True)
         if new_items:
+            self.documentChangedSig.emit()
             self._emit_commit()
 
     def make_back_piece_selected(self) -> None:

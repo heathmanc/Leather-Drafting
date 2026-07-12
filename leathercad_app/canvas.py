@@ -39,6 +39,7 @@ class Canvas(QGraphicsView):
     documentChangedSig = Signal()
     toolFinished = Signal()
     cursorMoved = Signal(float, float)
+    commitRequested = Signal()   # a discrete edit finished -> push undo snapshot
 
     def __init__(self, document: Document):
         super().__init__()
@@ -63,6 +64,8 @@ class Canvas(QGraphicsView):
         self._start: Optional[QPointF] = None
         self._preview: Optional[QGraphicsPathItem] = None
         self._poly_pts: List[QPointF] = []
+        self._moved_during_press = False
+        self._suppress_commit = False
 
         self.scene_obj.selectionChanged.connect(self.selectionChangedSig)
 
@@ -139,6 +142,9 @@ class Canvas(QGraphicsView):
             event.accept()
             return
         super().mouseReleaseEvent(event)
+        if event.button() == Qt.LeftButton and self._moved_during_press:
+            self._moved_during_press = False
+            self._emit_commit()
 
     def mouseDoubleClickEvent(self, event):
         if self.tool in (POLYGON, STITCHLINE) and self._poly_pts:
@@ -263,6 +269,7 @@ class Canvas(QGraphicsView):
         self.scene_obj.clearSelection()
         item.setSelected(True)
         self.documentChangedSig.emit()
+        self._emit_commit()
         return item
 
     def add_stitch_line(self, line) -> StitchLineItem:
@@ -270,6 +277,7 @@ class Canvas(QGraphicsView):
         item = StitchLineItem(line, self)
         self.scene_obj.addItem(item)
         self.documentChangedSig.emit()
+        self._emit_commit()
         return item
 
     def selected_items(self):
@@ -285,10 +293,12 @@ class Canvas(QGraphicsView):
             self.scene_obj.removeItem(it)
         self.documentChangedSig.emit()
         self.selectionChangedSig.emit()
+        self._emit_commit()
 
     def duplicate_selected(self) -> None:
         import copy
         new_items = []
+        self._suppress_commit = True
         for it in self.selected_items():
             if isinstance(it, ShapeItem):
                 sh = copy.deepcopy(it.shape)
@@ -297,11 +307,80 @@ class Canvas(QGraphicsView):
                 from leathercad.shapes import _next_id
                 sh.shape_id = _next_id("shape")
                 new_items.append(self.add_shape(sh))
+        self._suppress_commit = False
         self.scene_obj.clearSelection()
         for it in new_items:
             it.setSelected(True)
+        if new_items:
+            self._emit_commit()
+
+    def _emit_commit(self) -> None:
+        if not self._suppress_commit:
+            self.commitRequested.emit()
+
+    # -- align / distribute --------------------------------------------
+    def _shape_items(self):
+        return [it for it in self.selected_items() if isinstance(it, ShapeItem)]
+
+    def align_selected(self, mode: str) -> None:
+        items = self._shape_items()
+        if len(items) < 2:
+            return
+        boxes = [(it, it.shape.bounds()) for it in items]
+        if mode in ("left", "hcenter", "right"):
+            if mode == "left":
+                target = min(b[0] for _, b in boxes)
+                for it, b in boxes:
+                    it.shape.transform.x += target - b[0]
+            elif mode == "right":
+                target = max(b[2] for _, b in boxes)
+                for it, b in boxes:
+                    it.shape.transform.x += target - b[2]
+            else:
+                target = sum((b[0] + b[2]) / 2 for _, b in boxes) / len(boxes)
+                for it, b in boxes:
+                    it.shape.transform.x += target - (b[0] + b[2]) / 2
+        else:  # top/vcenter/bottom
+            if mode == "bottom":
+                target = min(b[1] for _, b in boxes)
+                for it, b in boxes:
+                    it.shape.transform.y += target - b[1]
+            elif mode == "top":
+                target = max(b[3] for _, b in boxes)
+                for it, b in boxes:
+                    it.shape.transform.y += target - b[3]
+            else:
+                target = sum((b[1] + b[3]) / 2 for _, b in boxes) / len(boxes)
+                for it, b in boxes:
+                    it.shape.transform.y += target - (b[1] + b[3]) / 2
+        for it, _ in boxes:
+            it.sync_from_model()
+        self.documentChangedSig.emit()
+        self._emit_commit()
+
+    def distribute_selected(self, horizontal: bool) -> None:
+        items = self._shape_items()
+        if len(items) < 3:
+            return
+        def center(it):
+            b = it.shape.bounds()
+            return ((b[0] + b[2]) / 2) if horizontal else ((b[1] + b[3]) / 2)
+        items.sort(key=center)
+        lo, hi = center(items[0]), center(items[-1])
+        step = (hi - lo) / (len(items) - 1)
+        for i, it in enumerate(items[1:-1], start=1):
+            c = center(it)
+            target = lo + step * i
+            if horizontal:
+                it.shape.transform.x += target - c
+            else:
+                it.shape.transform.y += target - c
+            it.sync_from_model()
+        self.documentChangedSig.emit()
+        self._emit_commit()
 
     def item_moved(self, item) -> None:
+        self._moved_during_press = True
         self.documentChangedSig.emit()
 
     def selection_changed(self) -> None:

@@ -61,6 +61,51 @@ def test_add_and_delete_shape(qapp):
     assert len(win.doc.shapes) == 0
 
 
+def test_undo_redo(qapp):
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    for i in range(3):
+        win.canvas.add_shape(Rectangle(
+            width=40, height=30, transform=Transform(x=i * 60, y=0),
+            stitch=StitchSettings(pitch_mm=4.0, inset=3.0), layer="Cut"))
+    assert len(win.doc.shapes) == 3
+    win.undo()
+    win.undo()
+    assert len(win.doc.shapes) == 1
+    win.redo()
+    assert len(win.doc.shapes) == 2
+
+    # property-edit undo
+    item = win.canvas.add_shape(Rectangle(
+        width=40, height=30, stitch=StitchSettings(pitch_mm=4.0, inset=3.0),
+        layer="Cut"))
+    win.properties.show_selection([item])
+    win.properties.w.setValue(88.0)
+    win.properties.w.editingFinished.emit()
+    assert item.shape.width == 88.0
+    win.undo()
+    assert all(s.width != 88.0 for s in win.doc.shapes)
+
+
+def test_align_left(qapp):
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    for x in (0, 40, 90):
+        win.canvas.add_shape(Rectangle(
+            width=20, height=20, transform=Transform(x=x, y=0),
+            stitch=StitchSettings(pitch_mm=4.0, inset=3.0), layer="Cut"))
+    for it in win.canvas.scene_obj.items():
+        if hasattr(it, "shape"):
+            it.setSelected(True)
+    win.canvas.align_selected("left")
+    lefts = {round(it.shape.bounds()[0], 3) for it in win.canvas._shape_items()}
+    assert len(lefts) == 1
+
+
 def test_export_from_document(qapp, tmp_path):
     from leathercad_app.mainwindow import MainWindow
     from leathercad.document import Document

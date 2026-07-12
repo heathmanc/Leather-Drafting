@@ -31,6 +31,8 @@ def _spin(lo, hi, step=1.0, decimals=2, suffix=" mm") -> QDoubleSpinBox:
 
 
 class PropertiesPanel(QWidget):
+    committed = Signal()   # a discrete edit finished -> caller pushes undo state
+
     def __init__(self, canvas):
         super().__init__()
         self.canvas = canvas
@@ -130,18 +132,20 @@ class PropertiesPanel(QWidget):
         root.addWidget(self.readout)
         root.addStretch(1)
 
-        # wire up
+        # wire up: valueChanged does live preview; editingFinished commits undo
         for wdg in (self.pos_x, self.pos_y, self.rot, self.w, self.h,
                     self.corner, self.rx, self.ry, self.poly_radius,
                     self.pitch, self.inset, self.hole_dia, self.slit_len,
                     self.slit_angle):
             wdg.valueChanged.connect(self._apply)
-        self.mirror.stateChanged.connect(self._apply)
+            wdg.editingFinished.connect(self._commit)
+        self.mirror.stateChanged.connect(self._apply_commit)
         self.opacity.valueChanged.connect(self._apply)
-        self.layer_combo.currentIndexChanged.connect(self._apply)
-        self.fit.currentIndexChanged.connect(self._apply)
-        self.hole_style.currentIndexChanged.connect(self._apply)
-        self.g_stitch.toggled.connect(self._apply)
+        self.opacity.sliderReleased.connect(self._commit)
+        self.layer_combo.currentIndexChanged.connect(self._apply_commit)
+        self.fit.currentIndexChanged.connect(self._apply_commit)
+        self.hole_style.currentIndexChanged.connect(self._apply_commit)
+        self.g_stitch.toggled.connect(self._apply_commit)
         self.iron.currentIndexChanged.connect(self._on_iron)
 
     # -- selection ------------------------------------------------------
@@ -242,6 +246,15 @@ class PropertiesPanel(QWidget):
             self.pitch.setValue(PRESETS[key].pitch_mm)
             self._loading = False
             self._apply()
+            self._commit()
+
+    def _commit(self):
+        if not self._loading and self._item is not None:
+            self.committed.emit()
+
+    def _apply_commit(self):
+        self._apply()
+        self._commit()
 
     # -- apply ----------------------------------------------------------
     def _apply(self):
@@ -318,6 +331,7 @@ class PropertiesPanel(QWidget):
 # ---------------------------------------------------------------------------
 class LayersPanel(QWidget):
     currentLayerChanged = Signal(str)
+    committed = Signal()
 
     def __init__(self, canvas):
         super().__init__()
@@ -388,6 +402,7 @@ class LayersPanel(QWidget):
         n = len(self.canvas.doc.layers) + 1
         self.canvas.doc.add_layer(Layer(f"Layer {n}", "#cc00cc", CUT))
         self.reload()
+        self.committed.emit()
 
     def _pick_color(self):
         lyr = self.current_layer()
@@ -398,16 +413,20 @@ class LayersPanel(QWidget):
             lyr.color = c.name()
             self.canvas.refresh_all()
             self.reload()
+            self.committed.emit()
 
     def _toggle_vis(self):
         lyr = self.current_layer()
         if not lyr:
             return
         lyr.visible = not lyr.visible
+        self.canvas.refresh_all()
         self.reload()
+        self.committed.emit()
 
     def _role_changed(self):
         lyr = self.current_layer()
         if lyr:
             lyr.role = self.role.currentText()
             self.reload()
+            self.committed.emit()

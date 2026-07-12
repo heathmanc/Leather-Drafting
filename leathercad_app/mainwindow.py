@@ -17,6 +17,7 @@ from leathercad import export
 from . import canvas as canvas_mod
 from .canvas import Canvas
 from .panels import PropertiesPanel, LayersPanel
+from .history import History
 
 
 TOOLS = [
@@ -54,10 +55,16 @@ class MainWindow(QMainWindow):
         self.canvas.documentChangedSig.connect(self._document_changed)
         self.canvas.toolFinished.connect(lambda: self._select_tool_action(0))
         self.canvas.cursorMoved.connect(self._cursor_moved)
+        self.canvas.commitRequested.connect(self.commit)
+        self.properties.committed.connect(self.commit)
+        self.layers.committed.connect(self.commit)
         self.layers.currentLayerChanged.connect(self._layer_changed)
 
         # Build canvas items for any shapes already in the document.
         self.canvas.rebuild()
+        self.history = History()
+        self.history.reset(self.doc.to_dict())
+        self._update_undo_actions()
         self._update_title()
 
     # -- UI construction ------------------------------------------------
@@ -120,9 +127,26 @@ class MainWindow(QMainWindow):
         self._add(fm, "Quit", "Ctrl+Q", self.close)
 
         em = m.addMenu("&Edit")
+        self.act_undo = self._add(em, "Undo", "Ctrl+Z", self.undo)
+        self.act_redo = self._add(em, "Redo", "Ctrl+Shift+Z", self.redo)
+        em.addSeparator()
         self._add(em, "Duplicate", "Ctrl+D", self.canvas.duplicate_selected)
         self._add(em, "Delete", None, self.canvas.delete_selected)
         self._add(em, "Select all", "Ctrl+A", self._select_all)
+
+        am = m.addMenu("&Arrange")
+        self._add(am, "Align left", None, lambda: self.canvas.align_selected("left"))
+        self._add(am, "Align centre", None, lambda: self.canvas.align_selected("hcenter"))
+        self._add(am, "Align right", None, lambda: self.canvas.align_selected("right"))
+        am.addSeparator()
+        self._add(am, "Align top", None, lambda: self.canvas.align_selected("top"))
+        self._add(am, "Align middle", None, lambda: self.canvas.align_selected("vcenter"))
+        self._add(am, "Align bottom", None, lambda: self.canvas.align_selected("bottom"))
+        am.addSeparator()
+        self._add(am, "Distribute horizontally", None,
+                  lambda: self.canvas.distribute_selected(True))
+        self._add(am, "Distribute vertically", None,
+                  lambda: self.canvas.distribute_selected(False))
 
         vm = m.addMenu("&View")
         self._add(vm, "Fit to content", "F", self.canvas.fit_to_content)
@@ -165,6 +189,37 @@ class MainWindow(QMainWindow):
     def _layer_changed(self, name):
         self.canvas._current_layer = name
 
+    # -- undo / redo ----------------------------------------------------
+    def commit(self):
+        self.history.push(self.doc.to_dict())
+        self._update_undo_actions()
+
+    def undo(self):
+        state = self.history.undo()
+        if state is not None:
+            self._load_state(state)
+
+    def redo(self):
+        state = self.history.redo()
+        if state is not None:
+            self._load_state(state)
+
+    def _load_state(self, state):
+        self.doc = Document.from_dict(state)
+        self.canvas.doc = self.doc
+        self.canvas.rebuild()
+        self.layers.canvas = self.canvas
+        self.layers.reload()
+        self.properties.set_layers(self.doc.layers)
+        self.properties.show_selection([])
+        self._update_undo_actions()
+        self.sb_holes.setText(f"{self.canvas.total_holes()} holes")
+
+    def _update_undo_actions(self):
+        if hasattr(self, "act_undo"):
+            self.act_undo.setEnabled(self.history.can_undo())
+            self.act_redo.setEnabled(self.history.can_redo())
+
     def _select_all(self):
         for it in self.canvas.scene_obj.items():
             it.setSelected(True)
@@ -182,6 +237,8 @@ class MainWindow(QMainWindow):
         self.layers.canvas = self.canvas
         self.layers.reload()
         self.properties.set_layers(self.doc.layers)
+        self.history.reset(self.doc.to_dict())
+        self._update_undo_actions()
         self._update_title()
 
     def open_document(self):
@@ -200,6 +257,8 @@ class MainWindow(QMainWindow):
         self.layers.reload()
         self.properties.set_layers(self.doc.layers)
         self.canvas.fit_to_content()
+        self.history.reset(self.doc.to_dict())
+        self._update_undo_actions()
         self._update_title()
 
     def save_document(self):

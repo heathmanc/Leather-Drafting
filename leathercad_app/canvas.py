@@ -152,6 +152,7 @@ class Canvas(QGraphicsView):
     selectionChangedSig = Signal()
     documentChangedSig = Signal()
     toolFinished = Signal()
+    requestSelectTool = Signal()  # Esc with nothing in progress -> pointer
     cursorMoved = Signal(float, float)
     commitRequested = Signal()   # a discrete edit finished -> push undo snapshot
     statusMessage = Signal(str)  # transient hint (live dimensions while drawing)
@@ -622,6 +623,9 @@ class Canvas(QGraphicsView):
         pos = raw
         if self.tool != SELECT:
             pos, _v = self.snap(pos)
+            if (event.modifiers() & Qt.ShiftModifier and self._start is not None
+                    and self.tool in (LINE, CONSTRUCTION)):
+                pos = self._apply_ortho(self._start, raw)
         if self.tool == SELECT:
             return super().mousePressEvent(event)
         if event.button() == Qt.LeftButton:
@@ -653,6 +657,17 @@ class Canvas(QGraphicsView):
                 self._update_poly_preview(pos)
         event.accept()
 
+    def _apply_ortho(self, start: QPointF, pos: QPointF) -> QPointF:
+        """Constrain ``pos`` to a 0 / 45 / 90 degree ray from ``start`` (Shift)."""
+        dx, dy = pos.x() - start.x(), pos.y() - start.y()
+        length = (dx * dx + dy * dy) ** 0.5
+        if length < 1e-9:
+            return pos
+        step = math.pi / 4.0
+        ang = round(math.atan2(dy, dx) / step) * step
+        return QPointF(start.x() + length * math.cos(ang),
+                       start.y() + length * math.sin(ang))
+
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.MiddleButton and hasattr(self, "_pan_last"):
             delta = event.position() - self._pan_last
@@ -669,6 +684,10 @@ class Canvas(QGraphicsView):
         pos = raw
         if self.tool != SELECT:
             pos, vtx, guides, kind = self._smart_snap(raw)
+            if (event.modifiers() & Qt.ShiftModifier and self._start is not None
+                    and self.tool in (LINE, CONSTRUCTION)):
+                pos = self._apply_ortho(self._start, raw)   # 0/45/90 line
+                guides, kind = [], None
             self._show_align_guides(guides)
             self._show_snap_nodes(raw)
             self._show_snap_marker(pos, kind)
@@ -803,6 +822,10 @@ class Canvas(QGraphicsView):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
+            # Esc cancels whatever is in progress; a second Esc (nothing in
+            # progress) drops back to the pointer/Select tool.
+            busy = (bool(self._poly_pts) or self._start is not None
+                    or bool(self._handles))
             self._cancel_poly()
             self.clear_vertex_handles()
             if self._start is not None:      # cancel an in-progress click-draw
@@ -810,6 +833,8 @@ class Canvas(QGraphicsView):
                 self._clear_preview()
                 self._hide_snap_marker()
                 self.statusMessage.emit("")
+            if not busy and self.tool != SELECT:
+                self.requestSelectTool.emit()
         elif event.key() in (Qt.Key_Return, Qt.Key_Enter):
             if self._poly_pts:
                 self._finalize_poly()

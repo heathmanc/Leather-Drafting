@@ -72,6 +72,7 @@ class MainWindow(QMainWindow):
         self.canvas.selectionChangedSig.connect(self._selection_changed)
         self.canvas.documentChangedSig.connect(self._document_changed)
         self.canvas.toolFinished.connect(self._tool_finished)
+        self.canvas.requestSelectTool.connect(lambda: self._select_tool_action(0))
         self.canvas.cursorMoved.connect(self._cursor_moved)
         self.canvas.statusMessage.connect(self.sb_dims.setText)
         self.canvas.commitRequested.connect(self.commit)

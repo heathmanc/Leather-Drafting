@@ -90,7 +90,7 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 |---|---|
 | **Draw** | Rectangle `R`, Rounded rect `O`, Ellipse `E`, Circle `C`, Polygon `P` (click points, double-click to finish), Line `L` (2-point) |
 | **Construction line** | `G` — a dashed guide you drag out; it's a snap/alignment reference only, never cut or exported |
-| **Drawing style** | **every drawing tool places points by clicking** — no click-and-hold. Two-point tools (rect, rounded, ellipse, circle, slot, line, construction) take two clicks; polygon / seam / score take clicks then a double-click (or `Enter`); hole is one click. Prefer press-drag-release for the two-point tools? Toggle **View → Drag to draw** (remembered between sessions). `Esc` cancels a point you're mid-placing |
+| **Drawing style** | **every drawing tool places points by clicking** — no click-and-hold. Two-point tools (rect, rounded, ellipse, circle, slot, line, construction) take two clicks; polygon / seam / score take clicks then a double-click (or `Enter`); hole is one click. Prefer press-drag-release for the two-point tools? Toggle **View → Drag to draw** (remembered between sessions). Hold **Shift** while placing a line to lock it to **0° / 45° / 90°**. `Esc` cancels a point you're mid-placing; press `Esc` again (nothing in progress) to drop back to the pointer |
 | **Holes / slots / fold lines** | Hole `H` (hardware), Slot `T` (stadium), Score line `K` (fold/skive on the Score layer) |
 | **Seam** | Stitch line `M` — a shared seam for cross-piece registration |
 | **Select / move** | `S` — drag to move, drag one piece over another to check fit |

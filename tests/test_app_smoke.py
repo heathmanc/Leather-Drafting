@@ -1073,6 +1073,37 @@ def test_line_node_has_ortho_reference(qapp):
     assert (round(r.x()), round(r.y())) == (0, 40)  # mostly vertical -> x locks
 
 
+def test_shift_ortho_while_drawing(qapp):
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+
+    c = MainWindow(Document()).canvas
+    # from the origin, a mostly-horizontal cursor is forced flat (0 deg)
+    r = c._apply_ortho(QPointF(0, 0), QPointF(30, 8))
+    assert round(r.x(), 1) == 31.0 and round(r.y(), 1) == 0.0
+    # mostly-vertical -> 90 deg; diagonal -> 45 deg
+    r = c._apply_ortho(QPointF(0, 0), QPointF(8, 30))
+    assert round(r.x(), 1) == 0.0 and round(r.y(), 1) == 31.0
+    r = c._apply_ortho(QPointF(0, 0), QPointF(20, 22))
+    assert round(r.x(), 1) == round(r.y(), 1)
+
+
+def test_escape_returns_to_pointer(qapp):
+    from PySide6.QtCore import Qt, QEvent
+    from PySide6.QtGui import QKeyEvent
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.tool = cm.RECT
+    # nothing in progress: Esc drops back to the pointer / Select tool
+    c.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
+    assert c.tool == cm.SELECT
+
+
 def test_line_length_and_angle_field(qapp):
     import math
     from leathercad_app.mainwindow import MainWindow

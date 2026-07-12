@@ -1049,6 +1049,55 @@ def test_split_midpoints_from_intersection(qapp):
     assert (round(p.x(), 1), round(p.y(), 1)) == (2.5, 0.0) and kind == "mid"
 
 
+def test_junction_midpoint_snaps_from_far_along_the_sub_segment(qapp):
+    # A construction line crossing a regular line makes a junction; the midpoint
+    # of each sub-segment must be snappable even when you hover on it far from
+    # the crossing (the crossing line is out of the cursor radius there).
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.shapes import PathShape
+    from leathercad.geometry import Vec2
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.add_shape(PathShape(points=[Vec2(0, 0), Vec2(100, 0)], close_path=False,
+                          transform=Transform(x=0, y=0), layer="Cut"))
+    cline = PathShape(points=[Vec2(40, -30), Vec2(40, 30)], close_path=False,
+                      transform=Transform(x=0, y=0), layer="Score")
+    cline.construction = True
+    c.add_shape(cline)
+    c.snap_to_nodes, c.snap_to_grid = True, False
+    # hover on the (0..40) sub-segment midpoint (20,0) -- 20 mm from the guide
+    p, vtx, guides, kind = c._smart_snap(QPointF(20.4, 0.3))
+    assert (round(p.x(), 1), round(p.y(), 1)) == (20.0, 0.0) and kind == "mid"
+
+
+def test_construction_line_body_snaps(qapp):
+    # A diagonal construction/guide line is snappable anywhere along its body
+    # (the "nearest point on line" osnap), not just at its end/mid nodes.
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.shapes import PathShape, Rectangle
+    from leathercad.geometry import Vec2
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    cline = PathShape(points=[Vec2(0, 0), Vec2(100, 100)], close_path=False,
+                      transform=Transform(x=0, y=0), layer="Score")
+    cline.construction = True
+    c.add_shape(cline)
+    # a solid closed shape must NOT get body-snapping on its edges
+    c.add_shape(Rectangle(width=40, height=30, transform=Transform(x=200, y=200)))
+    c.snap_to_nodes, c.snap_to_grid = True, False
+    p, vtx, guides, kind = c._smart_snap(QPointF(31, 29))     # off the diagonal
+    assert kind == "edge" and abs(p.x() - p.y()) < 1e-6       # foot lands on y=x
+    # the rectangle's plain body should not snap as "edge"
+    p2, _v, _g, k2 = c._smart_snap(QPointF(212, 214))
+    assert k2 != "edge"
+
+
 def test_node_shift_ortho_locks_movement_from_drag_start(qapp):
     # Shift while dragging a node locks its MOVEMENT to 0/45/90 from where the
     # drag began (like the drawing tools) -- so an endpoint that starts well off

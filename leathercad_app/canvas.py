@@ -58,7 +58,7 @@ _POLY_TOOLS = (POLYGON, STITCHLINE, SCORE)
 
 _SNAP_LABEL = {"center": "centre", "end": "endpoint", "mid": "midpoint",
                "quad": "quadrant", "hole": "hole centre", "cross": "intersection",
-               "align": "aligned", "grid": ""}
+               "align": "aligned", "grid": "", "edge": "on line"}
 
 
 def _rev(seg):
@@ -307,6 +307,13 @@ class Canvas(QGraphicsView):
             if best is not None:
                 return QPointF(best.x, best.y), True, guides, best_kind
 
+            # 1b. snap onto the body of a nearby construction/guide line -- the
+            # "nearest point on line" osnap, so a diagonal guide is snappable
+            # along its whole length, not just at its end/mid nodes.
+            foot = self._nearest_on_guide(near, thr)
+            if foot is not None:
+                return QPointF(foot.x, foot.y), True, guides, "edge"
+
             # 2. alignment snap: lock x and/or y to an aligned KEY point (ends /
             # centres / midpoints) that's reasonably close -- not every stitch
             # hole or intersection, which would put guides everywhere.
@@ -352,11 +359,62 @@ class Canvas(QGraphicsView):
             elif isinstance(it, HoleItem):
                 out.append((it.hole.point, "center"))
         edges = self._edges_near(near, radius)
+        all_edges = self._all_edges()
         out.extend((x, "cross")
                    for x in self._intersection_candidates(edges, near, radius))
         out.extend((p, "mid")
-                   for p in self._split_midpoints(edges, near, radius))
+                   for p in self._split_midpoints(edges, all_edges, near, radius))
         return out
+
+    def _all_edges(self):
+        """Every outline segment (a, b, owner) in the scene -- used as cutters so
+        an edge is split at ALL its junctions even when the crossing line is far
+        from the cursor. Bounded so a very busy scene stays responsive."""
+        edges = []
+        for it in self.scene_obj.items():
+            poly = None
+            if isinstance(it, ShapeItem):
+                poly = [Vec2(p.x, p.y) for p in it.model.world_polyline()[0]]
+            elif isinstance(it, StitchLineItem):
+                poly = [Vec2(p.x, p.y) for p in it.line.points]
+            if not poly or len(poly) < 2:
+                continue
+            owner = id(it)
+            for k in range(len(poly) - 1):
+                edges.append((poly[k], poly[k + 1], owner))
+            if len(edges) > 4000:
+                break
+        return edges
+
+    def _nearest_on_guide(self, near: Vec2, radius: float):
+        """Nearest point on a construction line or open guide line within
+        ``radius`` (the 'nearest' osnap). Skips closed shape outlines so it
+        doesn't fire all over solid pieces -- only guides/lines."""
+        best, best_d = None, radius
+        for it in self.scene_obj.items():
+            if isinstance(it, ShapeItem):
+                m = it.model
+                is_guide = getattr(m, "construction", False) or (
+                    isinstance(m, PathShape) and not getattr(m, "close_path", False))
+                if not is_guide:
+                    continue
+                poly = [Vec2(p.x, p.y) for p in m.world_polyline()[0]]
+            elif isinstance(it, StitchLineItem):
+                poly = [Vec2(p.x, p.y) for p in it.line.points]
+            else:
+                continue
+            for k in range(len(poly) - 1):
+                a, b = poly[k], poly[k + 1]
+                ab = b - a
+                d2 = ab.length_sq()
+                if d2 <= 1e-12:
+                    continue
+                t = max(0.0, min(1.0, (near - a).dot(ab) / d2))
+                foot = a.lerp(b, t)
+                d = (foot - near).length()
+                if d < best_d:
+                    best_d, best = d, foot
+        return best
 
     def _edges_near(self, near: Vec2, radius: float):
         """Outline edges (a, b, owner) within ``radius`` of ``near``."""
@@ -390,9 +448,11 @@ class Canvas(QGraphicsView):
                     out.append(x)
         return out
 
-    def _split_midpoints(self, edges, near: Vec2, radius: float):
-        """Midpoints of the pieces an edge is cut into by other outlines --
-        e.g. a line bisected at its centre gives you the 1/4 and 3/4 points."""
+    def _split_midpoints(self, edges, cutters, near: Vec2, radius: float):
+        """Midpoints of the pieces an edge (near the cursor) is cut into by every
+        other outline in the scene -- e.g. a line bisected by a construction line
+        gives you the 1/4 and 3/4 points, snappable even when you hover on the
+        sub-segment far from the crossing (the junctions are real 'nodes')."""
         from leathercad.trim import _seg_intersect
         out = []
         for a, b, owner in edges:
@@ -401,7 +461,7 @@ class Canvas(QGraphicsView):
             if length2 <= 1e-12:
                 continue
             ts = [0.0, 1.0]
-            for c, d, o2 in edges:
+            for c, d, o2 in cutters:
                 if o2 == owner:
                     continue
                 x = _seg_intersect(a, b, c, d)

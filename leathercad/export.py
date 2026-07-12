@@ -33,6 +33,9 @@ def collect(doc: Document):
     stitches: List[Tuple[StitchResult, object, str]] = []
     stitch_color = _layer_color(doc, "Stitch", "#0066ff")
 
+    from .stitching import Hole
+    from .stitchsettings import StitchSettings
+
     for sh in doc.shapes:
         lyr = doc.layer(sh.layer)
         if lyr is not None and not lyr.visible:
@@ -40,7 +43,13 @@ def collect(doc: Document):
         color = lyr.color if lyr else "#ff0000"
         pts, corners, closed = sh.world_polyline()
         outlines.append((pts, color))
-        if sh.stitch and sh.stitch.enabled:
+        if sh.baked_holes:
+            # grouped/baked holes: local -> world, styled by the shape's stitch
+            style = sh.stitch or StitchSettings()
+            world = [Hole(sh.transform.apply(h.point),
+                          sh.transform.apply_dir(h.tangent)) for h in sh.baked_holes]
+            stitches.append((StitchResult(holes=world), style, stitch_color))
+        elif sh.stitch and sh.stitch.enabled:
             res = stitch_polyline(pts, corners, closed, sh.stitch)
             stitches.append((res, sh.stitch, stitch_color))
 
@@ -49,10 +58,10 @@ def collect(doc: Document):
         if res.count:
             stitches.append((res, sl.settings, stitch_color))
 
-    for hg in getattr(doc, "hole_groups", []):
-        if hg.count:
-            res = StitchResult(holes=list(hg.holes))
-            stitches.append((res, hg, stitch_color))  # hg has hole_* fields
+    # individual (ungrouped) holes
+    for h in getattr(doc, "holes", []):
+        res = StitchResult(holes=[Hole(h.point, h.tangent)])
+        stitches.append((res, h, stitch_color))  # LooseHole has hole_* fields
     return outlines, stitches
 
 

@@ -16,7 +16,7 @@ from .shapes import (Shape, Rectangle, Ellipse, Circle, Polygon, PathShape,
                      Transform)
 from .stitchsettings import StitchSettings
 from .stitchline import StitchLine
-from .holegroup import HoleGroup
+from .holes import LooseHole
 from .stitching import Hole
 
 
@@ -71,7 +71,17 @@ def _shape_to_dict(sh: Shape) -> dict:
     elif isinstance(sh, PathShape):
         base.update(points=[[p.x, p.y] for p in sh.points],
                     close_path=sh.close_path)
+    if sh.baked_holes:
+        base["baked_holes"] = [[h.point.x, h.point.y, h.tangent.x, h.tangent.y]
+                               for h in sh.baked_holes]
     return base
+
+
+def _apply_baked(sh: Shape, d: dict) -> Shape:
+    if d.get("baked_holes"):
+        sh.baked_holes = [Hole(Vec2(x, y), Vec2(tx, ty))
+                          for x, y, tx, ty in d["baked_holes"]]
+    return sh
 
 
 def _shape_from_dict(d: dict) -> Shape:
@@ -86,52 +96,47 @@ def _shape_from_dict(d: dict) -> Shape:
     if "shape_id" in d:
         common["shape_id"] = d["shape_id"]
     if kind == "rectangle":
-        return Rectangle(width=d.get("width", 50), height=d.get("height", 30),
-                         corner_radius=d.get("corner_radius", 0.0), **common)
-    if kind == "circle":
-        return Circle(rx=d.get("rx", 20), ry=d.get("ry", d.get("rx", 20)), **common)
-    if kind == "ellipse":
-        return Ellipse(rx=d.get("rx", 25), ry=d.get("ry", 15), **common)
-    if kind == "polygon":
+        sh = Rectangle(width=d.get("width", 50), height=d.get("height", 30),
+                       corner_radius=d.get("corner_radius", 0.0), **common)
+    elif kind == "circle":
+        sh = Circle(rx=d.get("rx", 20), ry=d.get("ry", d.get("rx", 20)), **common)
+    elif kind == "ellipse":
+        sh = Ellipse(rx=d.get("rx", 25), ry=d.get("ry", 15), **common)
+    elif kind == "polygon":
         pts = [Vec2(x, y) for x, y in d.get("points", [])]
-        return Polygon(points=pts, corner_radius=d.get("corner_radius", 0.0),
-                       close_path=d.get("close_path", True),
-                       sharp_corners=d.get("sharp_corners", True), **common)
-    if kind == "path":
+        sh = Polygon(points=pts, corner_radius=d.get("corner_radius", 0.0),
+                     close_path=d.get("close_path", True),
+                     sharp_corners=d.get("sharp_corners", True), **common)
+    elif kind == "path":
         pts = [Vec2(x, y) for x, y in d.get("points", [])]
-        return PathShape(points=pts, close_path=d.get("close_path", False),
-                         **common)
-    raise ValueError(f"unknown shape kind {kind!r}")
+        sh = PathShape(points=pts, close_path=d.get("close_path", False), **common)
+    else:
+        raise ValueError(f"unknown shape kind {kind!r}")
+    return _apply_baked(sh, d)
 
 
-def _holegroup_to_dict(hg: HoleGroup) -> dict:
+def _hole_to_dict(h: LooseHole) -> dict:
     return {
-        "holes": [[h.point.x, h.point.y, h.tangent.x, h.tangent.y]
-                  for h in hg.holes],
-        "hole_style": hg.hole_style,
-        "hole_diameter": hg.hole_diameter,
-        "slit_length": hg.slit_length,
-        "slit_angle": hg.slit_angle,
-        "layer": hg.layer,
-        "name": hg.name,
-        "group_id": hg.group_id,
+        "point": [h.point.x, h.point.y],
+        "tangent": [h.tangent.x, h.tangent.y],
+        "hole_style": h.hole_style,
+        "hole_diameter": h.hole_diameter,
+        "slit_length": h.slit_length,
+        "slit_angle": h.slit_angle,
+        "layer": h.layer,
     }
 
 
-def _holegroup_from_dict(d: dict) -> HoleGroup:
-    hg = HoleGroup(
-        holes=[Hole(Vec2(x, y), Vec2(tx, ty))
-               for x, y, tx, ty in d.get("holes", [])],
+def _hole_from_dict(d: dict) -> LooseHole:
+    return LooseHole(
+        point=Vec2(*d.get("point", [0, 0])),
+        tangent=Vec2(*d.get("tangent", [1, 0])),
         hole_style=d.get("hole_style", "round"),
         hole_diameter=d.get("hole_diameter", 1.0),
         slit_length=d.get("slit_length", 1.6),
         slit_angle=d.get("slit_angle", 30.0),
         layer=d.get("layer", "Stitch"),
-        name=d.get("name", ""),
     )
-    if "group_id" in d:
-        hg.group_id = d["group_id"]
-    return hg
 
 
 def _stitchline_to_dict(sl: StitchLine) -> dict:
@@ -170,7 +175,7 @@ class Document:
         self.layers: List[Layer] = default_layers()
         self.shapes: List[Shape] = []
         self.stitch_lines: List[StitchLine] = []
-        self.hole_groups: List[HoleGroup] = []
+        self.holes: List[LooseHole] = []   # individual, ungrouped holes
 
     # -- collection helpers --------------------------------------------
     def add_shape(self, shape: Shape) -> Shape:
@@ -189,13 +194,13 @@ class Document:
         if line in self.stitch_lines:
             self.stitch_lines.remove(line)
 
-    def add_hole_group(self, group: HoleGroup) -> HoleGroup:
-        self.hole_groups.append(group)
-        return group
+    def add_hole(self, hole: LooseHole) -> LooseHole:
+        self.holes.append(hole)
+        return hole
 
-    def remove_hole_group(self, group: HoleGroup) -> None:
-        if group in self.hole_groups:
-            self.hole_groups.remove(group)
+    def remove_hole(self, hole: LooseHole) -> None:
+        if hole in self.holes:
+            self.holes.remove(hole)
 
     def layer(self, name: str) -> Optional[Layer]:
         for lyr in self.layers:
@@ -216,7 +221,7 @@ class Document:
             "layers": [lyr.to_dict() for lyr in self.layers],
             "shapes": [_shape_to_dict(s) for s in self.shapes],
             "stitch_lines": [_stitchline_to_dict(sl) for sl in self.stitch_lines],
-            "hole_groups": [_holegroup_to_dict(hg) for hg in self.hole_groups],
+            "holes": [_hole_to_dict(h) for h in self.holes],
         }
 
     @classmethod
@@ -228,8 +233,7 @@ class Document:
         doc.shapes = [_shape_from_dict(x) for x in d.get("shapes", [])]
         doc.stitch_lines = [_stitchline_from_dict(x)
                             for x in d.get("stitch_lines", [])]
-        doc.hole_groups = [_holegroup_from_dict(x)
-                           for x in d.get("hole_groups", [])]
+        doc.holes = [_hole_from_dict(x) for x in d.get("holes", [])]
         return doc
 
     def save(self, path: str) -> None:

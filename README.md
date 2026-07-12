@@ -79,7 +79,8 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Snapping** | toolbar *Snap* toggle + grid size; snaps to grid and to other shapes' corners while drawing and moving |
 | **Exact sizes** | live W×H shown while dragging; after drawing, the size field is focused so you can type an exact value |
 | **Edit vertices** | double-click a polygon or seam to drag its points |
-| **Ungroup stitching** | bake a shape's holes so you can delete individual ones (below) |
+| **Group / ungroup holes** | right-click (or `Ctrl+G` / `Ctrl+Shift+G`) — ungroup to delete individual holes (below) |
+| **Right-click menu** | Group / Ungroup / Duplicate / Delete on the selection |
 | **Radius corners** | select a rectangle/polygon, set *Corner radius* in Properties |
 | **Iron & holes** | per shape: pick an iron (mm or SPI), inset, round or slanted-slit holes, single or **double row** (saddle stitch) + backstitch, live hole count + spacing readout |
 | **Layers → laser jobs** | colour-coded Cut / Score / Engrave / Stitch layers with visibility |
@@ -92,23 +93,26 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 
 Everything is in **millimetres**, Y-up, and the canvas is WYSIWYG with the export.
 
-### Removing individual holes (ungroup / bake)
+### Group / ungroup holes (removing individual ones)
 
 By default a shape's holes are *computed* from its stitch settings, so they stay
-evenly spaced when you change the iron or resize — but that also means the engine
-would redistribute them if you tried to delete one. When you want to hand-remove
-specific holes (say, to clear a spot for a rivet), select the shape and hit
-**Ungroup stitching**. That **bakes** the current holes into an independent set
-and turns the shape's auto-spacing off, so:
+evenly spaced when you change the iron or resize — but that means the engine
+would redistribute them if you deleted one. To hand-edit holes (say, to clear a
+spot for a rivet):
 
-- the holes are now plain data — deleting one leaves a gap, nothing reflows;
-- the shape's Stitching box no longer governs them (no accidental redistribute).
+- **Ungroup** (right-click → *Ungroup stitching*, or `Ctrl+Shift+G`) explodes the
+  shape's holes into **individual holes** and turns its auto-spacing off. Each
+  hole is now an ordinary object — **click one to select it** (rubber-band to
+  select many), drag to nudge, press **Delete** to remove. Nothing reflows; the
+  gap stays exactly where you made it.
+- **Group** (right-click → *Group holes into shape*, or `Ctrl+G`) does the
+  reverse: select a shape **and** the loose holes, and they get baked back into
+  the shape so they move and rotate with it as one unit — still without
+  redistribution.
 
-Then **double-click the baked holes** to edit them: each hole gets a small
-handle — click (or rubber-band) to select, press **Delete** to remove. The gap
-stays exactly where you made it.
+Right-click anywhere for the context menu (Group / Ungroup / Duplicate / Delete).
 
-![ungroup and delete individual holes](docs/ungroup.png)
+![ungroup to individual selectable holes](docs/individual_holes.png)
 
 ## Scripting API (no GUI needed)
 
@@ -189,7 +193,8 @@ examples/  tests/  docs/
 - [x] Edit polygon/seam vertices; add holes / slots / skive (score) lines
 - [x] Two-row saddle stitch + backstitch markers
 - [x] Left tool palette (draggable / floatable / pinnable, layout remembered)
-- [x] Ungroup/bake stitching → delete individual holes without redistribution
+- [x] Group / ungroup holes (individual selectable holes; group back to a shape)
+- [x] Right-click context menu (group / ungroup / duplicate / delete)
 - [ ] Boolean ops (windows, cut-outs) and true seam-allowance offset
 - [ ] Alignment guides (smart snapping lines) while dragging
 - [ ] Import reference images / trace an existing pattern

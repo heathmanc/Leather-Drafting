@@ -129,21 +129,31 @@ def test_export_svg_and_dxf(tmp_path):
     assert "SECTION" in dxf_txt and "CIRCLE" in dxf_txt and "EOF" in dxf_txt
 
 
-def test_hole_group_roundtrip(tmp_path):
-    from leathercad import HoleGroup
-    from leathercad.stitching import Hole
+def test_loose_holes_roundtrip(tmp_path):
+    from leathercad import LooseHole
     doc = Document("t")
-    hg = HoleGroup(holes=[Hole(Vec2(0, 0), Vec2(1, 0)),
-                          Hole(Vec2(5, 0), Vec2(1, 0))],
-                   hole_style="slit", slit_angle=25.0)
-    doc.add_hole_group(hg)
-    p = tmp_path / "hg.json"
+    doc.add_hole(LooseHole(point=Vec2(0, 0), tangent=Vec2(1, 0)))
+    doc.add_hole(LooseHole(point=Vec2(5, 0), hole_style="slit", slit_angle=25.0))
+    p = tmp_path / "holes.json"
     doc.save(str(p))
     doc2 = Document.load(str(p))
-    assert len(doc2.hole_groups) == 1
-    g = doc2.hole_groups[0]
-    assert g.count == 2 and g.hole_style == "slit"
-    assert abs(g.holes[1].point.x - 5.0) < 1e-9
+    assert len(doc2.holes) == 2
+    assert abs(doc2.holes[1].point.x - 5.0) < 1e-9
+    assert doc2.holes[1].hole_style == "slit"
+
+
+def test_baked_holes_on_shape_roundtrip(tmp_path):
+    from leathercad.stitching import Hole
+    doc = Document("t")
+    r = Rectangle(width=40, height=30, transform=Transform(x=10, y=5))
+    r.baked_holes = [Hole(Vec2(-5, -5), Vec2(1, 0)), Hole(Vec2(5, 5), Vec2(1, 0))]
+    doc.add_shape(r)
+    p = tmp_path / "baked.json"
+    doc.save(str(p))
+    doc2 = Document.load(str(p))
+    assert doc2.shapes[0].baked_holes is not None
+    assert len(doc2.shapes[0].baked_holes) == 2
+    assert abs(doc2.shapes[0].baked_holes[0].point.x - (-5)) < 1e-9
 
 
 def test_two_row_saddle_stitch():

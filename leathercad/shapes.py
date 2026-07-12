@@ -45,9 +45,13 @@ class Transform:
     def inverse_apply(self, p: Vec2) -> Vec2:
         """World point -> local point (inverse of ``apply``)."""
         q = Vec2(p.x - self.x, p.y - self.y)
+        return self.inverse_apply_dir(q)
+
+    def inverse_apply_dir(self, d: Vec2) -> Vec2:
+        """World direction -> local direction (inverse of ``apply_dir``)."""
         r = math.radians(-self.rotation)
         c, s = math.cos(r), math.sin(r)
-        u = Vec2(q.x * c - q.y * s, q.x * s + q.y * c)
+        u = Vec2(d.x * c - d.y * s, d.x * s + d.y * c)
         return Vec2(-u.x if self.mirror_x else u.x, u.y)
 
 
@@ -72,6 +76,10 @@ class Shape:
     opacity: float = 1.0
     shape_id: str = field(default_factory=lambda: _next_id("shape"))
     kind: str = "shape"
+    # When set, these baked holes (in LOCAL coords) are drawn and moved with the
+    # shape instead of being computed from ``stitch`` -- the "grouped" state.
+    # Each entry is a stitching.Hole. Never redistributed.
+    baked_holes: Optional[list] = None
 
     # -- geometry (subclasses implement local_path) ---------------------
     def local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:  # pragma: no cover

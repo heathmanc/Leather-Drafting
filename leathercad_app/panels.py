@@ -16,7 +16,7 @@ from leathercad.irons import PRESETS
 from leathercad.stitchsettings import StitchSettings
 from leathercad.shapes import Rectangle, Ellipse, Circle, Polygon, PathShape
 from leathercad.layers import Layer, ROLES
-from .items import ShapeItem, StitchLineItem, HoleGroupItem
+from .items import ShapeItem, StitchLineItem, HoleItem
 
 
 def _spin(lo, hi, step=1.0, decimals=2, suffix=" mm") -> QDoubleSpinBox:
@@ -191,25 +191,23 @@ class PropertiesPanel(QWidget):
         self._loading = True
         it = self._item
         is_shape = isinstance(it, ShapeItem)
-        is_group = isinstance(it, HoleGroupItem)
+        is_hole = isinstance(it, HoleItem)
+        is_baked = is_shape and bool(it.model.baked_holes)
         self.g_rect.setVisible(False)
         self.g_ellipse.setVisible(False)
         self.g_poly.setVisible(False)
         self.g_appear.setVisible(is_shape)
         self.g_transform.setVisible(is_shape)
-        # Baked hole groups have no path/pitch -- only hole appearance applies.
-        self._set_path_rows_visible(not is_group)
-        self.g_stitch.setCheckable(not is_group)
+        # Only auto-spaced shapes expose path/pitch controls.
+        self._set_path_rows_visible(is_shape and not is_baked)
+        self.g_stitch.setCheckable(is_shape and not is_baked)
 
-        if is_group:
-            g = it.group
-            self.g_stitch.setChecked(True)
-            self.g_stitch.setTitle(f"Holes (baked · {g.count})")
-            self._load_hole_style(g)
+        if is_hole:
+            self.g_stitch.setTitle("Hole")
+            self._load_hole_style(it.hole)
             self._loading = False
             self._update_readout()
             return
-        self.g_stitch.setTitle("Stitching")
 
         if is_shape:
             sh = it.model
@@ -234,9 +232,14 @@ class PropertiesPanel(QWidget):
                 self.g_poly.setVisible(True)
                 self.poly_radius.setValue(sh.corner_radius)
                 self.poly_info.setText(str(len(sh.points)))
-            st = sh.stitch
-            self.g_stitch.setChecked(bool(st and st.enabled))
-            self._load_stitch(st or StitchSettings(enabled=False))
+            if is_baked:
+                self.g_stitch.setTitle(f"Holes (grouped · {len(sh.baked_holes)})")
+                self._load_hole_style(sh.stitch or StitchSettings())
+            else:
+                self.g_stitch.setTitle("Stitching")
+                st = sh.stitch
+                self.g_stitch.setChecked(bool(st and st.enabled))
+                self._load_stitch(st or StitchSettings(enabled=False))
         else:  # StitchLine
             st = it.line.settings
             self.g_stitch.setChecked(True)
@@ -311,17 +314,24 @@ class PropertiesPanel(QWidget):
         if self._loading or self._item is None:
             return
         it = self._item
-        if isinstance(it, HoleGroupItem):
-            g = it.group
-            g.hole_style = self.hole_style.currentText()
-            g.hole_diameter = self.hole_dia.value()
-            g.slit_length = self.slit_len.value()
-            g.slit_angle = self.slit_angle.value()
-            slit = g.hole_style == "slit"
-            self.hole_dia.setVisible(not slit)
-            self.slit_len.setVisible(slit)
-            self.slit_angle.setVisible(slit)
+        if isinstance(it, HoleItem):
+            self._write_hole_style(it.hole)
             self.canvas.refresh_item(it)
+            return
+        if isinstance(it, ShapeItem) and it.model.baked_holes:
+            sh = it.model
+            sh.transform.x = self.pos_x.value()
+            sh.transform.y = self.pos_y.value()
+            sh.transform.rotation = self.rot.value()
+            sh.transform.mirror_x = self.mirror.isChecked()
+            sh.opacity = self.opacity.value() / 100.0
+            sh.layer = self.layer_combo.currentData() or sh.layer
+            self._apply_shape_geometry(sh)
+            if sh.stitch is None:
+                sh.stitch = StitchSettings(enabled=False)
+            self._write_hole_style(sh.stitch)
+            self.canvas.refresh_item(it)
+            self._update_readout()
             return
         if isinstance(it, ShapeItem):
             sh = it.model
@@ -331,18 +341,7 @@ class PropertiesPanel(QWidget):
             sh.transform.mirror_x = self.mirror.isChecked()
             sh.opacity = self.opacity.value() / 100.0
             sh.layer = self.layer_combo.currentData() or sh.layer
-            if isinstance(sh, Rectangle):
-                sh.width = self.w.value()
-                sh.height = self.h.value()
-                sh.corner_radius = self.corner.value()
-            elif isinstance(sh, Circle):
-                sh.rx = self.rx.value()
-                sh.ry = self.ry.value()
-            elif isinstance(sh, Ellipse):
-                sh.rx = self.rx.value()
-                sh.ry = self.ry.value()
-            elif isinstance(sh, Polygon):
-                sh.corner_radius = self.poly_radius.value()
+            self._apply_shape_geometry(sh)
             if self.g_stitch.isChecked():
                 if sh.stitch is None:
                     sh.stitch = StitchSettings()
@@ -361,6 +360,23 @@ class PropertiesPanel(QWidget):
         self.row_spacing.setVisible(self.rows.currentIndex() == 1)
         self.canvas.refresh_item(it)
         self._update_readout()
+
+    def _apply_shape_geometry(self, sh):
+        if isinstance(sh, Rectangle):
+            sh.width = self.w.value()
+            sh.height = self.h.value()
+            sh.corner_radius = self.corner.value()
+        elif isinstance(sh, (Circle, Ellipse)):
+            sh.rx = self.rx.value()
+            sh.ry = self.ry.value()
+        elif isinstance(sh, Polygon):
+            sh.corner_radius = self.poly_radius.value()
+
+    def _write_hole_style(self, obj):
+        obj.hole_style = self.hole_style.currentText()
+        obj.hole_diameter = self.hole_dia.value()
+        obj.slit_length = self.slit_len.value()
+        obj.slit_angle = self.slit_angle.value()
 
     def _write_stitch(self, st: StitchSettings):
         st.pitch_mm = self.pitch.value()
@@ -392,10 +408,14 @@ class PropertiesPanel(QWidget):
         if it is None:
             self.readout.setText("")
             return
-        if isinstance(it, HoleGroupItem):
+        if isinstance(it, HoleItem):
+            self.readout.setText("<b>1 hole</b> (ungrouped)<br>"
+                                 "move or Delete freely; right-click to group")
+            return
+        if isinstance(it, ShapeItem) and it.model.baked_holes:
             self.readout.setText(
-                f"<b>{it.group.count} baked holes</b><br>"
-                "double-click to edit; select holes and press Delete to remove")
+                f"<b>{len(it.model.baked_holes)} holes</b> grouped to this shape"
+                "<br>Ungroup (right-click) to edit them individually")
             return
         res = it._holes if isinstance(it, ShapeItem) else it.line.result()
         if res and res.count:

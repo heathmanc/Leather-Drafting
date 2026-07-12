@@ -20,7 +20,7 @@ from leathercad.geometry import Vec2
 from leathercad.shapes import Shape
 from leathercad.stitchline import StitchLine
 from leathercad.stitching import stitch_polyline, StitchResult, Hole
-from leathercad.holegroup import HoleGroup
+from leathercad.holes import LooseHole
 
 
 def _draw_holes(painter, holes, style, diameter, slit_len, slit_angle):
@@ -119,60 +119,62 @@ class VertexHandle(QGraphicsItem):
             self.canvas.commitRequested.emit()
 
 
-class HoleGroupItem(QGraphicsItem):
-    """Renders a HoleGroup (baked, hand-editable holes). Move as a whole;
-    double-click to edit individual holes."""
+class HoleItem(QGraphicsItem):
+    """One individual (ungrouped) stitch hole: selectable, movable, deletable."""
 
-    def __init__(self, group: HoleGroup, canvas=None):
+    def __init__(self, hole: LooseHole, canvas=None):
         super().__init__()
-        self.group = group
+        self.hole = hole
         self.canvas = canvas
-        self._brect = QRectF()
         self.setFlags(
             QGraphicsItem.ItemIsSelectable
             | QGraphicsItem.ItemIsMovable
             | QGraphicsItem.ItemSendsGeometryChanges
         )
+        self.setZValue(50)
         self.sync_from_model()
 
     def sync_from_model(self):
         self.prepareGeometryChange()
-        b = self.group.bounds()
-        pad = 2.0 + self.group.hole_diameter
-        self._brect = QRectF(b[0] - pad, b[1] - pad,
-                             (b[2] - b[0]) + 2 * pad, (b[3] - b[1]) + 2 * pad)
-        self.setPos(0, 0)
+        self.setPos(self.hole.point.x, self.hole.point.y)
         self.update()
 
     def boundingRect(self):
-        return self._brect
+        # generous, zoom-independent hit area so small holes are easy to click
+        r = max(1.6, self.hole.hole_diameter) + 1.0
+        return QRectF(-r, -r, 2 * r, 2 * r)
+
+    def shape(self):
+        p = QPainterPath()
+        r = max(1.6, self.hole.hole_diameter)
+        p.addEllipse(QPointF(0, 0), r, r)
+        return p
 
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
-        color = (self.canvas.layer_color(self.group.layer)
+        color = (self.canvas.layer_color(self.hole.layer)
                  if self.canvas else "#0066ff")
-        pen = QPen(QColor(color))
+        pen = QPen(QColor(30, 140, 255) if self.isSelected() else QColor(color))
         pen.setCosmetic(True)
+        pen.setWidthF(1.6 if self.isSelected() else 1.0)
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)
-        g = self.group
-        _draw_holes(painter, g.holes, g.hole_style, g.hole_diameter,
-                    g.slit_length, g.slit_angle)
+        h = self.hole
+        # draw the actual hole geometry, centred at the item origin
+        centred = Hole(Vec2(0.0, 0.0), h.tangent)
+        _draw_holes(painter, [centred], h.hole_style, h.hole_diameter,
+                    h.slit_length, h.slit_angle)
         if self.isSelected():
-            sel = QPen(QColor(30, 140, 255), 0, Qt.DashLine)
-            sel.setCosmetic(True)
-            painter.setPen(sel)
-            painter.drawRect(self._brect.adjusted(1, 1, -1, -1))
+            painter.setPen(QPen(QColor(30, 140, 255), 0, Qt.DashLine))
+            painter.setBrush(Qt.NoBrush)
+            r = max(1.6, h.hole_diameter) + 0.6
+            painter.drawEllipse(QPointF(0, 0), r, r)
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionHasChanged:
-            dx, dy = self.pos().x(), self.pos().y()
-            if dx or dy:
-                self.group.translate(dx, dy)
-                self.setPos(0, 0)
-                self.sync_from_model()
-                if self.canvas is not None:
-                    self.canvas.item_moved(self)
+            self.hole.point = Vec2(self.pos().x(), self.pos().y())
+            if self.canvas is not None:
+                self.canvas.item_moved(self)
         elif change == QGraphicsItem.ItemSelectedHasChanged:
             if self.canvas is not None:
                 self.canvas.selection_changed()
@@ -180,40 +182,7 @@ class HoleGroupItem(QGraphicsItem):
 
     @property
     def hole_count(self):
-        return self.group.count
-
-
-class HoleHandle(QGraphicsItem):
-    """A constant-size, selectable marker for one baked hole (delete to remove)."""
-
-    SIZE = 3.5  # pixels
-
-    def __init__(self, group: HoleGroup, hole: Hole, canvas):
-        super().__init__()
-        self.group = group
-        self.hole = hole
-        self.canvas = canvas
-        self.setFlags(
-            QGraphicsItem.ItemIsSelectable
-            | QGraphicsItem.ItemIgnoresTransformations
-        )
-        self.setZValue(2000)
-        self.setPos(hole.point.x, hole.point.y)
-
-    def boundingRect(self):
-        s = self.SIZE + 2
-        return QRectF(-s, -s, 2 * s, 2 * s)
-
-    def paint(self, painter, option, widget=None):
-        painter.setRenderHint(painter.RenderHint.Antialiasing, True)
-        if self.isSelected():
-            painter.setPen(QPen(QColor(220, 40, 40), 1.4))
-            painter.setBrush(QBrush(QColor(255, 210, 210)))
-        else:
-            painter.setPen(QPen(QColor(30, 110, 220), 1.0))
-            painter.setBrush(QBrush(QColor(255, 255, 255)))
-        s = self.SIZE
-        painter.drawEllipse(QPointF(0, 0), s, s)
+        return 1
 
 
 class ShapeItem(QGraphicsItem):
@@ -247,16 +216,18 @@ class ShapeItem(QGraphicsItem):
 
         self._holes = None
         st = self.model.stitch
-        if st is not None and st.enabled:
+        if self.model.baked_holes:
+            # grouped/baked holes: local coords, oriented into pre-translation
+            oriented = [Hole(t.apply_dir(h.point), t.apply_dir(h.tangent))
+                        for h in self.model.baked_holes]
+            self._holes = StitchResult(holes=oriented)
+        elif st is not None and st.enabled:
             _, corner_pts, closed = self._local_geometry()
             res = stitch_polyline([Vec2(p.x, p.y) for p in local],
                                   corner_pts, closed, st)
             # orient holes into the pre-translation frame
-            oriented_holes = []
-            from leathercad.stitching import Hole
-            for h in res.holes:
-                oriented_holes.append(
-                    Hole(t.apply_dir(h.point), t.apply_dir(h.tangent)))
+            oriented_holes = [Hole(t.apply_dir(h.point), t.apply_dir(h.tangent))
+                              for h in res.holes]
             res.holes = oriented_holes
             self._holes = res
 
@@ -330,14 +301,7 @@ class ShapeItem(QGraphicsItem):
             painter.drawRect(self._outline.boundingRect())
 
     def itemChange(self, change, value):
-        if change == QGraphicsItem.ItemPositionChange:
-            if (self.canvas is not None and self.canvas.snap_enabled
-                    and self.canvas.snap_grid > 0):
-                g = self.canvas.snap_grid
-                from PySide6.QtCore import QPointF
-                value = QPointF(round(value.x() / g) * g,
-                                round(value.y() / g) * g)
-            return value
+        # Move follows the cursor exactly (no grid snap while dragging).
         if change == QGraphicsItem.ItemPositionHasChanged:
             self.model.transform.x = self.pos().x()
             self.model.transform.y = self.pos().y()
@@ -371,12 +335,20 @@ class StitchLineItem(QGraphicsItem):
         self.sync_from_model()
 
     def sync_from_model(self) -> None:
+        # Paint relative to a base point and position the item with setPos, so
+        # dragging follows the cursor smoothly (no mid-drag point mutation).
         self.prepareGeometryChange()
-        self._poly = _qpoly(self.line.points)
+        pts = self.line.points
+        self._base = Vec2(pts[0].x, pts[0].y) if pts else Vec2(0.0, 0.0)
+        rel = [Vec2(p.x - self._base.x, p.y - self._base.y) for p in pts]
+        self._poly = _qpoly(rel)
         self._holes = self.line.result()
+        self._rel_holes = [Hole(Vec2(h.point.x - self._base.x,
+                                     h.point.y - self._base.y), h.tangent)
+                           for h in self._holes.holes]
         r = self._poly.boundingRect()
         self._brect = r.adjusted(-3, -3, 3, 3)
-        self.setPos(0, 0)
+        self.setPos(self._base.x, self._base.y)
         self.update()
 
     def boundingRect(self) -> QRectF:
@@ -393,10 +365,11 @@ class StitchLineItem(QGraphicsItem):
                   if self.canvas else QColor("#0066ff"))
         hp.setCosmetic(True)
         painter.setPen(hp)
-        if self._holes:
-            for h in self._holes.holes:
-                painter.drawEllipse(QPointF(h.point.x, h.point.y), 0.5, 0.5)
-            _paint_backstitch(painter, self._holes, self.line.settings)
+        for h in self._rel_holes:
+            painter.drawEllipse(QPointF(h.point.x, h.point.y), 0.5, 0.5)
+        _paint_backstitch(painter, StitchResult(holes=self._rel_holes,
+                                                closed=self._holes.closed),
+                          self.line.settings)
         if self.isSelected():
             sel = QPen(QColor(30, 140, 255), 0, Qt.DashLine)
             sel.setCosmetic(True)
@@ -405,20 +378,28 @@ class StitchLineItem(QGraphicsItem):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionHasChanged:
-            # translate the underlying points by the moved delta
-            dx = self.pos().x()
-            dy = self.pos().y()
-            if dx or dy:
-                self.line.points = [Vec2(p.x + dx, p.y + dy)
-                                    for p in self.line.points]
-                self.line.corner_points = [Vec2(p.x + dx, p.y + dy)
-                                           for p in self.line.corner_points]
-                self.setPos(0, 0)
-                self.sync_from_model()
+            if self.canvas is not None:
+                self.canvas.item_moved(self)
         elif change == QGraphicsItem.ItemSelectedHasChanged:
             if self.canvas is not None:
                 self.canvas.selection_changed()
         return super().itemChange(change, value)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        self._bake_move()
+
+    def _bake_move(self):
+        """Bake the drag offset (setPos) into the seam points, once, on release."""
+        dx = self.pos().x() - self._base.x
+        dy = self.pos().y() - self._base.y
+        if abs(dx) > 1e-9 or abs(dy) > 1e-9:
+            self.line.points = [Vec2(p.x + dx, p.y + dy) for p in self.line.points]
+            self.line.corner_points = [Vec2(p.x + dx, p.y + dy)
+                                       for p in self.line.corner_points]
+            self.sync_from_model()
+            if self.canvas is not None:
+                self.canvas.commitRequested.emit()
 
     @property
     def hole_count(self) -> int:

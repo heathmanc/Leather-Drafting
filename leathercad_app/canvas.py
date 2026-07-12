@@ -13,7 +13,8 @@ from typing import List, Optional
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (QColor, QPainter, QPen, QPainterPath, QPolygonF,
                            QTransform)
-from PySide6.QtWidgets import QGraphicsScene, QGraphicsView, QGraphicsPathItem
+from PySide6.QtWidgets import (QGraphicsScene, QGraphicsView, QGraphicsPathItem,
+                               QMenu)
 
 from leathercad.geometry import Vec2
 from leathercad.document import Document
@@ -21,10 +22,9 @@ from leathercad.shapes import (Rectangle, Ellipse, Circle, Polygon, PathShape,
                                Transform)
 from leathercad.stitchsettings import StitchSettings
 from leathercad.stitchline import StitchLine
-from leathercad.holegroup import HoleGroup
-from leathercad.stitching import stitch_polyline
-from .items import (ShapeItem, StitchLineItem, VertexHandle, HoleGroupItem,
-                    HoleHandle)
+from leathercad.holes import LooseHole
+from leathercad.stitching import stitch_polyline, Hole
+from .items import ShapeItem, StitchLineItem, VertexHandle, HoleItem
 
 
 # tool modes
@@ -79,8 +79,6 @@ class Canvas(QGraphicsView):
         self.hole_tool_diameter = 4.0
         self._handles: List[VertexHandle] = []
         self._edit_owner = None
-        self._hole_handles: List[HoleHandle] = []
-        self._hole_edit_item = None
 
         # snapping
         self.snap_enabled = True
@@ -261,10 +259,6 @@ class Canvas(QGraphicsView):
             owner = it
             while owner is not None and not isinstance(owner, (ShapeItem, StitchLineItem)):
                 owner = owner.parentItem()
-            if isinstance(owner, HoleGroupItem):
-                self.enter_hole_edit(owner)
-                event.accept()
-                return
             if isinstance(owner, StitchLineItem) or (
                     isinstance(owner, ShapeItem)
                     and isinstance(owner.model, (Polygon, PathShape))):
@@ -273,11 +267,52 @@ class Canvas(QGraphicsView):
                 return
         super().mouseDoubleClickEvent(event)
 
+    def contextMenuEvent(self, event):
+        # select the item under the cursor if it isn't already selected
+        it = self.itemAt(event.pos())
+        owner = it
+        while owner is not None and not isinstance(
+                owner, (ShapeItem, StitchLineItem, HoleItem)):
+            owner = owner.parentItem()
+        if owner is not None and not owner.isSelected():
+            self.scene_obj.clearSelection()
+            owner.setSelected(True)
+
+        sel = self.selected_items()
+        shapes = [i for i in sel if isinstance(i, ShapeItem)]
+        holes = [i for i in sel if isinstance(i, HoleItem)]
+        can_group = len(shapes) == 1 and bool(holes)
+        can_ungroup = any(
+            isinstance(i, StitchLineItem)
+            or (isinstance(i, ShapeItem)
+                and (i.model.baked_holes
+                     or (i.model.stitch and i.model.stitch.enabled)))
+            for i in sel)
+
+        menu = QMenu(self)
+        a_group = menu.addAction("Group holes into shape")
+        a_group.setEnabled(can_group)
+        a_ungroup = menu.addAction("Ungroup stitching → individual holes")
+        a_ungroup.setEnabled(can_ungroup)
+        menu.addSeparator()
+        a_dup = menu.addAction("Duplicate")
+        a_dup.setEnabled(bool(shapes))
+        a_del = menu.addAction("Delete")
+        a_del.setEnabled(bool(sel))
+        chosen = menu.exec(event.globalPos())
+        if chosen is a_group:
+            self.group_selected()
+        elif chosen is a_ungroup:
+            self.ungroup_selected()
+        elif chosen is a_dup:
+            self.duplicate_selected()
+        elif chosen is a_del:
+            self.delete_selected()
+
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
             self._cancel_poly()
             self.clear_vertex_handles()
-            self.clear_hole_handles()
         elif event.key() in (Qt.Key_Return, Qt.Key_Enter):
             if self._poly_pts:
                 self._finalize_poly()
@@ -421,14 +456,12 @@ class Canvas(QGraphicsView):
         self._snap_marker = None
         self._handles = []
         self._edit_owner = None
-        self._hole_handles = []
-        self._hole_edit_item = None
         for sh in self.doc.shapes:
             self.scene_obj.addItem(ShapeItem(sh, self))
         for sl in self.doc.stitch_lines:
             self.scene_obj.addItem(StitchLineItem(sl, self))
-        for hg in self.doc.hole_groups:
-            self.scene_obj.addItem(HoleGroupItem(hg, self))
+        for h in self.doc.holes:
+            self.scene_obj.addItem(HoleItem(h, self))
         self.documentChangedSig.emit()
 
     def add_shape(self, shape) -> ShapeItem:
@@ -451,33 +484,16 @@ class Canvas(QGraphicsView):
 
     def selected_items(self):
         return [it for it in self.scene_obj.selectedItems()
-                if isinstance(it, (ShapeItem, StitchLineItem, HoleGroupItem))]
+                if isinstance(it, (ShapeItem, StitchLineItem, HoleItem))]
 
     def delete_selected(self) -> None:
-        # If individual holes are selected (hole-edit mode), remove just those.
-        handles = [it for it in self.scene_obj.selectedItems()
-                   if isinstance(it, HoleHandle)]
-        if handles:
-            grp = handles[0].group
-            for h in handles:
-                h.group.holes = [x for x in h.group.holes if x is not h.hole]
-            self.clear_hole_handles()
-            for it in self.scene_obj.items():
-                if isinstance(it, HoleGroupItem) and it.group is grp:
-                    it.sync_from_model()
-                    if grp.count:
-                        self.enter_hole_edit(it)
-                    break
-            self.documentChangedSig.emit()
-            self._emit_commit()
-            return
         for it in self.selected_items():
             if isinstance(it, ShapeItem):
                 self.doc.remove_shape(it.model)
             elif isinstance(it, StitchLineItem):
                 self.doc.remove_stitch_line(it.line)
-            else:  # HoleGroupItem
-                self.doc.remove_hole_group(it.group)
+            else:  # HoleItem
+                self.doc.remove_hole(it.hole)
             self.scene_obj.removeItem(it)
         self.documentChangedSig.emit()
         self.selectionChangedSig.emit()
@@ -574,12 +590,6 @@ class Canvas(QGraphicsView):
     def selection_changed(self) -> None:
         if self._edit_owner is not None and not self._edit_owner.isSelected():
             self.clear_vertex_handles()
-        if self._hole_edit_item is not None:
-            others = [it for it in self.scene_obj.selectedItems()
-                      if not isinstance(it, HoleHandle)
-                      and it is not self._hole_edit_item]
-            if others:
-                self.clear_hole_handles()
         self.selectionChangedSig.emit()
 
     def refresh_item(self, item) -> None:
@@ -598,27 +608,40 @@ class Canvas(QGraphicsView):
     def total_holes(self) -> int:
         n = 0
         for it in self.scene_obj.items():
-            if isinstance(it, (ShapeItem, StitchLineItem, HoleGroupItem)):
+            if isinstance(it, (ShapeItem, StitchLineItem, HoleItem)):
                 n += it.hole_count
         return n
 
-    # -- ungroup / bake stitching --------------------------------------
+    # -- ungroup: shape/seam stitching -> individual holes -------------
     def ungroup_selected(self) -> None:
-        """Bake selected shapes'/seams' holes into editable HoleGroups so
-        individual holes can be deleted without redistribution."""
+        """Explode selected shapes'/seams' holes into individual, directly
+        selectable/deletable holes (auto-spacing is turned off)."""
         made = []
         self._suppress_commit = True
         for it in list(self.selected_items()):
-            if isinstance(it, ShapeItem) and it.model.stitch and it.model.stitch.enabled:
-                res = stitch_polyline(*it.model.world_polyline(), it.model.stitch)
-                if res.count:
-                    made.append(self._bake(res, it.model.stitch))
-                    it.model.stitch.enabled = False
+            if isinstance(it, ShapeItem):
+                sh = it.model
+                res = None
+                if sh.baked_holes:
+                    from leathercad.stitching import StitchResult
+                    res = StitchResult(holes=[
+                        Hole(sh.transform.apply(h.point),
+                             sh.transform.apply_dir(h.tangent))
+                        for h in sh.baked_holes])
+                    style = sh.stitch or StitchSettings()
+                elif sh.stitch and sh.stitch.enabled:
+                    res = stitch_polyline(*sh.world_polyline(), sh.stitch)
+                    style = sh.stitch
+                if res and res.count:
+                    made += self._explode(res, style)
+                    sh.baked_holes = None
+                    if sh.stitch:
+                        sh.stitch.enabled = False
                     it.sync_from_model()
             elif isinstance(it, StitchLineItem):
                 res = it.line.result()
                 if res.count:
-                    made.append(self._bake(res, it.line.settings))
+                    made += self._explode(res, it.line.settings)
                     self.doc.remove_stitch_line(it.line)
                     self.scene_obj.removeItem(it)
         self._suppress_commit = False
@@ -629,31 +652,53 @@ class Canvas(QGraphicsView):
             self.documentChangedSig.emit()
             self._emit_commit()
 
-    def _bake(self, res, settings) -> HoleGroupItem:
-        hg = HoleGroup(
-            holes=list(res.holes), hole_style=settings.hole_style,
-            hole_diameter=settings.hole_diameter,
-            slit_length=settings.slit_length, slit_angle=settings.slit_angle,
-            layer="Stitch")
-        self.doc.add_hole_group(hg)
-        item = HoleGroupItem(hg, self)
-        self.scene_obj.addItem(item)
-        return item
+    def _explode(self, res, style):
+        items = []
+        for h in res.holes:
+            lh = LooseHole(
+                point=h.point, tangent=h.tangent,
+                hole_style=style.hole_style, hole_diameter=style.hole_diameter,
+                slit_length=style.slit_length, slit_angle=style.slit_angle,
+                layer="Stitch")
+            self.doc.add_hole(lh)
+            item = HoleItem(lh, self)
+            self.scene_obj.addItem(item)
+            items.append(item)
+        return items
 
-    # -- individual hole editing ---------------------------------------
-    def enter_hole_edit(self, group_item: HoleGroupItem) -> None:
-        self.clear_hole_handles()
-        self._hole_edit_item = group_item
-        for hole in group_item.group.holes:
-            h = HoleHandle(group_item.group, hole, self)
-            self.scene_obj.addItem(h)
-            self._hole_handles.append(h)
-
-    def clear_hole_handles(self) -> None:
-        for h in self._hole_handles:
+    # -- group: individual holes -> baked into a shape -----------------
+    def group_selected(self) -> None:
+        """Bake selected loose holes into the single selected shape so they
+        move with it (no redistribution). Needs exactly one shape selected."""
+        sel = self.selected_items()
+        shapes = [it for it in sel if isinstance(it, ShapeItem)]
+        holes = [it for it in sel if isinstance(it, HoleItem)]
+        if len(shapes) != 1 or not holes:
+            self.statusMessage.emit(
+                "Group: select one shape and the holes to attach to it")
+            return
+        shape_item = shapes[0]
+        sh = shape_item.model
+        baked = list(sh.baked_holes) if sh.baked_holes else []
+        for h in holes:
+            local = sh.transform.inverse_apply(h.hole.point)
+            tan = sh.transform.inverse_apply_dir(h.hole.tangent)
+            baked.append(Hole(local, tan))
+            self.doc.remove_hole(h.hole)
             self.scene_obj.removeItem(h)
-        self._hole_handles = []
-        self._hole_edit_item = None
+        sh.baked_holes = baked
+        # keep a style on the shape for baked-hole rendering
+        if sh.stitch is None:
+            sh.stitch = StitchSettings(enabled=False,
+                                       hole_style=holes[0].hole.hole_style,
+                                       hole_diameter=holes[0].hole.hole_diameter,
+                                       slit_length=holes[0].hole.slit_length,
+                                       slit_angle=holes[0].hole.slit_angle)
+        shape_item.sync_from_model()
+        self.scene_obj.clearSelection()
+        shape_item.setSelected(True)
+        self.documentChangedSig.emit()
+        self._emit_commit()
 
     # -- grid -----------------------------------------------------------
     def drawBackground(self, painter, rect):

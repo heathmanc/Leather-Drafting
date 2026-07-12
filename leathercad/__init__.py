@@ -26,7 +26,7 @@ from .shapes import (Transform, Shape, Rectangle, Ellipse, Circle, Polygon,
                      PathShape)
 from .layers import Layer, default_layers, CUT, SCORE, ENGRAVE, STITCH
 from .stitchline import StitchLine
-from .holegroup import HoleGroup
+from .holes import LooseHole
 from .document import Document
 from .svg import SvgDocument
 from . import export
@@ -44,7 +44,7 @@ __all__ = [
     "Transform", "Shape", "Rectangle", "Ellipse", "Circle", "Polygon",
     "PathShape",
     "Layer", "default_layers", "CUT", "SCORE", "ENGRAVE", "STITCH",
-    "StitchLine", "HoleGroup", "Document",
+    "StitchLine", "LooseHole", "Document",
     "SvgDocument", "export",
     "__version__",
 ]

@@ -131,6 +131,29 @@ def test_item_does_not_shadow_qt_shape_method(qapp):
     assert hit is item
 
 
+def test_seam_move_bakes_on_release_not_per_tick(qapp):
+    """Regression: moving a seam must not reset setPos(0,0) mid-drag (which made
+    items jump). Points bake to the final position on release."""
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import StitchLineItem
+    from leathercad.document import Document
+    from leathercad.stitchline import StitchLine
+    from leathercad.stitchsettings import StitchSettings
+    from leathercad.geometry import Vec2
+
+    win = MainWindow(Document())
+    c = win.canvas
+    sl = StitchLine(points=[Vec2(0, 0), Vec2(50, 0)],
+                    settings=StitchSettings(pitch_mm=4.0, fit="endpoints"))
+    item = c.add_stitch_line(sl)
+    # simulate a drag: Qt moves the item via setPos; points bake on release
+    item.setPos(20, -15)                       # base was points[0] = (0,0)
+    assert sl.points[0] == Vec2(0, 0)          # not mutated mid-drag
+    item._bake_move()                          # what mouseReleaseEvent calls
+    assert abs(sl.points[0].x - 20) < 1e-6 and abs(sl.points[0].y + 15) < 1e-6
+    assert abs(sl.points[1].x - 70) < 1e-6     # whole seam translated
+
+
 def test_snapping(qapp):
     from PySide6.QtCore import QPointF
     from leathercad_app.mainwindow import MainWindow
@@ -150,9 +173,12 @@ def test_snapping(qapp):
     p, vtx = c.snap(QPointF(19.4, 14.6))
     assert (round(p.x()), round(p.y())) == (20, 15) and vtx
 
+    # Moving is free (follows the cursor exactly) -- snapping applies while
+    # drawing, not while dragging existing shapes.
     item = _shape_items(c)[0]
     item.setPos(10.4, -3.7)
-    assert (item.pos().x(), item.pos().y()) == (10.0, -4.0)
+    assert (round(item.model.transform.x, 1), round(item.model.transform.y, 1)) \
+        == (10.4, -3.7)
 
 
 def test_hole_slot_score_tools(qapp):
@@ -222,9 +248,9 @@ def test_tool_palette_left_and_pinnable(qapp):
     assert tp.isMovable()
 
 
-def test_ungroup_bakes_holes_and_stops_redistribution(qapp):
+def test_ungroup_makes_individual_holes_then_group_back(qapp):
     from leathercad_app.mainwindow import MainWindow
-    from leathercad_app.items import HoleGroupItem
+    from leathercad_app.items import HoleItem
     from leathercad.document import Document
 
     win = MainWindow(Document())
@@ -234,28 +260,60 @@ def test_ungroup_bakes_holes_and_stops_redistribution(qapp):
         stitch=StitchSettings(pitch_mm=4.0, inset=3.0), layer="Cut"))
     n = item.hole_count
     assert n > 0
+
+    # Ungroup -> individual, directly-selectable holes (no box, no edit mode)
     c.scene_obj.clearSelection()
     item.setSelected(True)
     c.ungroup_selected()
-
-    # shape stitching is turned off; a baked group holds the holes
     assert item.model.stitch.enabled is False
     assert item.hole_count == 0
-    groups = [it for it in c.scene_obj.items() if isinstance(it, HoleGroupItem)]
-    assert len(groups) == 1 and groups[0].hole_count == n
+    holes = [it for it in c.scene_obj.items() if isinstance(it, HoleItem)]
+    assert len(holes) == n
+    assert len(win.doc.holes) == n
 
-    # delete 3 individual holes
-    grp = groups[0]
-    c.enter_hole_edit(grp)
-    for h in c._hole_handles[:3]:
+    # each hole is individually selectable and deletable
+    c.scene_obj.clearSelection()
+    for h in holes[:3]:
         h.setSelected(True)
     c.delete_selected()
-    assert grp.group.count == n - 3
+    assert len(win.doc.holes) == n - 3
 
-    # fiddling the (disabled) shape settings must NOT redistribute baked holes
+    # fiddling the (disabled) shape settings must NOT bring holes back
     item.model.stitch.pitch_mm = 2.0
     item.sync_from_model()
-    assert grp.group.count == n - 3
+    assert item.hole_count == 0
+    assert len(win.doc.holes) == n - 3
+
+    # Group the remaining holes back into the shape
+    remaining = [it for it in c.scene_obj.items() if isinstance(it, HoleItem)]
+    c.scene_obj.clearSelection()
+    item.setSelected(True)
+    for h in remaining:
+        h.setSelected(True)
+    c.group_selected()
+    assert win.doc.holes == []
+    assert item.model.baked_holes is not None
+    assert len(item.model.baked_holes) == n - 3
+    assert item.hole_count == n - 3  # now render as baked, move with the shape
+
+
+def test_grouped_holes_move_with_shape(qapp):
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    from leathercad.stitching import Hole
+    from leathercad.geometry import Vec2
+
+    win = MainWindow(Document())
+    c = win.canvas
+    r = Rectangle(width=40, height=30, transform=Transform(x=0, y=0), layer="Cut")
+    r.baked_holes = [Hole(Vec2(0, 0), Vec2(1, 0))]
+    item = c.add_shape(r)
+    # world hole starts at shape origin (0,0); move shape, hole follows
+    item.setPos(50, 20)
+    win.doc  # baked hole is local (0,0) -> world (50,20) after move
+    _, _, _ = r.world_polyline()
+    world = r.transform.apply(r.baked_holes[0].point)
+    assert abs(world.x - 50) < 1e-6 and abs(world.y - 20) < 1e-6
 
 
 def test_export_from_document(qapp, tmp_path):

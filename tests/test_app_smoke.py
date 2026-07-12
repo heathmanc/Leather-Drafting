@@ -1446,6 +1446,38 @@ def test_group_drag_self_heals_frozen_members(qapp):
     assert movable(holes[10]) and movable(holes[20]) and movable(holes[30])
 
 
+def test_layer_hide_show_toggles_item_visibility(qapp):
+    # Hiding a layer must actually hide its items on the canvas (and showing it
+    # brings them back).
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    from leathercad.shapes import Rectangle, Transform
+
+    doc = Document()
+    doc.add_shape(Rectangle(width=20, height=20,
+                            transform=Transform(x=10, y=10), layer="Cut"))
+    doc.add_shape(Rectangle(width=20, height=20,
+                            transform=Transform(x=50, y=50), layer="Score"))
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+
+    def vis(layer):
+        return next(it.isVisible() for it in c.scene_obj.items()
+                    if hasattr(it, "model") and it.model.layer == layer)
+
+    assert vis("Cut") and vis("Score")
+    lp = win.layers
+    for i in range(lp.list.count()):
+        if "Cut" in lp.list.item(i).text():
+            lp.list.setCurrentRow(i)
+            break
+    lp._toggle_vis()
+    assert not vis("Cut") and vis("Score")     # Cut hidden, Score untouched
+    lp._toggle_vis()
+    assert vis("Cut") and vis("Score")         # shown again
+
+
 def test_move_group_survives_save_load(qapp):
     from leathercad.document import Document, LooseHole
     from leathercad.geometry import Vec2

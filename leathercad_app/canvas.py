@@ -1233,6 +1233,7 @@ class Canvas(QGraphicsView):
             self._add_item(StitchLineItem(sl, self))
         for h in self.doc.holes:
             self._add_item(HoleItem(h, self))
+        self.apply_layer_visibility()
         self.documentChangedSig.emit()
 
     def add_shape(self, shape) -> ShapeItem:
@@ -1461,6 +1462,27 @@ class Canvas(QGraphicsView):
         for it in self.scene_obj.items():
             if isinstance(it, (ShapeItem, StitchLineItem)):
                 it.sync_from_model()
+        self.apply_layer_visibility()
+
+    def _layer_visible(self, name: str) -> bool:
+        lyr = self.doc.layer(name)
+        return lyr.visible if lyr else True
+
+    def apply_layer_visibility(self) -> None:
+        """Show/hide each scene item according to its layer's ``visible`` flag."""
+        for it in self.scene_obj.items():
+            if isinstance(it, ShapeItem):
+                layer = it.model.layer
+            elif isinstance(it, StitchLineItem):
+                layer = it.line.layer
+            elif isinstance(it, HoleItem):
+                layer = it.hole.layer
+            else:
+                continue
+            vis = self._layer_visible(layer)
+            if not vis and it.isSelected():
+                it.setSelected(False)      # don't leave hidden items selected
+            it.setVisible(vis)
 
     def layer_color(self, name: str) -> str:
         lyr = self.doc.layer(name)

@@ -105,6 +105,8 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Break apart** | right-click a shape → *Break apart into segments* (`Ctrl+B`) — each edge (line or arc) becomes its own movable piece |
 | **Join / weld** | select 2+ pieces → *Join / weld segments* (`Ctrl+J`) — chains segments whose endpoints touch into one path (arcs kept) |
 | **Trim** | Trim tool (`X`) — click the part of an outline you want gone; it's cut back to wherever it crosses another shape, just like Fusion 360 / LightBurn. Arcs are preserved; a closed shape opens, an open one splits |
+| **Measure** | Measure tool (`Q`) — click two (snapped) points for a live **length / angle / dx / dy** readout in the status bar |
+| **Dimension** | Dimension tool (`D`) — click two points to drop a permanent **dimension annotation** (extension lines, arrows, measured length). Annotations only — never cut or exported |
 | **Group (move together)** | select two or more items (holes, shapes, seams) → **Group** (`Ctrl+G`) — they share a group and move as one unit; clicking any member selects the whole group. **Ungroup** (`Ctrl+Shift+G`) breaks it apart. Survives save/undo |
 | **Attach holes to shape** | *Attach holes to shape* (`Ctrl+Shift+A`) bakes loose holes into a single shape so they ride with it for cross-piece registration; *Explode stitching → holes* turns a shape's stitching back into individual, deletable holes |
 | **Right-click menu** | Group / Ungroup / Attach holes / Convert to nodes / Duplicate / Delete on the selection |

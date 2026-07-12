@@ -198,6 +198,7 @@ class Document:
         self.shapes: List[Shape] = []
         self.stitch_lines: List[StitchLine] = []
         self.holes: List[LooseHole] = []   # individual, ungrouped holes
+        self.dimensions: list = []         # linear dimension annotations
 
     # -- collection helpers --------------------------------------------
     def add_shape(self, shape: Shape) -> Shape:
@@ -244,6 +245,7 @@ class Document:
             "shapes": [_shape_to_dict(s) for s in self.shapes],
             "stitch_lines": [_stitchline_to_dict(sl) for sl in self.stitch_lines],
             "holes": [_hole_to_dict(h) for h in self.holes],
+            "dimensions": [dm.to_dict() for dm in self.dimensions],
         }
 
     @classmethod
@@ -256,6 +258,8 @@ class Document:
         doc.stitch_lines = [_stitchline_from_dict(x)
                             for x in d.get("stitch_lines", [])]
         doc.holes = [_hole_from_dict(x) for x in d.get("holes", [])]
+        from .dimension import Dimension
+        doc.dimensions = [Dimension.from_dict(x) for x in d.get("dimensions", [])]
         return doc
 
     def save(self, path: str) -> None:

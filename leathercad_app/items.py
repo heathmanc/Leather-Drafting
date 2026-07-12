@@ -14,8 +14,9 @@ from typing import List, Optional
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (QColor, QPainterPath, QPainterPathStroker, QPen,
-                           QPolygonF, QBrush)
-from PySide6.QtWidgets import QGraphicsItem, QApplication
+                           QPolygonF, QBrush, QFont)
+from PySide6.QtWidgets import (QGraphicsItem, QApplication,
+                               QGraphicsSimpleTextItem)
 
 # Click tolerance (mm) around an outline for selection/hit-testing.
 OUTLINE_HIT_MM = 3.5
@@ -283,6 +284,78 @@ class ResizeHandle(QGraphicsItem):
         owner.sync_from_model()
         if self.canvas is not None:
             self.canvas.resize_handle_moved(self)
+
+
+class DimensionItem(QGraphicsItem):
+    """A linear dimension annotation: extension lines, an offset dimension line
+    with arrowheads, and the measured length as constant-size text. Selectable
+    and deletable; never exported (it's an annotation)."""
+
+    def __init__(self, dim, canvas=None):
+        super().__init__()
+        self.dim = dim
+        self.canvas = canvas
+        self.setFlags(QGraphicsItem.ItemIsSelectable)
+        self.setZValue(40)
+        self._label = QGraphicsSimpleTextItem(self)
+        self._label.setFlag(QGraphicsItem.ItemIgnoresTransformations, True)
+        f = QFont()
+        f.setPointSizeF(9.0)
+        self._label.setFont(f)
+        self.sync_from_model()
+
+    def sync_from_model(self):
+        self.prepareGeometryChange()
+        a, b = self.dim.line_points()
+        self._a, self._b = QPointF(a.x, a.y), QPointF(b.x, b.y)
+        self._p1 = QPointF(self.dim.p1.x, self.dim.p1.y)
+        self._p2 = QPointF(self.dim.p2.x, self.dim.p2.y)
+        self._label.setText(self.dim.label())
+        self._label.setBrush(QColor(70, 70, 70))
+        # anchor the label at the dim-line midpoint (constant screen size)
+        br = self._label.boundingRect()
+        self._label.setPos((a.x + b.x) / 2.0 - br.width() / 2.0 * 0,
+                           (a.y + b.y) / 2.0)
+        xs = [a.x, b.x, self.dim.p1.x, self.dim.p2.x]
+        ys = [a.y, b.y, self.dim.p1.y, self.dim.p2.y]
+        self._brect = QRectF(min(xs) - 6, min(ys) - 6,
+                             max(xs) - min(xs) + 12, max(ys) - min(ys) + 12)
+        self.update()
+
+    def boundingRect(self):
+        return self._brect
+
+    def shape(self):
+        return _outline_hit_shape(QPolygonF([self._a, self._b]), closed=False)
+
+    def paint(self, painter, option, widget=None):
+        painter.setRenderHint(painter.RenderHint.Antialiasing, True)
+        pen = QPen(QColor(30, 140, 255) if self.isSelected() else QColor(120, 120, 130))
+        pen.setCosmetic(True)
+        pen.setWidthF(1.4 if self.isSelected() else 0.9)
+        painter.setPen(pen)
+        painter.drawLine(self._p1, self._a)      # extension lines
+        painter.drawLine(self._p2, self._b)
+        painter.drawLine(self._a, self._b)       # dimension line
+        self._arrow(painter, self._a, self._b)
+        self._arrow(painter, self._b, self._a)
+
+    def _arrow(self, painter, tip, tail):
+        import math
+        ang = math.atan2(tail.y() - tip.y(), tail.x() - tip.x())
+        s = 2.4
+        for da in (0.42, -0.42):
+            painter.drawLine(tip, QPointF(tip.x() + s * math.cos(ang + da),
+                                          tip.y() + s * math.sin(ang + da)))
+
+    @property
+    def hole_count(self):
+        return 0
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemSelectedHasChanged and self.canvas is not None:
+            self.canvas.selection_changed()
+        return super().itemChange(change, value)
 
 
 class HoleItem(QGraphicsItem):

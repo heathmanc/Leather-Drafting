@@ -99,6 +99,26 @@ def tool_icon(kind: str, size: int = 22) -> QIcon:
         p.setBrush(Qt.NoBrush)
         p.drawEllipse(b1, 2.3, 2.3)
         p.drawEllipse(b2, 2.3, 2.3)
+    elif kind == "measure":
+        # a ruler: a line with tick marks
+        y = size * 0.5
+        p.drawLine(QPointF(m, y), QPointF(size - m, y))
+        n = 5
+        for i in range(n + 1):
+            x = m + (size - 2 * m) * i / n
+            hgt = 4.0 if i % n == 0 else 2.5
+            p.drawLine(QPointF(x, y), QPointF(x, y - hgt))
+    elif kind == "dimension":
+        # dimension line with arrow tips + extension ticks
+        y = size * 0.55
+        a = QPointF(m + 1, y)
+        b = QPointF(size - m - 1, y)
+        p.drawLine(a, b)
+        p.drawLine(QPointF(a.x(), y - 4), QPointF(a.x(), y + 2))
+        p.drawLine(QPointF(b.x(), y - 4), QPointF(b.x(), y + 2))
+        for tip, d in ((a, 1), (b, -1)):
+            p.drawLine(tip, QPointF(tip.x() + d * 3, y - 2))
+            p.drawLine(tip, QPointF(tip.x() + d * 3, y + 2))
     else:
         p.drawRect(rect)
     p.end()

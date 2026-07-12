@@ -25,7 +25,7 @@ from leathercad.stitchline import StitchLine
 from leathercad.holes import LooseHole
 from leathercad.stitching import stitch_polyline, Hole, StitchResult, flip_symmetry
 from .items import (ShapeItem, StitchLineItem, VertexHandle, HoleItem,
-                    ResizeHandle)
+                    ResizeHandle, DimensionItem)
 
 try:
     import shiboken6
@@ -52,6 +52,8 @@ SCORE = "score"
 TRIM = "trim"
 LINE = "line"
 CONSTRUCTION = "construction"
+MEASURE = "measure"
+DIMENSION = "dimension"
 
 _DRAG_TOOLS = (RECT, ROUNDED, ELLIPSE, CIRCLE, SLOT, LINE, CONSTRUCTION)
 _POLY_TOOLS = (POLYGON, STITCHLINE, SCORE)
@@ -789,6 +791,25 @@ class Canvas(QGraphicsView):
         if event.button() == Qt.LeftButton:
             if self.tool == HOLE:
                 self._place_hole(pos)
+            elif self.tool in (MEASURE, DIMENSION):
+                # two clicks: first sets the start, second finishes.
+                if self._start is None:
+                    self._start = pos
+                    self._preview = QGraphicsPathItem()
+                    pen = QPen(QColor(120, 120, 130), 0, Qt.DashLine)
+                    pen.setCosmetic(True)
+                    self._preview.setPen(pen)
+                    self.scene_obj.addItem(self._preview)
+                else:
+                    start = self._start
+                    self._start = None
+                    self._clear_preview()
+                    self._suppress_next_release = True
+                    if self.tool == MEASURE:
+                        self._show_measure(start, pos)
+                    else:
+                        self._add_dimension(start, pos)
+                    self._hide_snap_marker()
             elif self.tool in _DRAG_TOOLS:
                 if not self.drag_to_draw and self._start is not None:
                     # click-to-place: this is the second click -> finish. Swallow
@@ -814,6 +835,29 @@ class Canvas(QGraphicsView):
                 self._poly_pts.append(pos)
                 self._update_poly_preview(pos)
         event.accept()
+
+    def _measure_text(self, a: QPointF, b: QPointF) -> str:
+        import math
+        dx, dy = b.x() - a.x(), b.y() - a.y()
+        dist = (dx * dx + dy * dy) ** 0.5
+        ang = math.degrees(math.atan2(dy, dx))
+        return (f"length {dist:.2f} mm   ∠ {ang:.1f}°   "
+                f"(dx {dx:.2f}, dy {dy:.2f})")
+
+    def _show_measure(self, a: QPointF, b: QPointF) -> None:
+        self.statusMessage.emit(self._measure_text(a, b))
+        self.toolFinished.emit()
+
+    def _add_dimension(self, a: QPointF, b: QPointF) -> None:
+        from leathercad.dimension import Dimension
+        dim = Dimension(p1=Vec2(a.x(), a.y()), p2=Vec2(b.x(), b.y()),
+                        offset=8.0, layer="Dimension")
+        self.doc.dimensions.append(dim)
+        self._add_item(DimensionItem(dim, self))
+        self.statusMessage.emit(self._measure_text(a, b))
+        self.documentChangedSig.emit()
+        self._emit_commit()
+        self.toolFinished.emit()
 
     def _apply_ortho(self, start: QPointF, pos: QPointF) -> QPointF:
         """Constrain ``pos`` to a 0 / 45 / 90 degree ray from ``start`` (Shift)."""
@@ -868,7 +912,14 @@ class Canvas(QGraphicsView):
             self.statusMessage.emit(_SNAP_LABEL.get(kind, ""))
         else:
             self._hide_snap_marker()
-        if self._preview is not None and self._start is not None:
+        if (self._preview is not None and self._start is not None
+                and self.tool in (MEASURE, DIMENSION)):
+            path = QPainterPath()
+            path.moveTo(self._start)
+            path.lineTo(pos)
+            self._preview.setPath(path)
+            self.statusMessage.emit(self._measure_text(self._start, pos))
+        elif self._preview is not None and self._start is not None:
             self._preview.setPath(self._preview_path(self._start, pos))
             w = abs(pos.x() - self._start.x())
             h = abs(pos.y() - self._start.y())
@@ -1239,6 +1290,8 @@ class Canvas(QGraphicsView):
             self._add_item(StitchLineItem(sl, self))
         for h in self.doc.holes:
             self._add_item(HoleItem(h, self))
+        for dm in getattr(self.doc, "dimensions", []):
+            self._add_item(DimensionItem(dm, self))
         self.apply_layer_visibility()
         self.documentChangedSig.emit()
 
@@ -1260,7 +1313,8 @@ class Canvas(QGraphicsView):
 
     def selected_items(self):
         return [it for it in self.scene_obj.selectedItems()
-                if isinstance(it, (ShapeItem, StitchLineItem, HoleItem))]
+                if isinstance(it, (ShapeItem, StitchLineItem, HoleItem,
+                                   DimensionItem))]
 
     def delete_selected(self) -> None:
         for it in self.selected_items():
@@ -1268,6 +1322,9 @@ class Canvas(QGraphicsView):
                 self.doc.remove_shape(it.model)
             elif isinstance(it, StitchLineItem):
                 self.doc.remove_stitch_line(it.line)
+            elif isinstance(it, DimensionItem):
+                if it.dim in self.doc.dimensions:
+                    self.doc.dimensions.remove(it.dim)
             else:  # HoleItem
                 self.doc.remove_hole(it.hole)
             self._remove_item(it)

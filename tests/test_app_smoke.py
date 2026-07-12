@@ -1955,3 +1955,45 @@ def test_single_hole_readout_no_crash(qapp):
     it.setSelected(True)
     win.properties.show_selection(win.canvas.selected_items())   # must not raise
     assert "1 holes" in win.properties.readout.text()
+
+
+def test_pen_right_click_finishes_curve(qapp):
+    """Right-click finishes an open pen curve (more reliable than double-click)
+    and does not leave the pen mid-draw or pop a context menu."""
+    from PySide6.QtCore import QPointF, QEvent, Qt
+    from PySide6.QtGui import QMouseEvent, QContextMenuEvent
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document
+    from leathercad.shapes import EditablePath
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.resize(500, 500)
+    c.snap_to_grid = False
+    c.snap_to_nodes = False
+    c.tool = cm.PEN
+
+    def vp(x, y):
+        return QPointF(c.mapFromScene(QPointF(x, y)))
+
+    def ev(kind, x, y, btn=Qt.LeftButton, btns=Qt.LeftButton):
+        return QMouseEvent(kind, vp(x, y), btn, btns, Qt.NoModifier)
+
+    c.mousePressEvent(ev(QEvent.MouseButtonPress, 0, 0))
+    c.mouseMoveEvent(ev(QEvent.MouseMove, 10, 10, Qt.NoButton))
+    c.mouseReleaseEvent(ev(QEvent.MouseButtonRelease, 10, 10))
+    c.mousePressEvent(ev(QEvent.MouseButtonPress, 40, 0))
+    c.mouseMoveEvent(ev(QEvent.MouseMove, 50, -10, Qt.NoButton))
+    c.mouseReleaseEvent(ev(QEvent.MouseButtonRelease, 50, -10))
+    assert len(c._pen_pts) == 2
+
+    # right-click press then the platform context-menu event
+    c.mousePressEvent(ev(QEvent.MouseButtonPress, 40, 0,
+                         Qt.RightButton, Qt.RightButton))
+    c.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Mouse, vp(40, 0).toPoint()))
+
+    eps = [s for s in win.doc.shapes if isinstance(s, EditablePath)]
+    assert len(eps) == 1                       # curve committed
+    assert c._pen_pts == []                    # pen no longer mid-draw
+    assert [e.kind for e in eps[0].edges] == ["bezier"]

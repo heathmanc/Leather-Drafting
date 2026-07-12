@@ -209,6 +209,7 @@ class Canvas(QGraphicsView):
         self._pen_handles: List[Optional[QPointF]] = []
         self._pen_drag = False
         self._pen_hud: Optional[QGraphicsPathItem] = None
+        self._pen_rmb = False    # a right-click just finished a pen curve
         self._moved_during_press = False
         self._suppress_commit = False
         self._suppress_next_release = False
@@ -787,6 +788,16 @@ class Canvas(QGraphicsView):
             self._pan_last = event.position()
             self.setCursor(Qt.ClosedHandCursor)
             return
+        if self.tool == PEN and event.button() == Qt.RightButton:
+            # right-click finishes an open curve (a standard pen-tool finish, and
+            # more reliable than a double-click, which needs two clicks to land on
+            # the same pixel within the double-click time to register).
+            self._pen_rmb = True          # swallow the context menu that follows
+            self._finish_pen(closed=False)
+            event.accept()
+            return
+        if event.button() == Qt.LeftButton:
+            self._pen_rmb = False
         self._suppress_next_release = False   # clear any stale flag
         raw = self.mapToScene(event.position().toPoint())
         if self.tool == TRIM:
@@ -1030,8 +1041,8 @@ class Canvas(QGraphicsView):
             else:
                 self._update_pen_preview(pos, dragging=False)
                 self.statusMessage.emit(
-                    f"{len(self._pen_pts)} pts · click to add, drag to curve, "
-                    "click start or Enter to finish")
+                    f"{len(self._pen_pts)} pts · click to add, drag to curve · "
+                    "right-click / Enter to finish, click start to close")
         elif self._poly_pts and self.tool in _POLY_TOOLS:
             self._update_poly_preview(pos)
             last = self._poly_pts[-1]
@@ -1100,6 +1111,16 @@ class Canvas(QGraphicsView):
         super().mouseDoubleClickEvent(event)
 
     def contextMenuEvent(self, event):
+        # Right-click finishes a pen curve instead of opening the menu. Handle it
+        # here too (not just in mousePressEvent) because some platforms deliver
+        # the context-menu event on the press -- and swallow the menu that the
+        # just-finished right-click would otherwise pop after we switch to Select.
+        if self.tool == PEN or self._pen_rmb:
+            self._pen_rmb = False
+            if self._pen_pts:
+                self._finish_pen(closed=False)
+            event.accept()
+            return
         # select the item under the cursor if it isn't already selected
         it = self.itemAt(event.pos())
         owner = it

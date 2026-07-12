@@ -56,7 +56,8 @@ _DRAG_TOOLS = (RECT, ROUNDED, ELLIPSE, CIRCLE, SLOT, LINE, CONSTRUCTION)
 _POLY_TOOLS = (POLYGON, STITCHLINE, SCORE)
 
 _SNAP_LABEL = {"center": "centre", "end": "endpoint", "mid": "midpoint",
-               "cross": "intersection", "align": "aligned", "grid": ""}
+               "quad": "quadrant", "hole": "hole centre", "cross": "intersection",
+               "align": "aligned", "grid": ""}
 
 
 def _rev(seg):
@@ -271,10 +272,15 @@ class Canvas(QGraphicsView):
             if best is not None:
                 return QPointF(best.x, best.y), True, guides, best_kind
 
-            # 2. alignment snap: lock x and/or y to an aligned node (guides)
+            # 2. alignment snap: lock x and/or y to an aligned KEY point (ends /
+            # centres / midpoints) that's reasonably close -- not every stitch
+            # hole or intersection, which would put guides everywhere.
             ax = ay = None
             dx = dy = thr
-            for c, _kind in cands:
+            lim = 300.0 / self._zoom
+            for c, kind in cands:
+                if kind in ("hole", "cross") or (c - near).length() > lim:
+                    continue
                 if abs(c.x - pos.x()) < dx:
                     dx, ax = abs(c.x - pos.x()), c
                 if abs(c.y - pos.y()) < dy:
@@ -411,7 +417,9 @@ class Canvas(QGraphicsView):
         y = ya() if callable(ya) else ya
         if kind == "center":
             path.addEllipse(QPointF(x, y), r, r)
-        elif kind == "mid":                       # diamond
+        elif kind == "hole":                      # small ring (stitch hole)
+            path.addEllipse(QPointF(x, y), r * 0.7, r * 0.7)
+        elif kind in ("mid", "quad"):             # diamond
             path.moveTo(x, y - r); path.lineTo(x + r, y)
             path.lineTo(x, y + r); path.lineTo(x - r, y); path.closeSubpath()
         elif kind == "cross":                     # X

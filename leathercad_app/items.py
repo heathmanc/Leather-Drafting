@@ -241,47 +241,21 @@ class ShapeItem(QGraphicsItem):
         oriented = [t.apply_dir(p) for p in local]
         self._outline = _qpoly(oriented)
 
-        # snap nodes (local), each tagged with a kind for the on-screen marker:
-        # 'center' (shape / circle centre), 'end' (corner / vertex), 'mid'
-        # (side centre / edge midpoint / arc midpoint). Used for magnetic
-        # move-snap and as snap / alignment targets while drawing.
-        from leathercad.shapes import Polygon, PathShape, EditablePath
-        typed = [(Vec2(0.0, 0.0), "center")]               # shape centre
-        if local:
-            xs = [p.x for p in local]
-            ys = [p.y for p in local]
-            minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
-            cx, cy = 0.5 * (minx + maxx), 0.5 * (miny + maxy)
-            typed += [(Vec2(minx, miny), "end"), (Vec2(maxx, miny), "end"),
-                      (Vec2(maxx, maxy), "end"), (Vec2(minx, maxy), "end"),
-                      (Vec2(cx, miny), "mid"), (Vec2(maxx, cy), "mid"),
-                      (Vec2(cx, maxy), "mid"), (Vec2(minx, cy), "mid")]
-        if isinstance(self.model, (Polygon, PathShape)):
-            verts = list(self.model.points)
-            closed = getattr(self.model, "close_path", False)
-        elif isinstance(self.model, EditablePath):
-            verts = list(self.model.nodes)
-            closed = self.model.closed
-            typed += [(e.mid, "mid") for e in self.model.edges
-                      if e.kind == "arc" and e.mid is not None]
-        else:
-            verts = list(path.corner_points)
-            closed = False
-        typed += [(v, "end") for v in verts]
-        if len(verts) >= 2:                                # edge midpoints
-            n = len(verts)
-            for i in range(n if closed else n - 1):
-                a, b = verts[i], verts[(i + 1) % n]
-                typed.append((Vec2(0.5 * (a.x + b.x), 0.5 * (a.y + b.y)), "mid"))
-        self._snap_typed_local = typed
-        node_locals = [p for p, _k in typed]
+        # snap targets from REAL geometry (Fusion / LightBurn style): endpoints,
+        # edge/arc midpoints, arc & shape centres and circle quadrants -- not
+        # bounding-box corners, which don't sit on a rounded / round outline.
+        self._snap_typed_local = self._geometry_snap_nodes(path, local)
+        node_locals = [p for p, _k in self._snap_typed_local]
         self._snap_local = node_locals
         self._snap_offsets = [t.apply_dir(p) for p in node_locals]
+        self._hole_locals = []          # local stitch-hole centres (set below)
 
         self._holes = None
         st = self.model.stitch
         if self.model.baked_holes:
             # grouped/baked holes: local coords, oriented into pre-translation
+            self._hole_locals = [Vec2(h.point.x, h.point.y)
+                                 for h in self.model.baked_holes]
             oriented = [Hole(t.apply_dir(h.point), t.apply_dir(h.tangent))
                         for h in self.model.baked_holes]
             self._holes = StitchResult(holes=oriented)
@@ -289,6 +263,7 @@ class ShapeItem(QGraphicsItem):
             _, corner_pts, closed = self._local_geometry()
             res = stitch_polyline([Vec2(p.x, p.y) for p in local],
                                   corner_pts, closed, st)
+            self._hole_locals = [Vec2(h.point.x, h.point.y) for h in res.holes]
             # orient holes into the pre-translation frame
             oriented_holes = [Hole(t.apply_dir(h.point), t.apply_dir(h.tangent))
                               for h in res.holes]
@@ -401,14 +376,48 @@ class ShapeItem(QGraphicsItem):
         return self._holes.count if self._holes else 0
 
     # -- editable nodes (for vertex editing) ---------------------------
+    def _geometry_snap_nodes(self, path, local):
+        """Meaningful snap points in local coords, as (Vec2, kind): endpoints,
+        edge/arc midpoints, arc & shape centres, circle quadrants."""
+        from leathercad.shapes import Circle, Ellipse
+        from leathercad.path import Arc
+        m = self.model
+        typed = []
+        if isinstance(m, (Circle, Ellipse)):
+            typed.append((Vec2(0.0, 0.0), "center"))
+            typed += [(Vec2(m.rx, 0.0), "quad"), (Vec2(-m.rx, 0.0), "quad"),
+                      (Vec2(0.0, m.ry), "quad"), (Vec2(0.0, -m.ry), "quad")]
+            return typed
+        for seg in path.segments:
+            if isinstance(seg, Arc):
+                mid = seg._point(seg.a0 + seg._sweep() / 2.0)
+                typed += [(seg.start(), "end"), (seg.end(), "end"),
+                          (mid, "mid"), (seg.center, "center")]
+            else:
+                a, b = seg.start(), seg.end()
+                typed += [(a, "end"), (b, "end"),
+                          (Vec2(0.5 * (a.x + b.x), 0.5 * (a.y + b.y)), "mid")]
+        if getattr(path, "closed", False) and local:      # geometric centre
+            xs = [p.x for p in local]
+            ys = [p.y for p in local]
+            typed.append((Vec2(0.5 * (min(xs) + max(xs)),
+                               0.5 * (min(ys) + max(ys))), "center"))
+        out = []                                           # drop near-duplicates
+        for p, k in typed:
+            if not any((p - q).length() < 1e-6 for q, _ in out):
+                out.append((p, k))
+        return out
+
     def world_snap_nodes(self):
         t = self.model.transform
         return [t.apply(p) for p in getattr(self, "_snap_local", [])]
 
     def world_snap_nodes_typed(self):
         t = self.model.transform
-        return [(t.apply(p), kind)
-                for p, kind in getattr(self, "_snap_typed_local", [])]
+        out = [(t.apply(p), kind)
+               for p, kind in getattr(self, "_snap_typed_local", [])]
+        out += [(t.apply(p), "hole") for p in getattr(self, "_hole_locals", [])]
+        return out
 
     def editable_nodes(self):
         from leathercad.shapes import Polygon, PathShape, EditablePath

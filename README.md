@@ -93,7 +93,7 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Holes / slots / fold lines** | Hole `H` (hardware), Slot `T` (stadium), Score line `K` (fold/skive on the Score layer) |
 | **Seam** | Stitch line `L` — a shared seam for cross-piece registration |
 | **Select / move** | `S` — drag to move, drag one piece over another to check fit |
-| **Snapping** | two independent toolbar toggles — **Nodes** and **Grid** — plus grid size. Node snap catches other shapes' **ends, midpoints, centres, side-centres and intersections**; turn Grid off to snap only to geometry (points off a node stay free). Both apply while drawing and moving |
+| **Snapping** | two independent toolbar toggles — **Nodes** and **Grid** — plus grid size. Node snap catches real geometry: **endpoints, edge & arc midpoints, arc/shape centres, circle quadrants, stitch-hole centres and intersections** (no phantom bounding-box points). Turn Grid off to snap only to geometry (points off a node stay free). Both apply while drawing and moving |
 | **Alignment guides** | while drawing, when the cursor lines up with another object's node/centre the point locks to that x/y and a dashed **guide line** appears (smart snapping, Fusion/Illustrator style) |
 | **Exact sizes** | live W×H shown while dragging; after drawing, the size field is focused so you can type an exact value |
 | **Select by outline** | shapes are grabbed by clicking their outline, not the filled interior — click "inside" to reach shapes behind or draw there |
@@ -133,13 +133,18 @@ splits into two. Clicking a piece that nothing crosses removes it outright.
 
 While a drawing tool is active, the snap targets near the cursor are **marked on
 screen** so you always know where a click will land — a **square** for an
-end/corner, a **diamond** for a midpoint or side-centre, a **circle** for a
-shape/circle centre, an **✕** for an intersection — and the point you're placing
-snaps to the nearest one (its type is named in the status bar). When it lines up
-(same x or y) with one of those, it **locks to that alignment** and a dashed
-orange **guide line** is drawn so you can see what it lined up with — the same
-inference snapping as Fusion 360 / Illustrator. Line up with two things at once
-and it snaps to the crossing point.
+end/corner, a **diamond** for a midpoint or circle quadrant, a **circle** for a
+shape/arc centre, a small **ring** for a stitch-hole centre, an **✕** for an
+intersection — and the point you're placing snaps to the nearest one (its type
+is named in the status bar). All targets come from real geometry, so nothing
+floats off a rounded or round outline.
+
+When the point lines up (same x or y) with a nearby **endpoint, midpoint or
+centre**, it **locks to that alignment** and a dashed orange **guide line** is
+drawn — the same inference snapping as Fusion 360 / Illustrator. (Stitch holes
+and intersections don't drive guides, so the lines stay meaningful even on a
+piece with a hundred holes.) Line up with two things at once and it snaps to the
+crossing point.
 
 ![snap markers: a circle's centre highlighted while drawing](docs/snap_center.png)
 

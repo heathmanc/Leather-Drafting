@@ -778,6 +778,45 @@ def test_snap_reports_kind_including_circle_centre(qapp):
     assert kind == "center" and (round(p.x()), round(p.y())) == (30, 20)
 
 
+def test_snap_to_stitch_hole_centre(qapp):
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import ShapeItem
+    from leathercad.document import Document
+
+    doc = Document()
+    doc.add_shape(Rectangle(width=80, height=50, corner_radius=8,
+                            transform=Transform(x=0, y=0),
+                            stitch=StitchSettings(pitch_mm=4.0, inset=4.0),
+                            layer="Cut"))
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    c.snap_to_nodes, c.snap_to_grid = True, False
+    it = [i for i in c.scene_obj.items() if isinstance(i, ShapeItem)][0]
+    holes = [p for p, k in it.world_snap_nodes_typed() if k == "hole"]
+    assert holes                                    # stitch holes are snap targets
+    h = holes[0]
+    p, vtx, guides, kind = c._smart_snap(QPointF(h.x + 0.5, h.y - 0.4))
+    assert kind == "hole" and abs(p.x() - h.x) < 1e-6 and abs(p.y() - h.y) < 1e-6
+
+
+def test_snap_nodes_are_geometry_not_bbox(qapp):
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import ShapeItem
+    from leathercad.shapes import Circle
+    from leathercad.document import Document
+    from collections import Counter
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.add_shape(Circle(rx=20, ry=20, transform=Transform(x=0, y=0), layer="Cut"))
+    it = [i for i in c.scene_obj.items() if isinstance(i, ShapeItem)][0]
+    kinds = Counter(k for _p, k in it.world_snap_nodes_typed())
+    # a circle offers its centre + 4 quadrants -- no phantom bbox corners
+    assert kinds == Counter({"center": 1, "quad": 4})
+
+
 def test_construction_line_ends_where_drawn(qapp):
     from PySide6.QtCore import QPointF
     from leathercad_app.mainwindow import MainWindow

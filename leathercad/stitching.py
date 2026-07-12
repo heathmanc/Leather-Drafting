@@ -412,6 +412,86 @@ def _result_from_positions(poly: Polyline, positions: List[float],
     return StitchResult(holes=holes, pitches=pitches, closed=closed)
 
 
+def _axis_crossings(poly: Polyline, axis: str) -> List[float]:
+    """Arc-length positions where the outline crosses its centre axis
+    (2 points for a convex shape). ``axis`` is 'vertical' or 'horizontal'."""
+    pts = poly.points
+    xs = [p.x for p in pts]
+    ys = [p.y for p in pts]
+    if axis == "vertical":
+        c = 0.5 * (min(xs) + max(xs))
+        val = lambda p: p.x - c
+    else:
+        c = 0.5 * (min(ys) + max(ys))
+        val = lambda p: p.y - c
+    out = []
+    for i in range(len(pts) - 1):
+        a, b = pts[i], pts[i + 1]
+        va, vb = val(a), val(b)
+        if abs(va) < 1e-9:
+            out.append(poly.cum[i])
+        elif va * vb < 0:
+            t = va / (va - vb)
+            out.append(poly.cum[i] + (b - a).length() * t)
+    # dedupe near-identical crossings
+    out.sort()
+    uniq = []
+    for s in out:
+        if not uniq or abs(s - uniq[-1]) > 1e-6:
+            uniq.append(s)
+    return uniq
+
+
+def flip_symmetry(points: List[Vec2], axis: str, center: Optional[Vec2] = None,
+                  tol: float = 0.05):
+    """Check whether a hole set is symmetric under a flip.
+
+    Returns (is_symmetric, max_offset_mm, unmatched_count). ``axis`` is
+    'vertical' (mirror x about center) or 'horizontal' (mirror y).
+    """
+    if not points:
+        return True, 0.0, 0
+    xs = [p.x for p in points]
+    ys = [p.y for p in points]
+    cx = center.x if center else 0.5 * (min(xs) + max(xs))
+    cy = center.y if center else 0.5 * (min(ys) + max(ys))
+
+    def mirror(p: Vec2) -> Vec2:
+        if axis == "vertical":
+            return Vec2(2 * cx - p.x, p.y)
+        return Vec2(p.x, 2 * cy - p.y)
+
+    max_off = 0.0
+    unmatched = 0
+    for p in points:
+        m = mirror(p)
+        best = min(((m - q).length() for q in points), default=float("inf"))
+        max_off = max(max_off, best)
+        if best > tol:
+            unmatched += 1
+    return unmatched == 0, max_off, unmatched
+
+
+def holes_for_shape(shape) -> StitchResult:
+    """World-space holes for a shape, computed on its LOCAL outline then
+    transformed. Baked holes are transformed directly. Used by export and the
+    symmetry check so hole placement is consistent regardless of rotation."""
+    t = shape.transform
+    baked = getattr(shape, "baked_holes", None)
+    if baked:
+        return StitchResult(holes=[Hole(t.apply(h.point), t.apply_dir(h.tangent))
+                                   for h in baked])
+    st = getattr(shape, "stitch", None)
+    if not (st and st.enabled):
+        return StitchResult()
+    path = shape.local_path()
+    pts = path.flatten()
+    res = stitch_polyline([Vec2(p.x, p.y) for p in pts],
+                          list(path.corner_points), path.closed, st)
+    res.holes = [Hole(t.apply(h.point), t.apply_dir(h.tangent)) for h in res.holes]
+    return res
+
+
 # ---------------------------------------------------------------------------
 # Polyline-level API used by the shapes / document layer
 # ---------------------------------------------------------------------------
@@ -464,8 +544,23 @@ def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
     if poly.length <= _EPS:
         return StitchResult(closed=closed)
 
-    # Project corner points onto the (possibly inset) stitch line.
-    cor = sorted(poly.nearest_arclength(cp) for cp in (corner_points or []))
+    # Symmetry: rotate so the outline starts at one axis crossing and anchor a
+    # hole at the other. That splits the loop into the two mirror-image halves;
+    # each is fitted deterministically, so the holes come out flip-symmetric.
+    sym = getattr(settings, "symmetry", "none")
+    if closed and sym in ("vertical", "horizontal"):
+        crossings = _axis_crossings(poly, sym)
+        if len(crossings) >= 2:
+            poly = Polyline(_rotate_closed_ring(list(poly.points), crossings[0]))
+            cor = sorted(poly.nearest_arclength(cp) for cp in (corner_points or []))
+            other = [s for s in _axis_crossings(poly, sym) if s > 1e-6]
+            if other:
+                cor = sorted(set(cor) | {other[0]})
+        else:
+            cor = sorted(poly.nearest_arclength(cp) for cp in (corner_points or []))
+    else:
+        # Project corner points onto the (possibly inset) stitch line.
+        cor = sorted(poly.nearest_arclength(cp) for cp in (corner_points or []))
 
     fit = settings.fit
     if fit == "auto":

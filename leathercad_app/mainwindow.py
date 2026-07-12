@@ -229,6 +229,8 @@ class MainWindow(QMainWindow):
         self._add(em, "Break apart into segments", "Ctrl+B", self.canvas.break_apart_selected)
         self._add(em, "Join / weld segments", "Ctrl+J", lambda: self.canvas.join_selected())
         em.addSeparator()
+        self._add(em, "Check back-to-back symmetry…", None, self._check_symmetry)
+        em.addSeparator()
         self._add(em, "Duplicate", "Ctrl+D", self.canvas.duplicate_selected)
         self._add(em, "Delete", None, self.canvas.delete_selected)
         self._add(em, "Select all", "Ctrl+A", self._select_all)
@@ -332,6 +334,10 @@ class MainWindow(QMainWindow):
     def _select_all(self):
         for it in self.canvas.scene_obj.items():
             it.setSelected(True)
+
+    def _check_symmetry(self):
+        QMessageBox.information(self, "Back-to-back symmetry",
+                               self.canvas.symmetry_report_selected())
 
     def _zoom(self, factor):
         self.canvas._zoom = max(0.3, min(40.0, self.canvas._zoom * factor))

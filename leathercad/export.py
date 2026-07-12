@@ -33,7 +33,7 @@ def collect(doc: Document):
     stitches: List[Tuple[StitchResult, object, str]] = []
     stitch_color = _layer_color(doc, "Stitch", "#0066ff")
 
-    from .stitching import Hole
+    from .stitching import Hole, holes_for_shape
     from .stitchsettings import StitchSettings
 
     for sh in doc.shapes:
@@ -43,15 +43,10 @@ def collect(doc: Document):
         color = lyr.color if lyr else "#ff0000"
         pts, corners, closed = sh.world_polyline()
         outlines.append((pts, color))
-        if sh.baked_holes:
-            # grouped/baked holes: local -> world, styled by the shape's stitch
+        res = holes_for_shape(sh)
+        if res.count:
             style = sh.stitch or StitchSettings()
-            world = [Hole(sh.transform.apply(h.point),
-                          sh.transform.apply_dir(h.tangent)) for h in sh.baked_holes]
-            stitches.append((StitchResult(holes=world), style, stitch_color))
-        elif sh.stitch and sh.stitch.enabled:
-            res = stitch_polyline(pts, corners, closed, sh.stitch)
-            stitches.append((res, sh.stitch, stitch_color))
+            stitches.append((res, style, stitch_color))
 
     for sl in doc.stitch_lines:
         res = sl.result()

@@ -87,6 +87,7 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Right-click menu** | Group / Ungroup / Convert to nodes / Duplicate / Delete on the selection |
 | **Radius corners** | select a rectangle/polygon, set *Corner radius* in Properties |
 | **Iron & holes** | per shape: pick an iron (mm or SPI), inset, round or slanted-slit holes, single or **double row** (saddle stitch) + backstitch, live hole count + spacing readout |
+| **Back-to-back symmetry** | Stitching → *Symmetry* (vertical/horizontal) forces flip-symmetric holes; Edit → *Check back-to-back symmetry* validates that a flipped piece lines up |
 | **Layers → laser jobs** | colour-coded Cut / Score / Engrave / Stitch layers with visibility |
 | **Arrange** | align (left/centre/right/top/middle/bottom) and distribute selected shapes |
 | **Undo / redo** | `Ctrl+Z` / `Ctrl+Shift+Z` |
@@ -202,6 +203,7 @@ examples/  tests/  docs/
 - [x] Convert a shape to editable nodes (rounded corners keep arcs: midpoint +
       endpoint handles); outline-based selection; node-to-node snapping (move + edit)
 - [x] Break a shape apart into movable line/arc segments, and join/weld them back
+- [x] Flip-symmetric hole distribution + back-to-back symmetry validation
 - [ ] Boolean ops (windows, cut-outs) and true seam-allowance offset
 - [ ] Alignment guides (smart snapping lines) while dragging
 - [ ] Import reference images / trace an existing pattern

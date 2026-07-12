@@ -156,6 +156,39 @@ def test_baked_holes_on_shape_roundtrip(tmp_path):
     assert abs(doc2.shapes[0].baked_holes[0].point.x - (-5)) < 1e-9
 
 
+def test_flip_symmetric_distribution():
+    """Rounded rect holes aren't flip-symmetric by default, but become exactly
+    symmetric with the symmetry option -- so a flipped piece lines up."""
+    from leathercad.shapes import Rectangle, Transform
+    from leathercad.stitching import holes_for_shape, flip_symmetry
+
+    plain = Rectangle(width=100, height=64, corner_radius=14,
+                      transform=Transform(x=0, y=0),
+                      stitch=StitchSettings(pitch_mm=3.85, inset=3.5))
+    pts = [h.point for h in holes_for_shape(plain).holes]
+    assert not flip_symmetry(pts, "vertical")[0]
+
+    for axis in ("vertical", "horizontal"):
+        sym = Rectangle(width=100, height=64, corner_radius=14,
+                        transform=Transform(x=0, y=0),
+                        stitch=StitchSettings(pitch_mm=3.85, inset=3.5,
+                                              symmetry=axis))
+        p = [h.point for h in holes_for_shape(sym).holes]
+        ok, off, unmatched = flip_symmetry(p, axis)
+        assert ok and unmatched == 0 and off < 1e-3
+
+
+def test_flip_symmetry_helper():
+    from leathercad.stitching import flip_symmetry
+    # symmetric about x=0
+    pts = [Vec2(-5, 1), Vec2(5, 1), Vec2(-3, -2), Vec2(3, -2)]
+    assert flip_symmetry(pts, "vertical")[0]
+    # break it
+    pts2 = pts + [Vec2(7, 4)]
+    ok, off, un = flip_symmetry(pts2, "vertical")
+    assert not ok and un >= 1
+
+
 def test_two_row_saddle_stitch():
     """rows=2 doubles the holes into two parallel rows offset by row_spacing."""
     sl1 = StitchLine(points=[Vec2(0, 0), Vec2(40, 0)],

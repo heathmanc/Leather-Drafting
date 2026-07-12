@@ -28,6 +28,9 @@ class StitchSettings:
     # backstitch reinforcement zone at each open-seam end (marker only; you
     # sew back through these existing holes, so no extra holes are cut).
     backstitch: int = 0
+    # force flip-symmetric holes so a flipped piece lines up back-to-back:
+    # "none" | "vertical" (mirror left<->right) | "horizontal" (top<->bottom).
+    symmetry: str = "none"
 
     def iron_label(self) -> str:
         from .irons import mm_to_spi

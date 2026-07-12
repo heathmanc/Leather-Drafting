@@ -23,7 +23,7 @@ from leathercad.shapes import (Rectangle, Ellipse, Circle, Polygon, PathShape,
 from leathercad.stitchsettings import StitchSettings
 from leathercad.stitchline import StitchLine
 from leathercad.holes import LooseHole
-from leathercad.stitching import stitch_polyline, Hole, StitchResult
+from leathercad.stitching import stitch_polyline, Hole, StitchResult, flip_symmetry
 from .items import ShapeItem, StitchLineItem, VertexHandle, HoleItem
 
 try:
@@ -806,6 +806,38 @@ class Canvas(QGraphicsView):
         return n
 
     # -- ungroup: shape/seam stitching -> individual holes -------------
+    def symmetry_report_selected(self) -> str:
+        """Report whether the selected shape's holes are flip-symmetric (so a
+        flipped piece lines up back-to-back). Checked in the piece's own frame."""
+        shapes = [it for it in self.selected_items() if isinstance(it, ShapeItem)]
+        if len(shapes) != 1:
+            return "Select a single shape with stitching to check."
+        sh = shapes[0].model
+        if sh.baked_holes:
+            local = [h.point for h in sh.baked_holes]
+        elif sh.stitch and sh.stitch.enabled:
+            path = sh.local_path()
+            res = stitch_polyline([Vec2(p.x, p.y) for p in path.flatten()],
+                                  list(path.corner_points), path.closed, sh.stitch)
+            local = [h.point for h in res.holes]
+        else:
+            return "This shape has no stitch holes to check."
+        if not local:
+            return "This shape has no stitch holes to check."
+
+        def line(axis, label):
+            ok, off, un = flip_symmetry(local, axis)
+            if ok:
+                return f"• {label}: SYMMETRIC ✓"
+            return (f"• {label}: not symmetric — {un} of {len(local)} holes off "
+                    f"by up to {off:.2f} mm")
+
+        return (f"Back-to-back / flip symmetry ({len(local)} holes):\n\n"
+                + line("vertical", "Flip left ↔ right") + "\n"
+                + line("horizontal", "Flip top ↔ bottom") + "\n\n"
+                "Tip: set Stitching → Symmetry to force it, if the shape itself "
+                "is symmetric about that axis.")
+
     def _shape_world_holes(self, sh):
         """(StitchResult in world coords, style) for a shape's current holes,
         or (None, None) if it has none."""

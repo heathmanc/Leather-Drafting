@@ -133,6 +133,10 @@ class PropertiesPanel(QWidget):
         self.backstitch.setRange(0, 8)
         self.backstitch.setSuffix(" holes")
         self.backstitch.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.symmetry = QComboBox()
+        self.symmetry.addItems(["none", "vertical", "horizontal"])
+        self.symmetry.setToolTip(
+            "Force flip-symmetric holes so a flipped piece lines up back-to-back")
         fs.addRow("Iron", self.iron)
         fs.addRow("Pitch", self.pitch)
         fs.addRow("Inset from edge", self.inset)
@@ -144,6 +148,7 @@ class PropertiesPanel(QWidget):
         fs.addRow("Rows", self.rows)
         fs.addRow("Row spacing", self.row_spacing)
         fs.addRow("Backstitch", self.backstitch)
+        fs.addRow("Symmetry", self.symmetry)
         root.addWidget(self.g_stitch)
 
         self.readout = QLabel("")
@@ -164,6 +169,7 @@ class PropertiesPanel(QWidget):
         self.backstitch.valueChanged.connect(self._apply)
         self.backstitch.editingFinished.connect(self._commit)
         self.rows.currentIndexChanged.connect(self._apply_commit)
+        self.symmetry.currentIndexChanged.connect(self._apply_commit)
         self.mirror.stateChanged.connect(self._apply_commit)
         self.opacity.valueChanged.connect(self._apply)
         self.opacity.sliderReleased.connect(self._commit)
@@ -290,6 +296,8 @@ class PropertiesPanel(QWidget):
         self.rows.setCurrentIndex(1 if getattr(st, "rows", 1) == 2 else 0)
         self.row_spacing.setValue(getattr(st, "row_spacing", 3.0))
         self.backstitch.setValue(getattr(st, "backstitch", 0))
+        i = self.symmetry.findText(getattr(st, "symmetry", "none"))
+        self.symmetry.setCurrentIndex(i if i >= 0 else 0)
         self._sync_iron_combo(st.pitch_mm)
         self._sync_hole_vis()
         self.row_spacing.setVisible(self.rows.currentIndex() == 1)
@@ -402,6 +410,7 @@ class PropertiesPanel(QWidget):
         st.rows = 2 if self.rows.currentIndex() == 1 else 1
         st.row_spacing = self.row_spacing.value()
         st.backstitch = self.backstitch.value()
+        st.symmetry = self.symmetry.currentText()
 
     def focus_primary_dimension(self):
         """Focus the main size field so the user can type an exact value."""

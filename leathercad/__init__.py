@@ -18,6 +18,8 @@ from .stitching import (
     march_chord,
     march_arclength,
     polyline_from_path,
+    flip_symmetry,
+    holes_for_shape,
 )
 from .stitchsettings import StitchSettings
 from .irons import Iron, spi_to_mm, mm_to_spi, get as get_iron, PRESETS
@@ -38,6 +40,7 @@ __all__ = [
     "Path", "PathBuilder", "Line", "Arc", "CubicBezier", "QuadraticBezier",
     "Polyline", "Hole", "StitchResult", "stitch_path", "stitch_polyline",
     "march_chord", "march_arclength", "polyline_from_path",
+    "flip_symmetry", "holes_for_shape",
     "StitchSettings",
     "Iron", "spi_to_mm", "mm_to_spi", "get_iron", "PRESETS",
     "offset_closed_inward",

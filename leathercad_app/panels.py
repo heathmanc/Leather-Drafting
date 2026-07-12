@@ -116,6 +116,13 @@ class PropertiesPanel(QWidget):
         self.hole_dia = _spin(0.1, 10, 0.1)
         self.slit_len = _spin(0.2, 10, 0.1)
         self.slit_angle = _spin(-89, 89, 1.0, 1, " °")
+        self.rows = QComboBox()
+        self.rows.addItems(["1 (single)", "2 (double)"])
+        self.row_spacing = _spin(0.5, 20, 0.5)
+        self.backstitch = QSpinBox()
+        self.backstitch.setRange(0, 8)
+        self.backstitch.setSuffix(" holes")
+        self.backstitch.setButtonSymbols(QAbstractSpinBox.NoButtons)
         fs.addRow("Iron", self.iron)
         fs.addRow("Pitch", self.pitch)
         fs.addRow("Inset from edge", self.inset)
@@ -124,6 +131,9 @@ class PropertiesPanel(QWidget):
         fs.addRow("Hole ø", self.hole_dia)
         fs.addRow("Slit length", self.slit_len)
         fs.addRow("Slit angle", self.slit_angle)
+        fs.addRow("Rows", self.rows)
+        fs.addRow("Row spacing", self.row_spacing)
+        fs.addRow("Backstitch", self.backstitch)
         root.addWidget(self.g_stitch)
 
         self.readout = QLabel("")
@@ -139,6 +149,11 @@ class PropertiesPanel(QWidget):
                     self.slit_angle):
             wdg.valueChanged.connect(self._apply)
             wdg.editingFinished.connect(self._commit)
+        self.row_spacing.valueChanged.connect(self._apply)
+        self.row_spacing.editingFinished.connect(self._commit)
+        self.backstitch.valueChanged.connect(self._apply)
+        self.backstitch.editingFinished.connect(self._commit)
+        self.rows.currentIndexChanged.connect(self._apply_commit)
         self.mirror.stateChanged.connect(self._apply_commit)
         self.opacity.valueChanged.connect(self._apply)
         self.opacity.sliderReleased.connect(self._commit)
@@ -224,11 +239,15 @@ class PropertiesPanel(QWidget):
         self.hole_dia.setValue(st.hole_diameter)
         self.slit_len.setValue(st.slit_length)
         self.slit_angle.setValue(st.slit_angle)
+        self.rows.setCurrentIndex(1 if getattr(st, "rows", 1) == 2 else 0)
+        self.row_spacing.setValue(getattr(st, "row_spacing", 3.0))
+        self.backstitch.setValue(getattr(st, "backstitch", 0))
         self._sync_iron_combo(st.pitch_mm)
         slit = st.hole_style == "slit"
         self.hole_dia.setVisible(not slit)
         self.slit_len.setVisible(slit)
         self.slit_angle.setVisible(slit)
+        self.row_spacing.setVisible(self.rows.currentIndex() == 1)
 
     def _sync_iron_combo(self, pitch):
         for i, k in enumerate(self._iron_keys):
@@ -296,6 +315,7 @@ class PropertiesPanel(QWidget):
         self.hole_dia.setVisible(not slit)
         self.slit_len.setVisible(slit)
         self.slit_angle.setVisible(slit)
+        self.row_spacing.setVisible(self.rows.currentIndex() == 1)
         self.canvas.refresh_item(it)
         self._update_readout()
 
@@ -307,6 +327,9 @@ class PropertiesPanel(QWidget):
         st.hole_diameter = self.hole_dia.value()
         st.slit_length = self.slit_len.value()
         st.slit_angle = self.slit_angle.value()
+        st.rows = 2 if self.rows.currentIndex() == 1 else 1
+        st.row_spacing = self.row_spacing.value()
+        st.backstitch = self.backstitch.value()
 
     def focus_primary_dimension(self):
         """Focus the main size field so the user can type an exact value."""

@@ -22,6 +22,12 @@ class StitchSettings:
     # outline). Keeping this equal between two pieces guarantees identical
     # holes -> perfect registration.
     start_offset: float = 0.0
+    # saddle stitch: 2 -> a second parallel row of holes (aligned rungs)
+    rows: int = 1
+    row_spacing: float = 3.0        # mm between the two rows
+    # backstitch reinforcement zone at each open-seam end (marker only; you
+    # sew back through these existing holes, so no extra holes are cut).
+    backstitch: int = 0
 
     def iron_label(self) -> str:
         from .irons import mm_to_spi

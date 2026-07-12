@@ -26,6 +26,24 @@ def _qpoly(points: List[Vec2]) -> QPolygonF:
     return QPolygonF([QPointF(p.x, p.y) for p in points])
 
 
+def _paint_backstitch(painter, result, settings) -> None:
+    """Ring the reinforcement holes at each end of an OPEN seam."""
+    if settings is None or result is None or result.closed:
+        return
+    n = getattr(settings, "backstitch", 0)
+    if n <= 0 or not result.holes:
+        return
+    mult = 2 if getattr(settings, "rows", 1) == 2 else 1
+    k = min(n * mult, len(result.holes))
+    ring = QPen(QColor(220, 40, 40), 0)
+    ring.setCosmetic(True)
+    painter.setPen(ring)
+    painter.setBrush(Qt.NoBrush)
+    marked = list(result.holes[:k]) + list(result.holes[-k:])
+    for h in marked:
+        painter.drawEllipse(QPointF(h.point.x, h.point.y), 1.4, 1.4)
+
+
 class VertexHandle(QGraphicsItem):
     """A constant-size draggable handle for editing a polygon/seam vertex."""
 
@@ -187,6 +205,7 @@ class ShapeItem(QGraphicsItem):
                 r = d / 2.0
                 for h in self._holes.holes:
                     painter.drawEllipse(QPointF(h.point.x, h.point.y), r, r)
+            _paint_backstitch(painter, self._holes, st)
 
         if self.isSelected():
             sel = QPen(QColor(30, 140, 255), 0, Qt.DashLine)
@@ -262,6 +281,7 @@ class StitchLineItem(QGraphicsItem):
         if self._holes:
             for h in self._holes.holes:
                 painter.drawEllipse(QPointF(h.point.x, h.point.y), 0.5, 0.5)
+            _paint_backstitch(painter, self._holes, self.line.settings)
         if self.isSelected():
             sel = QPen(QColor(30, 140, 255), 0, Qt.DashLine)
             sel.setCosmetic(True)

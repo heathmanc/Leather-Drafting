@@ -129,6 +129,19 @@ def test_export_svg_and_dxf(tmp_path):
     assert "SECTION" in dxf_txt and "CIRCLE" in dxf_txt and "EOF" in dxf_txt
 
 
+def test_two_row_saddle_stitch():
+    """rows=2 doubles the holes into two parallel rows offset by row_spacing."""
+    sl1 = StitchLine(points=[Vec2(0, 0), Vec2(40, 0)],
+                     settings=StitchSettings(pitch_mm=4.0, fit="endpoints", rows=1))
+    sl2 = StitchLine(points=[Vec2(0, 0), Vec2(40, 0)],
+                     settings=StitchSettings(pitch_mm=4.0, fit="endpoints",
+                                             rows=2, row_spacing=3.0))
+    r1, r2 = sl1.result(), sl2.result()
+    assert r2.count == 2 * r1.count
+    ys = sorted(set(round(h.point.y, 3) for h in r2.holes))
+    assert ys == [-1.5, 1.5]  # perpendicular offset on a horizontal seam
+
+
 def test_stitch_line_registration_shared():
     """A shared stitch line yields ONE hole set; any piece against it lines
     up by construction."""

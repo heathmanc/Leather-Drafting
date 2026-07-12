@@ -473,12 +473,14 @@ def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
 
     if settings.mode == "arclength":
         positions = march_arclength(poly, settings.pitch_mm)
-        return _result_from_positions(poly, positions, [settings.pitch_mm], closed)
+        return _apply_rows(_result_from_positions(
+            poly, positions, [settings.pitch_mm], closed), settings)
 
     anchors = _anchors_from(cor, poly.length, closed, fit)
     if anchors is None:
         positions = march_chord(poly, settings.pitch_mm)
-        return _result_from_positions(poly, positions, [settings.pitch_mm], closed)
+        return _apply_rows(_result_from_positions(
+            poly, positions, [settings.pitch_mm], closed), settings)
 
     positions: List[float] = []
     pitches: List[float] = []
@@ -493,7 +495,27 @@ def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
         positions.extend(span_positions[:-1])
     if not closed:
         positions.append(anchors[-1])
-    return _result_from_positions(poly, positions, pitches, closed)
+    return _apply_rows(
+        _result_from_positions(poly, positions, pitches, closed), settings)
+
+
+def _apply_rows(result: StitchResult, settings) -> StitchResult:
+    """Expand to a second parallel row of holes for saddle stitching.
+
+    Each hole becomes two, offset by +/- row_spacing/2 along the seam normal,
+    at the same tangential position (aligned rungs).
+    """
+    rows = getattr(settings, "rows", 1)
+    if rows <= 1 or not result.holes:
+        return result
+    half = getattr(settings, "row_spacing", 3.0) / 2.0
+    doubled: List[Hole] = []
+    for h in result.holes:
+        n = h.tangent.perp()
+        doubled.append(Hole(h.point + n * half, h.tangent))
+        doubled.append(Hole(h.point - n * half, h.tangent))
+    result.holes = doubled
+    return result
 
 
 def _anchors_from(corners: List[float], total: float, closed: bool,

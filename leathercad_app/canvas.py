@@ -194,6 +194,7 @@ class Canvas(QGraphicsView):
         self._handles: List[VertexHandle] = []
         self._edit_owner = None
         self._resize_handles = []
+        self._active_resize = None   # handle currently being dragged
         # Hold strong Python refs to every scene item we create. PySide6 can
         # otherwise garbage-collect a live item's wrapper and free the C++
         # object while it is still selected -> crash in clearSelection().
@@ -1046,6 +1047,7 @@ class Canvas(QGraphicsView):
         for h in self._resize_handles:
             self.scene_obj.removeItem(h)
         self._resize_handles = []
+        self._active_resize = None
 
     def resize_handle_moved(self, dragged) -> None:
         # the shape geometry changed: move the sibling grips to the new box and
@@ -1276,7 +1278,11 @@ class Canvas(QGraphicsView):
             self.clear_resize_handles()
 
     def _reposition_resize_handles(self) -> None:
+        # never reposition the handle the user is actively dragging -- that
+        # would snap it back to the pre-resize box and fight the drag.
         for h in self._resize_handles:
+            if h is self._active_resize:
+                continue
             if _alive(h) and _alive(h.owner):
                 h.reposition()
 

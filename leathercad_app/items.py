@@ -227,27 +227,34 @@ class ResizeHandle(QGraphicsItem):
         painter.drawRect(QRectF(-s, -s, 2 * s, 2 * s))
 
     def mousePressEvent(self, event):
+        # Drive the resize by hand (below) instead of Qt's ItemIsMovable move --
+        # the default mouseMoveEvent also drags every *selected* item, which
+        # would translate the shape we're resizing. Just grab the mouse here.
+        self._dragged = False
         if self.canvas is not None:
+            self.canvas._active_resize = self
             self.canvas.begin_node_snap(self)
-        super().mousePressEvent(event)
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        if self.canvas is None:
+            return
+        world = self.canvas.snap_node(event.scenePos())   # snap to other nodes
+        self._dragged = True
+        self._apply_resize(Vec2(world.x(), world.y()))
+        self._syncing = True
+        self.setPos(world)                                 # glyph follows cursor
+        self._syncing = False
+        event.accept()
 
     def mouseReleaseEvent(self, event):
-        super().mouseReleaseEvent(event)
         if self.canvas is not None:
             self.canvas.end_node_snap()
+            self.canvas._active_resize = None
         if self._dragged and self.canvas is not None:
             self._dragged = False
             self.canvas.commitRequested.emit()
-
-    def itemChange(self, change, value):
-        if getattr(self, "_syncing", False):
-            return super().itemChange(change, value)
-        if change == QGraphicsItem.ItemPositionChange and self.canvas is not None:
-            return self.canvas.snap_node(value)
-        if change == QGraphicsItem.ItemPositionHasChanged:
-            self._dragged = True
-            self._apply_resize(Vec2(self.pos().x(), self.pos().y()))
-        return super().itemChange(change, value)
+        event.accept()
 
     def _apply_resize(self, grip_world: Vec2) -> None:
         owner = self.owner

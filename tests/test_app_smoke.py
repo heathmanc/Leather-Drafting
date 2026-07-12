@@ -1300,7 +1300,8 @@ def test_resize_handles_appear_and_resize(qapp):
     assert len(handles) == 8
     tr = next(h for h in handles if h.grip == (1, 1))     # top-right grip
     assert (round(tr.pos().x()), round(tr.pos().y())) == (70, 65)
-    tr.setPos(80, 75)                                     # drag it out
+    from leathercad.geometry import Vec2
+    tr._apply_resize(Vec2(80, 75))                        # drag the grip out
     assert round(rect.width) == 50 and round(rect.height) == 40
     # opposite (bottom-left) corner must stay at (30, 35)
     assert round(rect.transform.x - rect.width / 2) == 30
@@ -1309,6 +1310,56 @@ def test_resize_handles_appear_and_resize(qapp):
     c.scene_obj.clearSelection()
     c.selection_changed()
     assert not [h for h in c.scene_obj.items() if isinstance(h, ResizeHandle)]
+
+
+def test_resize_drag_resizes_not_moves_and_refits_holes(qapp):
+    # Regression: dragging a resize grip must RESIZE the shape (opposite corner
+    # pinned) rather than translate the selected shape, and the stitch holes
+    # must be recomputed to fit the new perimeter.
+    from PySide6.QtCore import QPointF, QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from leathercad_app import canvas as cm
+    from leathercad_app.items import ResizeHandle
+    from leathercad.shapes import Rectangle, Transform
+    from leathercad.stitchsettings import StitchSettings
+    from leathercad.document import Document
+
+    doc = Document()
+    rect = Rectangle(width=40, height=30, transform=Transform(x=50, y=50),
+                     stitch=StitchSettings(pitch_mm=4.0, inset=3.0))
+    rect.stitch.enabled = True
+    doc.add_shape(rect)
+    c = cm.Canvas(doc)
+    c.snap_to_nodes = False
+    c.snap_to_grid = False
+    c.tool = cm.SELECT
+    c.rebuild()
+    c.resize(600, 600)
+    c.show()
+    item = next(it for it in c.scene_obj.items()
+                if getattr(it, "model", None) is rect)
+    item.setSelected(True)
+    c.selection_changed()
+    holes_before = item.hole_count
+    vp = c.viewport()
+
+    def send(kind, world, btns=Qt.LeftButton, btn=Qt.LeftButton):
+        pt = c.mapFromScene(QPointF(world))
+        QApplication.sendEvent(vp, QMouseEvent(
+            kind, QPointF(pt), vp.mapToGlobal(pt), btn, btns, Qt.NoModifier))
+
+    send(QEvent.MouseButtonPress, QPointF(70, 65))          # grab top-right grip
+    qapp.processEvents()
+    for w in [(80, 75), (90, 85)]:
+        send(QEvent.MouseMove, QPointF(*w))
+        qapp.processEvents()
+    send(QEvent.MouseButtonRelease, QPointF(90, 85), Qt.NoButton)
+    qapp.processEvents()
+
+    assert round(rect.width) == 60 and round(rect.height) == 50   # resized
+    assert round(rect.transform.x - rect.width / 2) == 30         # BL pinned
+    assert round(rect.transform.y - rect.height / 2) == 35
+    assert item.hole_count != holes_before                       # holes refit
 
 
 def test_line_length_and_angle_field(qapp):

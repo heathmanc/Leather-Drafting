@@ -240,6 +240,7 @@ class ShapeItem(QGraphicsItem):
         local = path.flatten()
         oriented = [t.apply_dir(p) for p in local]
         self._outline = _qpoly(oriented)
+        self._closed = path.closed
 
         # snap targets from REAL geometry (Fusion / LightBurn style): endpoints,
         # edge/arc midpoints, arc & shape centres and circle quadrants -- not
@@ -295,8 +296,9 @@ class ShapeItem(QGraphicsItem):
         return self._brect
 
     def shape(self):
-        # Only the outline is clickable (not the filled interior).
-        return _outline_hit_shape(self._outline, closed=True)
+        # Only the outline is clickable (not the filled interior). Open paths
+        # (lines, construction lines) get a straight band, not a closed sliver.
+        return _outline_hit_shape(self._outline, closed=getattr(self, "_closed", True))
 
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)

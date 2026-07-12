@@ -184,6 +184,7 @@ class Canvas(QGraphicsView):
         self._poly_pts: List[QPointF] = []
         self._moved_during_press = False
         self._suppress_commit = False
+        self._suppress_next_release = False
         self.hole_tool_diameter = 4.0
         # drawing style: False = click first point, click second point (default);
         # True = press-drag-release. Tunable from the View menu.
@@ -541,9 +542,11 @@ class Canvas(QGraphicsView):
             self._snap_cache = None
             return
         start = handle.pos()
-        cands = self._snap_candidates() + \
-            self._all_intersections()
-        # exclude the dragged node's own current position
+        # snap to OTHER objects (and their intersections), not the shape being
+        # edited -- otherwise the node just sticks to its own neighbours.
+        owner = getattr(handle, "owner", None)
+        cands = (self._snap_candidates(exclude=owner)
+                 + self._all_intersections(exclude=owner))
         self._snap_cache = [c for c in cands
                             if (c.x - start.x()) ** 2 + (c.y - start.y()) ** 2 > 0.25]
 
@@ -573,6 +576,7 @@ class Canvas(QGraphicsView):
             self._pan_last = event.position()
             self.setCursor(Qt.ClosedHandCursor)
             return
+        self._suppress_next_release = False   # clear any stale flag
         raw = self.mapToScene(event.position().toPoint())
         if self.tool == TRIM:
             if event.button() == Qt.LeftButton:
@@ -589,10 +593,14 @@ class Canvas(QGraphicsView):
                 self._place_hole(pos)
             elif self.tool in _DRAG_TOOLS:
                 if not self.drag_to_draw and self._start is not None:
-                    # click-to-place: this is the second click -> finish
+                    # click-to-place: this is the second click -> finish. Swallow
+                    # the release that follows so the view (now on the Select
+                    # tool) doesn't get an unpaired release that leaves the new
+                    # shape un-grabbable until you reselect it.
                     start = self._start
                     self._start = None
                     self._clear_preview()
+                    self._suppress_next_release = True
                     self._finalize_drag(start, pos)
                     self._hide_snap_marker()
                     self.statusMessage.emit("")
@@ -650,6 +658,10 @@ class Canvas(QGraphicsView):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MiddleButton:
             self.setCursor(Qt.ArrowCursor)
+            return
+        if self._suppress_next_release:      # release of a click-to-place finish
+            self._suppress_next_release = False
+            event.accept()
             return
         pos = self.mapToScene(event.position().toPoint())
         if self.tool != SELECT:

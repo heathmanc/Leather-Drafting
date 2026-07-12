@@ -88,11 +88,11 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 
 | | |
 |---|---|
-| **Draw** | Rectangle `R`, Rounded rect `O`, Ellipse `E`, Circle `C`, Polygon `P` (click points, double-click to finish), Line `I` (2-point) |
+| **Draw** | Rectangle `R`, Rounded rect `O`, Ellipse `E`, Circle `C`, Polygon `P` (click points, double-click to finish), Line `L` (2-point) |
 | **Construction line** | `G` — a dashed guide you drag out; it's a snap/alignment reference only, never cut or exported |
-| **Drawing style** | shapes/lines default to **click first point, click second point**. Prefer press-drag-release? Toggle **View → Drag to draw** (remembered between sessions). `Esc` cancels a point you're mid-placing |
+| **Drawing style** | **every drawing tool places points by clicking** — no click-and-hold. Two-point tools (rect, rounded, ellipse, circle, slot, line, construction) take two clicks; polygon / seam / score take clicks then a double-click (or `Enter`); hole is one click. Prefer press-drag-release for the two-point tools? Toggle **View → Drag to draw** (remembered between sessions). `Esc` cancels a point you're mid-placing |
 | **Holes / slots / fold lines** | Hole `H` (hardware), Slot `T` (stadium), Score line `K` (fold/skive on the Score layer) |
-| **Seam** | Stitch line `L` — a shared seam for cross-piece registration |
+| **Seam** | Stitch line `M` — a shared seam for cross-piece registration |
 | **Select / move** | `S` — drag to move, drag one piece over another to check fit |
 | **Snapping** | two independent toolbar toggles — **Nodes** and **Grid** — plus grid size. Node snap catches real geometry: **endpoints, edge & arc midpoints, arc/shape centres, circle quadrants, stitch-hole centres and intersections** (no phantom bounding-box points). Turn Grid off to snap only to geometry (points off a node stay free). Both apply while drawing and moving |
 | **Alignment guides** | while drawing, when the cursor lines up with another object's node/centre the point locks to that x/y and a dashed **guide line** appears (smart snapping, Fusion/Illustrator style) |
@@ -113,7 +113,7 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Layers → laser jobs** | colour-coded Cut / Score / Engrave / Stitch layers with visibility |
 | **Arrange** | align (left/centre/right/top/middle/bottom) and distribute selected shapes |
 | **Undo / redo** | `Ctrl+Z` / `Ctrl+Shift+Z` |
-| **Duplicate / Delete / Fit** | `Ctrl+D` / `Del` / `F` |
+| **Duplicate / Delete / Fit** | `Ctrl+D` / `Del` or `Backspace` / `F` |
 | **Zoom / pan** | mouse wheel / middle-drag |
 | **Save / Open** | `Ctrl+S` / `Ctrl+O` (JSON project files) |
 | **Export** | SVG `Ctrl+E` or DXF — millimetre-accurate, layer-coloured |

@@ -28,12 +28,12 @@ TOOLS = [
     ("Ellipse", canvas_mod.ELLIPSE, "E"),
     ("Circle", canvas_mod.CIRCLE, "C"),
     ("Polygon", canvas_mod.POLYGON, "P"),
-    ("Line", canvas_mod.LINE, "I"),
+    ("Line", canvas_mod.LINE, "L"),
     ("Construction line", canvas_mod.CONSTRUCTION, "G"),
     ("Hole", canvas_mod.HOLE, "H"),
     ("Slot", canvas_mod.SLOT, "T"),
     ("Score line", canvas_mod.SCORE, "K"),
-    ("Stitch line (seam)", canvas_mod.STITCHLINE, "L"),
+    ("Stitch line (seam)", canvas_mod.STITCHLINE, "M"),
     ("Trim to intersections", canvas_mod.TRIM, "X"),
 ]
 
@@ -255,7 +255,11 @@ class MainWindow(QMainWindow):
         self._add(em, "Check back-to-back symmetry…", None, self._check_symmetry)
         em.addSeparator()
         self._add(em, "Duplicate", "Ctrl+D", self.canvas.duplicate_selected)
-        self._add(em, "Delete", None, self.canvas.delete_selected)
+        self.act_del = self._add(em, "Delete", None, self.canvas.delete_selected)
+        # Delete and Backspace (macOS "delete" key) both remove the selection.
+        # A focused text field claims these first, so typing stays safe.
+        self.act_del.setShortcuts([QKeySequence(Qt.Key_Delete),
+                                   QKeySequence(Qt.Key_Backspace)])
         self._add(em, "Select all", "Ctrl+A", self._select_all)
 
         am = m.addMenu("&Arrange")

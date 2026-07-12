@@ -892,6 +892,140 @@ def test_click_to_place_vs_drag_drawing(qapp):
     assert len(win.doc.shapes) == n + 1
 
 
+def test_every_drawing_tool_is_click_to_place(qapp):
+    """No drawing tool needs click-and-hold: 2-point tools take two clicks,
+    polygon/seam/score take clicks then a double-click, hole is one click."""
+    from PySide6.QtCore import QPointF, QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.resize(500, 500)
+    c.drag_to_draw = False
+
+    def _ev(kind, x, y):
+        vp = QPointF(c.mapFromScene(QPointF(x, y)))
+        return QMouseEvent(kind, vp, Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+
+    def press(x, y):
+        c.mousePressEvent(_ev(QEvent.MouseButtonPress, x, y))
+
+    def release(x, y):
+        c.mouseReleaseEvent(_ev(QEvent.MouseButtonRelease, x, y))
+
+    def click(x, y):
+        press(x, y)
+        release(x, y)
+
+    def dbl(x, y):
+        c.mouseDoubleClickEvent(_ev(QEvent.MouseButtonDblClick, x, y))
+
+    # every two-point tool: click, click
+    for tool in (cm.RECT, cm.ROUNDED, cm.ELLIPSE, cm.CIRCLE, cm.SLOT,
+                 cm.LINE, cm.CONSTRUCTION):
+        n = len(win.doc.shapes)
+        c.tool = tool
+        click(-40, -28)
+        click(40, 28)
+        assert len(win.doc.shapes) == n + 1, f"{tool} did not click-to-place"
+
+    # hole: a single click
+    n = len(win.doc.shapes)
+    c.tool = cm.HOLE
+    click(5, 5)
+    assert len(win.doc.shapes) == n + 1
+
+    # polygon / score: clicks then double-click to finish
+    for tool in (cm.POLYGON, cm.SCORE):
+        n = len(win.doc.shapes)
+        c.tool = tool
+        for (x, y) in [(-30, -20), (30, -20), (0, 25)]:
+            click(x, y)
+        dbl(0, 25)
+        assert len(win.doc.shapes) == n + 1, f"{tool} did not click-to-place"
+
+    # stitch line (seam): clicks then double-click
+    n = len(win.doc.stitch_lines)
+    c.tool = cm.STITCHLINE
+    click(-20, 0)
+    click(20, 0)
+    dbl(20, 0)
+    assert len(win.doc.stitch_lines) == n + 1
+
+
+def test_tool_shortcuts_unique_and_unambiguous():
+    from leathercad_app.mainwindow import TOOLS
+    keys = [k for _n, _m, k in TOOLS]
+    assert len(keys) == len(set(keys))          # no duplicated keys
+    by_name = {n: k for n, _m, k in TOOLS}
+    assert by_name["Line"] == "L"               # Line is L (was confusable "I")
+    assert by_name["Stitch line (seam)"] == "M"
+
+
+def test_delete_action_removes_selection(qapp):
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    it = c.add_shape(Rectangle(width=40, height=30, transform=Transform(x=0, y=0),
+                               layer="Cut"))
+    c.scene_obj.clearSelection()
+    it.setSelected(True)
+    n = len(win.doc.shapes)
+    # the Delete menu action is what Del / Backspace trigger
+    keys = {s.toString().lower() for s in win.act_del.shortcuts()}
+    assert "del" in keys or "backspace" in keys
+    win.act_del.trigger()
+    assert len(win.doc.shapes) == n - 1
+
+
+def test_node_edit_snaps_to_other_object_not_itself(qapp):
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    a = c.add_shape(Rectangle(width=40, height=30, transform=Transform(x=0, y=0),
+                              layer="Cut"))          # corner at (20, 15)
+    c.add_shape(Rectangle(width=40, height=30, transform=Transform(x=100, y=0),
+                          layer="Cut"))              # corner at (80, 15)
+    c.snap_to_nodes, c.snap_to_grid = True, False
+
+    class Handle:                                    # stand-in for a VertexHandle
+        owner = a
+
+        def pos(self):
+            return QPointF(20, 15)
+
+    c.begin_node_snap(Handle())
+    # dragging a's node near the OTHER rect's corner snaps to it
+    snapped = c.snap_node(QPointF(79.5, 14.7))
+    assert (round(snapped.x()), round(snapped.y())) == (80, 15)
+    # ...but it does NOT stick to a's own neighbouring corner (owner excluded)
+    free = c.snap_node(QPointF(-19.5, 14.7))
+    assert (round(free.x(), 1), round(free.y(), 1)) == (-19.5, 14.7)
+
+
+def test_open_line_is_clickable_and_not_a_closed_sliver(qapp):
+    from PySide6.QtCore import QPointF
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.shapes import PathShape
+    from leathercad.geometry import Vec2
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    it = win.canvas.add_shape(PathShape(points=[Vec2(-20, 0), Vec2(20, 0)],
+                                        close_path=False,
+                                        transform=Transform(x=0, y=0), layer="Cut"))
+    assert it._closed is False
+    assert it.shape().contains(it.mapFromScene(QPointF(0, 0)))    # on the line
+
+
 def test_export_from_document(qapp, tmp_path):
     from leathercad_app.mainwindow import MainWindow
     from leathercad.document import Document

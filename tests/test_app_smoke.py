@@ -1997,3 +1997,36 @@ def test_pen_right_click_finishes_curve(qapp):
     assert len(eps) == 1                       # curve committed
     assert c._pen_pts == []                    # pen no longer mid-draw
     assert [e.kind for e in eps[0].edges] == ["bezier"]
+
+
+def test_double_click_edits_bezier_nodes(qapp):
+    """Double-clicking a bezier curve (an EditablePath) must enter node-edit --
+    it used to only recognise Polygon/PathShape, so pen curves ignored it."""
+    from PySide6.QtCore import QPointF, QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app import canvas as cm
+    from leathercad_app.items import ShapeItem
+    from leathercad.document import Document
+    from leathercad.shapes import EditablePath, Transform
+    from leathercad.geometry import Vec2
+
+    ep = EditablePath.from_bezier([Vec2(-20, 0), Vec2(20, 0)],
+                                  [Vec2(5, 15), Vec2(5, -15)], closed=False)
+    ep.layer = "Cut"
+    ep.transform = Transform(x=0, y=0)
+    doc = Document()
+    doc.add_shape(ep)
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    c.resize(500, 500)
+    c.tool = cm.SELECT
+    it = [i for i in c.scene_obj.items() if isinstance(i, ShapeItem)][0]
+
+    apex = max(ep.local_path().flatten(), key=lambda p: p.y)   # a point on the curve
+    vp = c.mapFromScene(QPointF(apex.x, apex.y))
+    c.mouseDoubleClickEvent(QMouseEvent(QEvent.MouseButtonDblClick, QPointF(vp),
+                                        Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+    assert c._edit_owner is it                                 # entered node-edit
+    assert any(getattr(h.node, "is_ctrl", False) for h in c._handles)

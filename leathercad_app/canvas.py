@@ -1104,7 +1104,8 @@ class Canvas(QGraphicsView):
                 owner = owner.parentItem()
             if isinstance(owner, StitchLineItem) or (
                     isinstance(owner, ShapeItem)
-                    and isinstance(owner.model, (Polygon, PathShape))):
+                    and isinstance(owner.model,
+                                   (Polygon, PathShape, EditablePath))):
                 self.enter_vertex_edit(owner)
                 event.accept()
                 return

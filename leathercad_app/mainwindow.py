@@ -28,6 +28,7 @@ TOOLS = [
     ("Ellipse", canvas_mod.ELLIPSE, "E"),
     ("Circle", canvas_mod.CIRCLE, "C"),
     ("Polygon", canvas_mod.POLYGON, "P"),
+    ("Pen (bezier curve)", canvas_mod.PEN, "B"),
     ("Line", canvas_mod.LINE, "L"),
     ("Construction line", canvas_mod.CONSTRUCTION, "G"),
     ("Hole", canvas_mod.HOLE, "H"),
@@ -49,7 +50,7 @@ _ICON_FOR = {
     canvas_mod.TRIM: "trim", canvas_mod.LINE: "line",
     canvas_mod.CONSTRUCTION: "construction",
     canvas_mod.MEASURE: "measure", canvas_mod.DIMENSION: "dimension",
-    canvas_mod.TEXT: "text",
+    canvas_mod.TEXT: "text", canvas_mod.PEN: "pen",
 }
 
 

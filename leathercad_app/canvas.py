@@ -55,6 +55,7 @@ CONSTRUCTION = "construction"
 MEASURE = "measure"
 DIMENSION = "dimension"
 TEXT = "text"
+PEN = "pen"
 
 _DRAG_TOOLS = (RECT, ROUNDED, ELLIPSE, CIRCLE, SLOT, LINE, CONSTRUCTION)
 _POLY_TOOLS = (POLYGON, STITCHLINE, SCORE)
@@ -203,6 +204,11 @@ class Canvas(QGraphicsView):
         self._start: Optional[QPointF] = None
         self._preview: Optional[QGraphicsPathItem] = None
         self._poly_pts: List[QPointF] = []
+        # pen / bezier tool: anchor points + per-anchor out-handle offsets
+        self._pen_pts: List[QPointF] = []
+        self._pen_handles: List[Optional[QPointF]] = []
+        self._pen_drag = False
+        self._pen_hud: Optional[QGraphicsPathItem] = None
         self._moved_during_press = False
         self._suppress_commit = False
         self._suppress_next_release = False
@@ -795,6 +801,19 @@ class Canvas(QGraphicsView):
         if self.tool == SELECT:
             return super().mousePressEvent(event)
         if event.button() == Qt.LeftButton:
+            if self.tool == PEN:
+                # click near the first anchor closes the path; otherwise drop a
+                # new anchor and start a (possible) handle drag off it.
+                if (len(self._pen_pts) >= 2
+                        and self._near(pos, self._pen_pts[0])):
+                    self._finish_pen(closed=True)
+                else:
+                    self._pen_pts.append(pos)
+                    self._pen_handles.append(None)
+                    self._pen_drag = True
+                    self._update_pen_preview(raw, dragging=True)
+                event.accept()
+                return
             if self.tool == HOLE:
                 self._place_hole(pos)
             elif self.tool == TEXT:
@@ -1002,6 +1021,17 @@ class Canvas(QGraphicsView):
                 self.statusMessage.emit(f"r {r:.1f} mm   ø {2*r:.1f} mm")
             else:
                 self.statusMessage.emit(f"{w:.1f} × {h:.1f} mm")
+        elif self.tool == PEN and self._pen_pts:
+            if self._pen_drag and (event.buttons() & Qt.LeftButton):
+                a = self._pen_pts[-1]                 # pull a free tangent handle
+                self._pen_handles[-1] = QPointF(raw.x() - a.x(), raw.y() - a.y())
+                self._update_pen_preview(None, dragging=True)
+                self.statusMessage.emit("drag to shape the curve · release for a corner")
+            else:
+                self._update_pen_preview(pos, dragging=False)
+                self.statusMessage.emit(
+                    f"{len(self._pen_pts)} pts · click to add, drag to curve, "
+                    "click start or Enter to finish")
         elif self._poly_pts and self.tool in _POLY_TOOLS:
             self._update_poly_preview(pos)
             last = self._poly_pts[-1]
@@ -1015,6 +1045,15 @@ class Canvas(QGraphicsView):
             return
         if self._suppress_next_release:      # release of a click-to-place finish
             self._suppress_next_release = False
+            event.accept()
+            return
+        if self.tool == PEN:
+            if self._pen_drag:
+                self._pen_drag = False
+                h = self._pen_handles[-1] if self._pen_handles else None
+                if h is not None and (h.x() ** 2 + h.y() ** 2) ** 0.5 < 2.0 / self._zoom:
+                    self._pen_handles[-1] = None     # negligible pull -> corner
+                self._update_pen_preview(None, dragging=False)
             event.accept()
             return
         pos = self.mapToScene(event.position().toPoint())
@@ -1040,6 +1079,10 @@ class Canvas(QGraphicsView):
     def mouseDoubleClickEvent(self, event):
         if self.tool in _POLY_TOOLS and self._poly_pts:
             self._finalize_poly()
+            event.accept()
+            return
+        if self.tool == PEN and self._pen_pts:
+            self._finish_pen(closed=False)   # double-click ends an open curve
             event.accept()
             return
         if self.tool == SELECT:
@@ -1138,9 +1181,10 @@ class Canvas(QGraphicsView):
         if event.key() == Qt.Key_Escape:
             # Esc cancels whatever is in progress; a second Esc (nothing in
             # progress) drops back to the pointer/Select tool.
-            busy = (bool(self._poly_pts) or self._start is not None
-                    or bool(self._handles))
+            busy = (bool(self._poly_pts) or bool(self._pen_pts)
+                    or self._start is not None or bool(self._handles))
             self._cancel_poly()
+            self._cancel_pen()
             self.clear_vertex_handles()
             if self._start is not None:      # cancel an in-progress click-draw
                 self._start = None
@@ -1152,6 +1196,8 @@ class Canvas(QGraphicsView):
         elif event.key() in (Qt.Key_Return, Qt.Key_Enter):
             if self._poly_pts:
                 self._finalize_poly()
+            elif self._pen_pts:
+                self._finish_pen(closed=False)
         else:
             super().keyPressEvent(event)
 
@@ -1277,6 +1323,103 @@ class Canvas(QGraphicsView):
 
     def _cancel_poly(self) -> None:
         self._poly_pts = []
+        self._clear_preview()
+
+    # -- pen / bezier tool ---------------------------------------------
+    def _near(self, a: QPointF, b: QPointF) -> bool:
+        tol = 6.0 / max(self._zoom, 1e-6)      # ~6 px in mm
+        return ((a.x() - b.x()) ** 2 + (a.y() - b.y()) ** 2) ** 0.5 < tol
+
+    def _bez_seg(self, path: QPainterPath, a: QPointF, ha, b: QPointF, hb) -> None:
+        """Append the a->b segment: a cubic bezier when either endpoint has a
+        tangent handle, else a straight line. ``ha``/``hb`` are out-handle
+        offsets; b's *incoming* control point is the mirror of its out handle."""
+        if ha is None and hb is None:
+            path.lineTo(b)
+            return
+        c1x = a.x() + (ha.x() if ha is not None else 0.0)
+        c1y = a.y() + (ha.y() if ha is not None else 0.0)
+        c2x = b.x() - (hb.x() if hb is not None else 0.0)
+        c2y = b.y() - (hb.y() if hb is not None else 0.0)
+        path.cubicTo(c1x, c1y, c2x, c2y, b.x(), b.y())
+
+    def _update_pen_preview(self, cursor: Optional[QPointF], dragging: bool) -> None:
+        pts, handles = self._pen_pts, self._pen_handles
+        if not pts:
+            return
+        curve = QPainterPath()
+        curve.moveTo(pts[0])
+        for i in range(1, len(pts)):
+            self._bez_seg(curve, pts[i - 1], handles[i - 1], pts[i], handles[i])
+        # tentative segment to the cursor while hovering (not dragging a handle)
+        if not dragging and cursor is not None and pts:
+            a, ha = pts[-1], handles[-1]
+            self._bez_seg(curve, a, ha, cursor, None)
+        if self._preview is None:
+            self._preview = QGraphicsPathItem()
+            pen = QPen(QColor(120, 120, 120), 0, Qt.DashLine)
+            pen.setCosmetic(True)
+            self._preview.setPen(pen)
+            self.scene_obj.addItem(self._preview)
+        self._preview.setPath(curve)
+
+        # HUD: tangent handle line + control dots for the anchor being dragged
+        hud = QPainterPath()
+        if dragging and handles and handles[-1] is not None:
+            a, ho = pts[-1], handles[-1]
+            p_in = QPointF(a.x() - ho.x(), a.y() - ho.y())
+            p_out = QPointF(a.x() + ho.x(), a.y() + ho.y())
+            hud.moveTo(p_in)
+            hud.lineTo(p_out)
+            r = 1.2 / self._zoom
+            for p in (p_in, p_out):
+                hud.addEllipse(p, r, r)
+        if self._pen_hud is None:
+            self._pen_hud = QGraphicsPathItem()
+            hpen = QPen(QColor(30, 140, 255), 0)
+            hpen.setCosmetic(True)
+            self._pen_hud.setPen(hpen)
+            self.scene_obj.addItem(self._pen_hud)
+        self._pen_hud.setPath(hud)
+
+    def _clear_pen_hud(self) -> None:
+        if self._pen_hud is not None:
+            self.scene_obj.removeItem(self._pen_hud)
+            self._pen_hud = None
+
+    def _finish_pen(self, closed: bool) -> None:
+        pts = list(self._pen_pts)
+        handles = list(self._pen_handles)
+        self._pen_pts = []
+        self._pen_handles = []
+        self._pen_drag = False
+        self._clear_pen_hud()
+        self._clear_preview()
+        self._hide_snap_marker()
+        self.statusMessage.emit("")
+        # drop a trailing near-duplicate anchor (e.g. from a finishing dbl-click)
+        while len(pts) >= 2 and self._near(pts[-1], pts[-2]):
+            pts.pop()
+            handles.pop()
+        if len(pts) < 2:
+            self.toolFinished.emit()
+            return
+        cx = sum(p.x() for p in pts) / len(pts)
+        cy = sum(p.y() for p in pts) / len(pts)
+        anchors = [Vec2(p.x() - cx, p.y() - cy) for p in pts]
+        outs = [Vec2(h.x(), h.y()) if h is not None else None for h in handles]
+        ep = EditablePath.from_bezier(anchors, outs, closed=closed)
+        ep.transform = Transform(x=cx, y=cy)
+        ep.layer = self._current_layer
+        ep.stitch = self._default_stitch()
+        self.add_shape(ep)
+        self.toolFinished.emit()
+
+    def _cancel_pen(self) -> None:
+        self._pen_pts = []
+        self._pen_handles = []
+        self._pen_drag = False
+        self._clear_pen_hud()
         self._clear_preview()
 
     # -- vertex editing -------------------------------------------------

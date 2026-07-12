@@ -339,8 +339,12 @@ def arc_through(p0: Vec2, pm: Vec2, p1: Vec2):
 
 @dataclass
 class Edge:
-    kind: str = "line"            # "line" or "arc"
+    kind: str = "line"            # "line", "arc" or "bezier"
     mid: Optional[Vec2] = None    # arc: a point the arc passes through (local)
+    # cubic-bezier control points (local coords) for kind == "bezier":
+    # c1 pulls out of the start node, c2 pulls into the end node.
+    c1: Optional[Vec2] = None
+    c2: Optional[Vec2] = None
 
 
 @dataclass
@@ -371,6 +375,9 @@ class EditablePath(Shape):
                     c, r, a0, a1, ccw = arc
                     b.arc_to(c.x, c.y, a0, a1, ccw)
                     continue
+            if edge.kind == "bezier" and edge.c1 is not None and edge.c2 is not None:
+                b.cubic_to(edge.c1.x, edge.c1.y, edge.c2.x, edge.c2.y, nb.x, nb.y)
+                continue
             b.line_to(nb.x, nb.y)
         if self.closed:
             b.close(corner=False)
@@ -404,6 +411,41 @@ class EditablePath(Shape):
             Edge("arc", Vec2(bl.x - d, bl.y - d)),          # bottom-left
         ]
         return EditablePath(nodes=nodes, edges=edges, closed=True)
+
+    @staticmethod
+    def from_bezier(anchors: List[Vec2], out_handles: List[Optional[Vec2]],
+                    closed: bool) -> "EditablePath":
+        """Build a smooth path from anchor points and their *out* handle offsets.
+
+        ``out_handles[i]`` is the vector from ``anchors[i]`` to that anchor's
+        outgoing control point (``None`` / zero = a sharp corner). Each anchor's
+        incoming control point is the mirror of its out handle, so an anchor with
+        a handle is smooth. Consecutive anchors are joined by a cubic bezier when
+        either endpoint has a handle, otherwise by a straight line.
+        """
+        nodes = list(anchors)
+        n = len(nodes)
+        if n < 2:
+            return EditablePath(nodes=nodes, edges=[], closed=False)
+        m = n if closed else n - 1
+
+        def h(i):
+            v = out_handles[i] if i < len(out_handles) else None
+            return v if (v is not None and v.length() > 1e-9) else None
+
+        edges: List[Edge] = []
+        for i in range(m):
+            a = nodes[i]
+            b = nodes[(i + 1) % n]
+            ho = h(i)                          # out of the start anchor
+            hi = h((i + 1) % n)                # out of the end anchor -> mirror in
+            if ho is None and hi is None:
+                edges.append(Edge("line"))
+                continue
+            c1 = a + (ho if ho is not None else Vec2(0.0, 0.0))
+            c2 = b - (hi if hi is not None else Vec2(0.0, 0.0))
+            edges.append(Edge("bezier", c1=c1, c2=c2))
+        return EditablePath(nodes=nodes, edges=edges, closed=closed)
 
     @staticmethod
     def from_ellipse(rx: float, ry: float) -> "EditablePath":

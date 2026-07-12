@@ -126,6 +126,23 @@ def tool_icon(kind: str, size: int = 22) -> QIcon:
         for tip, d in ((a, 1), (b, -1)):
             p.drawLine(tip, QPointF(tip.x() + d * 3, y - 2))
             p.drawLine(tip, QPointF(tip.x() + d * 3, y + 2))
+    elif kind == "pen":
+        # an S-curve with its two bezier control handles + anchor dots
+        a = QPointF(m, size - m)
+        b = QPointF(size - m, m)
+        c1 = QPointF(size - m, size - m)
+        c2 = QPointF(m, m)
+        from PySide6.QtGui import QPainterPath
+        path = QPainterPath(a)
+        path.cubicTo(c1, c2, b)
+        p.drawPath(path)
+        hp = QPen(_ACCENT)
+        hp.setWidthF(0.9)
+        p.setPen(hp)
+        p.drawLine(a, c1)
+        p.drawLine(b, c2)
+        _dots_along(p, [a, b], color=_FG, r=1.4)
+        _dots_along(p, [c1, c2], color=_ACCENT, r=1.2)
     else:
         p.drawRect(rect)
     p.end()

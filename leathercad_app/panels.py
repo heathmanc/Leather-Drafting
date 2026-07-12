@@ -546,10 +546,11 @@ class PropertiesPanel(QWidget):
         if res and res.count:
             gaps = res.chord_spacings()
             pitches = res.pitches or [0]
-            txt = (f"<b>{res.count} holes</b><br>"
-                   f"chord spacing {min(gaps):.2f}–{max(gaps):.2f} mm<br>"
-                   f"effective pitch "
-                   f"{min(pitches):.3f}–{max(pitches):.3f} mm")
+            txt = f"<b>{res.count} holes</b>"
+            if gaps:                             # a lone hole has no spacing
+                txt += (f"<br>chord spacing {min(gaps):.2f}–{max(gaps):.2f} mm"
+                        f"<br>effective pitch "
+                        f"{min(pitches):.3f}–{max(pitches):.3f} mm")
             self.readout.setText(txt)
         else:
             self.readout.setText("No holes")

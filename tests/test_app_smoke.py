@@ -1836,3 +1836,122 @@ def test_press_unselected_item_drops_prior_selection(qapp):
                        Qt.LeftButton, Qt.LeftButton, Qt.ControlModifier)
     c.press_select(B, ctrl)
     assert A.isSelected()                            # A preserved for multi-select
+
+
+def test_pen_tool_draws_bezier_editpath(qapp):
+    """The pen tool: click-drag places smooth anchors, a plain click a corner;
+    Enter finishes an open curved EditablePath with bezier edges + a control
+    handle per bezier end in node-edit."""
+    from PySide6.QtCore import QPointF, QEvent, Qt
+    from PySide6.QtGui import QMouseEvent, QKeyEvent
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app import canvas as cm
+    from leathercad_app.items import ShapeItem
+    from leathercad.document import Document
+    from leathercad.shapes import EditablePath
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.resize(500, 500)
+    c.snap_to_grid = False
+    c.snap_to_nodes = False
+    c.tool = cm.PEN
+
+    def vp(x, y):
+        return QPointF(c.mapFromScene(QPointF(x, y)))
+
+    def press(x, y):
+        c.mousePressEvent(QMouseEvent(QEvent.MouseButtonPress, vp(x, y),
+                                      Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+
+    def move(x, y):
+        c.mouseMoveEvent(QMouseEvent(QEvent.MouseMove, vp(x, y),
+                                     Qt.NoButton, Qt.LeftButton, Qt.NoModifier))
+
+    def release(x, y):
+        c.mouseReleaseEvent(QMouseEvent(QEvent.MouseButtonRelease, vp(x, y),
+                                        Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+
+    press(0, 0); move(10, 10); release(10, 10)      # smooth anchor
+    press(40, 0); move(50, -10); release(50, -10)   # smooth anchor
+    press(20, -30); release(20, -30)                # corner anchor
+    c.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Return, Qt.NoModifier))
+
+    eps = [s for s in win.doc.shapes if isinstance(s, EditablePath)]
+    assert len(eps) == 1
+    ep = eps[0]
+    assert [e.kind for e in ep.edges] == ["bezier", "bezier"]
+    assert len(ep.local_path().flatten()) > 12      # a real curve, not 3 points
+
+    it = [i for i in c.scene_obj.items() if isinstance(i, ShapeItem)][0]
+    it.setSelected(True)
+    c.enter_vertex_edit(it)
+    ctrl = [h for h in c._handles if getattr(h.node, "is_ctrl", False)]
+    assert len(ctrl) == 4                            # 2 beziers x 2 control pts
+
+
+def test_pen_close_path_and_ctrl_reshape(qapp):
+    """Clicking the start anchor closes the curve; dragging a control handle
+    reshapes it and dragging an anchor carries its handles along."""
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import ShapeItem
+    from leathercad.document import Document
+    from leathercad.shapes import EditablePath, Transform
+    from leathercad.geometry import Vec2
+
+    anchors = [Vec2(-20, 0), Vec2(0, 20), Vec2(20, 0), Vec2(0, -20)]
+    outs = [Vec2(0, 10), Vec2(10, 0), Vec2(0, -10), Vec2(-10, 0)]
+    ep = EditablePath.from_bezier(anchors, outs, closed=True)
+    ep.layer = "Cut"
+    ep.transform = Transform(x=0, y=0)
+    doc = Document()
+    doc.add_shape(ep)
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    it = [i for i in c.scene_obj.items() if isinstance(i, ShapeItem)][0]
+
+    flat0 = ep.local_path().flatten()
+    it.setSelected(True)
+    c.enter_vertex_edit(it)
+    ctrl = [h for h in c._handles if getattr(h.node, "is_ctrl", False)]
+    h = ctrl[0]
+    w = h.node.world
+    h.node.setter(Vec2(w.x, w.y + 15))
+    it.sync_from_model()
+    assert ep.local_path().flatten() != flat0        # curve reshaped
+
+    c.clear_vertex_handles()
+    c.enter_vertex_edit(it)
+    anchs = [hh for hh in c._handles
+             if not getattr(hh.node, "is_ctrl", False) and not hh.node.is_mid]
+    a0 = anchs[0]
+    c1_before = ep.edges[0].c1
+    aw = a0.node.world
+    a0.node.setter(Vec2(aw.x + 5, aw.y + 5))
+    assert round(ep.edges[0].c1.x - c1_before.x, 3) == 5.0   # handle followed
+    assert round(ep.edges[0].c1.y - c1_before.y, 3) == 5.0
+
+
+def test_single_hole_readout_no_crash(qapp):
+    """A shape with exactly one hole has no chord spacing; the Properties readout
+    must not crash on min([]) (regression)."""
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import ShapeItem
+    from leathercad.document import Document
+    from leathercad.shapes import PathShape, Transform
+    from leathercad.geometry import Vec2
+
+    doc = Document()
+    doc.add_shape(PathShape(points=[Vec2(0, 0), Vec2(2, 0)], close_path=False,
+                            transform=Transform(x=0, y=0),
+                            stitch=StitchSettings(pitch_mm=50.0, inset=0.0,
+                                                  fit="none", enabled=True),
+                            layer="Cut"))
+    win = MainWindow(doc)
+    win.canvas.rebuild()
+    it = [i for i in win.canvas.scene_obj.items() if isinstance(i, ShapeItem)][0]
+    assert it.hole_count == 1
+    it.setSelected(True)
+    win.properties.show_selection(win.canvas.selected_items())   # must not raise
+    assert "1 holes" in win.properties.readout.text()

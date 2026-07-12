@@ -116,7 +116,12 @@ class VertexHandle(QGraphicsItem):
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
         s = self.SIZE
-        if self.node.is_mid:   # arc midpoint
+        if getattr(self.node, "is_ctrl", False):   # bezier tangent handle
+            painter.setPen(QPen(QColor(40, 170, 90), 1))
+            painter.setBrush(QBrush(QColor(90, 210, 130)))
+            r = s - 0.5
+            painter.drawEllipse(QPointF(0, 0), r, r)
+        elif self.node.is_mid:   # arc midpoint
             painter.setPen(QPen(QColor(210, 120, 0), 1))
             painter.setBrush(QBrush(QColor(255, 235, 200)))
             painter.drawEllipse(QPointF(0, 0), s, s)
@@ -159,6 +164,8 @@ class VertexHandle(QGraphicsItem):
                 # (the old lock was relative to the far neighbour, so a node that
                 # started well off-axis could never reach vertical).
                 return self.canvas._apply_ortho(self._drag_start, value)
+            if getattr(self.node, "is_ctrl", False):
+                return value      # tangent handles move freely (no osnap)
             return self.canvas.snap_node(value)
         if change == QGraphicsItem.ItemPositionHasChanged:
             self._dragged = True
@@ -827,6 +834,13 @@ class ShapeItem(QGraphicsItem):
                 if e.kind == "arc" and e.mid is not None:
                     out.append(NodeRef(t.apply(e.mid), self._set_epmid(e),
                                        is_mid=True))
+                elif e.kind == "bezier":
+                    if e.c1 is not None:
+                        out.append(NodeRef(t.apply(e.c1), self._set_edge_c1(e),
+                                           is_ctrl=True))
+                    if e.c2 is not None:
+                        out.append(NodeRef(t.apply(e.c2), self._set_edge_c2(e),
+                                           is_ctrl=True))
         return out
 
     def _set_point(self, i):
@@ -836,7 +850,23 @@ class ShapeItem(QGraphicsItem):
 
     def _set_epnode(self, i):
         def s(world):
-            self.model.nodes[i] = self.model.transform.inverse_apply(world)
+            sh = self.model
+            new_local = sh.transform.inverse_apply(world)
+            old = sh.nodes[i]
+            dx, dy = new_local.x - old.x, new_local.y - old.y
+            sh.nodes[i] = new_local
+            # Move the bezier tangent handles attached to this anchor so the
+            # curve translates with it (like every vector editor does).
+            n, m = len(sh.nodes), len(sh.edges)
+            e_out = sh.edges[i] if i < m else None            # node i -> i+1
+            if (e_out is not None and e_out.kind == "bezier"
+                    and e_out.c1 is not None):
+                e_out.c1 = Vec2(e_out.c1.x + dx, e_out.c1.y + dy)
+            j = i - 1 if i >= 1 else (m - 1 if sh.closed else None)   # edge -> i
+            e_in = sh.edges[j] if (j is not None and 0 <= j < m) else None
+            if (e_in is not None and e_in.kind == "bezier"
+                    and e_in.c2 is not None):
+                e_in.c2 = Vec2(e_in.c2.x + dx, e_in.c2.y + dy)
         return s
 
     def _set_epmid(self, edge):
@@ -844,18 +874,30 @@ class ShapeItem(QGraphicsItem):
             edge.mid = self.model.transform.inverse_apply(world)
         return s
 
+    def _set_edge_c1(self, edge):
+        def s(world):
+            edge.c1 = self.model.transform.inverse_apply(world)
+        return s
+
+    def _set_edge_c2(self, edge):
+        def s(world):
+            edge.c2 = self.model.transform.inverse_apply(world)
+        return s
+
 
 class NodeRef:
     """One editable node: its world position + a setter that takes a new world
     point and writes it back to the model (converting to local)."""
 
-    __slots__ = ("world", "setter", "is_mid", "ref")
+    __slots__ = ("world", "setter", "is_mid", "ref", "is_ctrl")
 
-    def __init__(self, world: Vec2, setter, is_mid: bool = False, ref=None):
+    def __init__(self, world: Vec2, setter, is_mid: bool = False, ref=None,
+                 is_ctrl: bool = False):
         self.world = world
         self.setter = setter
         self.is_mid = is_mid
         self.ref = ref     # world pos of the adjacent node (for Shift-ortho)
+        self.is_ctrl = is_ctrl   # a bezier tangent-control handle
 
 
 class StitchLineItem(QGraphicsItem):

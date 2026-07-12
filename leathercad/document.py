@@ -77,7 +77,9 @@ def _shape_to_dict(sh: Shape) -> dict:
         base.update(
             nodes=[[p.x, p.y] for p in sh.nodes],
             edges=[{"kind": e.kind,
-                    "mid": [e.mid.x, e.mid.y] if e.mid is not None else None}
+                    "mid": [e.mid.x, e.mid.y] if e.mid is not None else None,
+                    "c1": [e.c1.x, e.c1.y] if e.c1 is not None else None,
+                    "c2": [e.c2.x, e.c2.y] if e.c2 is not None else None}
                    for e in sh.edges],
             closed=sh.closed)
     if sh.baked_holes:
@@ -124,7 +126,9 @@ def _shape_from_dict(d: dict) -> Shape:
     elif kind == "editpath":
         nodes = [Vec2(x, y) for x, y in d.get("nodes", [])]
         edges = [Edge(e.get("kind", "line"),
-                      Vec2(*e["mid"]) if e.get("mid") else None)
+                      Vec2(*e["mid"]) if e.get("mid") else None,
+                      c1=Vec2(*e["c1"]) if e.get("c1") else None,
+                      c2=Vec2(*e["c2"]) if e.get("c2") else None)
                  for e in d.get("edges", [])]
         sh = EditablePath(nodes=nodes, edges=edges,
                           closed=d.get("closed", True), **common)

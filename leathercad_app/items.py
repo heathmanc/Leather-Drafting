@@ -176,6 +176,10 @@ class HoleItem(QGraphicsItem):
             | QGraphicsItem.ItemSendsGeometryChanges
         )
         self.setZValue(50)
+        # A hole snaps by its single centre, exactly like a circle's centre.
+        self._snap_offsets = [Vec2(0.0, 0.0)]
+        self._snap_offset_kinds = ["center"]
+        self._center_snap_priority = True
         self.sync_from_model()
 
     def sync_from_model(self):
@@ -214,7 +218,20 @@ class HoleItem(QGraphicsItem):
             r = max(1.6, h.hole_diameter) + 0.6
             painter.drawEllipse(QPointF(0, 0), r, r)
 
+    def mousePressEvent(self, event):
+        if self.canvas is not None:
+            self.canvas.begin_move_snap(self)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if self.canvas is not None:
+            self.canvas.end_move_snap()
+
     def itemChange(self, change, value):
+        # Magnetic centre snapping while dragging; free otherwise.
+        if change == QGraphicsItem.ItemPositionChange and self.canvas is not None:
+            return self.canvas.snap_move(self, value)
         if change == QGraphicsItem.ItemPositionHasChanged:
             self.hole.point = Vec2(self.pos().x(), self.pos().y())
             if self.canvas is not None:

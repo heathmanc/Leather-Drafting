@@ -1149,6 +1149,31 @@ def test_circle_drag_locks_center(qapp):
     assert round(res.x(), 2) == 50.0 and round(res.y(), 2) == 50.0
 
 
+def test_loose_hole_drag_snaps_center(qapp):
+    # Moving an individual (ungrouped) stitch hole must snap its centre to
+    # nearby object nodes, just like a circle.
+    from PySide6.QtCore import QPointF
+    from leathercad_app import canvas as cm
+    from leathercad.shapes import Rectangle, Transform
+    from leathercad.document import Document, LooseHole
+    from leathercad.geometry import Vec2
+
+    doc = Document()
+    doc.add_shape(Rectangle(width=20, height=20, transform=Transform(x=40, y=40)))
+    hole = LooseHole(point=Vec2(48, 48))
+    doc.holes.append(hole)
+    c = cm.Canvas(doc)
+    c.snap_to_nodes = True
+    c.snap_to_grid = False
+    c.rebuild()
+    hitem = next(it for it in c.scene_obj.items()
+                 if getattr(it, "hole", None) is hole)
+    assert getattr(hitem, "_center_snap_priority", False) is True
+    c.begin_move_snap(hitem)
+    res = c.snap_move(hitem, QPointF(49.6, 49.6))   # toward the (50, 50) corner
+    assert round(res.x(), 2) == 50.0 and round(res.y(), 2) == 50.0
+
+
 def test_line_length_and_angle_field(qapp):
     import math
     from leathercad_app.mainwindow import MainWindow

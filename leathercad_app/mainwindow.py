@@ -397,6 +397,27 @@ class MainWindow(QMainWindow):
             lambda on: setattr(self.canvas, "drag_to_draw", on))
         vm.addAction(self.act_drag_draw)
 
+        hm = m.addMenu("&Help")
+        self._add(hm, "User guide", "F1", self.show_help)
+        self._add(hm, "About", None, self._about)
+
+    def show_help(self):
+        from .helpdialog import HelpDialog
+        dlg = getattr(self, "_help_dialog", None)
+        if dlg is None:
+            dlg = HelpDialog(self)
+            self._help_dialog = dlg
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def _about(self):
+        QMessageBox.about(
+            self, "Leather-Drafting",
+            "<b>Leather-Drafting</b><br>CAD for laser-cut leather patterns "
+            "with pricking-iron-accurate (chord-spaced) stitch holes.<br><br>"
+            "Units are millimetres. Press <b>F1</b> for the user guide.")
+
     def _add(self, menu, text, shortcut, slot):
         act = QAction(text, self)
         if shortcut:

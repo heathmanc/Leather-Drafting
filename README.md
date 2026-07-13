@@ -10,6 +10,12 @@ across overlapping pieces** no matter which side you laser.
 > Status: v0.2. The desktop app (draw / radius / move-overlay / per-iron holes /
 > layers / registration / SVG+DXF export) is working and tested. Roadmap below.
 
+**📖 New here? Read the [User Guide](docs/USER_GUIDE.md)** — a full manual with
+tool reference, a stitching deep-dive, three worked tutorials (card holder,
+curved key fob, shared seams), shortcuts, and troubleshooting. It's also built
+into the app: **Help → User guide** or press **F1**. The test suite pins the
+manual to the code, so the docs can't silently drift out of date.
+
 ---
 
 ## Two problems this is designed around

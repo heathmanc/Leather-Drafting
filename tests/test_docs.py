@@ -1,0 +1,79 @@
+"""The user guide must exist and stay in sync with the program.
+
+These tests pin the documentation to the code: every tool, shortcut and key
+menu command must appear in docs/USER_GUIDE.md, and defaults quoted in the
+guide must match the real defaults. Change a shortcut without updating the
+manual and this fails.
+"""
+
+import os
+from pathlib import Path
+
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+pytest.importorskip("PySide6")
+
+from PySide6.QtWidgets import QApplication  # noqa: E402
+
+GUIDE = Path(__file__).resolve().parent.parent / "docs" / "USER_GUIDE.md"
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    app = QApplication.instance() or QApplication([])
+    yield app
+
+
+@pytest.fixture(scope="module")
+def guide_text():
+    assert GUIDE.exists(), "docs/USER_GUIDE.md is missing"
+    return GUIDE.read_text(encoding="utf-8")
+
+
+def test_guide_is_substantial(guide_text):
+    assert len(guide_text) > 10_000
+    for section in ("Quick start", "Drawing tools", "Stitching",
+                    "Keyboard shortcuts", "Troubleshooting", "Glossary",
+                    "Tutorial 1", "Tutorial 2", "Tutorial 3"):
+        assert section in guide_text, f"guide is missing section: {section}"
+
+
+def test_every_tool_and_shortcut_documented(guide_text):
+    from leathercad_app.mainwindow import TOOLS
+    for label, _mode, key in TOOLS:
+        assert label in guide_text, f"tool not documented: {label}"
+        assert f"`{key}`" in guide_text, f"shortcut not documented: {key} ({label})"
+
+
+def test_key_menu_commands_documented(guide_text):
+    for cmd in ("Export PDF (1:1, tiled)", "Offset / seam allowance",
+                "Make back piece (mirror)", "Ungroup stitching → individual holes",
+                "Group holes into shape", "Join / weld segments",
+                "Break apart into segments", "Convert to editable nodes",
+                "Check back-to-back symmetry", "Reset panels", "Drag to draw"):
+        assert cmd in guide_text, f"menu command not documented: {cmd}"
+
+
+def test_documented_defaults_match_code(guide_text):
+    from leathercad.stitchsettings import StitchSettings
+    st = StitchSettings()
+    assert f"{st.pitch_mm:g} mm" in guide_text        # default pitch quoted right
+    assert f"{st.inset:g} mm" in guide_text           # default inset quoted right
+
+
+def test_help_dialog_renders_guide(qapp):
+    from leathercad_app.helpdialog import HelpDialog
+    dlg = HelpDialog()
+    body = dlg.browser.toPlainText()
+    assert "pricking-iron" in body or "chord" in body.lower()
+    assert len(body) > 5_000                          # the real guide, not an error
+
+
+def test_mainwindow_help_menu(qapp):
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    win = MainWindow(Document())
+    win.show_help()                                   # F1 target
+    assert win._help_dialog is not None
+    assert len(win._help_dialog.browser.toPlainText()) > 5_000

@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QGraphicsScene, QGraphicsView, QGraphicsPathItem,
 from leathercad.geometry import Vec2
 from leathercad.document import Document
 from leathercad.shapes import (Rectangle, Ellipse, Circle, Polygon, PathShape,
-                               EditablePath, Edge, Transform)
+                               EditablePath, Edge, Transform, arc_through)
 from leathercad.stitchsettings import StitchSettings
 from leathercad.stitchline import StitchLine
 from leathercad.holes import LooseHole
@@ -56,9 +56,27 @@ MEASURE = "measure"
 DIMENSION = "dimension"
 TEXT = "text"
 PEN = "pen"
+ARC3 = "arc3"            # 3-point arc: start, end, then a point on the arc
+ARCCENTER = "arccenter"  # centre arc: centre, start, end (sweeps CCW)
+CIRCLE2 = "circle2"      # 2-point circle: two ends of a diameter
+CIRCLE3 = "circle3"      # 3-point circle: through three points
 
 _DRAG_TOOLS = (RECT, ROUNDED, ELLIPSE, CIRCLE, SLOT, LINE, CONSTRUCTION)
 _POLY_TOOLS = (POLYGON, STITCHLINE, SCORE)
+# multi-click primitives (each click drops a point; the shape finalises once it
+# has enough points)
+_MULTI_TOOLS = (ARC3, ARCCENTER, CIRCLE2, CIRCLE3)
+_MULTI_NEED = {ARC3: 3, ARCCENTER: 3, CIRCLE2: 2, CIRCLE3: 3}
+# (tool, points already placed) -> prompt for the next click
+_MULTI_HINT = {
+    (ARC3, 1): "arc: click the end point",
+    (ARC3, 2): "arc: click a point on the arc (its bulge)",
+    (ARCCENTER, 1): "centre arc: click the start point (sets the radius)",
+    (ARCCENTER, 2): "centre arc: click the end point (sweeps counter-clockwise)",
+    (CIRCLE2, 1): "circle: click the opposite end of the diameter",
+    (CIRCLE3, 1): "circle: click the second point",
+    (CIRCLE3, 2): "circle: click the third point",
+}
 
 _SNAP_LABEL = {"center": "centre", "end": "endpoint", "mid": "midpoint",
                "quad": "quadrant", "hole": "hole centre", "cross": "intersection",
@@ -210,6 +228,8 @@ class Canvas(QGraphicsView):
         self._pen_drag = False
         self._pen_hud: Optional[QGraphicsPathItem] = None
         self._pen_rmb = False    # a right-click just finished a pen curve
+        # multi-click arc / circle tools: collected click points (scene coords)
+        self._multi_pts: List[QPointF] = []
         self._moved_during_press = False
         self._suppress_commit = False
         self._suppress_next_release = False
@@ -812,6 +832,14 @@ class Canvas(QGraphicsView):
         if self.tool == SELECT:
             return super().mousePressEvent(event)
         if event.button() == Qt.LeftButton:
+            if self.tool in _MULTI_TOOLS:
+                self._multi_pts.append(pos)
+                if len(self._multi_pts) >= _MULTI_NEED[self.tool]:
+                    self._finalize_multi()
+                else:
+                    self._update_multi_preview(pos)
+                event.accept()
+                return
             if self.tool == PEN:
                 # click near the first anchor closes the path; otherwise drop a
                 # new anchor and start a (possible) handle drag off it.
@@ -1032,6 +1060,10 @@ class Canvas(QGraphicsView):
                 self.statusMessage.emit(f"r {r:.1f} mm   ø {2*r:.1f} mm")
             else:
                 self.statusMessage.emit(f"{w:.1f} × {h:.1f} mm")
+        elif self.tool in _MULTI_TOOLS and self._multi_pts:
+            self._update_multi_preview(pos)
+            self.statusMessage.emit(_MULTI_HINT.get(
+                (self.tool, len(self._multi_pts)), ""))
         elif self.tool == PEN and self._pen_pts:
             if self._pen_drag and (event.buttons() & Qt.LeftButton):
                 a = self._pen_pts[-1]                 # pull a free tangent handle
@@ -1204,9 +1236,11 @@ class Canvas(QGraphicsView):
             # Esc cancels whatever is in progress; a second Esc (nothing in
             # progress) drops back to the pointer/Select tool.
             busy = (bool(self._poly_pts) or bool(self._pen_pts)
+                    or bool(self._multi_pts)
                     or self._start is not None or bool(self._handles))
             self._cancel_poly()
             self._cancel_pen()
+            self._cancel_multi()
             self.clear_vertex_handles()
             if self._start is not None:      # cancel an in-progress click-draw
                 self._start = None
@@ -1442,6 +1476,142 @@ class Canvas(QGraphicsView):
         self._pen_handles = []
         self._pen_drag = False
         self._clear_pen_hud()
+        self._clear_preview()
+
+    # -- arc / circle (multi-click) tools -------------------------------
+    def _arc_flatten(self, start: QPointF, through: QPointF, end: QPointF):
+        """World-space polyline of the arc through three points (empty if the
+        three points are collinear)."""
+        ep = EditablePath(nodes=[Vec2(start.x(), start.y()), Vec2(end.x(), end.y())],
+                          edges=[Edge("arc", Vec2(through.x(), through.y()))],
+                          closed=False)                 # identity transform -> world
+        return ep.local_path().flatten()
+
+    def _centre_arc_through(self, centre: QPointF, start: QPointF, end: QPointF):
+        """For a centre arc: the start/end points snapped to the radius circle and
+        a through-point at the mid of the CCW sweep. Returns (s, thru, e) as
+        QPointF, or None if degenerate."""
+        r = math.hypot(start.x() - centre.x(), start.y() - centre.y())
+        if r < 1e-6:
+            return None
+        a0 = math.atan2(start.y() - centre.y(), start.x() - centre.x())
+        a1 = math.atan2(end.y() - centre.y(), end.x() - centre.x())
+        sweep = (a1 - a0) % (2 * math.pi)               # CCW from start to end
+        if sweep < 1e-6:
+            sweep = 2 * math.pi
+        am = a0 + sweep / 2.0
+        s = QPointF(centre.x() + r * math.cos(a0), centre.y() + r * math.sin(a0))
+        e = QPointF(centre.x() + r * math.cos(a1), centre.y() + r * math.sin(a1))
+        thru = QPointF(centre.x() + r * math.cos(am), centre.y() + r * math.sin(am))
+        return s, thru, e
+
+    def _update_multi_preview(self, cursor: QPointF) -> None:
+        pts = self._multi_pts
+        path = QPainterPath()
+        tool = self.tool
+        if tool == CIRCLE2 and len(pts) == 1:
+            a, b = pts[0], cursor
+            cx, cy = (a.x() + b.x()) / 2, (a.y() + b.y()) / 2
+            r = math.hypot(b.x() - a.x(), b.y() - a.y()) / 2.0
+            path.addEllipse(QPointF(cx, cy), r, r)
+        elif tool == CIRCLE3:
+            if len(pts) == 1:
+                path.moveTo(pts[0]); path.lineTo(cursor)
+            elif len(pts) == 2:
+                cr = arc_through(Vec2(pts[0].x(), pts[0].y()),
+                                 Vec2(pts[1].x(), pts[1].y()),
+                                 Vec2(cursor.x(), cursor.y()))
+                if cr:
+                    c, r = cr[0], cr[1]
+                    path.addEllipse(QPointF(c.x, c.y), r, r)
+                else:
+                    path.moveTo(pts[0]); path.lineTo(pts[1]); path.lineTo(cursor)
+        elif tool == ARC3:
+            if len(pts) == 1:
+                path.moveTo(pts[0]); path.lineTo(cursor)
+            elif len(pts) == 2:                          # start, end placed
+                poly = self._arc_flatten(pts[0], cursor, pts[1])   # through=cursor
+                if len(poly) >= 2:
+                    path.moveTo(poly[0].x, poly[0].y)
+                    for p in poly[1:]:
+                        path.lineTo(p.x, p.y)
+                else:
+                    path.moveTo(pts[0]); path.lineTo(pts[1])
+        elif tool == ARCCENTER:
+            if len(pts) == 1:                            # centre placed -> radius
+                r = math.hypot(cursor.x() - pts[0].x(), cursor.y() - pts[0].y())
+                path.addEllipse(pts[0], r, r)
+                path.moveTo(pts[0]); path.lineTo(cursor)
+            elif len(pts) == 2:                          # centre, start -> sweep
+                tri = self._centre_arc_through(pts[0], pts[1], cursor)
+                if tri:
+                    s, thru, e = tri
+                    poly = self._arc_flatten(s, thru, e)
+                    if len(poly) >= 2:
+                        path.moveTo(poly[0].x, poly[0].y)
+                        for p in poly[1:]:
+                            path.lineTo(p.x, p.y)
+        if self._preview is None:
+            self._preview = QGraphicsPathItem()
+            pen = QPen(QColor(120, 120, 120), 0, Qt.DashLine)
+            pen.setCosmetic(True)
+            self._preview.setPen(pen)
+            self.scene_obj.addItem(self._preview)
+        self._preview.setPath(path)
+
+    def _finalize_multi(self) -> None:
+        pts = list(self._multi_pts)
+        tool = self.tool
+        self._multi_pts = []
+        self._clear_preview()
+        self._hide_snap_marker()
+        self.statusMessage.emit("")
+        sh = None
+        if tool == CIRCLE2 and len(pts) == 2:
+            a, b = pts
+            cx, cy = (a.x() + b.x()) / 2, (a.y() + b.y()) / 2
+            r = math.hypot(b.x() - a.x(), b.y() - a.y()) / 2.0
+            if r > 1e-3:
+                sh = Circle(rx=r, ry=r, transform=Transform(x=cx, y=cy),
+                            stitch=self._default_stitch(), layer=self._current_layer)
+        elif tool == CIRCLE3 and len(pts) == 3:
+            cr = arc_through(Vec2(pts[0].x(), pts[0].y()),
+                             Vec2(pts[1].x(), pts[1].y()),
+                             Vec2(pts[2].x(), pts[2].y()))
+            if cr:
+                c, r = cr[0], cr[1]
+                sh = Circle(rx=r, ry=r, transform=Transform(x=c.x, y=c.y),
+                            stitch=self._default_stitch(), layer=self._current_layer)
+        elif tool == ARC3 and len(pts) == 3:
+            # points placed as start, end, through
+            sh = self._make_arc_shape(pts[0], pts[2], pts[1])
+        elif tool == ARCCENTER and len(pts) == 3:
+            tri = self._centre_arc_through(pts[0], pts[1], pts[2])
+            if tri:
+                s, thru, e = tri
+                sh = self._make_arc_shape(s, e, thru)
+        if sh is not None:
+            self.add_shape(sh)
+        self.toolFinished.emit()
+
+    def _make_arc_shape(self, start: QPointF, end: QPointF, through: QPointF):
+        """A standalone arc as an EditablePath (kept editable, not flattened).
+        Returns None if the three points are collinear."""
+        if arc_through(Vec2(start.x(), start.y()), Vec2(through.x(), through.y()),
+                       Vec2(end.x(), end.y())) is None:
+            return None
+        allp = [start, end, through]
+        cx = sum(p.x() for p in allp) / 3.0
+        cy = sum(p.y() for p in allp) / 3.0
+        nodes = [Vec2(start.x() - cx, start.y() - cy),
+                 Vec2(end.x() - cx, end.y() - cy)]
+        edges = [Edge("arc", Vec2(through.x() - cx, through.y() - cy))]
+        return EditablePath(nodes=nodes, edges=edges, closed=False,
+                            transform=Transform(x=cx, y=cy),
+                            stitch=self._default_stitch(), layer=self._current_layer)
+
+    def _cancel_multi(self) -> None:
+        self._multi_pts = []
         self._clear_preview()
 
     # -- vertex editing -------------------------------------------------

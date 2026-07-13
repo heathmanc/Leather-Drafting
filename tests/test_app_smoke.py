@@ -2030,3 +2030,96 @@ def test_double_click_edits_bezier_nodes(qapp):
                                         Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
     assert c._edit_owner is it                                 # entered node-edit
     assert any(getattr(h.node, "is_ctrl", False) for h in c._handles)
+
+
+def _multi_click(c, pts):
+    from PySide6.QtCore import QPointF, QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    for x, y in pts:
+        vp = QPointF(c.mapFromScene(QPointF(x, y)))
+        c.mousePressEvent(QMouseEvent(QEvent.MouseButtonPress, vp,
+                                      Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+
+
+def test_two_point_circle(qapp):
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document
+    from leathercad.shapes import Circle
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.rebuild()
+    c.resize(500, 500)
+    c.snap_to_grid = False
+    c.snap_to_nodes = False
+    c.tool = cm.CIRCLE2
+    _multi_click(c, [(0, 0), (40, 0)])                 # diameter ends
+    circ = [s for s in win.doc.shapes if isinstance(s, Circle)]
+    assert len(circ) == 1
+    assert round(circ[0].transform.x, 1) == 20.0 and round(circ[0].rx, 1) == 20.0
+
+
+def test_three_point_circle(qapp):
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document
+    from leathercad.shapes import Circle
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.rebuild()
+    c.resize(500, 500)
+    c.snap_to_grid = False
+    c.snap_to_nodes = False
+    c.tool = cm.CIRCLE3
+    _multi_click(c, [(0, 20), (20, 0), (40, 20)])      # 3 points on the rim
+    circ = [s for s in win.doc.shapes if isinstance(s, Circle)]
+    assert len(circ) == 1
+    assert round(circ[0].transform.x, 1) == 20.0
+    assert round(circ[0].transform.y, 1) == 20.0
+    assert round(circ[0].rx, 1) == 20.0
+
+
+def test_three_point_arc(qapp):
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document
+    from leathercad.shapes import EditablePath
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.rebuild()
+    c.resize(500, 500)
+    c.snap_to_grid = False
+    c.snap_to_nodes = False
+    c.tool = cm.ARC3
+    _multi_click(c, [(0, 0), (40, 0), (20, 15)])       # start, end, through
+    eps = [s for s in win.doc.shapes if isinstance(s, EditablePath)]
+    assert len(eps) == 1
+    assert [e.kind for e in eps[0].edges] == ["arc"]
+    wpts = [eps[0].transform.apply(p) for p in eps[0].local_path().flatten()]
+    assert round(max(p.y for p in wpts), 1) == 15.0    # bulges through the point
+    assert len(wpts) > 8                               # a real arc, not a chord
+
+
+def test_centre_arc(qapp):
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document
+    from leathercad.shapes import EditablePath
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.rebuild()
+    c.resize(500, 500)
+    c.snap_to_grid = False
+    c.snap_to_nodes = False
+    c.tool = cm.ARCCENTER
+    _multi_click(c, [(0, 0), (20, 0), (0, 20)])        # centre, start, end (quarter)
+    eps = [s for s in win.doc.shapes if isinstance(s, EditablePath)]
+    assert len(eps) == 1
+    assert [e.kind for e in eps[0].edges] == ["arc"]
+    wpts = [eps[0].transform.apply(p) for p in eps[0].local_path().flatten()]
+    # every point is ~20 mm from the centre (0,0)
+    assert all(abs((p.x ** 2 + p.y ** 2) ** 0.5 - 20.0) < 0.2 for p in wpts)

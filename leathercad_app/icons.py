@@ -126,6 +126,30 @@ def tool_icon(kind: str, size: int = 22) -> QIcon:
         for tip, d in ((a, 1), (b, -1)):
             p.drawLine(tip, QPointF(tip.x() + d * 3, y - 2))
             p.drawLine(tip, QPointF(tip.x() + d * 3, y + 2))
+    elif kind == "arc":
+        # a quarter/half arc with its two endpoint dots
+        cx, cy = size * 0.32, size * 0.7
+        rr = size * 0.5
+        rect_a = QRectF(cx - rr, cy - rr, 2 * rr, 2 * rr)
+        p.drawArc(rect_a, 0 * 16, 90 * 16)
+        import math as _m
+        a = QPointF(cx + rr, cy)
+        b = QPointF(cx, cy - rr)
+        _dots_along(p, [a, b], color=_ACCENT, r=1.4)
+    elif kind == "circle2":
+        d = min(rect.width(), rect.height())
+        cc = rect.center()
+        p.drawEllipse(QRectF(cc.x() - d / 2, cc.y() - d / 2, d, d))
+        _dots_along(p, [QPointF(cc.x() - d / 2, cc.y()),
+                        QPointF(cc.x() + d / 2, cc.y())], color=_ACCENT, r=1.5)
+    elif kind == "circle3":
+        d = min(rect.width(), rect.height())
+        cc = rect.center()
+        p.drawEllipse(QRectF(cc.x() - d / 2, cc.y() - d / 2, d, d))
+        r = d / 2
+        pts3 = [QPointF(cc.x() + r * math.cos(a), cc.y() + r * math.sin(a))
+                for a in (math.radians(-90), math.radians(30), math.radians(150))]
+        _dots_along(p, pts3, color=_ACCENT, r=1.5)
     elif kind == "pen":
         # an S-curve with its two bezier control handles + anchor dots
         a = QPointF(m, size - m)

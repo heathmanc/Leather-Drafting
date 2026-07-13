@@ -29,6 +29,10 @@ TOOLS = [
     ("Circle", canvas_mod.CIRCLE, "C"),
     ("Polygon", canvas_mod.POLYGON, "P"),
     ("Pen (bezier curve)", canvas_mod.PEN, "B"),
+    ("Circle (2-point)", canvas_mod.CIRCLE2, "2"),
+    ("Circle (3-point)", canvas_mod.CIRCLE3, "3"),
+    ("Arc (3-point)", canvas_mod.ARC3, "4"),
+    ("Arc (centre)", canvas_mod.ARCCENTER, "5"),
     ("Line", canvas_mod.LINE, "L"),
     ("Construction line", canvas_mod.CONSTRUCTION, "G"),
     ("Hole", canvas_mod.HOLE, "H"),
@@ -51,6 +55,8 @@ _ICON_FOR = {
     canvas_mod.CONSTRUCTION: "construction",
     canvas_mod.MEASURE: "measure", canvas_mod.DIMENSION: "dimension",
     canvas_mod.TEXT: "text", canvas_mod.PEN: "pen",
+    canvas_mod.CIRCLE2: "circle2", canvas_mod.CIRCLE3: "circle3",
+    canvas_mod.ARC3: "arc", canvas_mod.ARCCENTER: "arc",
 }
 
 

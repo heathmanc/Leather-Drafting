@@ -667,6 +667,12 @@ It's in a **move-group** — that's the point of `Ctrl+G`. Select it and press
 picks the right one). Compare against **none**, which marches at the raw
 pitch: the last gap will usually differ.
 
+**Zoomed way out, my stitch holes look like square dots.**
+Intended: once a hole is smaller than about two pixels on screen it is drawn
+as a dot instead of a circle — visually identical at that size, but it keeps
+huge patterns (tens of thousands of holes) smooth to pan and drag. Zoom in
+and the real circles/slits come back.
+
 **Turning off the Cut layer hid my piece but the blue holes stayed.**
 Intended: outline visibility and stitch visibility are independent, so you
 can inspect either alone. Hide the Stitch layer to hide holes.

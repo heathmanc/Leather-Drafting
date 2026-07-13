@@ -41,6 +41,28 @@ from leathercad.stitching import stitch_polyline, StitchResult, Hole
 from leathercad.holes import LooseHole
 
 
+def _holes_to_path(holes, style, diameter, slit_len, slit_angle) -> QPainterPath:
+    """All of an item's stitch holes as ONE QPainterPath. Painting thousands
+    of holes is then a single C++ draw call instead of a Python loop of
+    drawEllipse -- the difference between 4 fps and realtime on big patterns."""
+    import math
+    path = QPainterPath()
+    if style == "slit":
+        half = slit_len / 2.0
+        ca = math.cos(math.radians(slit_angle))
+        sa = math.sin(math.radians(slit_angle))
+        for h in holes:
+            dx = h.tangent.x * ca - h.tangent.y * sa
+            dy = h.tangent.x * sa + h.tangent.y * ca
+            path.moveTo(h.point.x - dx * half, h.point.y - dy * half)
+            path.lineTo(h.point.x + dx * half, h.point.y + dy * half)
+    else:
+        r = diameter / 2.0
+        for h in holes:
+            path.addEllipse(QPointF(h.point.x, h.point.y), r, r)
+    return path
+
+
 def _draw_holes(painter, holes, style, diameter, slit_len, slit_angle):
     import math
     if style == "slit":
@@ -567,6 +589,9 @@ class ShapeItem(QGraphicsItem):
         self.canvas = canvas
         self._outline: QPolygonF = QPolygonF()
         self._holes: Optional[StitchResult] = None
+        self._holes_path: Optional[QPainterPath] = None
+        self._holes_pts: Optional[QPolygonF] = None
+        self._holes_size_mm = 1.0
         self._brect = QRectF()
         self._color = QColor("#ff0000")
         self.setFlags(
@@ -623,6 +648,25 @@ class ShapeItem(QGraphicsItem):
                               for h in res.holes]
             res.holes = oriented_holes
             self._holes = res
+
+        # pre-batch the holes into one path (and their centres into one polygon
+        # for the zoomed-out dot LOD) so paint() is a single draw call
+        if self._holes and self._holes.count:
+            if st and st.hole_style == "slit":
+                self._holes_path = _holes_to_path(
+                    self._holes.holes, "slit", 0.0,
+                    st.slit_length, st.slit_angle)
+                self._holes_size_mm = st.slit_length
+            else:
+                self._holes_path = _holes_to_path(
+                    self._holes.holes, "round",
+                    st.hole_diameter if st else 1.0, 0.0, 0.0)
+                self._holes_size_mm = st.hole_diameter if st else 1.0
+            self._holes_pts = QPolygonF(
+                [QPointF(h.point.x, h.point.y) for h in self._holes.holes])
+        else:
+            self._holes_path = None
+            self._holes_pts = None
 
         if self.canvas is not None:
             self._color = QColor(self.canvas.layer_color(self.model.layer))
@@ -684,25 +728,23 @@ class ShapeItem(QGraphicsItem):
                       if self.canvas else QColor("#0066ff"))
             hp.setCosmetic(True)
             hp.setWidthF(self.canvas.line_width if self.canvas else 1.0)
-            painter.setPen(hp)
+            painter.setBrush(Qt.NoBrush)
             st = self.model.stitch
-            if st and st.hole_style == "slit":
-                half = st.slit_length / 2.0
-                import math
-                ca = math.cos(math.radians(st.slit_angle))
-                sa = math.sin(math.radians(st.slit_angle))
-                for h in self._holes.holes:
-                    # rotate tangent by slit angle
-                    dx = h.tangent.x * ca - h.tangent.y * sa
-                    dy = h.tangent.x * sa + h.tangent.y * ca
-                    painter.drawLine(
-                        QPointF(h.point.x - dx * half, h.point.y - dy * half),
-                        QPointF(h.point.x + dx * half, h.point.y + dy * half))
-            else:
-                d = (st.hole_diameter if st else 1.0)
-                r = d / 2.0
-                for h in self._holes.holes:
-                    painter.drawEllipse(QPointF(h.point.x, h.point.y), r, r)
+            if self._holes_path is not None:
+                # one pre-batched draw call for ALL holes. Zoomed out far
+                # enough that a hole covers < ~2px, stroking antialiased
+                # ellipses is wasted work -- a plain dot reads identically
+                # and paints an order of magnitude faster.
+                lod = option.levelOfDetailFromTransform(painter.worldTransform())
+                if (self._holes_pts is not None
+                        and self._holes_size_mm * lod < 2.0):
+                    hp.setWidthF(max(1.6, hp.widthF()))
+                    painter.setPen(hp)
+                    painter.drawPoints(self._holes_pts)
+                else:
+                    painter.setPen(hp)
+                    painter.drawPath(self._holes_path)
+            painter.setPen(hp)
             _paint_backstitch(painter, self._holes, st)
 
         # a dashed bounding box only for CLOSED shapes -- open segments (lines,
@@ -1016,6 +1058,9 @@ class StitchLineItem(QGraphicsItem):
         self.canvas = canvas
         self._poly = QPolygonF()
         self._holes: Optional[StitchResult] = None
+        self._holes_path: Optional[QPainterPath] = None
+        self._holes_pts: Optional[QPolygonF] = None
+        self._holes_size_mm = 1.0
         self._brect = QRectF()
         self.setFlags(
             QGraphicsItem.ItemIsSelectable
@@ -1036,6 +1081,24 @@ class StitchLineItem(QGraphicsItem):
         self._rel_holes = [Hole(Vec2(h.point.x - self._base.x,
                                      h.point.y - self._base.y), h.tangent)
                            for h in self._holes.holes]
+        # pre-batch the holes into one path (+ centres for the dot LOD) so
+        # paint() is a single draw call
+        st = self.line.settings
+        if self._rel_holes:
+            if st and st.hole_style == "slit":
+                self._holes_path = _holes_to_path(
+                    self._rel_holes, "slit", 0.0, st.slit_length, st.slit_angle)
+                self._holes_size_mm = st.slit_length
+            else:
+                self._holes_path = _holes_to_path(
+                    self._rel_holes, "round",
+                    st.hole_diameter if st else 1.0, 0.0, 0.0)
+                self._holes_size_mm = st.hole_diameter if st else 1.0
+            self._holes_pts = QPolygonF(
+                [QPointF(h.point.x, h.point.y) for h in self._rel_holes])
+        else:
+            self._holes_path = None
+            self._holes_pts = None
         r = self._poly.boundingRect()
         self._brect = r.adjusted(-3, -3, 3, 3)
         self.setPos(self._base.x, self._base.y)
@@ -1058,9 +1121,18 @@ class StitchLineItem(QGraphicsItem):
                   if self.canvas else QColor("#0066ff"))
         hp.setCosmetic(True)
         hp.setWidthF(self.canvas.line_width if self.canvas else 1.0)
+        painter.setBrush(Qt.NoBrush)
+        if self._holes_path is not None:
+            lod = option.levelOfDetailFromTransform(painter.worldTransform())
+            if (self._holes_pts is not None
+                    and self._holes_size_mm * lod < 2.0):
+                hp.setWidthF(max(1.6, hp.widthF()))
+                painter.setPen(hp)
+                painter.drawPoints(self._holes_pts)
+            else:
+                painter.setPen(hp)
+                painter.drawPath(self._holes_path)
         painter.setPen(hp)
-        for h in self._rel_holes:
-            painter.drawEllipse(QPointF(h.point.x, h.point.y), 0.5, 0.5)
         _paint_backstitch(painter, StitchResult(holes=self._rel_holes,
                                                 closed=self._holes.closed),
                           self.line.settings)

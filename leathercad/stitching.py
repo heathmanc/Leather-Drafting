@@ -638,6 +638,38 @@ def _rotate_closed_ring(points: List[Vec2], start_offset: float) -> List[Vec2]:
     return rotated
 
 
+# Fitting a big outline is pure but not cheap, and the SAME outline is fitted
+# again on every rebuild (open, undo, redo, layer toggle...). Memoise on the
+# exact inputs: items compute holes on LOCAL geometry, so moving a shape --
+# or 50 copies of it -- reuses one cached fit. ~512 entries of a few hundred
+# holes each is well under a megabyte.
+_CACHE_MAX = 512
+_stitch_cache: "OrderedDict" = None  # created lazily below
+
+
+def _cache_key(points, corner_points, closed, settings):
+    return (
+        tuple((round(p.x, 6), round(p.y, 6)) for p in points),
+        tuple((round(p.x, 6), round(p.y, 6)) for p in (corner_points or [])),
+        bool(closed),
+        # every settings field that moves a hole; appearance fields
+        # (hole_style/diameter/slits, backstitch markers) don't invalidate
+        (settings.pitch_mm, settings.mode, settings.fit, settings.max_dev,
+         settings.inset, getattr(settings, "start_offset", 0.0),
+         settings.rows, settings.row_spacing,
+         getattr(settings, "symmetry", "none"),
+         getattr(settings, "corner_style", "auto")),
+    )
+
+
+def _copy_result(res: StitchResult) -> StitchResult:
+    # Fresh lists each time: consumers replace/re-orient the holes list
+    # (items.py maps them through the shape transform), so the cached
+    # master must never be handed out directly.
+    return StitchResult(holes=list(res.holes), pitches=list(res.pitches),
+                        closed=res.closed)
+
+
 def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
                     settings) -> StitchResult:
     """Distribute holes on a world-space polyline using ``StitchSettings``.
@@ -646,8 +678,28 @@ def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
     sharp corners). For closed outlines the stitch line is inset from the edge
     by ``settings.inset`` first; corners are then projected onto the inset ring,
     so a sharp corner still gets a hole at the *inset* corner. This is the
-    function the CAD document / export layer calls.
+    function the CAD document / export layer calls. Results are memoised
+    (see ``_cache_key``); callers get an independent ``StitchResult`` whose
+    ``holes``/``pitches`` lists are safe to replace.
     """
+    global _stitch_cache
+    if _stitch_cache is None:
+        from collections import OrderedDict
+        _stitch_cache = OrderedDict()
+    key = _cache_key(points, corner_points, closed, settings)
+    hit = _stitch_cache.get(key)
+    if hit is not None:
+        _stitch_cache.move_to_end(key)
+        return _copy_result(hit)
+    res = _stitch_polyline_impl(points, corner_points, closed, settings)
+    _stitch_cache[key] = _copy_result(res)
+    while len(_stitch_cache) > _CACHE_MAX:
+        _stitch_cache.popitem(last=False)
+    return res
+
+
+def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
+                          closed: bool, settings) -> StitchResult:
     from .offset import offset_closed_inward
 
     pts = list(points)

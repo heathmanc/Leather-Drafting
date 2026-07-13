@@ -194,6 +194,7 @@ Hold **Shift** while placing any line-like point to lock the segment to
 | **Stitch line (seam)** | `M` | A standalone seam of holes — see [Tutorial 3](#16-tutorial-3--two-pieces-sharing-one-seam). |
 | **Trim** | `X` | Click the piece of an outline you want gone (red preview on hover). |
 | **Fillet / chamfer corner** | `6` | Click any corner of a polygon/path to **round** it with a true arc; **Shift-click** to chamfer (bevel); **Ctrl-click** to change the radius. |
+| **Extend to intersection** | `7` | Click the **end** of a line/path: it grows until it meets the next outline or guide (the opposite of Trim). |
 | **Text** | `A` | Click to place engraved lettering. |
 | **Measure** | `Q` | Two clicks; length/angle/dx/dy in the status bar. |
 | **Dimension** | `D` | Two clicks; a permanent dimension annotation. |
@@ -262,6 +263,12 @@ point-by-point:
 * **Green dots** — bezier control handles. Drag to reshape the curve (these
   move freely, no snapping).
 
+* **Add a node**: double-click anywhere on a straight edge — a new vertex
+  appears right there (arcs already have their midpoint handle).
+* **Delete a node**: **Alt-click** it. Alt-clicking an arc's orange midpoint
+  handle straightens that arc into a line. Shapes keep their minimum point
+  count, so you can't delete a triangle down to nothing.
+
 The shape itself is locked while node-editing so your clicks always land on
 the handles. Click elsewhere / press `Esc` to leave node editing.
 
@@ -310,6 +317,14 @@ backstitch zone — instead of the rough "4× the seam" rule (which under-buys
 on short seams, where the needle tails dominate). Tell it your total leather
 stack thickness and preferred tail length once; both are remembered. Cut
 generously anyway.
+
+### How much leather do I need?
+
+**Edit → Area / leather usage…** lists every closed cut piece with its size
+and area, then totals it in **cm² and square feet** (leather is sold by the
+square foot) and suggests how much to buy given how much of a hide is really
+usable (default 75 % — edges, brands and scars eat the rest). The Properties
+panel also shows the selected piece's area.
 
 ### Loose holes and grouped holes
 
@@ -583,6 +598,8 @@ what the **Stitch line** tool is for.
 | `K` | Score line |
 | `M` | Stitch line (seam) |
 | `X` | Trim to intersections |
+| `6` | Fillet / chamfer corner |
+| `7` | Extend to intersection |
 | `A` | Text |
 | `Q` | Measure |
 | `D` | Dimension |

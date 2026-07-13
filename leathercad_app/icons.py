@@ -171,6 +171,20 @@ def tool_icon(kind: str, size: int = 22, dark: bool = False) -> QIcon:
         ap.setWidthF(1.8)
         p.setPen(ap)
         p.drawPath(fp)
+    elif kind == "extend":
+        # a short line growing (dashes) until it hits a wall
+        y = size * 0.5
+        p.drawLine(QPointF(m, y), QPointF(size * 0.45, y))
+        wall_x = size - m
+        p.drawLine(QPointF(wall_x, m), QPointF(wall_x, size - m))
+        ap = QPen(_ACCENT)
+        ap.setWidthF(1.4)
+        ap.setStyle(Qt.DashLine)
+        p.setPen(ap)
+        p.drawLine(QPointF(size * 0.45, y), QPointF(wall_x, y))
+        p.setPen(QPen(_ACCENT, 1.4))
+        p.drawLine(QPointF(wall_x - 4, y - 3), QPointF(wall_x, y))
+        p.drawLine(QPointF(wall_x - 4, y + 3), QPointF(wall_x, y))
     elif kind == "pen":
         # an S-curve with its two bezier control handles + anchor dots
         a = QPointF(m, size - m)

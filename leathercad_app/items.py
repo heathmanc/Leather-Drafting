@@ -131,6 +131,10 @@ class VertexHandle(QGraphicsItem):
             painter.drawRect(QRectF(-s, -s, 2 * s, 2 * s))
 
     def mousePressEvent(self, event):
+        if (event.modifiers() & Qt.AltModifier) and self.canvas is not None:
+            self.canvas.delete_node(self)           # Alt-click removes the node
+            event.accept()
+            return
         self._shift = bool(event.modifiers() & Qt.ShiftModifier)
         self._drag_start = QPointF(self.pos())      # where the node started
         if self.canvas is not None:

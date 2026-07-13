@@ -45,6 +45,7 @@ TOOLS = [
     ("Stitch line (seam)", canvas_mod.STITCHLINE, "M"),
     ("Trim to intersections", canvas_mod.TRIM, "X"),
     ("Fillet / chamfer corner", canvas_mod.FILLET, "6"),
+    ("Extend to intersection", canvas_mod.EXTEND, "7"),
     ("Text", canvas_mod.TEXT, "A"),
     ("Measure", canvas_mod.MEASURE, "Q"),
     ("Dimension", canvas_mod.DIMENSION, "D"),
@@ -62,7 +63,7 @@ _ICON_FOR = {
     canvas_mod.TEXT: "text", canvas_mod.PEN: "pen",
     canvas_mod.CIRCLE2: "circle2", canvas_mod.CIRCLE3: "circle3",
     canvas_mod.ARC3: "arc", canvas_mod.ARCCENTER: "arc",
-    canvas_mod.FILLET: "fillet",
+    canvas_mod.FILLET: "fillet", canvas_mod.EXTEND: "extend",
 }
 
 _TOOL_BY_MODE = {mode: (label, key) for label, mode, key in TOOLS}
@@ -86,6 +87,7 @@ TOOL_LAYOUT = [
     canvas_mod.STITCHLINE,
     canvas_mod.TRIM,
     canvas_mod.FILLET,
+    canvas_mod.EXTEND,
     canvas_mod.TEXT,
     canvas_mod.MEASURE,
     canvas_mod.DIMENSION,
@@ -579,6 +581,7 @@ class MainWindow(QMainWindow):
         self._add(em, "Check back-to-back symmetry…", None, self._check_symmetry)
         self._add(em, "Check seam mates…", None, self._check_seam_mates)
         self._add(em, "Thread estimate…", None, self._thread_estimate)
+        self._add(em, "Area / leather usage…", None, self._area_report)
         em.addSeparator()
         self._add(em, "Duplicate", "Ctrl+D", self.canvas.duplicate_selected)
         self.act_del = self._add(em, "Delete", None, self.canvas.delete_selected)
@@ -715,6 +718,10 @@ class MainWindow(QMainWindow):
             self.canvas.statusMessage.emit(
                 "Fillet: click a corner to round it · Shift-click = chamfer · "
                 "Ctrl-click = change radius")
+        elif mode == canvas_mod.EXTEND:
+            self.canvas.statusMessage.emit(
+                "Extend: click the END of a line/path to grow it until it "
+                "meets the next outline or guide")
 
     def _tool_triggered(self, mode, act):
         # promote the chosen variant to its flyout button's face, then activate
@@ -849,6 +856,19 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self, "Thread estimate",
             self.canvas.thread_report(thick.value(), tail.value()))
+
+    def _area_report(self):
+        """Ask the usable-hide percentage (remembered), show material usage."""
+        s = self._settings()
+        usable, ok = QInputDialog.getDouble(
+            self, "Area / leather usage",
+            "Usable portion of the hide (%) — real cutting wastes the rest:",
+            s.value("leatherUsable", 75.0, type=float), 10.0, 100.0, 0)
+        if not ok:
+            return
+        s.setValue("leatherUsable", usable)
+        QMessageBox.information(self, "Area / leather usage",
+                                self.canvas.area_report(usable))
 
     def _underlay_place(self):
         fn, _ = QFileDialog.getOpenFileName(

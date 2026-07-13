@@ -544,6 +544,14 @@ class PropertiesPanel(QWidget):
                 f"<b>{len(it.model.baked_holes)} holes</b> grouped to this shape"
                 "<br>Ungroup (right-click) to edit them individually")
             return
+        area_line = ""
+        if isinstance(it, ShapeItem):
+            pts, _c, closed = it.model.world_polyline()
+            if closed and len(pts) >= 4:
+                from leathercad.offset import signed_area
+                ring = pts[:-1] if (pts[0] - pts[-1]).length() < 1e-9 else pts
+                area_line = (f"<br>area {abs(signed_area(ring)) / 100.0:.1f} "
+                             f"cm²")
         res = it._holes if isinstance(it, ShapeItem) else it.line.result()
         if res and res.count:
             gaps = res.chord_spacings()
@@ -553,9 +561,9 @@ class PropertiesPanel(QWidget):
                 txt += (f"<br>chord spacing {min(gaps):.2f}–{max(gaps):.2f} mm"
                         f"<br>effective pitch "
                         f"{min(pitches):.3f}–{max(pitches):.3f} mm")
-            self.readout.setText(txt)
+            self.readout.setText(txt + area_line)
         else:
-            self.readout.setText("No holes")
+            self.readout.setText("No holes" + area_line)
 
 
 # ---------------------------------------------------------------------------

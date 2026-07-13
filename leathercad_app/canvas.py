@@ -58,6 +58,7 @@ DIMENSION = "dimension"
 TEXT = "text"
 PEN = "pen"
 FILLET = "fillet"        # click a corner to round it (Shift = chamfer)
+EXTEND = "extend"        # click a line's end to grow it to the next outline
 UNDERLAYCAL = "underlaycal"   # two clicks on the tracing image -> real distance
 ARC3 = "arc3"            # 3-point arc: start, end, then a point on the arc
 ARCCENTER = "arccenter"  # centre arc: centre, start, end (sweeps CCW)
@@ -863,6 +864,11 @@ class Canvas(QGraphicsView):
                                 force_ask=bool(event.modifiers() & Qt.ControlModifier))
             event.accept()
             return
+        if self.tool == EXTEND:
+            if event.button() == Qt.LeftButton:
+                self._do_extend(Vec2(raw.x(), raw.y()))
+            event.accept()
+            return
         if self.tool == UNDERLAYCAL:
             if event.button() == Qt.LeftButton:
                 self._cal_pts.append(QPointF(raw))
@@ -1190,6 +1196,11 @@ class Canvas(QGraphicsView):
             return
         if self.tool == SELECT:
             pos = self.mapToScene(event.position().toPoint())
+            # already node-editing: a double-click on an edge inserts a node
+            if self._edit_owner is not None and self.insert_node_at(
+                    Vec2(pos.x(), pos.y())):
+                event.accept()
+                return
             it = self.itemAt(event.position().toPoint())
             owner = it
             while owner is not None and not isinstance(owner, (ShapeItem, StitchLineItem)):
@@ -1810,6 +1821,254 @@ class Canvas(QGraphicsView):
             "shape with Ctrl+Shift+A if they belong to a piece")
         self.documentChangedSig.emit()
         self.selectionChangedSig.emit()
+        self._emit_commit()
+
+    # -- node add / delete (in node-edit mode) ---------------------------
+    @staticmethod
+    def _nearest_segment(pts, closed, target: Vec2):
+        """(index, projection, dist) of the segment of ``pts`` nearest target.
+        Segment i joins pts[i] -> pts[i+1] (wrapping when closed)."""
+        best = (None, None, float("inf"))
+        n = len(pts)
+        m = n if closed else n - 1
+        for i in range(m):
+            a, b = pts[i], pts[(i + 1) % n]
+            ab = b - a
+            denom = ab.length_sq()
+            t = 0.0 if denom < 1e-12 else max(
+                0.0, min(1.0, (target - a).dot(ab) / denom))
+            proj = a.lerp(b, t)
+            d = (proj - target).length()
+            if d < best[2]:
+                best = (i, proj, d)
+        return best
+
+    def insert_node_at(self, world: Vec2) -> bool:
+        """Double-click an edge while node-editing: add a vertex there."""
+        it = self._edit_owner
+        if it is None or not _alive(it):
+            return False
+        thr = 10.0 / max(self._zoom, 1e-6)
+        if isinstance(it, StitchLineItem):
+            pts = it.line.points
+            i, proj, d = self._nearest_segment(pts, it.line.closed, world)
+            if i is None or d > thr:
+                return False
+            pts.insert(i + 1, proj)
+        elif isinstance(it, ShapeItem):
+            sh = it.model
+            local = sh.transform.inverse_apply(world)
+            if isinstance(sh, (Polygon, PathShape)):
+                closed = bool(getattr(sh, "close_path", False))
+                i, proj, d = self._nearest_segment(sh.points, closed, local)
+                if i is None or d > thr:
+                    return False
+                sh.points.insert(i + 1, proj)
+            elif isinstance(sh, EditablePath):
+                n = len(sh.nodes)
+                best = (None, None, float("inf"))
+                for i, e in enumerate(sh.edges):
+                    if e.kind != "line":
+                        continue          # arcs/beziers have their own handles
+                    a, b = sh.nodes[i], sh.nodes[(i + 1) % n]
+                    _idx, proj, d = self._nearest_segment([a, b], False, local)
+                    if proj is not None and d < best[2]:
+                        best = (i, proj, d)
+                i, proj, d = best
+                if i is None or d > thr:
+                    self.statusMessage.emit(
+                        "Add nodes on straight edges (arcs already have a "
+                        "midpoint handle)")
+                    return False
+                sh.nodes.insert(i + 1, proj)
+                sh.edges.insert(i, Edge("line"))
+            else:
+                return False
+        else:
+            return False
+        it.sync_from_model()
+        self.enter_vertex_edit(it)        # rebuild handles incl. the new one
+        self.statusMessage.emit(
+            "Node added — drag it, Alt-click a node to delete it")
+        self.documentChangedSig.emit()
+        self._emit_commit()
+        return True
+
+    def delete_node(self, handle) -> bool:
+        """Alt-click a node handle: remove that vertex (an arc's midpoint
+        handle straightens the arc into a line)."""
+        it = handle.owner
+        if not _alive(it):
+            return False
+        world = Vec2(handle.pos().x(), handle.pos().y())
+        if isinstance(it, StitchLineItem):
+            pts = it.line.points
+            if len(pts) <= 2:
+                self.statusMessage.emit("A seam needs at least two points")
+                return False
+            idx = min(range(len(pts)),
+                      key=lambda i: (pts[i] - world).length())
+            pts.pop(idx)
+        elif isinstance(it, ShapeItem):
+            sh = it.model
+            local = sh.transform.inverse_apply(world)
+            if isinstance(sh, (Polygon, PathShape)):
+                closed = bool(getattr(sh, "close_path", False))
+                if len(sh.points) <= (3 if closed else 2):
+                    self.statusMessage.emit("Can't remove any more nodes")
+                    return False
+                idx = min(range(len(sh.points)),
+                          key=lambda i: (sh.points[i] - local).length())
+                sh.points.pop(idx)
+            elif isinstance(sh, EditablePath):
+                if getattr(handle.node, "is_ctrl", False):
+                    self.statusMessage.emit(
+                        "Drag the green handles to reshape — delete the "
+                        "anchor node instead")
+                    return False
+                if handle.node.is_mid:    # straighten the arc into a line
+                    edge = min((e for e in sh.edges
+                                if e.kind == "arc" and e.mid is not None),
+                               key=lambda e: (e.mid - local).length(),
+                               default=None)
+                    if edge is None:
+                        return False
+                    edge.kind = "line"
+                    edge.mid = None
+                else:
+                    n = len(sh.nodes)
+                    if n <= (3 if sh.closed else 2):
+                        self.statusMessage.emit("Can't remove any more nodes")
+                        return False
+                    idx = min(range(n),
+                              key=lambda i: (sh.nodes[i] - local).length())
+                    m = len(sh.edges)
+                    sh.nodes.pop(idx)
+                    if sh.closed:
+                        sh.edges.pop(idx % m)
+                        sh.edges[(idx - 1) % len(sh.edges)] = Edge("line")
+                    elif idx == 0:
+                        sh.edges.pop(0)
+                    elif idx == n - 1:
+                        sh.edges.pop(-1)
+                    else:
+                        sh.edges.pop(idx)
+                        sh.edges[idx - 1] = Edge("line")
+            else:
+                return False
+        else:
+            return False
+        it.sync_from_model()
+        self.enter_vertex_edit(it)
+        self.statusMessage.emit("Node removed")
+        self.documentChangedSig.emit()
+        self._emit_commit()
+        return True
+
+    # -- area / leather usage --------------------------------------------
+    def area_report(self, usable_pct: float = 75.0) -> str:
+        """Material usage: area of every closed cut piece (leather is sold by
+        the square foot), selection-scoped like the other reports."""
+        from leathercad.offset import signed_area
+        sel = self.selected_items()
+        pool = sel if sel else list(self.scene_obj.items())
+        rows = []
+        total_mm2 = 0.0
+        for it in pool:
+            if not isinstance(it, ShapeItem):
+                continue
+            sh = it.model
+            if getattr(sh, "construction", False):
+                continue
+            lyr = self.doc.layer(sh.layer)
+            if lyr is not None and getattr(lyr, "role", "cut") != "cut":
+                continue
+            pts, _c, closed = sh.world_polyline()
+            if not closed or len(pts) < 4:
+                continue
+            ring = pts[:-1] if (pts[0] - pts[-1]).length() < 1e-9 else pts
+            a = abs(signed_area(ring))
+            total_mm2 += a
+            b = sh.bounds()
+            rows.append(f"{sh.name or type(sh).__name__}:  "
+                        f"{b[2] - b[0]:.0f}×{b[3] - b[1]:.0f} mm · "
+                        f"{a / 100.0:.1f} cm²")
+        if not rows:
+            return "No closed cut pieces to measure."
+        cm2 = total_mm2 / 100.0
+        sqft = total_mm2 / 92903.04
+        usable = max(usable_pct, 1.0) / 100.0
+        buy = sqft / usable
+        scope = "selection" if sel else "whole pattern"
+        rows += ["", f"Total ({scope}): {cm2:.1f} cm²  =  {sqft:.2f} sq ft",
+                 f"Buy ≈ {buy:.2f} sq ft of leather "
+                 f"(assuming {usable_pct:g}% of the hide is usable)"]
+        return "\n".join(rows)
+
+    # -- extend a line to the next outline --------------------------------
+    def _do_extend(self, world: Vec2) -> None:
+        """Click near an open path's end: grow it until it meets an outline."""
+        from leathercad.trim import _seg_intersect
+        pick = 15.0 / max(self._zoom, 1e-6)
+        best = None
+        best_d = pick
+        for it in self.scene_obj.items():
+            if not isinstance(it, ShapeItem):
+                continue
+            sh = it.model
+            if isinstance(sh, (Polygon, PathShape)):
+                if getattr(sh, "close_path", False) or len(sh.points) < 2:
+                    continue
+                pts = sh.points
+            elif isinstance(sh, EditablePath):
+                if sh.closed or len(sh.nodes) < 2:
+                    continue
+                pts = sh.nodes
+            else:
+                continue
+            t = sh.transform
+            for idx in (0, len(pts) - 1):
+                w = t.apply(pts[idx])
+                d = ((w.x - world.x) ** 2 + (w.y - world.y) ** 2) ** 0.5
+                if d < best_d:
+                    best_d, best = d, (it, idx)
+        if best is None:
+            self.statusMessage.emit(
+                "Extend: click the END of a line/path to grow it to the next "
+                "outline")
+            return
+        it, idx = best
+        sh = it.model
+        pts = sh.points if isinstance(sh, (Polygon, PathShape)) else sh.nodes
+        t = sh.transform
+        end = t.apply(pts[idx])
+        nb = t.apply(pts[1] if idx == 0 else pts[-2])
+        d = Vec2(end.x - nb.x, end.y - nb.y)
+        if d.length() < 1e-9:
+            return
+        d = d.normalized()
+        far = Vec2(end.x + d.x * 10000.0, end.y + d.y * 10000.0)
+        hit = None
+        hit_d = float("inf")
+        for other in self.scene_obj.items():
+            if other is it or not isinstance(other, ShapeItem):
+                continue
+            opts, _c, _cl = other.model.world_polyline()
+            for k in range(len(opts) - 1):
+                p = _seg_intersect(end, far, opts[k], opts[k + 1])
+                if p is None:
+                    continue
+                dd = ((p.x - end.x) ** 2 + (p.y - end.y) ** 2) ** 0.5
+                if 1e-6 < dd < hit_d:
+                    hit_d, hit = dd, p
+        if hit is None:
+            self.statusMessage.emit(
+                "Nothing to extend to in that direction")
+            return
+        pts[idx] = t.inverse_apply(hit)
+        it.sync_from_model()
+        self.statusMessage.emit(f"Extended {hit_d:.1f} mm to the outline")
+        self.documentChangedSig.emit()
         self._emit_commit()
 
     # -- tracing underlay ------------------------------------------------

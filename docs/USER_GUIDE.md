@@ -337,8 +337,11 @@ extra construction.
   punching.
 * **Fillet / chamfer** (`6`) — click any corner of a polygon or path to round
   it with a real arc (asks the radius on first use; **Ctrl-click** to change
-  it, **Shift-click** for a straight chamfer instead). The radius clamps so it
-  never eats past an edge's midpoint. Rectangles/parametric shapes:
+  it, **Shift-click** for a straight chamfer instead). It also works across
+  **two separate lines whose ends meet**: draw two lines into a corner (they
+  snap), click the corner, and the lines are **welded into one path** with the
+  arc between them — the classic draft-then-round workflow. The radius clamps
+  so it never eats past an edge's midpoint. Rectangles/parametric shapes:
   just set Corner radius in Properties, or convert to nodes first (`Ctrl+K`).
   The rounded corner stays a true arc — node-edit it later, and stitching
   treats it like any rounded corner (symmetric holes about the apex).

@@ -1754,15 +1754,20 @@ class Canvas(QGraphicsView):
 
     def _do_fillet(self, world: Vec2, chamfer: bool = False,
                    force_ask: bool = False) -> None:
-        """Round (or Shift: bevel) the polygon/path corner nearest the click."""
+        """Round (or Shift: bevel) the corner nearest the click. Works on a
+        vertex inside one shape AND across two separate lines/paths whose ends
+        meet at the click -- those are welded into one path first (the
+        draw-two-lines-then-round-the-corner workflow)."""
         from leathercad.modify import fillet_vertex, chamfer_vertex, to_editable
 
-        best = None
-        best_d = 15.0 / max(self._zoom, 1e-6)     # generous ~15 px pick radius
+        pick = 15.0 / max(self._zoom, 1e-6)       # generous ~15 px pick radius
+        cands = []                                # (dist, item, idx, world pos)
         for it in self.scene_obj.items():
             if not isinstance(it, ShapeItem):
                 continue
             sh = it.model
+            if getattr(sh, "construction", False):
+                continue                          # guides aren't fillet targets
             if isinstance(sh, (Polygon, PathShape)):
                 pts = sh.points
             elif isinstance(sh, EditablePath):
@@ -1773,14 +1778,16 @@ class Canvas(QGraphicsView):
             for i, p in enumerate(pts):
                 w = t.apply(p)
                 d = ((w.x - world.x) ** 2 + (w.y - world.y) ** 2) ** 0.5
-                if d < best_d:
-                    best_d, best = d, (it, i)
-        if best is None:
+                if d < pick:
+                    cands.append((d, it, i, w))
+        if not cands:
             self.statusMessage.emit(
-                "Fillet: click a corner of a polygon / path. (For a whole "
-                "rectangle, just set its Corner radius in Properties.)")
+                "Fillet: click a corner of a polygon / path, or the point "
+                "where two line ends meet. (For a whole rectangle, set its "
+                "Corner radius in Properties.)")
             return
-        it, idx = best
+        cands.sort(key=lambda c: c[0])
+        _d, it, idx, wpos = cands[0]
         if self.fillet_radius is None or force_ask:
             from PySide6.QtWidgets import QInputDialog
             val, ok = QInputDialog.getDouble(
@@ -1790,8 +1797,23 @@ class Canvas(QGraphicsView):
             if not ok:
                 return
             self.fillet_radius = val
+
         sh = it.model
-        ep = to_editable(sh)
+        ep_probe = to_editable(sh)
+        endpoint = (ep_probe is not None and not ep_probe.closed
+                    and idx in (0, len(ep_probe.nodes) - 1))
+        if endpoint:
+            # an open end: look for another open end meeting it -> weld + round
+            partner = self._fillet_partner(it, idx, wpos, cands)
+            if partner is not None:
+                self._fillet_across(it, idx, partner, chamfer)
+                return
+            self.statusMessage.emit(
+                "Fillet: this is a loose end — bring another line's end to "
+                "this point (they snap), then click their corner")
+            return
+
+        ep = ep_probe
         if ep is None:
             return
         if ep is not sh:                          # Polygon/PathShape -> editable
@@ -1803,13 +1825,97 @@ class Canvas(QGraphicsView):
         if not done:
             self.statusMessage.emit(
                 "That corner can't be rounded — it needs a straight edge on "
-                "both sides")
+                "both sides (weld paths first with Ctrl+J if they're separate)")
             return
         it.sync_from_model()
+        self._fillet_done_msg(chamfer)
+        self.documentChangedSig.emit()
+        self._emit_commit()
+
+    def _fillet_done_msg(self, chamfer: bool) -> None:
         self.statusMessage.emit(
             f"{'Chamfered' if chamfer else 'Filleted'} at "
             f"{self.fillet_radius:g} mm — keep clicking corners · "
             "Shift-click = chamfer · Ctrl-click = change radius")
+
+    def _fillet_polyline(self, sh):
+        """World points of an open, all-straight shape (weldable for fillet),
+        or None."""
+        if getattr(sh, "construction", False):
+            return None
+        if isinstance(sh, (Polygon, PathShape)):
+            if getattr(sh, "close_path", False):
+                return None
+            pts = sh.points
+        elif isinstance(sh, EditablePath):
+            if sh.closed or any(e.kind != "line" for e in sh.edges):
+                return None
+            pts = sh.nodes
+        else:
+            return None
+        if len(pts) < 2:
+            return None
+        return [sh.transform.apply(p) for p in pts]
+
+    def _fillet_partner(self, it, idx, wpos, cands):
+        """Another shape's open END within a hair of ``wpos`` -> (item, idx)."""
+        tol = max(0.75, 8.0 / max(self._zoom, 1e-6))     # snap slop, in mm
+        for _d, jt, j, w in cands:
+            if jt is it:
+                continue
+            pts = self._fillet_polyline(jt.model)
+            if pts is None or j not in (0, len(pts) - 1):
+                continue
+            if ((w.x - wpos.x) ** 2 + (w.y - wpos.y) ** 2) ** 0.5 <= tol:
+                return jt, j
+        return None
+
+    def _fillet_across(self, it_a, idx_a, partner, chamfer: bool) -> None:
+        """Weld two open paths at their meeting ends and round that corner."""
+        from leathercad.modify import fillet_vertex, chamfer_vertex
+        it_b, idx_b = partner
+        a = self._fillet_polyline(it_a.model)
+        b = self._fillet_polyline(it_b.model)
+        if a is None or b is None:
+            self.statusMessage.emit(
+                "Those paths can't be welded automatically — join them with "
+                "Ctrl+J first, then fillet")
+            return
+        if idx_a == 0:
+            a = a[::-1]                            # junction goes at A's end
+        if idx_b != 0:
+            b = b[::-1]                            # ...and at B's start
+        junction = Vec2((a[-1].x + b[0].x) / 2.0, (a[-1].y + b[0].y) / 2.0)
+        merged = a[:-1] + [junction] + b[1:]
+        closed = len(merged) > 3 and (merged[0] - merged[-1]).length() < 1e-6
+        if closed:
+            merged = merged[:-1]                   # ends met too: a loop
+        cx = sum(p.x for p in merged) / len(merged)
+        cy = sum(p.y for p in merged) / len(merged)
+        base = it_a.model
+        ep = EditablePath(nodes=[Vec2(p.x - cx, p.y - cy) for p in merged],
+                          edges=[Edge("line") for _ in
+                                 range(len(merged) if closed else len(merged) - 1)],
+                          closed=closed,
+                          transform=Transform(x=cx, y=cy),
+                          layer=base.layer, stitch=base.stitch)
+        ep.opacity = base.opacity
+        for old in (it_a, it_b):
+            self.doc.remove_shape(old.model)
+            self._remove_item(old)
+        self.doc.add_shape(ep)
+        item = self._add_item(ShapeItem(ep, self))
+        done = (chamfer_vertex if chamfer else fillet_vertex)(
+            ep, len(a) - 1, self.fillet_radius)
+        item.sync_from_model()
+        self.scene_obj.clearSelection()
+        item.setSelected(True)
+        if done:
+            self._fillet_done_msg(chamfer)
+        else:
+            self.statusMessage.emit(
+                "Lines welded into one path, but that corner couldn't be "
+                "rounded (are they parallel?)")
         self.documentChangedSig.emit()
         self._emit_commit()
 

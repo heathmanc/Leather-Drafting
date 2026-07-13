@@ -340,6 +340,13 @@ The Layers panel maps **colour → laser job**. A new document has:
 * **Save / Open** (`Ctrl+S` / `Ctrl+O`) — projects are plain JSON
   (`*.json` / `*.leathercad.json`). Everything round-trips: shapes, curves,
   stitching settings, baked holes, groups, dimensions, text, layers.
+* **Your work is safe.** A `•` in the title bar means unsaved changes; closing
+  then asks whether to save. Unsaved work is also **auto-saved every two
+  minutes**, and if the program (or your computer) ever dies, the next launch
+  offers to **recover** exactly where you were. If something goes wrong
+  internally you get a plain-language dialog — your work is auto-saved first,
+  and the technical details land in an error log you can send along with a bug
+  report.
 * **Export SVG** (`Ctrl+E`) — millimetre-accurate, hairline strokes, grouped
   and coloured by layer. Ideal for LightBurn, Inkscape, or a browser preview.
 * **Export DXF** — R12 DXF. Outlines are written as connected **POLYLINE**s
@@ -485,6 +492,16 @@ what the **Stitch line** tool is for.
 ---
 
 ## 18. Troubleshooting & FAQ
+
+**The program crashed / my computer died — is my work gone?**
+No. Unsaved work is auto-saved every two minutes (and again the instant any
+internal error is caught). Just relaunch: you'll be offered the recovered
+copy. Say yes, then `Ctrl+S`.
+
+**A "Something went wrong" dialog appeared. Now what?**
+Your work was auto-saved before the dialog appeared, and you can usually keep
+working. The dialog names an error-log file — if the problem repeats, send
+that file with a description of what you clicked.
 
 **My printed pattern is the wrong size.**
 Print at **Actual size / 100 %**, never "Fit to page". Measure the reference

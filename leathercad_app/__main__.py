@@ -32,6 +32,17 @@ def main(argv=None) -> int:
         doc = Document.load(argv[1])
     win = MainWindow(doc or _starter_document())
     win.canvas.fit_to_content()
+
+    # Crash safety: unhandled errors are logged + auto-saved + reported in a
+    # dialog instead of dying in a hidden console; a leftover autosave from a
+    # crash is offered back on the next launch.
+    from .robustness import CrashHandler
+    win._crash_handler = CrashHandler(win).install()
+
+    if "--smoke" in argv:                # build verification: open + exit clean
+        return 0
+    if doc is None:                      # don't offer over an explicit file
+        win.maybe_recover_autosave()
     win.show()
     return app.exec()
 

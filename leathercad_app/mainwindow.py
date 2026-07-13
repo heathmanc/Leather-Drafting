@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import datetime
+import json
 import os
+from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, QSize, QSettings
+from PySide6.QtCore import Qt, QSize, QSettings, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow, QDockWidget, QFileDialog, QToolBar, QLabel, QMessageBox,
@@ -125,6 +128,16 @@ class MainWindow(QMainWindow):
         self.history.reset(self.doc.to_dict())
         self._update_undo_actions()
         self._restore_ui_state()
+
+        # crash safety: track unsaved edits and autosave them periodically.
+        self._unsaved_changes = False      # since the last save/open/new
+        self._dirty_for_autosave = False   # since the last autosave write
+        self.autosave_dir: Optional[str] = None   # None -> app-data dir
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setInterval(120_000)          # every 2 minutes
+        self._autosave_timer.timeout.connect(self._autosave_tick)
+        self._autosave_timer.start()
+
         self._update_title()
 
     # -- persist toolbar/window layout across sessions ------------------
@@ -145,12 +158,124 @@ class MainWindow(QMainWindow):
         self.act_drag_draw.setChecked(drag)
 
     def closeEvent(self, event):
+        # Offer to save unsaved work (only when actually shown to a user --
+        # offscreen/test windows close silently).
+        if self._unsaved_changes and self.isVisible():
+            ans = QMessageBox.question(
+                self, "Unsaved changes",
+                "Save your changes before closing?",
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Discard
+                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save)
+            if ans == QMessageBox.StandardButton.Cancel:
+                event.ignore()
+                return
+            if ans == QMessageBox.StandardButton.Save:
+                self.save_document()
+                if self._unsaved_changes:      # user cancelled the Save dialog
+                    event.ignore()
+                    return
         s = self._settings()
         s.setValue("geometry", self.saveGeometry())
         s.setValue("windowState", self.saveState())
         s.setValue("toolbarPinned", self.act_pin.isChecked())
         s.setValue("dragToDraw", self.act_drag_draw.isChecked())
+        self.remove_autosave()                 # clean exit -> nothing to recover
         super().closeEvent(event)
+
+    # -- autosave & crash recovery ---------------------------------------
+    def _autosave_path(self) -> Path:
+        if self.autosave_dir:
+            d = Path(self.autosave_dir)
+            d.mkdir(parents=True, exist_ok=True)
+        else:
+            from .robustness import app_data_dir
+            d = app_data_dir()
+        return d / "autosave.json"
+
+    def write_autosave(self) -> Path:
+        """Snapshot the document (with its source path) for crash recovery."""
+        p = self._autosave_path()
+        wrapper = {
+            "autosave": 1,
+            "source_path": self.path,
+            "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            "doc": self.doc.to_dict(),
+        }
+        p.write_text(json.dumps(wrapper), encoding="utf-8")
+        return p
+
+    def remove_autosave(self) -> None:
+        try:
+            self._autosave_path().unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def _autosave_tick(self) -> None:
+        if not self._dirty_for_autosave:
+            return
+        try:
+            self.write_autosave()
+            self._dirty_for_autosave = False
+            self.statusBar().showMessage("Autosaved", 1500)
+        except Exception:      # autosave must never take the app down
+            pass
+
+    def maybe_recover_autosave(self, ask=None) -> bool:
+        """If a crash left an autosave behind, offer to restore it.
+
+        ``ask(source_path, saved_at) -> bool`` decides (a dialog by default).
+        The autosave file is consumed either way. Returns True if restored.
+        """
+        p = self._autosave_path()
+        if not p.exists():
+            return False
+        try:
+            wrapper = json.loads(p.read_text(encoding="utf-8"))
+            doc = Document.from_dict(wrapper["doc"])
+        except Exception:
+            self.remove_autosave()             # corrupt -> discard quietly
+            return False
+        source = wrapper.get("source_path")
+        saved_at = wrapper.get("saved_at", "")
+        if ask is None:                        # pragma: no cover - GUI dialog
+            name = os.path.basename(source) if source else "an unsaved pattern"
+            ans = QMessageBox.question(
+                self, "Recover unsaved work?",
+                f"Leather-Drafting didn't close cleanly last time.\n\n"
+                f"Restore the auto-saved copy of {name}"
+                f"{f' from {saved_at}' if saved_at else ''}?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes)
+            accept = ans == QMessageBox.StandardButton.Yes
+        else:
+            accept = bool(ask(source, saved_at))
+        self.remove_autosave()
+        if not accept:
+            return False
+        self._adopt_document(doc, source, fit=True)
+        self._unsaved_changes = True           # recovered != saved on disk
+        self._update_title()
+        return True
+
+    def _adopt_document(self, doc: Document, path: Optional[str],
+                        fit: bool = False) -> None:
+        """Swap in a new/loaded document and refresh every view of it."""
+        self.doc = doc
+        self.path = path
+        self.canvas.doc = doc
+        self.canvas.rebuild()
+        self.layers.canvas = self.canvas
+        self.layers.reload()
+        self.properties.set_layers(doc.layers)
+        if fit:
+            self.canvas.fit_to_content()
+        self.history.reset(doc.to_dict())
+        self._update_undo_actions()
+        self._unsaved_changes = False
+        self._dirty_for_autosave = False
+        self._update_title()
 
     # -- UI construction ------------------------------------------------
     def _make_docks(self):
@@ -490,16 +615,25 @@ class MainWindow(QMainWindow):
     def commit(self):
         self.history.push(self.doc.to_dict())
         self._update_undo_actions()
+        self._mark_dirty()
 
     def undo(self):
         state = self.history.undo()
         if state is not None:
             self._load_state(state)
+            self._mark_dirty()
 
     def redo(self):
         state = self.history.redo()
         if state is not None:
             self._load_state(state)
+            self._mark_dirty()
+
+    def _mark_dirty(self):
+        self._dirty_for_autosave = True
+        if not self._unsaved_changes:
+            self._unsaved_changes = True
+            self._update_title()
 
     def _load_state(self, state):
         self.doc = Document.from_dict(state)
@@ -572,42 +706,30 @@ class MainWindow(QMainWindow):
 
     # -- file ops -------------------------------------------------------
     def new_document(self):
-        self.doc = Document()
-        self.path = None
-        self.canvas.doc = self.doc
-        self.canvas.rebuild()
-        self.layers.canvas = self.canvas
-        self.layers.reload()
-        self.properties.set_layers(self.doc.layers)
-        self.history.reset(self.doc.to_dict())
-        self._update_undo_actions()
-        self._update_title()
+        self._adopt_document(Document(), None)
 
     def open_document(self):
         fn, _ = QFileDialog.getOpenFileName(
             self, "Open", "", "Leather-Drafting (*.json *.leathercad.json)")
         if not fn:
             return
+        self.open_path(fn)
+
+    def open_path(self, fn: str) -> bool:
         try:
-            self.doc = Document.load(fn)
-        except Exception as e:  # pragma: no cover - GUI path
-            QMessageBox.critical(self, "Open failed", str(e))
-            return
-        self.path = fn
-        self.canvas.doc = self.doc
-        self.canvas.rebuild()
-        self.layers.reload()
-        self.properties.set_layers(self.doc.layers)
-        self.canvas.fit_to_content()
-        self.history.reset(self.doc.to_dict())
-        self._update_undo_actions()
-        self._update_title()
+            doc = Document.load(fn)
+        except Exception as e:
+            QMessageBox.critical(self, "Open failed",
+                                 f"Couldn't open {os.path.basename(fn)}:\n{e}")
+            return False
+        self._adopt_document(doc, fn, fit=True)
+        return True
 
     def save_document(self):
         if not self.path:
             return self.save_document_as()
         self.doc.save(self.path)
-        self._update_title()
+        self._after_save()
 
     def save_document_as(self):
         fn, _ = QFileDialog.getSaveFileName(
@@ -617,6 +739,12 @@ class MainWindow(QMainWindow):
             return
         self.path = fn
         self.doc.save(fn)
+        self._after_save()
+
+    def _after_save(self):
+        self._unsaved_changes = False
+        self._dirty_for_autosave = False
+        self.remove_autosave()          # on disk now -> nothing to recover
         self._update_title()
 
     def export_svg(self):
@@ -665,4 +793,5 @@ class MainWindow(QMainWindow):
 
     def _update_title(self):
         name = os.path.basename(self.path) if self.path else "Untitled"
-        self.setWindowTitle(f"Leather-Drafting — {name}")
+        mark = "• " if getattr(self, "_unsaved_changes", False) else ""
+        self.setWindowTitle(f"Leather-Drafting — {mark}{name}")

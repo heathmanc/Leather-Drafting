@@ -23,13 +23,19 @@ def _layer_color(doc: Document, name: str, default: str) -> str:
     return lyr.color if lyr else default
 
 
-def collect(doc: Document):
+def collect(doc: Document, kerf: float = 0.0):
     """Return (outlines, stitch_results) in world coordinates.
 
     outlines: list of (points, color)
     stitch_results: list of (StitchResult, settings, color)
+
+    ``kerf`` > 0 applies laser-kerf compensation to closed *cut* outlines:
+    outer boundaries grow by kerf/2 and nested cutouts (a slot fully inside a
+    strap) shrink by kerf/2, so cut pieces come out drawn-size. Score/engrave
+    geometry and open paths are never offset.
     """
     outlines: List[Tuple[List[Vec2], str]] = []
+    cuttable: List[bool] = []            # closed + on a cut layer (kerf targets)
     stitches: List[Tuple[StitchResult, object, str]] = []
     stitch_color = _layer_color(doc, "Stitch", "#0066ff")
 
@@ -43,8 +49,10 @@ def collect(doc: Document):
         if lyr is not None and not lyr.visible:
             continue
         color = lyr.color if lyr else "#ff0000"
+        role = getattr(lyr, "role", "cut") if lyr else "cut"
         pts, corners, closed = sh.world_polyline()
         outlines.append((pts, color))
+        cuttable.append(bool(closed) and role == "cut" and len(pts) >= 4)
         res = holes_for_shape(sh)
         if res.count:
             style = sh.stitch or StitchSettings()
@@ -58,6 +66,10 @@ def collect(doc: Document):
         for contour in tx.world_contours():
             if len(contour) >= 2:
                 outlines.append((list(contour) + [contour[0]], color))
+                cuttable.append(False)    # lettering is engraved, never offset
+
+    if kerf and kerf > 1e-9:
+        outlines = _apply_kerf(outlines, cuttable, kerf)
 
     for sl in doc.stitch_lines:
         res = sl.result()
@@ -69,6 +81,42 @@ def collect(doc: Document):
         res = StitchResult(holes=[Hole(h.point, h.tangent)])
         stitches.append((res, h, stitch_color))  # LooseHole has hole_* fields
     return outlines, stitches
+
+
+def _apply_kerf(outlines, cuttable, kerf: float):
+    """Offset closed cut outlines by half the kerf, direction by nesting.
+
+    A closed cut outline whose sampled vertices all sit strictly inside an odd
+    number of other closed cut outlines is a *cutout* (buckle slot, hardware
+    hole) and shrinks; everything else is an outer boundary and grows. Assumes
+    a physical cut layout (pieces side by side, cutouts nested inside their
+    piece) -- overlapping pieces parked on top of each other for fit-checking
+    aren't a cuttable layout in the first place.
+    """
+    from .geometry import point_in_polygon
+    from .offset import offset_closed
+
+    rings = [i for i, cut in enumerate(cuttable) if cut]
+    out = list(outlines)
+    for i in rings:
+        pts_i = outlines[i][0]
+        ring_i = pts_i[:-1]
+        step = max(1, len(ring_i) // 12)
+        sample = ring_i[::step]
+        depth = 0
+        for j in rings:
+            if j == i:
+                continue
+            ring_j = outlines[j][0][:-1]
+            if all(point_in_polygon(p, ring_j) for p in sample):
+                depth += 1
+        d = kerf / 2.0 if depth % 2 == 0 else -kerf / 2.0
+        out[i] = (offset_closed(pts_i, d), outlines[i][1])
+    return out
+
+
+def _resolve_kerf(doc: Document, kerf) -> float:
+    return float(getattr(doc, "kerf", 0.0) or 0.0) if kerf is None else float(kerf)
 
 
 # ---------------------------------------------------------------------------
@@ -92,8 +140,9 @@ def _bbox_all(outlines, stitches):
 
 
 def export_svg(doc: Document, path: str, *, margin: float = 6.0,
-               hairline: float = 0.05) -> None:
-    outlines, stitches = collect(doc)
+               hairline: float = 0.05, kerf: float | None = None) -> None:
+    k = _resolve_kerf(doc, kerf)
+    outlines, stitches = collect(doc, kerf=k)
     minx, miny, maxx, maxy = _bbox_all(outlines, stitches)
     minx -= margin; miny -= margin; maxx += margin; maxy += margin
     w = maxx - minx
@@ -124,7 +173,8 @@ def export_svg(doc: Document, path: str, *, margin: float = 6.0,
     out.append("  <g id='stitches' fill='none'>")
     for res, settings, color in stitches:
         if settings.hole_style == "slit":
-            half = settings.slit_length / 2.0
+            # the beam widens/lengthens the slit by ~a kerf: cut it shorter
+            half = max(0.05, (settings.slit_length - k) / 2.0)
             slant = math.radians(settings.slit_angle)
             for hle in res.holes:
                 d = hle.tangent.rotate(slant)
@@ -136,7 +186,9 @@ def export_svg(doc: Document, path: str, *, margin: float = 6.0,
                     f"stroke='{color}' stroke-width='{hairline}' "
                     f"stroke-linecap='round' />")
         else:
-            r = settings.hole_diameter / 2.0
+            # the beam enlarges holes: cut a smaller circle so the finished
+            # hole comes out at the drawn diameter
+            r = max(0.05, (settings.hole_diameter - k) / 2.0)
             for hle in res.holes:
                 out.append(
                     f"    <circle cx='{_fmt(X(hle.point.x))}' "
@@ -167,8 +219,9 @@ def _dxf_pair(code: int, value) -> str:
     return f"{code}\n{value}\n"
 
 
-def export_dxf(doc: Document, path: str) -> None:
-    outlines, stitches = collect(doc)
+def export_dxf(doc: Document, path: str, *, kerf: float | None = None) -> None:
+    k = _resolve_kerf(doc, kerf)
+    outlines, stitches = collect(doc, kerf=k)
 
     # gather layer names/colors actually used
     used = {}
@@ -239,13 +292,13 @@ def export_dxf(doc: Document, path: str) -> None:
     saci = _aci(stitch_color)
     for res, settings, _ in stitches:
         if settings.hole_style == "slit":
-            half = settings.slit_length / 2.0
+            half = max(0.05, (settings.slit_length - k) / 2.0)
             slant = math.radians(settings.slit_angle)
             for hle in res.holes:
                 d = hle.tangent.rotate(slant)
                 line(hle.point - d * half, hle.point + d * half, saci)
         else:
-            r = settings.hole_diameter / 2.0
+            r = max(0.05, (settings.hole_diameter - k) / 2.0)
             for hle in res.holes:
                 circle(hle.point, r, saci)
 

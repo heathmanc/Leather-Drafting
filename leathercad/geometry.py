@@ -68,3 +68,19 @@ class Vec2:
 
 def distance(a: Vec2, b: Vec2) -> float:
     return math.hypot(a.x - b.x, a.y - b.y)
+
+
+def point_in_polygon(p: Vec2, poly) -> bool:
+    """Ray-cast point-in-polygon test. ``poly`` is a ring of Vec2 (a repeated
+    closing point is harmless). Points on an edge are implementation-defined."""
+    inside = False
+    n = len(poly)
+    j = n - 1
+    for i in range(n):
+        a, b = poly[i], poly[j]
+        if (a.y > p.y) != (b.y > p.y):
+            x = (b.x - a.x) * (p.y - a.y) / ((b.y - a.y) or 1e-30) + a.x
+            if p.x < x:
+                inside = not inside
+        j = i
+    return inside

@@ -383,10 +383,20 @@ The Layers panel maps **colour → laser job**. A new document has:
   style — cut them straight through, and they match your iron.
 * Construction lines and dimensions are never exported.
 
+* **Kerf compensation** — the laser burns away a thin line of material (the
+  *kerf*), so uncompensated pieces come out slightly small and holes slightly
+  big. Set your laser's kerf in the toolbar **kerf** box (typically
+  0.1–0.3 mm; cut a 20 mm test square and measure to find yours). On SVG/DXF
+  export, outer cut lines grow by half the kerf, nested cutouts (slots,
+  hardware holes) and stitch holes shrink — so everything comes out
+  **drawn-size**. The value is saved with the document. Leave it at 0 if you
+  prefer to set kerf in your laser software instead — **never both**.
+  Kerf assumes a cut layout (pieces side by side); 1:1 printing is never
+  kerf-compensated.
+
 **Typical LightBurn workflow**: Export SVG → drag into LightBurn → the red
 layer becomes your cut, blue becomes the stitch-hole cut (small holes: slow
-speed, full power works well), green a light score, grey an engrave. Set your
-**kerf offset in LightBurn** if your pieces must be size-exact (see FAQ).
+speed, full power works well), green a light score, grey an engrave.
 
 ---
 
@@ -535,9 +545,12 @@ Print at **Actual size / 100 %**, never "Fit to page". Measure the reference
 box printed on every page.
 
 **My laser-cut pieces come out slightly small / holes slightly big.**
-That's the laser's **kerf** (the width of the burn). Leather-Drafting exports
-the true geometry; apply a kerf offset in your laser software (LightBurn:
-Cut settings → Kerf offset, typically 0.05–0.15 mm for leather).
+That's the laser's **kerf** (the width of the burn). Set it in the toolbar
+**kerf** box: exports then grow outer cut lines and shrink cutouts/holes by
+half the kerf, so pieces come out drawn-size. Find your kerf by cutting a
+20 mm square and measuring it (kerf = 20 − measured, typically 0.1–0.3 mm).
+If you already apply kerf in your laser software, leave the box at 0 —
+compensating twice over-corrects.
 
 **I can't select a shape by clicking inside it.**
 By design — shapes are selected by their **outline**, so stacked pieces stay
@@ -590,7 +603,7 @@ just its endpoints).
 | **Arc-length spacing** | Spacing measured along the curve (what most software does; wrong for irons on curves). |
 | **Inset** | Distance from the cut edge in to the stitch line. |
 | **Fit** | Nudging the pitch a few % so whole holes land on corners and seam ends. |
-| **Kerf** | Width of material the laser burns away. Compensate in your laser software. |
+| **Kerf** | Width of material the laser burns away. Set it in the toolbar **kerf** box and exports are compensated automatically (or leave 0 and compensate in your laser software — never both). |
 | **Seam / stitch line** | A standalone run of holes shared by several pieces for perfect registration. |
 | **Back piece** | A mirrored copy whose holes line up with the original back-to-back. |
 | **Score** | A shallow, non-through laser line: fold guides, skive marks, decoration. |

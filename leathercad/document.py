@@ -204,6 +204,9 @@ class Document:
         self.holes: List[LooseHole] = []   # individual, ungrouped holes
         self.dimensions: list = []         # linear dimension annotations
         self.texts: list = []              # engrave lettering
+        # laser kerf compensation (mm) applied to cut geometry on SVG/DXF
+        # export: outer outlines grow by kerf/2, cutouts and holes shrink.
+        self.kerf: float = 0.0
 
     # -- collection helpers --------------------------------------------
     def add_shape(self, shape: Shape) -> Shape:
@@ -252,6 +255,7 @@ class Document:
             "holes": [_hole_to_dict(h) for h in self.holes],
             "dimensions": [dm.to_dict() for dm in self.dimensions],
             "texts": [tx.to_dict() for tx in self.texts],
+            "kerf": self.kerf,
         }
 
     @classmethod
@@ -268,6 +272,7 @@ class Document:
         doc.dimensions = [Dimension.from_dict(x) for x in d.get("dimensions", [])]
         from .text import TextShape
         doc.texts = [TextShape.from_dict(x) for x in d.get("texts", [])]
+        doc.kerf = float(d.get("kerf", 0.0))
         return doc
 
     def save(self, path: str) -> None:

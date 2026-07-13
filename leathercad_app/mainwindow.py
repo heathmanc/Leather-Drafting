@@ -278,9 +278,16 @@ class MainWindow(QMainWindow):
             self.canvas.fit_to_content()
         self.history.reset(doc.to_dict())
         self._update_undo_actions()
+        self._sync_kerf_spin()
         self._unsaved_changes = False
         self._dirty_for_autosave = False
         self._update_title()
+
+    def _sync_kerf_spin(self):
+        if hasattr(self, "kerf_spin"):
+            self.kerf_spin.blockSignals(True)
+            self.kerf_spin.setValue(getattr(self.doc, "kerf", 0.0))
+            self.kerf_spin.blockSignals(False)
 
     # -- UI construction ------------------------------------------------
     def _make_docks(self):
@@ -439,9 +446,29 @@ class MainWindow(QMainWindow):
         self.line_width_spin.valueChanged.connect(self._line_width_changed)
         tb.addWidget(self.line_width_spin)
 
+        tb.addWidget(QLabel(" kerf "))
+        self.kerf_spin = QDoubleSpinBox()
+        self.kerf_spin.setRange(0.0, 1.0)
+        self.kerf_spin.setSingleStep(0.05)
+        self.kerf_spin.setDecimals(2)
+        self.kerf_spin.setSuffix(" mm")
+        self.kerf_spin.setKeyboardTracking(False)
+        self.kerf_spin.setToolTip(
+            "Laser kerf compensation, applied on SVG/DXF export:\n"
+            "outer cut lines grow by kerf/2, cutouts and stitch holes shrink,\n"
+            "so pieces come out drawn-size. 0 = off (set kerf in your laser\n"
+            "software instead -- never both). Printing is never compensated.")
+        self.kerf_spin.setValue(getattr(self.doc, "kerf", 0.0))
+        self.kerf_spin.valueChanged.connect(self._kerf_changed)
+        tb.addWidget(self.kerf_spin)
+
     def _line_width_changed(self, w):
         self.canvas.set_line_width(w)
         self._settings().setValue("lineWidth", w)
+
+    def _kerf_changed(self, k):
+        self.doc.kerf = float(k)
+        self.commit()                      # per-document, undoable, saved
 
     def _make_menus(self):
         m = self.menuBar()
@@ -658,6 +685,7 @@ class MainWindow(QMainWindow):
         self.properties.set_layers(self.doc.layers)
         self.properties.show_selection([])
         self._update_undo_actions()
+        self._sync_kerf_spin()
         self.sb_holes.setText(f"{self.canvas.total_holes()} holes")
 
     def _update_undo_actions(self):

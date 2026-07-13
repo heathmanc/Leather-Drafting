@@ -487,6 +487,7 @@ class MainWindow(QMainWindow):
         self._add(fm, "Save", "Ctrl+S", self.save_document)
         self._add(fm, "Save As…", "Ctrl+Shift+S", self.save_document_as)
         fm.addSeparator()
+        self._add(fm, "Import SVG / DXF…", "Ctrl+I", self.import_file)
         self._add(fm, "Export SVG…", "Ctrl+E", self.export_svg)
         self._add(fm, "Export DXF…", None, self.export_dxf)
         self._add(fm, "Export PDF (1:1, tiled)…", None, self.export_pdf)
@@ -855,6 +856,37 @@ class MainWindow(QMainWindow):
         if self.path:
             self._add_recent(self.path)
         self._update_title()
+
+    def import_file(self):
+        fn, _ = QFileDialog.getOpenFileName(
+            self, "Import", "", "Vector drawings (*.svg *.dxf)")
+        if not fn:
+            return
+        self.import_path(fn)
+
+    def import_path(self, fn: str) -> int:
+        """Add the shapes from an SVG/DXF into the current document."""
+        from leathercad.importers import import_file
+        try:
+            shapes = import_file(fn)
+        except Exception as e:
+            QMessageBox.critical(self, "Import failed",
+                                 f"Couldn't import {os.path.basename(fn)}:\n{e}")
+            return 0
+        if not shapes:
+            QMessageBox.information(
+                self, "Nothing imported",
+                "No usable outlines were found in that file.")
+            return 0
+        for sh in shapes:
+            self.doc.add_shape(sh)
+        self.canvas.rebuild()
+        self.canvas.fit_to_content()
+        self.commit()
+        self.statusBar().showMessage(
+            f"Imported {len(shapes)} shape(s) from {os.path.basename(fn)} — "
+            "stitching is off; enable it per piece in Properties", 6000)
+        return len(shapes)
 
     def export_svg(self):
         fn, _ = QFileDialog.getSaveFileName(self, "Export SVG", "pattern.svg",

@@ -367,6 +367,14 @@ The Layers panel maps **colour → laser job**. A new document has:
 * **File → Open recent** lists your last eight patterns (files that no longer
   exist quietly drop off). **File → New from template** starts from a complete
   example instead of a blank canvas.
+* **Import SVG / DXF** (`Ctrl+I`) — bring existing patterns in as editable
+  shapes. Curves flatten to fine outlines; closed contours arrive as smooth
+  polygons, open ones as paths, all on the Cut layer with stitching **off**
+  (enable per piece in Properties). SVG paths (including beziers, arcs and
+  group transforms) and the common DXF entities (lines, circles, arcs,
+  polylines with bulge arcs) are supported; millimetre scale is taken from
+  the SVG's width/viewBox (px assumed 96 dpi) and DXF coordinates are read
+  as mm.
 * **Your work is safe.** A `•` in the title bar means unsaved changes; closing
   then asks whether to save. Unsaved work is also **auto-saved every two
   minutes**, and if the program (or your computer) ever dies, the next launch

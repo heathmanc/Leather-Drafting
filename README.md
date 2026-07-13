@@ -127,6 +127,7 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Zoom / pan** | mouse wheel / middle-drag |
 | **Save / Open** | `Ctrl+S` / `Ctrl+O` (JSON project files) |
 | **Export** | SVG `Ctrl+E` or DXF — millimetre-accurate, layer-coloured. DXF outlines export as connected **POLYLINE**s (closed shapes carry the closed flag), so LightBurn / Illustrator import them as one contour instead of loose line segments |
+| **Print / PDF (1:1)** | **Export PDF (1:1, tiled)** and **Print** `Ctrl+P` render the pattern at **true 1:1 scale** (1 mm = 1 mm on paper). Patterns bigger than a sheet are split into overlapping **tiles** with crop marks and `row/col` page labels — line the pages up on the overlap and tape. Each page prints a labelled reference box so you can confirm your printer isn't scaling |
 
 Everything is in **millimetres**, Y-up, and the canvas is WYSIWYG with the export.
 

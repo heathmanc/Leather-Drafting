@@ -271,6 +271,8 @@ class MainWindow(QMainWindow):
         fm.addSeparator()
         self._add(fm, "Export SVG…", "Ctrl+E", self.export_svg)
         self._add(fm, "Export DXF…", None, self.export_dxf)
+        self._add(fm, "Export PDF (1:1, tiled)…", None, self.export_pdf)
+        self._add(fm, "Print (1:1)…", "Ctrl+P", self.print_pattern)
         fm.addSeparator()
         self._add(fm, "Quit", "Ctrl+Q", self.close)
 
@@ -545,6 +547,34 @@ class MainWindow(QMainWindow):
             return
         export.export_dxf(self.doc, fn)
         self.statusBar().showMessage(f"Exported {os.path.basename(fn)}", 4000)
+
+    def export_pdf(self):
+        from .printing import export_pdf_tiled
+        fn, _ = QFileDialog.getSaveFileName(self, "Export PDF (1:1)",
+                                            "pattern.pdf", "PDF (*.pdf)")
+        if not fn:
+            return
+        rows, cols = export_pdf_tiled(self.doc, fn)
+        self.statusBar().showMessage(
+            f"Exported {os.path.basename(fn)} — {rows}×{cols} page(s), 1:1 scale",
+            5000)
+
+    def print_pattern(self):
+        from PySide6.QtPrintSupport import QPrinter, QPrintDialog
+        from PySide6.QtGui import QPageSize, QPageLayout
+        from PySide6.QtCore import QSizeF, QMarginsF
+        from .printing import render_tiled
+        printer = QPrinter(QPrinter.HighResolution)
+        printer.setPageSize(QPageSize(QPageSize.A4))
+        printer.setPageMargins(QMarginsF(0, 0, 0, 0), QPageLayout.Unit.Millimeter)
+        dlg = QPrintDialog(printer, self)
+        dlg.setWindowTitle("Print pattern (1:1)")
+        if dlg.exec() != QPrintDialog.Accepted:
+            return
+        layout = printer.pageLayout().fullRect(QPageLayout.Unit.Millimeter)
+        render_tiled(printer, self.doc,
+                     page_w=layout.width(), page_h=layout.height())
+        self.statusBar().showMessage("Sent to printer at 1:1 scale", 4000)
 
     def _update_title(self):
         name = os.path.basename(self.path) if self.path else "Untitled"

@@ -2123,3 +2123,27 @@ def test_centre_arc(qapp):
     wpts = [eps[0].transform.apply(p) for p in eps[0].local_path().flatten()]
     # every point is ~20 mm from the centre (0,0)
     assert all(abs((p.x ** 2 + p.y ** 2) ** 0.5 - 20.0) < 0.2 for p in wpts)
+
+
+def test_pdf_export_1to1_tiled(qapp, tmp_path):
+    """1:1 PDF export: a small pattern is one page, a large one tiles across
+    several, and the file is a valid PDF."""
+    from leathercad_app.printing import export_pdf_tiled
+    from leathercad.document import Document
+    from leathercad.shapes import Rectangle, Transform
+
+    small = Document()
+    small.add_shape(Rectangle(width=80, height=60, transform=Transform(x=0, y=0),
+                              stitch=StitchSettings(pitch_mm=4, inset=3),
+                              layer="Cut"))
+    p1 = tmp_path / "small.pdf"
+    assert export_pdf_tiled(small, str(p1)) == (1, 1)
+    assert p1.read_bytes()[:5] == b"%PDF-"
+
+    big = Document()
+    big.add_shape(Rectangle(width=400, height=300, transform=Transform(x=0, y=0),
+                            layer="Cut"))
+    p2 = tmp_path / "big.pdf"
+    rows, cols = export_pdf_tiled(big, str(p2))
+    assert rows >= 2 and cols >= 2                # genuinely tiled
+    assert p2.read_bytes()[:5] == b"%PDF-"

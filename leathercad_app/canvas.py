@@ -1885,6 +1885,48 @@ class Canvas(QGraphicsView):
         self._emit_commit()
         return items
 
+    def thread_report(self, thickness_mm: float = 3.0,
+                      tail_mm: float = 150.0) -> str:
+        """Estimated saddle-stitch thread for the selected stitched items (or
+        everything stitched, when nothing is selected)."""
+        from leathercad.thread import estimate_thread, format_length
+        from leathercad.stitching import holes_for_shape
+        from leathercad.stitchsettings import StitchSettings
+
+        sel = self.selected_items()
+        pool = sel if sel else list(self.scene_obj.items())
+        rows = []
+        total = 0.0
+        for it in pool:
+            if isinstance(it, ShapeItem):
+                res = holes_for_shape(it.model)
+                if not res.count:
+                    continue
+                st = it.model.stitch or StitchSettings()
+                name = it.model.name or type(it.model).__name__
+            elif isinstance(it, StitchLineItem):
+                res = it.line.result()
+                if not res.count:
+                    continue
+                st = it.line.settings
+                name = it.line.name or "Seam"
+            else:
+                continue
+            est = estimate_thread(res, st, thickness_mm, tail_mm)
+            total += est["thread_mm"]
+            extra = "  (double row)" if est["rows"] == 2 else ""
+            rows.append(f"{name}:  {est['holes']} holes · seam "
+                        f"{format_length(est['seam_mm'])} → thread ≈ "
+                        f"{format_length(est['thread_mm'])}{extra}")
+        if not rows:
+            return ("Nothing stitched here yet — enable Stitching on a piece "
+                    "or draw a seam first.")
+        scope = "selection" if sel else "whole pattern"
+        rows += ["", f"Total ({scope}): ≈ {format_length(total)} of thread",
+                 f"(assumes {thickness_mm:g} mm total leather stack and "
+                 f"{tail_mm:g} mm needle tails per run — cut generously)"]
+        return "\n".join(rows)
+
     def seam_mate_report(self) -> str:
         """Compare the two selected stitched items (shapes or seams): pieces
         sewn together MUST have the same hole count, or assembly fails."""

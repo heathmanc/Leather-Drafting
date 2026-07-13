@@ -576,6 +576,7 @@ class MainWindow(QMainWindow):
                   self.canvas.make_back_piece_selected)
         self._add(em, "Check back-to-back symmetry…", None, self._check_symmetry)
         self._add(em, "Check seam mates…", None, self._check_seam_mates)
+        self._add(em, "Thread estimate…", None, self._thread_estimate)
         em.addSeparator()
         self._add(em, "Duplicate", "Ctrl+D", self.canvas.duplicate_selected)
         self.act_del = self._add(em, "Delete", None, self.canvas.delete_selected)
@@ -808,6 +809,44 @@ class MainWindow(QMainWindow):
     def _check_seam_mates(self):
         QMessageBox.information(self, "Seam mates",
                                 self.canvas.seam_mate_report())
+
+    def _thread_estimate(self):
+        """Ask leather thickness + needle tails (remembered), show the report."""
+        from PySide6.QtWidgets import (QDialog, QFormLayout, QDialogButtonBox,
+                                       QVBoxLayout)
+        from .mathspin import MathSpinBox
+        s = self._settings()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Thread estimate")
+        lay = QVBoxLayout(dlg)
+        form = QFormLayout()
+        thick = MathSpinBox()
+        thick.setRange(0.2, 30.0)
+        thick.setDecimals(1)
+        thick.setSuffix(" mm")
+        thick.setValue(s.value("threadThickness", 3.0, type=float))
+        thick.setToolTip("TOTAL leather stack at the seam (all layers)")
+        tail = MathSpinBox()
+        tail.setRange(0.0, 1000.0)
+        tail.setDecimals(0)
+        tail.setSuffix(" mm")
+        tail.setValue(s.value("threadTail", 150.0, type=float))
+        tail.setToolTip("Needle-grip allowance at EACH end of a run")
+        form.addRow("Leather stack", thick)
+        form.addRow("Needle tail", tail)
+        lay.addLayout(form)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                              | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        s.setValue("threadThickness", thick.value())
+        s.setValue("threadTail", tail.value())
+        QMessageBox.information(
+            self, "Thread estimate",
+            self.canvas.thread_report(thick.value(), tail.value()))
 
     def _underlay_place(self):
         fn, _ = QFileDialog.getOpenFileName(

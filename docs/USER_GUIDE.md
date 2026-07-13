@@ -300,6 +300,17 @@ each side's hole count, seam length and spacing, and a clear verdict. If they
 differ, match the seam lengths, adjust pitch/fit — or use one shared **Stitch
 line** so both pieces get identical holes by construction.
 
+### How much thread do I need?
+
+**Edit → Thread estimate…** computes the saddle-stitch thread for the
+selection (or the whole pattern when nothing is selected). It models the real
+consumption — thread on **both faces**, **two passes through every hole**,
+needle tails at each end of every run, double rows as two runs, and the
+backstitch zone — instead of the rough "4× the seam" rule (which under-buys
+on short seams, where the needle tails dominate). Tell it your total leather
+stack thickness and preferred tail length once; both are remembered. Cut
+generously anyway.
+
 ### Loose holes and grouped holes
 
 * Right-click a stitched shape → **Ungroup stitching → individual holes** to

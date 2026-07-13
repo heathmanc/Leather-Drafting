@@ -51,8 +51,15 @@ def test_key_menu_commands_documented(guide_text):
                 "Make back piece (mirror)", "Ungroup stitching → individual holes",
                 "Group holes into shape", "Join / weld segments",
                 "Break apart into segments", "Convert to editable nodes",
-                "Check back-to-back symmetry", "Reset panels", "Drag to draw"):
+                "Check back-to-back symmetry", "Reset panels", "Drag to draw",
+                "New from template", "Open recent"):
         assert cmd in guide_text, f"menu command not documented: {cmd}"
+
+
+def test_every_template_documented(guide_text):
+    from leathercad.templates import TEMPLATES
+    for label, _builder in TEMPLATES:
+        assert label in guide_text, f"template not documented: {label}"
 
 
 def test_documented_defaults_match_code(guide_text):

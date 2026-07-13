@@ -118,6 +118,11 @@ The user guide travels inside the app (Help → User guide still works).
 
 ## 4. Quick start — a pattern in five minutes
 
+Don't want to start from nothing? **File → New from template** opens a
+complete starter pattern — **Card holder**, **Belt** (with buckle slot, fold
+line and sizing holes) or **Key fob** — matching the tutorials in this guide.
+Adapt and Save As.
+
 1. Press `R` (Rectangle). Click once for the first corner, move, click again
    for the opposite corner. *(Prefer press-drag-release? Toggle
    View → Drag to draw.)*
@@ -359,6 +364,9 @@ The Layers panel maps **colour → laser job**. A new document has:
 * **Save / Open** (`Ctrl+S` / `Ctrl+O`) — projects are plain JSON
   (`*.json` / `*.leathercad.json`). Everything round-trips: shapes, curves,
   stitching settings, baked holes, groups, dimensions, text, layers.
+* **File → Open recent** lists your last eight patterns (files that no longer
+  exist quietly drop off). **File → New from template** starts from a complete
+  example instead of a blank canvas.
 * **Your work is safe.** A `•` in the title bar means unsaved changes; closing
   then asks whether to save. Unsaved work is also **auto-saved every two
   minutes**, and if the program (or your computer) ever dies, the next launch

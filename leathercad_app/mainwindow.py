@@ -157,25 +157,30 @@ class MainWindow(QMainWindow):
         self.canvas.drag_to_draw = drag
         self.act_drag_draw.setChecked(drag)
 
+    def _confirm_discard(self, verb: str = "closing") -> bool:
+        """Offer to save unsaved work before it would be lost. True = proceed.
+        Only prompts when the window is actually shown to a user -- offscreen /
+        test windows proceed silently."""
+        if not (self._unsaved_changes and self.isVisible()):
+            return True
+        ans = QMessageBox.question(
+            self, "Unsaved changes",
+            f"Save your changes before {verb}?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save)
+        if ans == QMessageBox.StandardButton.Cancel:
+            return False
+        if ans == QMessageBox.StandardButton.Save:
+            self.save_document()
+            return not self._unsaved_changes   # user may cancel the Save dialog
+        return True
+
     def closeEvent(self, event):
-        # Offer to save unsaved work (only when actually shown to a user --
-        # offscreen/test windows close silently).
-        if self._unsaved_changes and self.isVisible():
-            ans = QMessageBox.question(
-                self, "Unsaved changes",
-                "Save your changes before closing?",
-                QMessageBox.StandardButton.Save
-                | QMessageBox.StandardButton.Discard
-                | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Save)
-            if ans == QMessageBox.StandardButton.Cancel:
-                event.ignore()
-                return
-            if ans == QMessageBox.StandardButton.Save:
-                self.save_document()
-                if self._unsaved_changes:      # user cancelled the Save dialog
-                    event.ignore()
-                    return
+        if not self._confirm_discard("closing"):
+            event.ignore()
+            return
         s = self._settings()
         s.setValue("geometry", self.saveGeometry())
         s.setValue("windowState", self.saveState())
@@ -442,7 +447,16 @@ class MainWindow(QMainWindow):
         m = self.menuBar()
         fm = m.addMenu("&File")
         self._add(fm, "New", "Ctrl+N", self.new_document)
+        tm = fm.addMenu("New from template")
+        from leathercad.templates import TEMPLATES
+        for label, builder in TEMPLATES:
+            act = QAction(label, self)
+            act.triggered.connect(
+                lambda checked=False, b=builder: self._new_from_template(b))
+            tm.addAction(act)
         self._add(fm, "Open…", "Ctrl+O", self.open_document)
+        self.recent_menu = fm.addMenu("Open recent")
+        self._rebuild_recent_menu()
         self._add(fm, "Save", "Ctrl+S", self.save_document)
         self._add(fm, "Save As…", "Ctrl+Shift+S", self.save_document_as)
         fm.addSeparator()
@@ -706,9 +720,18 @@ class MainWindow(QMainWindow):
 
     # -- file ops -------------------------------------------------------
     def new_document(self):
+        if not self._confirm_discard("starting a new pattern"):
+            return
         self._adopt_document(Document(), None)
 
+    def _new_from_template(self, builder):
+        if not self._confirm_discard("starting a new pattern"):
+            return
+        self._adopt_document(builder(), None, fit=True)
+
     def open_document(self):
+        if not self._confirm_discard("opening another file"):
+            return
         fn, _ = QFileDialog.getOpenFileName(
             self, "Open", "", "Leather-Drafting (*.json *.leathercad.json)")
         if not fn:
@@ -721,9 +744,65 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Open failed",
                                  f"Couldn't open {os.path.basename(fn)}:\n{e}")
+            self._forget_recent(fn)
             return False
         self._adopt_document(doc, fn, fit=True)
+        self._add_recent(fn)
         return True
+
+    # -- recent files ------------------------------------------------------
+    _RECENT_MAX = 8
+
+    def recent_files(self) -> list:
+        val = self._settings().value("recentFiles", [])
+        if isinstance(val, str):           # QSettings collapses 1-item lists
+            val = [val]
+        return [p for p in (val or []) if isinstance(p, str)]
+
+    def _save_recents(self, paths) -> None:
+        self._settings().setValue("recentFiles", list(paths))
+        self._rebuild_recent_menu()
+
+    def _add_recent(self, path: str) -> None:
+        path = os.path.abspath(path)
+        rec = [p for p in self.recent_files() if p != path]
+        rec.insert(0, path)
+        self._save_recents(rec[: self._RECENT_MAX])
+
+    def _forget_recent(self, path: str) -> None:
+        path = os.path.abspath(path)
+        rec = [p for p in self.recent_files() if p != path]
+        self._save_recents(rec)
+
+    def _rebuild_recent_menu(self) -> None:
+        if not hasattr(self, "recent_menu"):
+            return
+        self.recent_menu.clear()
+        rec = [p for p in self.recent_files() if os.path.exists(p)]
+        if rec != self.recent_files():     # quietly drop deleted files
+            self._settings().setValue("recentFiles", rec)
+        if not rec:
+            empty = self.recent_menu.addAction("(empty)")
+            empty.setEnabled(False)
+            return
+        for p in rec:
+            act = self.recent_menu.addAction(os.path.basename(p))
+            act.setToolTip(p)
+            act.triggered.connect(
+                lambda checked=False, fn=p: self._open_recent(fn))
+        self.recent_menu.addSeparator()
+        self.recent_menu.addAction("Clear menu",
+                                   lambda: self._save_recents([]))
+
+    def _open_recent(self, fn: str) -> None:
+        if not self._confirm_discard("opening another file"):
+            return
+        if not os.path.exists(fn):
+            QMessageBox.warning(self, "File moved",
+                                f"{os.path.basename(fn)} no longer exists.")
+            self._forget_recent(fn)
+            return
+        self.open_path(fn)
 
     def save_document(self):
         if not self.path:
@@ -745,6 +824,8 @@ class MainWindow(QMainWindow):
         self._unsaved_changes = False
         self._dirty_for_autosave = False
         self.remove_autosave()          # on disk now -> nothing to recover
+        if self.path:
+            self._add_recent(self.path)
         self._update_title()
 
     def export_svg(self):

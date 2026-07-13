@@ -44,6 +44,7 @@ TOOLS = [
     ("Score line", canvas_mod.SCORE, "K"),
     ("Stitch line (seam)", canvas_mod.STITCHLINE, "M"),
     ("Trim to intersections", canvas_mod.TRIM, "X"),
+    ("Fillet / chamfer corner", canvas_mod.FILLET, "6"),
     ("Text", canvas_mod.TEXT, "A"),
     ("Measure", canvas_mod.MEASURE, "Q"),
     ("Dimension", canvas_mod.DIMENSION, "D"),
@@ -61,6 +62,7 @@ _ICON_FOR = {
     canvas_mod.TEXT: "text", canvas_mod.PEN: "pen",
     canvas_mod.CIRCLE2: "circle2", canvas_mod.CIRCLE3: "circle3",
     canvas_mod.ARC3: "arc", canvas_mod.ARCCENTER: "arc",
+    canvas_mod.FILLET: "fillet",
 }
 
 _TOOL_BY_MODE = {mode: (label, key) for label, mode, key in TOOLS}
@@ -83,6 +85,7 @@ TOOL_LAYOUT = [
     canvas_mod.SCORE,
     canvas_mod.STITCHLINE,
     canvas_mod.TRIM,
+    canvas_mod.FILLET,
     canvas_mod.TEXT,
     canvas_mod.MEASURE,
     canvas_mod.DIMENSION,
@@ -619,6 +622,10 @@ class MainWindow(QMainWindow):
             self.canvas.statusMessage.emit(
                 "Trim: click the part of an outline to cut back to where it "
                 "crosses another shape")
+        elif mode == canvas_mod.FILLET:
+            self.canvas.statusMessage.emit(
+                "Fillet: click a corner to round it · Shift-click = chamfer · "
+                "Ctrl-click = change radius")
 
     def _tool_triggered(self, mode, act):
         # promote the chosen variant to its flyout button's face, then activate

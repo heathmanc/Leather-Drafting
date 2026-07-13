@@ -170,6 +170,7 @@ Hold **Shift** while placing any line-like point to lock the segment to
 | **Score line** | `K` | Click points; lands on the **Score** layer (fold/skive/decoration). |
 | **Stitch line (seam)** | `M` | A standalone seam of holes — see [Tutorial 3](#16-tutorial-3--two-pieces-sharing-one-seam). |
 | **Trim** | `X` | Click the piece of an outline you want gone (red preview on hover). |
+| **Fillet / chamfer corner** | `6` | Click any corner of a polygon/path to **round** it with a true arc; **Shift-click** to chamfer (bevel); **Ctrl-click** to change the radius. |
 | **Text** | `A` | Click to place engraved lettering. |
 | **Measure** | `Q` | Two clicks; length/angle/dx/dy in the status bar. |
 | **Dimension** | `D` | Two clicks; a permanent dimension annotation. |
@@ -326,6 +327,13 @@ extra construction.
   (rows × columns at spacings) or a **circle** (count around a centre,
   optionally rotating each copy). Perfect for belt holes and decorative
   punching.
+* **Fillet / chamfer** (`6`) — click any corner of a polygon or path to round
+  it with a real arc (asks the radius on first use; **Ctrl-click** to change
+  it, **Shift-click** for a straight chamfer instead). The radius clamps so it
+  never eats past an edge's midpoint. Rectangles/parametric shapes:
+  just set Corner radius in Properties, or convert to nodes first (`Ctrl+K`).
+  The rounded corner stays a true arc — node-edit it later, and stitching
+  treats it like any rounded corner (symmetric holes about the apex).
 
 ---
 

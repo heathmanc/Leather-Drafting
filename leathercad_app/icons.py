@@ -150,6 +150,17 @@ def tool_icon(kind: str, size: int = 22) -> QIcon:
         pts3 = [QPointF(cc.x() + r * math.cos(a), cc.y() + r * math.sin(a))
                 for a in (math.radians(-90), math.radians(30), math.radians(150))]
         _dots_along(p, pts3, color=_ACCENT, r=1.5)
+    elif kind == "fillet":
+        # a square corner being rounded: two edges + the fillet arc
+        from PySide6.QtGui import QPainterPath
+        p.drawLine(QPointF(m, m), QPointF(m, size - m - 6))
+        p.drawLine(QPointF(m + 6, size - m), QPointF(size - m, size - m))
+        fp = QPainterPath(QPointF(m, size - m - 6))
+        fp.quadTo(QPointF(m, size - m), QPointF(m + 6, size - m))
+        ap = QPen(_ACCENT)
+        ap.setWidthF(1.8)
+        p.setPen(ap)
+        p.drawPath(fp)
     elif kind == "pen":
         # an S-curve with its two bezier control handles + anchor dots
         a = QPointF(m, size - m)

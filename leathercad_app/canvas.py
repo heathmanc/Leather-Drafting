@@ -56,6 +56,7 @@ MEASURE = "measure"
 DIMENSION = "dimension"
 TEXT = "text"
 PEN = "pen"
+FILLET = "fillet"        # click a corner to round it (Shift = chamfer)
 ARC3 = "arc3"            # 3-point arc: start, end, then a point on the arc
 ARCCENTER = "arccenter"  # centre arc: centre, start, end (sweeps CCW)
 CIRCLE2 = "circle2"      # 2-point circle: two ends of a diameter
@@ -217,6 +218,7 @@ class Canvas(QGraphicsView):
         self.tool = SELECT
         self._default_stitch = lambda: StitchSettings(pitch_mm=3.85, inset=3.5)
         self._current_layer = "Cut"
+        self.fillet_radius: Optional[float] = None   # asked on first use
 
         # in-progress construction state
         self._start: Optional[QPointF] = None
@@ -823,6 +825,13 @@ class Canvas(QGraphicsView):
         if self.tool == TRIM:
             if event.button() == Qt.LeftButton:
                 self._do_trim(Vec2(raw.x(), raw.y()))
+            event.accept()
+            return
+        if self.tool == FILLET:
+            if event.button() == Qt.LeftButton:
+                self._do_fillet(Vec2(raw.x(), raw.y()),
+                                chamfer=bool(event.modifiers() & Qt.ShiftModifier),
+                                force_ask=bool(event.modifiers() & Qt.ControlModifier))
             event.accept()
             return
         pos = raw
@@ -1718,6 +1727,67 @@ class Canvas(QGraphicsView):
             self._add_item(TextItem(tx, self))
         self.apply_layer_visibility()
         self.documentChangedSig.emit()
+
+    def _do_fillet(self, world: Vec2, chamfer: bool = False,
+                   force_ask: bool = False) -> None:
+        """Round (or Shift: bevel) the polygon/path corner nearest the click."""
+        from leathercad.modify import fillet_vertex, chamfer_vertex, to_editable
+
+        best = None
+        best_d = 15.0 / max(self._zoom, 1e-6)     # generous ~15 px pick radius
+        for it in self.scene_obj.items():
+            if not isinstance(it, ShapeItem):
+                continue
+            sh = it.model
+            if isinstance(sh, (Polygon, PathShape)):
+                pts = sh.points
+            elif isinstance(sh, EditablePath):
+                pts = sh.nodes
+            else:
+                continue
+            t = sh.transform
+            for i, p in enumerate(pts):
+                w = t.apply(p)
+                d = ((w.x - world.x) ** 2 + (w.y - world.y) ** 2) ** 0.5
+                if d < best_d:
+                    best_d, best = d, (it, i)
+        if best is None:
+            self.statusMessage.emit(
+                "Fillet: click a corner of a polygon / path. (For a whole "
+                "rectangle, just set its Corner radius in Properties.)")
+            return
+        it, idx = best
+        if self.fillet_radius is None or force_ask:
+            from PySide6.QtWidgets import QInputDialog
+            val, ok = QInputDialog.getDouble(
+                self, "Fillet / chamfer",
+                "Radius / chamfer setback (mm):",
+                self.fillet_radius or 5.0, 0.1, 500.0, 2)
+            if not ok:
+                return
+            self.fillet_radius = val
+        sh = it.model
+        ep = to_editable(sh)
+        if ep is None:
+            return
+        if ep is not sh:                          # Polygon/PathShape -> editable
+            self.doc.shapes[self.doc.shapes.index(sh)] = ep
+            self._remove_item(it)
+            it = self._add_item(ShapeItem(ep, self))
+        done = (chamfer_vertex if chamfer else fillet_vertex)(
+            ep, idx, self.fillet_radius)
+        if not done:
+            self.statusMessage.emit(
+                "That corner can't be rounded — it needs a straight edge on "
+                "both sides")
+            return
+        it.sync_from_model()
+        self.statusMessage.emit(
+            f"{'Chamfered' if chamfer else 'Filleted'} at "
+            f"{self.fillet_radius:g} mm — keep clicking corners · "
+            "Shift-click = chamfer · Ctrl-click = change radius")
+        self.documentChangedSig.emit()
+        self._emit_commit()
 
     def boolean_selected(self, op: str) -> None:
         """Union / difference / intersection of the selected closed shapes.

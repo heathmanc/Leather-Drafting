@@ -202,8 +202,14 @@ class Canvas(QGraphicsView):
         super().__init__()
         self.doc = document
         self.scene_obj = QGraphicsScene(self)
-        self.scene_obj.setSceneRect(-500, -500, 1000, 1000)
+        # An effectively infinite canvas (Fusion-style). A small scene rect
+        # CLAMPS view translation, which silently broke cursor-anchored zoom
+        # (the correction pan hit the wall, so points near the view edge slid)
+        # and made panning rubber-band at the boundary.
+        self.scene_obj.setSceneRect(-100000, -100000, 200000, 200000)
         self.setScene(self.scene_obj)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setRenderHint(QPainter.Antialiasing, True)
         self.setMouseTracking(True)
         self.setTransformationAnchor(QGraphicsView.NoAnchor)
@@ -268,12 +274,20 @@ class Canvas(QGraphicsView):
     def _apply_zoom(self) -> None:
         self.setTransform(QTransform().scale(self._zoom, -self._zoom))
 
+    ZOOM_MIN = 0.05     # px per mm -- far enough out for a whole belt
+    ZOOM_MAX = 120.0
+
     def wheelEvent(self, event):
-        old = self.mapToScene(event.position().toPoint())
-        factor = 1.0015 ** event.angleDelta().y()
-        self._zoom = max(0.3, min(40.0, self._zoom * factor))
+        # Fusion-style zoom: the scene point under the cursor stays under the
+        # cursor (zoom about the mouse, not the view centre).
+        self.zoom_at(event.position().toPoint(),
+                     1.0015 ** event.angleDelta().y())
+
+    def zoom_at(self, view_pos, factor: float) -> None:
+        old = self.mapToScene(view_pos)
+        self._zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, self._zoom * factor))
         self._apply_zoom()
-        new = self.mapToScene(event.position().toPoint())
+        new = self.mapToScene(view_pos)
         delta = new - old
         self.translate(delta.x(), delta.y())
 
@@ -284,8 +298,9 @@ class Canvas(QGraphicsView):
         rect = rect.adjusted(-15, -15, 15, 15)
         vw = max(1, self.viewport().width())
         vh = max(1, self.viewport().height())
-        self._zoom = max(0.3, min(40.0, min(vw / rect.width(),
-                                            vh / rect.height())))
+        self._zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX,
+                                            min(vw / rect.width(),
+                                                vh / rect.height())))
         self._apply_zoom()
         self.centerOn(rect.center())
 
@@ -2925,22 +2940,26 @@ class Canvas(QGraphicsView):
     # -- grid -----------------------------------------------------------
     def drawBackground(self, painter, rect):
         painter.fillRect(rect, QColor(250, 250, 248))
-        left = math.floor(rect.left() / 10) * 10
-        top = math.floor(rect.bottom() / 10) * 10
+        # Adaptive grid: pick the finest 10^k step that stays >= ~8 px apart,
+        # so zooming far out over a huge canvas never draws thousands of lines.
+        step = 10.0
+        while step * self._zoom < 8.0:
+            step *= 10.0
+        big = step * 5.0
         minor = QPen(QColor(230, 230, 226), 0)
         minor.setCosmetic(True)
         major = QPen(QColor(210, 210, 205), 0)
         major.setCosmetic(True)
-        x = left
+        x = math.floor(rect.left() / step) * step
         while x < rect.right():
-            painter.setPen(major if int(round(x)) % 50 == 0 else minor)
+            painter.setPen(major if abs(x % big) < 1e-6 else minor)
             painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
-            x += 10
-        y = math.floor(rect.top() / 10) * 10
+            x += step
+        y = math.floor(rect.top() / step) * step
         while y < rect.bottom():
-            painter.setPen(major if int(round(y)) % 50 == 0 else minor)
+            painter.setPen(major if abs(y % big) < 1e-6 else minor)
             painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
-            y += 10
+            y += step
         axis = QPen(QColor(200, 160, 160), 0)
         axis.setCosmetic(True)
         painter.setPen(axis)

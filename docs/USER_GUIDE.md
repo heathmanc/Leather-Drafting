@@ -96,7 +96,10 @@ The user guide travels inside the app (Help → User guide still works).
 ## 3. The workspace
 
 * **Canvas** (centre) — your drawing. The grid is in mm; the origin is marked.
-  * **Zoom**: mouse wheel. **Pan**: drag with the middle mouse button.
+  * **Zoom**: mouse wheel — zooms **about the cursor** (the point under your
+    mouse stays put, Fusion-style). **Pan**: drag with the middle mouse
+    button. The canvas is effectively infinite; the grid coarsens as you zoom
+    out so it stays readable.
   * **Fit to content**: `F` (or View → Fit to content).
   * **Rulers** — mm rulers frame the canvas (View → Rulers to toggle), with a
     marker tracking your cursor. **Drag out of a ruler** onto the canvas to

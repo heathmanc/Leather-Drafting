@@ -348,9 +348,17 @@ class MainWindow(QMainWindow):
         d2.setWidget(self.layers)
         self.addDockWidget(Qt.RightDockWidgetArea, d2)
 
+        from .partspanel import PartsPanel
+        self.parts = PartsPanel(self.canvas)
+        d3 = QDockWidget("Parts", self)
+        d3.setObjectName("PartsDock")
+        d3.setWidget(self.parts)
+        self.addDockWidget(Qt.RightDockWidgetArea, d3)
+
         # keep references so the View menu can toggle them back after closing
         self.properties_dock = d1
         self.layers_dock = d2
+        self.parts_dock = d3
 
     def _make_tool_palette(self):
         """Traditional vertical tool palette, docked left, drag/float/pinnable."""
@@ -478,7 +486,8 @@ class MainWindow(QMainWindow):
 
         tb.addSeparator()
         tb.addWidget(QLabel(" line "))
-        self.line_width_spin = QDoubleSpinBox()
+        from .mathspin import MathSpinBox
+        self.line_width_spin = MathSpinBox()
         self.line_width_spin.setRange(0.3, 8.0)
         self.line_width_spin.setSingleStep(0.5)
         self.line_width_spin.setDecimals(1)
@@ -491,7 +500,7 @@ class MainWindow(QMainWindow):
         tb.addWidget(self.line_width_spin)
 
         tb.addWidget(QLabel(" kerf "))
-        self.kerf_spin = QDoubleSpinBox()
+        self.kerf_spin = MathSpinBox()
         self.kerf_spin.setRange(0.0, 1.0)
         self.kerf_spin.setSingleStep(0.05)
         self.kerf_spin.setDecimals(2)
@@ -566,6 +575,7 @@ class MainWindow(QMainWindow):
         self._add(em, "Make back piece (mirror)", "Ctrl+M",
                   self.canvas.make_back_piece_selected)
         self._add(em, "Check back-to-back symmetry…", None, self._check_symmetry)
+        self._add(em, "Check seam mates…", None, self._check_seam_mates)
         em.addSeparator()
         self._add(em, "Duplicate", "Ctrl+D", self.canvas.duplicate_selected)
         self.act_del = self._add(em, "Delete", None, self.canvas.delete_selected)
@@ -603,6 +613,10 @@ class MainWindow(QMainWindow):
         la.setText("Layers panel")
         la.setShortcut(QKeySequence("Ctrl+2"))
         vm.addAction(la)
+        pa2 = self.parts_dock.toggleViewAction()
+        pa2.setText("Parts library")
+        pa2.setShortcut(QKeySequence("Ctrl+3"))
+        vm.addAction(pa2)
         self._add(vm, "Reset panels", None, self._reset_panels)
         vm.addSeparator()
         self.act_rulers = QAction("Rulers", self)
@@ -612,6 +626,23 @@ class MainWindow(QMainWindow):
         self.act_rulers.toggled.connect(self._set_rulers_visible)
         self._set_rulers_visible(self.act_rulers.isChecked())
         vm.addAction(self.act_rulers)
+        tim = vm.addMenu("Tracing image")
+        self._add(tim, "Place image…", None, self._underlay_place)
+        self._add(tim, "Calibrate scale (click 2 points)…", None,
+                  self._underlay_calibrate)
+        for pct in (25, 50, 75):
+            self._add(tim, f"Opacity {pct}%", None,
+                      lambda checked=False, o=pct / 100.0:
+                      self.canvas.underlay_config(opacity=o))
+        self.act_underlay_show = QAction("Show tracing image", self)
+        self.act_underlay_show.setCheckable(True)
+        self.act_underlay_show.setChecked(True)
+        self.act_underlay_show.toggled.connect(
+            lambda on: self.canvas.underlay_config(visible=on))
+        tim.addAction(self.act_underlay_show)
+        self._add(tim, "Remove", None,
+                  lambda: self.canvas.underlay_config(remove=True))
+        vm.addSeparator()
         self.act_dark = QAction("Dark theme", self)
         self.act_dark.setCheckable(True)
         self.act_dark.toggled.connect(self._apply_theme)
@@ -773,6 +804,31 @@ class MainWindow(QMainWindow):
     def _check_symmetry(self):
         QMessageBox.information(self, "Back-to-back symmetry",
                                self.canvas.symmetry_report_selected())
+
+    def _check_seam_mates(self):
+        QMessageBox.information(self, "Seam mates",
+                                self.canvas.seam_mate_report())
+
+    def _underlay_place(self):
+        fn, _ = QFileDialog.getOpenFileName(
+            self, "Place tracing image", "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp)")
+        if not fn:
+            return
+        if self.canvas.set_underlay(fn):
+            self.statusBar().showMessage(
+                "Tracing image placed — now View → Tracing image → Calibrate "
+                "scale, click two points a known distance apart", 8000)
+
+    def _underlay_calibrate(self):
+        if getattr(self.canvas.doc, "underlay", None) is None:
+            QMessageBox.information(self, "Tracing image",
+                                    "Place a tracing image first.")
+            return
+        self.canvas.tool = canvas_mod.UNDERLAYCAL
+        self.canvas.statusMessage.emit(
+            "Calibrate: click the FIRST point of a known distance on the "
+            "photo (e.g. one end of a ruler in the shot)")
 
     def _offset_selected(self):
         if not [it for it in self.canvas.selected_items()

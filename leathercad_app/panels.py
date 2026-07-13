@@ -29,7 +29,8 @@ except Exception:  # pragma: no cover
 
 
 def _spin(lo, hi, step=1.0, decimals=2, suffix=" mm") -> QDoubleSpinBox:
-    s = QDoubleSpinBox()
+    from .mathspin import MathSpinBox
+    s = MathSpinBox()
     s.setRange(lo, hi)
     s.setSingleStep(step)
     s.setDecimals(decimals)

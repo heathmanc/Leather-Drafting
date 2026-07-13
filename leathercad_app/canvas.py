@@ -58,6 +58,7 @@ DIMENSION = "dimension"
 TEXT = "text"
 PEN = "pen"
 FILLET = "fillet"        # click a corner to round it (Shift = chamfer)
+UNDERLAYCAL = "underlaycal"   # two clicks on the tracing image -> real distance
 ARC3 = "arc3"            # 3-point arc: start, end, then a point on the arc
 ARCCENTER = "arccenter"  # centre arc: centre, start, end (sweeps CCW)
 CIRCLE2 = "circle2"      # 2-point circle: two ends of a diameter
@@ -227,6 +228,8 @@ class Canvas(QGraphicsView):
         self._current_layer = "Cut"
         self.fillet_radius: Optional[float] = None   # asked on first use
         self.dark = False        # canvas swatches (paper/grid/axis), see theme.py
+        self._underlay_item = None   # tracing photo behind the drawing
+        self._cal_pts: List[QPointF] = []    # underlay calibration clicks
 
         # in-progress construction state
         self._start: Optional[QPointF] = None
@@ -293,7 +296,11 @@ class Canvas(QGraphicsView):
         self.translate(delta.x(), delta.y())
 
     def fit_to_content(self) -> None:
-        rect = self.scene_obj.itemsBoundingRect()
+        rect = QRectF()
+        for it in self.scene_obj.items():
+            if it is self._underlay_item:
+                continue                 # the tracing photo isn't content
+            rect = rect.united(it.sceneBoundingRect())
         if rect.isNull():
             rect = QRectF(-50, -50, 100, 100)
         rect = rect.adjusted(-15, -15, 15, 15)
@@ -851,6 +858,28 @@ class Canvas(QGraphicsView):
                                 force_ask=bool(event.modifiers() & Qt.ControlModifier))
             event.accept()
             return
+        if self.tool == UNDERLAYCAL:
+            if event.button() == Qt.LeftButton:
+                self._cal_pts.append(QPointF(raw))
+                if len(self._cal_pts) >= 2:
+                    p1, p2 = self._cal_pts[0], self._cal_pts[1]
+                    self._cal_pts = []
+                    from PySide6.QtWidgets import QInputDialog
+                    real, ok = QInputDialog.getDouble(
+                        self, "Calibrate tracing image",
+                        "Real distance between your two clicks (mm):",
+                        100.0, 0.1, 5000.0, 2)
+                    if ok and self.calibrate_underlay(p1, p2, real):
+                        self.statusMessage.emit(
+                            "Tracing image scaled — 1 mm on screen is now "
+                            "1 mm in real life")
+                    self.toolFinished.emit()
+                else:
+                    self.statusMessage.emit(
+                        "Calibrate: now click the SECOND point of the known "
+                        "distance")
+            event.accept()
+            return
         pos = raw
         if self.tool != SELECT:
             pos, _v = self.snap(pos)
@@ -1275,11 +1304,12 @@ class Canvas(QGraphicsView):
             # Esc cancels whatever is in progress; a second Esc (nothing in
             # progress) drops back to the pointer/Select tool.
             busy = (bool(self._poly_pts) or bool(self._pen_pts)
-                    or bool(self._multi_pts)
+                    or bool(self._multi_pts) or bool(self._cal_pts)
                     or self._start is not None or bool(self._handles))
             self._cancel_poly()
             self._cancel_pen()
             self._cancel_multi()
+            self._cal_pts = []
             self.clear_vertex_handles()
             if self._start is not None:      # cancel an in-progress click-draw
                 self._start = None
@@ -1725,6 +1755,7 @@ class Canvas(QGraphicsView):
         self.selectionChangedSig.emit()   # let panels release their item refs
         self.scene_obj.clear()
         self._live.clear()
+        self._underlay_item = None        # freed by scene.clear()
         self._preview = None
         self._snap_marker = None
         self._node_hl = None
@@ -1745,8 +1776,154 @@ class Canvas(QGraphicsView):
             self._add_item(DimensionItem(dm, self))
         for tx in getattr(self.doc, "texts", []):
             self._add_item(TextItem(tx, self))
+        self._rebuild_underlay()
         self.apply_layer_visibility()
         self.documentChangedSig.emit()
+
+    # -- tracing underlay ------------------------------------------------
+    def set_underlay(self, path: str) -> bool:
+        """Place a reference photo behind the drawing (traceable, never
+        exported). Starts at ~200 mm wide, half opacity, position locked."""
+        from PySide6.QtGui import QPixmap
+        pm = QPixmap(path)
+        if pm.isNull():
+            self.statusMessage.emit("Couldn't load that image")
+            return False
+        scale = 200.0 / max(pm.width(), 1)
+        self.doc.underlay = {"path": path, "x": -100.0,
+                             "y": pm.height() * scale / 2.0,
+                             "scale": scale, "opacity": 0.5, "visible": True}
+        self._rebuild_underlay()
+        self._emit_commit()
+        return True
+
+    def _rebuild_underlay(self) -> None:
+        from PySide6.QtGui import QPixmap
+        from PySide6.QtWidgets import QGraphicsPixmapItem
+        if self._underlay_item is not None:
+            self.scene_obj.removeItem(self._underlay_item)
+            self._underlay_item = None
+        u = getattr(self.doc, "underlay", None)
+        if not u:
+            return
+        pm = QPixmap(u["path"])
+        if pm.isNull():
+            return                        # image moved/deleted: skip quietly
+        item = QGraphicsPixmapItem(pm)
+        item.setZValue(-1000)             # always behind the drawing
+        item.setOpacity(float(u.get("opacity", 0.5)))
+        item.setVisible(bool(u.get("visible", True)))
+        s = float(u.get("scale", 1.0))
+        # flip Y so the photo reads upright in our Y-up world
+        item.setTransform(QTransform().scale(s, -s))
+        item.setPos(float(u.get("x", 0.0)), float(u.get("y", 0.0)))
+        item.setTransformationMode(Qt.SmoothTransformation)
+        self.scene_obj.addItem(item)
+        self._underlay_item = item
+
+    def underlay_config(self, **kw) -> None:
+        """Update underlay settings (opacity / visible / locked / remove)."""
+        u = getattr(self.doc, "underlay", None)
+        if u is None:
+            return
+        if kw.pop("remove", False):
+            self.doc.underlay = None
+            self._rebuild_underlay()
+            self._emit_commit()
+            return
+        u.update({k: v for k, v in kw.items() if k in
+                  ("opacity", "visible", "x", "y", "scale")})
+        it = self._underlay_item
+        if it is not None:
+            it.setOpacity(float(u.get("opacity", 0.5)))
+            it.setVisible(bool(u.get("visible", True)))
+        self._emit_commit()
+
+    def calibrate_underlay(self, p1: QPointF, p2: QPointF,
+                           real_mm: float) -> bool:
+        """Two clicked scene points a known real distance apart -> rescale the
+        photo so that distance measures true, keeping p1 pinned."""
+        u = getattr(self.doc, "underlay", None)
+        it = self._underlay_item
+        if u is None or it is None or real_mm <= 0:
+            return False
+        measured = ((p2.x() - p1.x()) ** 2 + (p2.y() - p1.y()) ** 2) ** 0.5
+        if measured < 1e-6:
+            return False
+        f = real_mm / measured
+        u["scale"] = float(u.get("scale", 1.0)) * f
+        # keep the first clicked point fixed while scaling about the item origin
+        u["x"] = p1.x() - f * (p1.x() - float(u.get("x", 0.0)))
+        u["y"] = p1.y() - f * (p1.y() - float(u.get("y", 0.0)))
+        self._rebuild_underlay()
+        self._emit_commit()
+        return True
+
+    def place_shapes(self, shapes) -> list:
+        """Add shapes (e.g. a library part) centred in the current view, as one
+        undoable step, and select them."""
+        if not shapes:
+            return []
+        bs = [sh.bounds() for sh in shapes]
+        cx = (min(b[0] for b in bs) + max(b[2] for b in bs)) / 2.0
+        cy = (min(b[1] for b in bs) + max(b[3] for b in bs)) / 2.0
+        target = self.mapToScene(self.viewport().rect().center())
+        dx, dy = target.x() - cx, target.y() - cy
+        self._suppress_commit = True
+        items = []
+        for sh in shapes:
+            sh.transform.x += dx
+            sh.transform.y += dy
+            self.doc.add_shape(sh)
+            items.append(self._add_item(ShapeItem(sh, self)))
+        self._suppress_commit = False
+        self.scene_obj.clearSelection()
+        for it in items:
+            it.setSelected(True)
+        self.documentChangedSig.emit()
+        self.selectionChangedSig.emit()
+        self._emit_commit()
+        return items
+
+    def seam_mate_report(self) -> str:
+        """Compare the two selected stitched items (shapes or seams): pieces
+        sewn together MUST have the same hole count, or assembly fails."""
+        from leathercad.stitching import holes_for_shape
+        picks = []
+        for it in self.selected_items():
+            if isinstance(it, ShapeItem):
+                res = holes_for_shape(it.model)
+                if res.count:
+                    nm = it.model.name or type(it.model).__name__
+                    picks.append((nm, res))
+            elif isinstance(it, StitchLineItem):
+                res = it.line.result()
+                if res.count:
+                    picks.append((it.line.name or "Seam", res))
+        if len(picks) != 2:
+            return ("Select exactly TWO stitched items (pieces or seams) "
+                    "to compare — e.g. a body and its gusset.")
+        out = []
+        counts = []
+        for name, res in picks:
+            gaps = res.chord_spacings()
+            length = sum(gaps)
+            counts.append(res.count)
+            if gaps:
+                out.append(f"{name}:  {res.count} holes ·"
+                           f" seam ≈ {length:.1f} mm ·"
+                           f" spacing {min(gaps):.2f}–{max(gaps):.2f} mm")
+            else:
+                out.append(f"{name}:  {res.count} hole")
+        diff = abs(counts[0] - counts[1])
+        if diff == 0:
+            out += ["", "✓ Hole counts MATCH — these seams will sew together."]
+        else:
+            out += ["", f"✗ Hole counts differ by {diff} — the pieces will NOT "
+                        "line up stitch-for-stitch. Match the seam lengths, or "
+                        "use one shared Stitch line (seam) so both pieces get "
+                        "identical holes."]
+        return "\n".join(out)
 
     def add_guide(self, orientation: str, coord: float) -> ShapeItem:
         """Drop a ruler guide: a long construction line at x (``'v'``) or y
@@ -2759,6 +2936,17 @@ class Canvas(QGraphicsView):
             chain, remaining = _chain_segments(remaining, tol)
             made.append(_path_from_chain(chain, tol, layer))
 
+        # A weld that closes into an outline is a leather piece: give it stitch
+        # holes right away (draw lines -> weld -> stitched shape). Toggle the
+        # Stitching box off in Properties if it's a cut-only piece.
+        n_stitched = 0
+        for m in made:
+            closed = bool(getattr(m, "closed", False)
+                          or getattr(m, "close_path", False))
+            if closed and getattr(m, "stitch", None) is None:
+                m.stitch = self._default_stitch()
+                n_stitched += 1
+
         self._suppress_commit = True
         for it in shapes:
             self.doc.remove_shape(it.model)
@@ -2769,6 +2957,10 @@ class Canvas(QGraphicsView):
         self.scene_obj.clearSelection()
         for m in items:
             m.setSelected(True)
+        if n_stitched:
+            self.statusMessage.emit(
+                "Welded into a closed shape — stitch holes added "
+                "(adjust or disable in Properties → Stitching)")
         self.documentChangedSig.emit()
         self.selectionChangedSig.emit()
         self._emit_commit()

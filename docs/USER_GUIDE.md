@@ -119,6 +119,9 @@ The user guide travels inside the app (Help → User guide still works).
   section. Closed it? View → Properties panel, or View → Reset panels.
 * **Layers panel** (right, `Ctrl+2`) — colour → laser-job mapping, visibility
   checkboxes, layer roles.
+* **Parts library** (right, `Ctrl+3`) — *your* reusable pieces, kept across
+  all documents: select shapes → **Save selection…**, then double-click a part
+  in any project to place it at the view centre (fresh copies every time).
 * **Status bar** (bottom) — cursor position in mm, live measurements and tool
   hints, and the total hole count.
 * **Dark theme** — View → **Dark theme** switches the whole app (panels,
@@ -132,6 +135,16 @@ Don't want to start from nothing? **File → New from template** opens a
 complete starter pattern — **Card holder**, **Belt** (with buckle slot, fold
 line and sizing holes) or **Key fob** — matching the tutorials in this guide.
 Adapt and Save As.
+
+### Tracing a real object
+
+Want to digitize a wallet you already own? Photograph or scan it with a ruler
+in the shot, then **View → Tracing image → Place image…**. The photo sits
+behind the canvas at half opacity. Now **Calibrate scale**: click two points a
+known distance apart (the ruler ends), type the real distance — the photo
+rescales so 1 mm on it is 1 mm for real. Trace over it with the pen/line
+tools; the image is never exported and is saved with your project. Adjust
+opacity, hide, or remove it from the same menu.
 
 1. Press `R` (Rectangle). Click once for the first corner, move, click again
    for the opposite corner. *(Prefer press-drag-release? Toggle
@@ -218,6 +231,8 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
   box handles — the opposite corner stays pinned. Holes recalculate for the
   new size automatically.
 * **Resize exactly**: type in the Properties fields. Both stay in sync.
+  **Every number field does math**: type `105/2 + 3`, `4*25.4`, or even
+  `1in` / `3cm` and it evaluates on Enter.
 * **Rotate**: drag the round **rotation grip** floating above a selected
   shape's box — snaps to 1° (hold **Shift** for 15° detents) — or type an
   exact angle in Properties → Rotation.
@@ -277,6 +292,14 @@ disappear).
 The **readout** at the bottom shows the hole count, the min–max chord spacing
 (these should hug your pitch), and the effective pitch per span.
 
+### Seam mates — will these two pieces sew together?
+
+Two pieces sewn to each other **must have the same hole count**. Select the
+two stitched pieces (or seams) and run **Edit → Check seam mates…**: you get
+each side's hole count, seam length and spacing, and a clear verdict. If they
+differ, match the seam lengths, adjust pitch/fit — or use one shared **Stitch
+line** so both pieces get identical holes by construction.
+
 ### Loose holes and grouped holes
 
 * Right-click a stitched shape → **Ungroup stitching → individual holes** to
@@ -322,8 +345,11 @@ extra construction.
 * **Break apart** (`Ctrl+B`) — explode a shape into its individual edges
   (lines and arcs), each independently movable.
 * **Join / weld** (`Ctrl+J`) — select several touching segments and weld them
-  back into one continuous path (arcs kept). Loose holes inside a welded
-  outline can then be attached with `Ctrl+Shift+A`.
+  back into one continuous path (arcs kept). **If the weld closes into a
+  loop, the shape gets stitch holes automatically** — so *draw lines → weld →
+  stitched piece* is one step (untick Stitching in Properties for a cut-only
+  piece). Loose holes inside a welded outline can then be attached with
+  `Ctrl+Shift+A`.
 * **Offset / seam allowance** (`Ctrl+Shift+O`) — create a parallel copy of the
   selected outline: positive = outward, negative = inward. Use it for seam
   allowances, linings, or an outer glue line.

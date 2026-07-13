@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .mathspin import MathSpinBox
 from PySide6.QtWidgets import (
     QDialog, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox, QFormLayout,
     QVBoxLayout, QStackedWidget, QWidget, QDialogButtonBox, QLabel,
@@ -34,9 +35,9 @@ class ArrayDialog(QDialog):
         gf = QFormLayout(grid)
         self.rows = QSpinBox(); self.rows.setRange(1, 200); self.rows.setValue(1)
         self.cols = QSpinBox(); self.cols.setRange(1, 200); self.cols.setValue(3)
-        self.dx = QDoubleSpinBox(); self.dx.setRange(-500, 500); self.dx.setValue(15.0)
+        self.dx = MathSpinBox(); self.dx.setRange(-500, 500); self.dx.setValue(15.0)
         self.dx.setSuffix(" mm")
-        self.dy = QDoubleSpinBox(); self.dy.setRange(-500, 500); self.dy.setValue(0.0)
+        self.dy = MathSpinBox(); self.dy.setRange(-500, 500); self.dy.setValue(0.0)
         self.dy.setSuffix(" mm")
         gf.addRow("Rows", self.rows)
         gf.addRow("Columns", self.cols)
@@ -48,11 +49,11 @@ class ArrayDialog(QDialog):
         circ = QWidget()
         cf = QFormLayout(circ)
         self.count = QSpinBox(); self.count.setRange(2, 360); self.count.setValue(6)
-        self.cx = QDoubleSpinBox(); self.cx.setRange(-100000, 100000)
+        self.cx = MathSpinBox(); self.cx.setRange(-100000, 100000)
         self.cx.setValue(center[0]); self.cx.setSuffix(" mm")
-        self.cy = QDoubleSpinBox(); self.cy.setRange(-100000, 100000)
+        self.cy = MathSpinBox(); self.cy.setRange(-100000, 100000)
         self.cy.setValue(center[1]); self.cy.setSuffix(" mm")
-        self.angle = QDoubleSpinBox(); self.angle.setRange(-360, 360)
+        self.angle = MathSpinBox(); self.angle.setRange(-360, 360)
         self.angle.setValue(360.0); self.angle.setSuffix(" °")
         self.rotate = QCheckBox("Rotate copies to face out")
         self.rotate.setChecked(True)

@@ -207,6 +207,9 @@ class Document:
         # laser kerf compensation (mm) applied to cut geometry on SVG/DXF
         # export: outer outlines grow by kerf/2, cutouts and holes shrink.
         self.kerf: float = 0.0
+        # tracing underlay: a reference photo behind the drawing (never
+        # exported). {path, x, y, scale, opacity, visible} or None.
+        self.underlay: Optional[dict] = None
 
     # -- collection helpers --------------------------------------------
     def add_shape(self, shape: Shape) -> Shape:
@@ -256,6 +259,7 @@ class Document:
             "dimensions": [dm.to_dict() for dm in self.dimensions],
             "texts": [tx.to_dict() for tx in self.texts],
             "kerf": self.kerf,
+            "underlay": self.underlay,
         }
 
     @classmethod
@@ -273,6 +277,7 @@ class Document:
         from .text import TextShape
         doc.texts = [TextShape.from_dict(x) for x in d.get("texts", [])]
         doc.kerf = float(d.get("kerf", 0.0))
+        doc.underlay = d.get("underlay") or None
         return doc
 
     def save(self, path: str) -> None:

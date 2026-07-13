@@ -31,7 +31,8 @@ _FLAT = 0.05     # import flattening tolerance (mm) -- fine enough for lasers
 # ---------------------------------------------------------------------------
 # shared helpers
 # ---------------------------------------------------------------------------
-def _shape_from_ring(pts: List[Vec2], closed: bool) -> Optional[Shape]:
+def _shape_from_ring(pts: List[Vec2], closed: bool,
+                     layer: str = "Cut") -> Optional[Shape]:
     """Centre a world polyline and wrap it as a Polygon/PathShape."""
     # a ring closed by repeating its first point (no explicit Z) counts too
     if not closed and len(pts) >= 4 and (pts[0] - pts[-1]).length() < 1e-6:
@@ -46,8 +47,8 @@ def _shape_from_ring(pts: List[Vec2], closed: bool) -> Optional[Shape]:
     t = Transform(x=cx, y=cy)
     if closed and len(local) >= 3:
         return Polygon(points=local, close_path=True, sharp_corners=False,
-                       transform=t, layer="Cut")
-    return PathShape(points=local, close_path=False, transform=t, layer="Cut")
+                       transform=t, layer=layer)
+    return PathShape(points=local, close_path=False, transform=t, layer=layer)
 
 
 def _normalize(shapes: List[Shape]) -> List[Shape]:
@@ -311,8 +312,54 @@ def _element_polylines(el, tag) -> List[Tuple[List[Vec2], bool]]:
     return []
 
 
-def import_svg(path: str) -> List[Shape]:
+def _element_color(el, inherited: str) -> str:
+    """The element's stroke (falling back to fill, then the group's colour),
+    normalised to lowercase '#rrggbb' where possible."""
+    val = el.get("stroke") or None
+    style = el.get("style") or ""
+    m = re.search(r"stroke\s*:\s*([^;]+)", style)
+    if m:
+        val = m.group(1).strip()
+    if not val or val == "none":
+        fill = el.get("fill")
+        m = re.search(r"fill\s*:\s*([^;]+)", style)
+        if m:
+            fill = m.group(1).strip()
+        if fill and fill != "none":
+            val = fill
+    return (val or inherited).lower().strip()
+
+
+def _true_round(el, tag, m, scale) -> Optional[Shape]:
+    """A <circle>/<ellipse> under an axis-aligned transform -> a REAL
+    Circle/Ellipse shape instead of a dense polygon. This keeps imported
+    stitch holes light: 5 snap nodes instead of hundreds of vertices."""
+    if tag not in ("circle", "ellipse"):
+        return None
+    a, b, c, d, _e, _f = m
+    if abs(b) > 1e-9 or abs(c) > 1e-9 or a <= 0 or d <= 0:
+        return None                       # rotated/skewed: fall back to polygon
+    cx = float(el.get("cx", 0))
+    cy = float(el.get("cy", 0))
+    rx = float(el.get("r", el.get("rx", 0)))
+    ry = float(el.get("r", el.get("ry", 0)))
+    if rx <= 0 or ry <= 0:
+        return None
+    centre = _mat_apply(m, Vec2(cx, cy))
+    wrx, wry = rx * a * scale, ry * d * scale
+    t = Transform(x=centre.x * scale, y=-centre.y * scale)   # Y-flip
+    if abs(wrx - wry) < 1e-9:
+        return Circle(rx=wrx, ry=wry, transform=t, layer="Cut")
+    from .shapes import Ellipse
+    return Ellipse(rx=wrx, ry=wry, transform=t, layer="Cut")
+
+
+def import_svg(path: str, color_layers: Optional[dict] = None) -> List[Shape]:
+    """Import an SVG. ``color_layers`` maps lowercase '#rrggbb' stroke/fill
+    colours to layer names (e.g. {'#0066ff': 'Stitch'}); unmatched colours
+    land on Cut."""
     root = ET.parse(path).getroot()
+    color_layers = {k.lower(): v for k, v in (color_layers or {}).items()}
 
     # unit scale: root width + viewBox -> mm per user unit
     scale = 1.0
@@ -325,22 +372,29 @@ def import_svg(path: str) -> List[Shape]:
 
     shapes: List[Shape] = []
 
-    def walk(el, m):
+    def walk(el, m, color):
         tag = el.tag.split("}")[-1]
         if tag in ("defs", "clipPath", "symbol", "style", "text"):
             return
         m = _mat_mul(m, _parse_transform(el.get("transform", "")))
-        for pts, closed in _element_polylines(el, tag):
-            world = [_mat_apply(m, p) for p in pts]
-            # scale to mm and flip SVG's Y-down to our Y-up
-            world = [Vec2(p.x * scale, -p.y * scale) for p in world]
-            sh = _shape_from_ring(world, closed)
-            if sh is not None:
-                shapes.append(sh)
+        color = _element_color(el, color)
+        layer = color_layers.get(color, "Cut")
+        rnd = _true_round(el, tag, m, scale)
+        if rnd is not None:                   # real circle/ellipse, kept light
+            rnd.layer = layer
+            shapes.append(rnd)
+        else:
+            for pts, closed in _element_polylines(el, tag):
+                world = [_mat_apply(m, p) for p in pts]
+                # scale to mm and flip SVG's Y-down to our Y-up
+                world = [Vec2(p.x * scale, -p.y * scale) for p in world]
+                sh = _shape_from_ring(world, closed, layer)
+                if sh is not None:
+                    shapes.append(sh)
         for child in el:
-            walk(child, m)
+            walk(child, m, color)
 
-    walk(root, _IDENT)
+    walk(root, _IDENT, "")
     return _normalize(shapes)
 
 
@@ -376,9 +430,24 @@ def _bulge_points(a: Vec2, b: Vec2, bulge: float) -> List[Vec2]:
     return _arc_points(c, r, a0, a1, ccw=bulge > 0)[1:]
 
 
-def import_dxf(path: str) -> List[Shape]:
+# nearest standard hex for the 7 classic AutoCAD colour indices (+ grey)
+_ACI_HEX = {1: "#ff0000", 2: "#ffff00", 3: "#00aa00", 4: "#00ffff",
+            5: "#0066ff", 6: "#ff00ff", 7: "#ffffff", 8: "#888888"}
+
+
+def import_dxf(path: str, color_layers: Optional[dict] = None) -> List[Shape]:
+    """Import a DXF. Entity colours (ACI, code 62) are mapped through
+    ``color_layers`` ('#rrggbb' -> layer name) like the SVG importer."""
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
         pairs = list(_dxf_pairs(fh.read()))
+    color_layers = {k.lower(): v for k, v in (color_layers or {}).items()}
+
+    def layer_for(attrs) -> str:
+        try:
+            aci = int(attrs.get(62, 0))
+        except (TypeError, ValueError):
+            aci = 0
+        return color_layers.get(_ACI_HEX.get(aci, ""), "Cut")
 
     shapes: List[Shape] = []
     i = 0
@@ -410,14 +479,14 @@ def import_dxf(path: str) -> List[Shape]:
             if ent == "LINE":
                 a = Vec2(float(attrs.get(10, 0)), float(attrs.get(20, 0)))
                 b = Vec2(float(attrs.get(11, 0)), float(attrs.get(21, 0)))
-                sh = _shape_from_ring([a, b], False)
+                sh = _shape_from_ring([a, b], False, layer_for(attrs))
                 if sh:
                     shapes.append(sh)
             elif ent == "CIRCLE":
                 r = float(attrs.get(40, 0))
                 if r > 0:
                     shapes.append(Circle(
-                        rx=r, ry=r, layer="Cut",
+                        rx=r, ry=r, layer=layer_for(attrs),
                         transform=Transform(x=float(attrs.get(10, 0)),
                                             y=float(attrs.get(20, 0)))))
             elif ent == "ARC":
@@ -425,7 +494,8 @@ def import_dxf(path: str) -> List[Shape]:
                 r = float(attrs.get(40, 0))
                 a0 = math.radians(float(attrs.get(50, 0)))
                 a1 = math.radians(float(attrs.get(51, 360)))
-                sh = _shape_from_ring(_arc_points(c, r, a0, a1, True), False)
+                sh = _shape_from_ring(_arc_points(c, r, a0, a1, True),
+                                      False, layer_for(attrs))
                 if sh:
                     shapes.append(sh)
             elif ent == "LWPOLYLINE":
@@ -442,7 +512,7 @@ def import_dxf(path: str) -> List[Shape]:
                     if bulge and (k + 1 < n or closed):
                         nx, ny, _ = verts[(k + 1) % n]
                         pts.extend(_bulge_points(p, Vec2(nx, ny), bulge))
-                sh = _shape_from_ring(pts, bool(closed))
+                sh = _shape_from_ring(pts, bool(closed), layer_for(attrs))
                 if sh:
                     shapes.append(sh)
             elif ent == "POLYLINE":
@@ -469,7 +539,7 @@ def import_dxf(path: str) -> List[Shape]:
                         j += 1
                 if closed and prev is not None and abs(prev[1]) > 1e-12 and pts:
                     pts.extend(_bulge_points(prev[0], pts[0], prev[1]))
-                sh = _shape_from_ring(pts, bool(closed))
+                sh = _shape_from_ring(pts, bool(closed), layer_for(attrs))
                 if sh:
                     shapes.append(sh)
             i = j
@@ -478,11 +548,12 @@ def import_dxf(path: str) -> List[Shape]:
     return _normalize(shapes)
 
 
-def import_file(path: str) -> List[Shape]:
+def import_file(path: str,
+                color_layers: Optional[dict] = None) -> List[Shape]:
     """Import an SVG or DXF file (dispatch by extension)."""
     low = path.lower()
     if low.endswith(".svg"):
-        return import_svg(path)
+        return import_svg(path, color_layers)
     if low.endswith(".dxf"):
-        return import_dxf(path)
+        return import_dxf(path, color_layers)
     raise ValueError("Unsupported file type (use .svg or .dxf)")

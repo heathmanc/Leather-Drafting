@@ -325,6 +325,11 @@ class Canvas(QGraphicsView):
                 pts.extend(it.line.points)
             elif isinstance(it, HoleItem):
                 pts.append(it.hole.point)
+        # very busy scenes (dense imports): thin the cache so every mouse-move
+        # scan stays fast; snapping degrades gracefully instead of lagging
+        if len(pts) > 6000:
+            step = len(pts) // 6000 + 1
+            pts = pts[::step]
         return pts
 
     def snap(self, pos: QPointF):
@@ -1779,6 +1784,33 @@ class Canvas(QGraphicsView):
         self._rebuild_underlay()
         self.apply_layer_visibility()
         self.documentChangedSig.emit()
+
+    def convert_circles_to_holes(self) -> None:
+        """Reclassify the selected circle shapes as loose stitch holes (for
+        imported drawings where holes arrive as plain circles)."""
+        from leathercad.holes import LooseHole
+        circles = [it for it in self.selected_items()
+                   if isinstance(it, ShapeItem) and isinstance(it.model, Circle)]
+        if not circles:
+            self.statusMessage.emit(
+                "Select the circle(s) you want to become stitch holes")
+            return
+        self._suppress_commit = True
+        for it in circles:
+            m = it.model
+            c = m.transform.apply(Vec2(0.0, 0.0))
+            lh = LooseHole(point=Vec2(c.x, c.y), hole_diameter=2.0 * m.rx)
+            self.doc.holes.append(lh)
+            self.doc.remove_shape(m)
+            self._remove_item(it)
+            self._add_item(HoleItem(lh, self))
+        self._suppress_commit = False
+        self.statusMessage.emit(
+            f"{len(circles)} circle(s) are now stitch holes — group them to a "
+            "shape with Ctrl+Shift+A if they belong to a piece")
+        self.documentChangedSig.emit()
+        self.selectionChangedSig.emit()
+        self._emit_commit()
 
     # -- tracing underlay ------------------------------------------------
     def set_underlay(self, path: str) -> bool:

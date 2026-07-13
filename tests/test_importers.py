@@ -140,3 +140,105 @@ def test_gui_import_adds_shapes(tmp_path):
     assert win.import_path(str(p)) == 1
     assert len(win.doc.shapes) == 1
     assert win._unsaved_changes                    # import is an edit
+
+
+def test_circle_elements_import_as_real_circles(tmp_path):
+    """<circle> becomes a parametric Circle (5 snap nodes), not a dense
+    polygon -- the fix for laggy dragging after importing stitched SVGs."""
+    svg = """<svg xmlns='http://www.w3.org/2000/svg' width='100mm' viewBox='0 0 100 100'>
+      <circle cx='20' cy='20' r='6'/>
+      <g transform='rotate(30)'><ellipse cx='60' cy='20' rx='8' ry='4'/></g>
+    </svg>"""
+    p = tmp_path / "c.svg"
+    p.write_text(svg)
+    shapes = import_svg(str(p))
+    kinds = sorted(type(s).__name__ for s in shapes)
+    assert "Circle" in kinds                        # axis-aligned: parametric
+    assert "Polygon" in kinds                       # rotated: safe fallback
+    circ = [s for s in shapes if isinstance(s, Circle)][0]
+    assert abs(circ.rx - 6.0) < 1e-6
+
+
+def test_svg_stroke_colors_map_to_layers(tmp_path):
+    svg = """<svg xmlns='http://www.w3.org/2000/svg' width='100mm' viewBox='0 0 100 100'>
+      <rect x='0' y='0' width='40' height='20' stroke='#ff0000'/>
+      <circle cx='60' cy='10' r='2' stroke='#0066FF'/>
+      <g stroke='#00aa00'><line x1='0' y1='50' x2='30' y2='50'/></g>
+      <path d='M 0 70 L 20 70' style='stroke:#888888'/>
+    </svg>"""
+    p = tmp_path / "cl.svg"
+    p.write_text(svg)
+    cl = {"#ff0000": "Cut", "#0066ff": "Stitch", "#00aa00": "Score",
+          "#888888": "Engrave"}
+    layers = [s.layer for s in import_svg(str(p), color_layers=cl)]
+    assert layers == ["Cut", "Stitch", "Score", "Engrave"]
+
+
+def test_dxf_aci_colors_map_to_layers(tmp_path):
+    def pair(c, v):
+        return f"{c}\n{v}\n"
+    body = (pair(0, "SECTION") + pair(2, "ENTITIES")
+            + pair(0, "CIRCLE") + pair(62, 5) + pair(10, 0) + pair(20, 0)
+            + pair(40, 2)
+            + pair(0, "LINE") + pair(62, 1) + pair(10, 10) + pair(20, 0)
+            + pair(11, 40) + pair(21, 0)
+            + pair(0, "ENDSEC") + pair(0, "EOF"))
+    p = tmp_path / "aci.dxf"
+    p.write_text(body)
+    cl = {"#0066ff": "Stitch", "#ff0000": "Cut"}
+    shapes = import_dxf(str(p), color_layers=cl)
+    assert sorted(s.layer for s in shapes) == ["Cut", "Stitch"]
+
+
+def test_stitched_export_reimports_as_holes(tmp_path):
+    """The golden roundtrip: export a stitched piece to SVG, import it back --
+    the outline returns as a shape and every blue hole circle returns as a
+    real LooseHole (classified by colour), not a dense red polygon."""
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.stitchsettings import StitchSettings
+    QApplication.instance() or QApplication([])
+
+    src = Document()
+    src.add_shape(Rectangle(width=60, height=40, transform=Transform(x=0, y=0),
+                            stitch=StitchSettings(pitch_mm=4.0, inset=3.0),
+                            layer="Cut"))
+    svg = tmp_path / "stitched.svg"
+    export.export_svg(src, str(svg))
+
+    win = MainWindow(Document())
+    n = win.import_path(str(svg))
+    assert n > 10
+    assert len(win.doc.shapes) == 1                 # just the outline
+    assert len(win.doc.holes) > 20                  # every hole classified
+    assert all(h.layer == "Stitch" for h in win.doc.holes)
+    assert abs(win.doc.holes[0].hole_diameter - 1.0) < 0.05
+
+
+def test_convert_circles_to_holes_command():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import ShapeItem
+    QApplication.instance() or QApplication([])
+
+    doc = Document()
+    doc.add_shape(Circle(rx=0.6, ry=0.6, transform=Transform(x=5, y=5),
+                         layer="Cut"))
+    doc.add_shape(Rectangle(width=30, height=20, transform=Transform(x=0, y=0),
+                            layer="Cut"))
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    for it in c.scene_obj.items():
+        if isinstance(it, ShapeItem):
+            it.setSelected(True)
+    c.convert_circles_to_holes()                    # circles only; rect stays
+    assert len(win.doc.shapes) == 1
+    assert len(win.doc.holes) == 1
+    h = win.doc.holes[0]
+    assert (round(h.point.x, 3), round(h.point.y, 3)) == (5.0, 5.0)
+    assert abs(h.hole_diameter - 1.2) < 1e-6

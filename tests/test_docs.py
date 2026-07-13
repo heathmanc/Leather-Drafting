@@ -54,7 +54,7 @@ def test_key_menu_commands_documented(guide_text):
                 "Check back-to-back symmetry", "Reset panels", "Drag to draw",
                 "New from template", "Open recent", "Dark theme",
                 "Check seam mates", "Tracing image", "Parts library",
-                "Thread estimate"):
+                "Thread estimate", "Circles → stitch holes"):
         assert cmd in guide_text, f"menu command not documented: {cmd}"
 
 

@@ -558,6 +558,8 @@ class MainWindow(QMainWindow):
                   self.canvas.group_selected)
         self._add(em, "Explode stitching → holes", "",
                   self.canvas.ungroup_selected)
+        self._add(em, "Circles → stitch holes", "",
+                  self.canvas.convert_circles_to_holes)
         self._add(em, "Convert to editable nodes", "Ctrl+K", self.canvas.convert_to_nodes)
         self._add(em, "Break apart into segments", "Ctrl+B", self.canvas.break_apart_selected)
         self._add(em, "Join / weld segments", "Ctrl+J", lambda: self.canvas.join_selected())
@@ -1029,10 +1031,17 @@ class MainWindow(QMainWindow):
         self.import_path(fn)
 
     def import_path(self, fn: str) -> int:
-        """Add the shapes from an SVG/DXF into the current document."""
+        """Add the shapes from an SVG/DXF into the current document. Stroke
+        colours map onto this document's layers, and circles that land on a
+        stitch-role layer become real stitch holes."""
         from leathercad.importers import import_file
+        from leathercad.shapes import Circle
+        from leathercad.holes import LooseHole
+        from leathercad.geometry import Vec2
+        color_layers = {lyr.color.lower(): lyr.name
+                        for lyr in self.doc.layers}
         try:
-            shapes = import_file(fn)
+            shapes = import_file(fn, color_layers=color_layers)
         except Exception as e:
             QMessageBox.critical(self, "Import failed",
                                  f"Couldn't import {os.path.basename(fn)}:\n{e}")
@@ -1042,15 +1051,29 @@ class MainWindow(QMainWindow):
                 self, "Nothing imported",
                 "No usable outlines were found in that file.")
             return 0
+        stitch_layers = {lyr.name for lyr in self.doc.layers
+                         if getattr(lyr, "role", "") == "stitch"}
+        n_holes = 0
+        n_shapes = 0
         for sh in shapes:
-            self.doc.add_shape(sh)
+            if isinstance(sh, Circle) and sh.layer in stitch_layers:
+                c = sh.transform.apply(Vec2(0.0, 0.0))
+                self.doc.holes.append(LooseHole(point=Vec2(c.x, c.y),
+                                                hole_diameter=2.0 * sh.rx))
+                n_holes += 1
+            else:
+                self.doc.add_shape(sh)
+                n_shapes += 1
         self.canvas.rebuild()
         self.canvas.fit_to_content()
         self.commit()
-        self.statusBar().showMessage(
-            f"Imported {len(shapes)} shape(s) from {os.path.basename(fn)} — "
-            "stitching is off; enable it per piece in Properties", 6000)
-        return len(shapes)
+        msg = f"Imported {n_shapes} shape(s)"
+        if n_holes:
+            msg += f" + {n_holes} stitch hole(s) (classified by colour)"
+        msg += (f" from {os.path.basename(fn)} — stitching is off; enable it "
+                "per piece in Properties")
+        self.statusBar().showMessage(msg, 7000)
+        return n_shapes + n_holes
 
     def export_svg(self):
         fn, _ = QFileDialog.getSaveFileName(self, "Export SVG", "pattern.svg",

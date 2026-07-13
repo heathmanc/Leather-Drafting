@@ -117,6 +117,11 @@ class MainWindow(QMainWindow):
 
         self.canvas.selectionChangedSig.connect(self._selection_changed)
         self.canvas.documentChangedSig.connect(self._document_changed)
+        # synchronous on every move (documentChangedSig is rate-limited during
+        # drags): the geometry fields must never lag a canvas edit, or a later
+        # _apply would write a stale position back
+        self.canvas.geometryMovedSig.connect(
+            lambda: self.properties.sync_geometry_fields())
         self.canvas.toolFinished.connect(self._tool_finished)
         self.canvas.requestSelectTool.connect(
             lambda: self._select_mode(canvas_mod.SELECT))

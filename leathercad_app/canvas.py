@@ -10,7 +10,9 @@ from __future__ import annotations
 import math
 from typing import List, Optional
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+import time
+
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (QColor, QPainter, QPen, QPainterPath, QPolygonF,
                            QTransform)
 from PySide6.QtWidgets import (QGraphicsScene, QGraphicsView, QGraphicsPathItem,
@@ -194,6 +196,10 @@ def _segment_shape(kind, wpts, layer):
 class Canvas(QGraphicsView):
     selectionChangedSig = Signal()
     documentChangedSig = Signal()
+    # emitted synchronously on EVERY canvas move (documentChangedSig is
+    # rate-limited during drags) -- for cheap must-not-go-stale listeners
+    # like the Properties geometry fields
+    geometryMovedSig = Signal()
     toolFinished = Signal()
     requestSelectTool = Signal()  # Esc with nothing in progress -> pointer
     cursorMoved = Signal(float, float)
@@ -260,7 +266,12 @@ class Canvas(QGraphicsView):
         # object while it is still selected -> crash in clearSelection().
         self._live = set()
         self._snap_cache = None   # static snap nodes captured at drag start
+        self._snap_grid = None    # same nodes bucketed for O(1) lookup
+        self._snap_cell = 1.0     # grid cell size == snap threshold (mm)
         self._group_drag = None   # active move-group drag state
+        self._group_driving = False   # snap_move is repositioning members
+        self._last_move_refresh = 0.0     # rate-limit for item_moved refresh
+        self._move_refresh_pending = False
         self._nonmovable_members = []   # items we temporarily froze for a group drag
         self.line_width = 1.0     # on-screen outline stroke width (cosmetic px)
 
@@ -715,6 +726,7 @@ class Canvas(QGraphicsView):
         if len(sel) <= 1:
             self._snap_cache = (self._snap_candidates(exclude=item)
                                 + self._all_intersections(exclude=item))
+            self._build_snap_grid()
             return
         # A move-group is being dragged: snap the whole group by its leader (the
         # pressed item) and move the other members to match. Exclude every group
@@ -723,6 +735,7 @@ class Canvas(QGraphicsView):
         # ignoring the snap and distorting the group).
         self._snap_cache = (self._snap_candidates(exclude=set(sel))
                             + self._all_intersections(exclude=set(sel)))
+        self._build_snap_grid()
         leader = item
         members = [it for it in sel if it is not leader]
         lp = leader.pos()
@@ -732,6 +745,10 @@ class Canvas(QGraphicsView):
             bx, by = mp.x() - lp.x(), mp.y() - lp.y()
             for o in getattr(m, "_snap_offsets", None) or [Vec2(0.0, 0.0)]:
                 offsets.append(Vec2(bx + o.x, by + o.y))
+        # a huge multi-select would mean scanning thousands of group nodes on
+        # every mouse move -- thin them; group snapping degrades gracefully
+        if len(offsets) > 600:
+            offsets = offsets[::len(offsets) // 600 + 1]
         self._group_drag = {
             "leader": leader,
             "members": members,
@@ -743,10 +760,23 @@ class Canvas(QGraphicsView):
             m.setFlag(QGraphicsItem.ItemIsMovable, False)
         self._nonmovable_members = list(members)
 
+    def _build_snap_grid(self) -> None:
+        """Bucket the drag snap cache into threshold-sized cells. Each mouse
+        move then checks the 3x3 neighbourhood of every dragged node instead
+        of the whole cache -- the difference between a beachball and a live
+        drag when both the selection and the scene are big."""
+        cell = 12.0 / self._zoom
+        grid: dict = {}
+        for s in (self._snap_cache or []):
+            grid.setdefault((int(s.x // cell), int(s.y // cell)), []).append(s)
+        self._snap_cell = cell
+        self._snap_grid = grid
+
     def end_move_snap(self) -> None:
         self._restore_group_movability()
         self._group_drag = None
         self._snap_cache = None
+        self._snap_grid = None
         self._hide_snap_marker()
 
     def snap_move(self, item, value: QPointF) -> QPointF:
@@ -756,14 +786,25 @@ class Canvas(QGraphicsView):
         gd = self._group_drag
         if gd is not None and item is not gd["leader"]:
             return value          # members are driven from the leader (below)
-        thr = 12.0 / self._zoom
+        # threshold frozen at drag start (== the grid cell), so the 3x3-cell
+        # lookup below is guaranteed to cover it
+        thr = self._snap_cell if self._snap_grid is not None else 12.0 / self._zoom
         vx, vy = value.x(), value.y()
+        grid = self._snap_grid
 
         def _best(cand_offsets):
             bd, bp, bt = thr, None, None
             for off in cand_offsets:
                 nx, ny = vx + off.x, vy + off.y
-                for s in self._snap_cache:
+                if grid is not None:
+                    ix, iy = int(nx // thr), int(ny // thr)
+                    near = []
+                    for gx in (ix - 1, ix, ix + 1):
+                        for gy in (iy - 1, iy, iy + 1):
+                            near.extend(grid.get((gx, gy), ()))
+                else:
+                    near = self._snap_cache
+                for s in near:
                     d = ((nx - s.x) ** 2 + (ny - s.y) ** 2) ** 0.5
                     if d < bd:
                         bd, bp, bt = d, QPointF(s.x - off.x, s.y - off.y), s
@@ -795,9 +836,16 @@ class Canvas(QGraphicsView):
         if gd is not None:                    # drag the rest of the group along
             dx = best.x() - gd["leader_start"].x()
             dy = best.y() - gd["leader_start"].y()
-            for m in gd["members"]:
-                st = gd["starts"][id(m)]
-                m.setPos(st.x() + dx, st.y() + dy)
+            # members' item_moved is suppressed while we drive them: the
+            # leader reports the move once, instead of N status/panel
+            # refreshes per mouse move
+            self._group_driving = True
+            try:
+                for m in gd["members"]:
+                    st = gd["starts"][id(m)]
+                    m.setPos(st.x() + dx, st.y() + dy)
+            finally:
+                self._group_driving = False
         return best
 
     # -- node-to-node snapping while editing nodes ----------------------
@@ -2869,9 +2917,33 @@ class Canvas(QGraphicsView):
 
     def item_moved(self, item) -> None:
         self._moved_during_press = True
+        if self._group_driving:
+            return      # a driven group member; the drag leader reports once
+        # Cheap must-stay-fresh work runs on every move: the resize grips
+        # track the shape, and the Properties geometry fields re-sync so a
+        # later _apply can never write a stale position back.
         self._reposition_resize_handles()
+        self.geometryMovedSig.emit()
+        # The full refresh (dimension re-anchoring, status bar, layer combo,
+        # window title) is heavier than a frame. First move of a burst runs
+        # it synchronously; the rest coalesce into one trailing refresh, so
+        # dragging 100 selected shapes costs one refresh per frame, not 100.
+        now = time.monotonic()
+        if now - self._last_move_refresh >= 0.03:
+            self._last_move_refresh = now
+            self._move_refresh()
+        elif not self._move_refresh_pending:
+            self._move_refresh_pending = True
+            QTimer.singleShot(40, self._flush_move_refresh)
+
+    def _move_refresh(self) -> None:
         self.update_dimensions()
         self.documentChangedSig.emit()
+
+    def _flush_move_refresh(self) -> None:
+        self._move_refresh_pending = False
+        self._last_move_refresh = time.monotonic()
+        self._move_refresh()
 
     def selection_changed(self) -> None:
         if self._edit_owner is not None and not self._edit_owner.isSelected():

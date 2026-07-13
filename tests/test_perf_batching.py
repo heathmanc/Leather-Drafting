@@ -134,6 +134,96 @@ def test_shapeitem_path_follows_settings_change(qapp):
     assert it._holes_path is None and it._holes_pts is None
 
 
+def _grid_of_rects(n_side, sel_count):
+    from leathercad_app.items import ShapeItem
+    doc = Document()
+    for i in range(n_side):
+        for j in range(n_side):
+            doc.add_shape(Rectangle(width=80, height=60,
+                                    transform=Transform(x=i * 100.0,
+                                                        y=j * 90.0),
+                                    layer="Cut"))
+    from leathercad_app.mainwindow import MainWindow
+    win = MainWindow(doc)
+    win.canvas.rebuild()
+    items = [it for it in win.canvas.scene_obj.items()
+             if isinstance(it, ShapeItem)]
+    sel = items[:sel_count]
+    for it in sel:
+        it.setSelected(True)
+    return win, sel
+
+
+# -- multi-select drag stays realtime -----------------------------------------
+def test_drag_snap_uses_spatial_grid(qapp):
+    """The move-snap cache is bucketed at drag start so each mouse move scans
+    a 3x3 neighbourhood, not the whole cache; torn down with the drag."""
+    win, sel = _grid_of_rects(4, 1)
+    c = win.canvas
+    c.begin_move_snap(sel[0])
+    assert c._snap_grid is not None
+    assert sum(len(v) for v in c._snap_grid.values()) == len(c._snap_cache)
+    c.end_move_snap()
+    assert c._snap_grid is None
+
+
+def test_drag_snap_grid_still_snaps_exactly(qapp):
+    from PySide6.QtCore import QPointF
+    win, sel = _grid_of_rects(2, 1)          # rects at (0,0) and (100,0)...
+    c = win.canvas
+    it = sel[0]
+    other = [s for s in c.scene_obj.items()
+             if getattr(s, "model", None) is not None and s is not it]
+    target = other[0].model.transform        # drag so centres coincide
+    c.begin_move_snap(it)
+    res = c.snap_move(it, QPointF(target.x - 0.9 / c._zoom,
+                                  target.y + 0.9 / c._zoom))
+    c.end_move_snap()
+    assert abs(res.x() - target.x) < 1e-6    # locked onto the other centre
+    assert abs(res.y() - target.y) < 1e-6
+
+
+def test_group_drag_offsets_capped(qapp):
+    win, sel = _grid_of_rects(12, 100)       # 100 rects x 9 nodes = 900 raw
+    c = win.canvas
+    c.begin_move_snap(sel[0])
+    assert c._group_drag is not None
+    assert len(c._group_drag["offsets"]) <= 600
+    c.end_move_snap()
+
+
+def test_group_drag_single_refresh_per_move(qapp):
+    """Driven group members must not each fire the full document-changed
+    cascade on every mouse move -- the leader reports once."""
+    from PySide6.QtCore import QPointF
+    win, sel = _grid_of_rects(4, 8)
+    c = win.canvas
+    hits = []
+    c.documentChangedSig.connect(lambda: hits.append(1))
+    c.begin_move_snap(sel[0])
+    assert c._group_drag is not None
+    hits.clear()
+    p = sel[0].pos()
+    c.snap_move(sel[0], QPointF(p.x() + 5.0, p.y() + 3.0))  # drives 7 members
+    assert len(hits) <= 1                    # not one per member
+    c.end_move_snap()
+
+
+def test_geometry_fields_sync_synchronously_on_move(qapp):
+    """documentChangedSig is rate-limited during drags, but the Properties
+    position fields must re-sync on EVERY move (a later _apply would
+    otherwise write a stale position back)."""
+    win, sel = _grid_of_rects(2, 1)
+    c, it = win.canvas, sel[0]
+    win._selection_changed()
+    it.model.transform.x = 123.0
+    c.item_moved(it)                          # no event loop spin needed
+    assert win.properties.pos_x.value() == 123.0
+    it.model.transform.x = 77.0
+    c.item_moved(it)                          # immediately again (rate window)
+    assert win.properties.pos_x.value() == 77.0
+
+
 def test_stitchlineitem_batches_holes(qapp):
     from leathercad.stitchline import StitchLine
     from leathercad_app.items import StitchLineItem

@@ -512,6 +512,13 @@ class MainWindow(QMainWindow):
                   self._offset_selected)
         self._add(em, "Array…", "Ctrl+Shift+R", self._array_selected)
         em.addSeparator()
+        self._add(em, "Union (merge shapes)", "Ctrl+U",
+                  lambda: self.canvas.boolean_selected("union"))
+        self._add(em, "Subtract (bottom − top)", "Ctrl+Shift+U",
+                  lambda: self.canvas.boolean_selected("difference"))
+        self._add(em, "Intersect", None,
+                  lambda: self.canvas.boolean_selected("intersection"))
+        em.addSeparator()
         self._add(em, "Make back piece (mirror)", "Ctrl+M",
                   self.canvas.make_back_piece_selected)
         self._add(em, "Check back-to-back symmetry…", None, self._check_symmetry)

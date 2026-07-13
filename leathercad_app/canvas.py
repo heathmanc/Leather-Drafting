@@ -1199,6 +1199,13 @@ class Canvas(QGraphicsView):
         a_offset = menu.addAction("Offset / seam allowance…")
         a_offset.setEnabled(bool(shapes))
         menu.addSeparator()
+        a_union = menu.addAction("Union (merge shapes)")
+        a_union.setEnabled(len(shapes) >= 2)
+        a_subtract = menu.addAction("Subtract (bottom − top)")
+        a_subtract.setEnabled(len(shapes) >= 2)
+        a_intersect = menu.addAction("Intersect")
+        a_intersect.setEnabled(len(shapes) >= 2)
+        menu.addSeparator()
         a_dup = menu.addAction("Duplicate")
         a_dup.setEnabled(bool(shapes))
         a_back = menu.addAction("Make back piece (mirror)")
@@ -1224,6 +1231,12 @@ class Canvas(QGraphicsView):
             dist, ok = self._ask_offset_distance()
             if ok:
                 self.offset_selected(dist)
+        elif chosen is a_union:
+            self.boolean_selected("union")
+        elif chosen is a_subtract:
+            self.boolean_selected("difference")
+        elif chosen is a_intersect:
+            self.boolean_selected("intersection")
         elif chosen is a_dup:
             self.duplicate_selected()
         elif chosen is a_back:
@@ -1705,6 +1718,62 @@ class Canvas(QGraphicsView):
             self._add_item(TextItem(tx, self))
         self.apply_layer_visibility()
         self.documentChangedSig.emit()
+
+    def boolean_selected(self, op: str) -> None:
+        """Union / difference / intersection of the selected closed shapes.
+        The BOTTOM shape (lowest z) is the subject: Subtract removes the upper
+        shapes from it, Illustrator "Minus Front" style. The result keeps the
+        subject's layer and stitch settings; extra rings (disjoint parts or
+        cutouts left by a swallowed cutter) become their own shapes."""
+        import copy as _copy
+        from leathercad.boolean import combine
+        from leathercad.offset import signed_area
+
+        ordered = []
+        for it in self.selected_items():
+            if not isinstance(it, ShapeItem):
+                continue
+            pts, _c, closed = it.model.world_polyline()
+            if not closed or len(pts) < 4:
+                continue
+            ring = pts[:-1] if (pts[0] - pts[-1]).length() < 1e-9 else pts
+            ordered.append((self.doc.shapes.index(it.model), it, ring))
+        if len(ordered) < 2:
+            self.statusMessage.emit(
+                "Select two or more CLOSED shapes for a boolean operation")
+            return
+        ordered.sort(key=lambda x: x[0])          # bottom-most first
+        base = ordered[0][1].model
+        result = combine(op, [ring for _i, _it, ring in ordered])
+        keep_stitch = _copy.deepcopy(base.stitch)
+        layer, opacity = base.layer, base.opacity
+        for _i, it, _r in ordered:
+            self.doc.remove_shape(it.model)
+            self._remove_item(it)
+        if not result:
+            self.statusMessage.emit("Nothing left after the operation")
+            self.documentChangedSig.emit()
+            self._emit_commit()
+            return
+        result.sort(key=lambda r: -abs(signed_area(r)))
+        first_item = None
+        for k, ring in enumerate(result):
+            cx = sum(p.x for p in ring) / len(ring)
+            cy = sum(p.y for p in ring) / len(ring)
+            local = [Vec2(p.x - cx, p.y - cy) for p in ring]
+            sh = Polygon(points=local, close_path=True, sharp_corners=False,
+                         transform=Transform(x=cx, y=cy),
+                         stitch=keep_stitch if k == 0 else None, layer=layer)
+            sh.opacity = opacity
+            self.doc.add_shape(sh)
+            item = self._add_item(ShapeItem(sh, self))
+            if k == 0:
+                first_item = item
+        self.scene_obj.clearSelection()
+        if first_item is not None:
+            first_item.setSelected(True)
+        self.documentChangedSig.emit()
+        self._emit_commit()
 
     def add_shape(self, shape) -> ShapeItem:
         self.doc.add_shape(shape)

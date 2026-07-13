@@ -313,6 +313,15 @@ extra construction.
 * **Offset / seam allowance** (`Ctrl+Shift+O`) — create a parallel copy of the
   selected outline: positive = outward, negative = inward. Use it for seam
   allowances, linings, or an outer glue line.
+* **Boolean operations** — select two or more **closed** shapes:
+  **Union (merge shapes)** (`Ctrl+U`) welds them into one outline;
+  **Subtract (bottom − top)** (`Ctrl+Shift+U`) removes the upper shapes from
+  the bottom one (Illustrator "Minus Front" — the shape drawn first is the
+  one that survives); **Intersect** keeps only the overlap. The result keeps
+  the bottom shape's layer and stitching (holes re-fit to the new outline).
+  Subtracting a shape that sits *fully inside* leaves it as a cutout ring —
+  which is exactly what the laser needs. Shapes that merely share an edge
+  (no overlap) can't be merged — overlap them slightly first.
 * **Array** (`Ctrl+Shift+R`) — repeat the selection in a **grid**
   (rows × columns at spacings) or a **circle** (count around a centre,
   optionally rotating each copy). Perfect for belt holes and decorative

@@ -121,6 +121,8 @@ The user guide travels inside the app (Help → User guide still works).
   checkboxes, layer roles.
 * **Status bar** (bottom) — cursor position in mm, live measurements and tool
   hints, and the total hole count.
+* **Dark theme** — View → **Dark theme** switches the whole app (panels,
+  canvas, rulers, tool icons) to a dark look; remembered between sessions.
 
 ---
 

@@ -226,6 +226,7 @@ class Canvas(QGraphicsView):
         self._default_stitch = lambda: StitchSettings(pitch_mm=3.85, inset=3.5)
         self._current_layer = "Cut"
         self.fillet_radius: Optional[float] = None   # asked on first use
+        self.dark = False        # canvas swatches (paper/grid/axis), see theme.py
 
         # in-progress construction state
         self._start: Optional[QPointF] = None
@@ -2938,17 +2939,23 @@ class Canvas(QGraphicsView):
                 it.setSelected(True)
 
     # -- grid -----------------------------------------------------------
+    def set_dark_theme(self, dark: bool) -> None:
+        self.dark = bool(dark)
+        self.viewport().update()
+
     def drawBackground(self, painter, rect):
-        painter.fillRect(rect, QColor(250, 250, 248))
+        from .theme import CANVAS
+        sw = CANVAS[getattr(self, "dark", False)]
+        painter.fillRect(rect, sw["bg"])
         # Adaptive grid: pick the finest 10^k step that stays >= ~8 px apart,
         # so zooming far out over a huge canvas never draws thousands of lines.
         step = 10.0
         while step * self._zoom < 8.0:
             step *= 10.0
         big = step * 5.0
-        minor = QPen(QColor(230, 230, 226), 0)
+        minor = QPen(sw["minor"], 0)
         minor.setCosmetic(True)
-        major = QPen(QColor(210, 210, 205), 0)
+        major = QPen(sw["major"], 0)
         major.setCosmetic(True)
         x = math.floor(rect.left() / step) * step
         while x < rect.right():
@@ -2960,7 +2967,7 @@ class Canvas(QGraphicsView):
             painter.setPen(major if abs(y % big) < 1e-6 else minor)
             painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
             y += step
-        axis = QPen(QColor(200, 160, 160), 0)
+        axis = QPen(sw["axis"], 0)
         axis.setCosmetic(True)
         painter.setPen(axis)
         painter.drawLine(QPointF(rect.left(), 0), QPointF(rect.right(), 0))

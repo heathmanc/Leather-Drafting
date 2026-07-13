@@ -8,8 +8,14 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
 
 
-_FG = QColor(60, 60, 66)
-_ACCENT = QColor(30, 110, 220)
+_FG_LIGHT = QColor(60, 60, 66)
+_FG_DARK = QColor(210, 212, 218)
+_ACCENT_LIGHT = QColor(30, 110, 220)
+_ACCENT_DARK = QColor(100, 165, 255)
+
+# current stroke colours -- swapped by tool_icon(dark=...) before drawing
+_FG = _FG_LIGHT
+_ACCENT = _ACCENT_LIGHT
 
 
 def _canvas(size: int):
@@ -24,14 +30,18 @@ def _canvas(size: int):
     return pm, p
 
 
-def _dots_along(p, pts, color=_ACCENT, r=1.3):
-    p.setBrush(color)
+def _dots_along(p, pts, color=None, r=1.3):
+    p.setBrush(color if color is not None else _ACCENT)
     p.setPen(Qt.NoPen)
     for pt in pts:
         p.drawEllipse(pt, r, r)
 
 
-def tool_icon(kind: str, size: int = 22) -> QIcon:
+def tool_icon(kind: str, size: int = 22, dark: bool = False) -> QIcon:
+    # swap the stroke colours for the theme (GUI is single-threaded)
+    global _FG, _ACCENT
+    _FG = _FG_DARK if dark else _FG_LIGHT
+    _ACCENT = _ACCENT_DARK if dark else _ACCENT_LIGHT
     pm, p = _canvas(size)
     m = 4
     rect = QRectF(m, m, size - 2 * m, size - 2 * m)

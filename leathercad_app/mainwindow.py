@@ -169,6 +169,21 @@ class MainWindow(QMainWindow):
             w.setVisible(on)
         self._settings().setValue("rulersVisible", on)
 
+    def _apply_theme(self, dark: bool) -> None:
+        """Switch the whole app between light and dark: widget chrome (Fusion
+        palette), canvas paper/grid/axis, rulers, and re-tinted tool icons."""
+        from .theme import apply_app_theme, RULER
+        apply_app_theme(dark)
+        self.canvas.set_dark_theme(dark)
+        self._ruler_corner.setStyleSheet(RULER[dark]["corner_css"])
+        self.ruler_h.update()
+        self.ruler_v.update()
+        for mode, act in self._action_for_mode.items():
+            act.setIcon(tool_icon(_ICON_FOR.get(mode, "rect"), dark=dark))
+        self.act_pin.setIcon(tool_icon("pin", dark=dark))
+        self.act_ungroup.setIcon(tool_icon("ungroup", dark=dark))
+        self._settings().setValue("darkTheme", dark)
+
     # -- persist toolbar/window layout across sessions ------------------
     def _settings(self) -> QSettings:
         return QSettings("Leather-Drafting", "Leather-Drafting")
@@ -597,6 +612,13 @@ class MainWindow(QMainWindow):
         self.act_rulers.toggled.connect(self._set_rulers_visible)
         self._set_rulers_visible(self.act_rulers.isChecked())
         vm.addAction(self.act_rulers)
+        self.act_dark = QAction("Dark theme", self)
+        self.act_dark.setCheckable(True)
+        self.act_dark.toggled.connect(self._apply_theme)
+        vm.addAction(self.act_dark)
+        # setChecked only fires the toggle (and re-themes) when it was saved on
+        self.act_dark.setChecked(
+            self._settings().value("darkTheme", False, type=bool))
         self.act_drag_draw = QAction("Drag to draw (hold && release)", self)
         self.act_drag_draw.setCheckable(True)
         self.act_drag_draw.setChecked(self.canvas.drag_to_draw)

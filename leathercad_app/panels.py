@@ -176,7 +176,8 @@ class PropertiesPanel(QWidget):
 
         self.readout = QLabel("")
         self.readout.setWordWrap(True)
-        self.readout.setStyleSheet("color:#555;")
+        # palette-based so it stays readable in both light and dark themes
+        self.readout.setStyleSheet("color: palette(mid);")
         root.addWidget(self.readout)
         root.addStretch(1)
 

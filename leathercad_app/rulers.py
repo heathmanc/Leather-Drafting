@@ -60,9 +60,12 @@ class Ruler(QWidget):
 
     # -- painting ---------------------------------------------------------
     def paintEvent(self, ev):
+        from .theme import RULER
+        sw = RULER[getattr(self.canvas, "dark", False)]
+        bg, fg, tick = sw["bg"], sw["fg"], sw["tick"]
         p = QPainter(self)
-        p.fillRect(self.rect(), _BG)
-        p.setPen(QPen(_TICK, 1))
+        p.fillRect(self.rect(), bg)
+        p.setPen(QPen(tick, 1))
         c = self.canvas
         vp = c.viewport()
         # scene mm across the ruler
@@ -101,20 +104,20 @@ class Ruler(QWidget):
             label = f"{t:g}"
             if self.horizontal:
                 p.drawLine(QPointF(px, THICKNESS - 10), QPointF(px, THICKNESS))
-                p.setPen(QPen(_FG, 1))
+                p.setPen(QPen(fg, 1))
                 p.drawText(QRectF(px + 2, 0, 60, THICKNESS - 8),
                            Qt.AlignLeft | Qt.AlignVCenter, label)
-                p.setPen(QPen(_TICK, 1))
+                p.setPen(QPen(tick, 1))
             else:
                 p.drawLine(QPointF(THICKNESS - 10, px), QPointF(THICKNESS, px))
-                p.setPen(QPen(_FG, 1))
+                p.setPen(QPen(fg, 1))
                 p.save()
                 p.translate(4, px - 2)
                 p.rotate(-90)
                 p.drawText(QRectF(0, 0, 60, THICKNESS - 8),
                            Qt.AlignLeft | Qt.AlignVCenter, label)
                 p.restore()
-                p.setPen(QPen(_TICK, 1))
+                p.setPen(QPen(tick, 1))
             t += step
 
         if self._cursor_mm is not None:

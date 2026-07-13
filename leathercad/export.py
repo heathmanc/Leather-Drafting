@@ -212,10 +212,29 @@ def export_dxf(doc: Document, path: str) -> None:
         s.append(_dxf_pair(20, f"{c.y:.4f}"))
         s.append(_dxf_pair(40, f"{r:.4f}"))
 
+    def polyline(pts: Sequence[Vec2], aci: int, closed: bool):
+        # A single (R12) POLYLINE per outline so importers see one connected
+        # contour -- and, when closed, a genuine closed loop (needed for correct
+        # cut ordering / fill in LightBurn, Illustrator, etc.) rather than a heap
+        # of disconnected LINE segments.
+        s.append(_dxf_pair(0, "POLYLINE"))
+        s.append(_dxf_pair(8, f"L{aci}"))
+        s.append(_dxf_pair(62, aci))
+        s.append(_dxf_pair(66, 1))                 # vertices-follow flag
+        s.append(_dxf_pair(70, 1 if closed else 0))
+        for p in pts:
+            s.append(_dxf_pair(0, "VERTEX"))
+            s.append(_dxf_pair(8, f"L{aci}"))
+            s.append(_dxf_pair(10, f"{p.x:.4f}"))
+            s.append(_dxf_pair(20, f"{p.y:.4f}"))
+        s.append(_dxf_pair(0, "SEQEND"))
+
     for pl, color in outlines:
+        if len(pl) < 2:
+            continue
         aci = _aci(color)
-        for i in range(len(pl) - 1):
-            line(pl[i], pl[i + 1], aci)
+        closed = len(pl) > 2 and (pl[0] - pl[-1]).length() < 1e-6
+        polyline(pl[:-1] if closed else pl, aci, closed)
 
     saci = _aci(stitch_color)
     for res, settings, _ in stitches:

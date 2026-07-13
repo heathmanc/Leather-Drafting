@@ -127,6 +127,27 @@ def test_export_svg_and_dxf(tmp_path):
     assert "mm" in svg_txt and "<circle" in svg_txt
     dxf_txt = dxf.read_text()
     assert "SECTION" in dxf_txt and "CIRCLE" in dxf_txt and "EOF" in dxf_txt
+    # outlines export as a connected POLYLINE, and a closed shape sets the
+    # closed flag (70 -> 1) so importers see one closed contour, not loose lines
+    assert "POLYLINE" in dxf_txt and "VERTEX" in dxf_txt
+    assert "70\n1\n" in dxf_txt
+
+
+def test_dxf_polyline_closed_flag(tmp_path):
+    """A closed shape exports as a closed POLYLINE; an open one stays open."""
+    from leathercad.shapes import PathShape, Transform
+    from leathercad.geometry import Vec2
+
+    doc = Document("t")
+    doc.add_shape(Rectangle(width=40, height=20, layer="Cut"))       # closed
+    doc.add_shape(PathShape(points=[Vec2(0, 0), Vec2(30, 5)], close_path=False,
+                            transform=Transform(x=80, y=0), layer="Cut"))  # open
+    dxf = tmp_path / "o.dxf"
+    export.export_dxf(doc, str(dxf))
+    txt = dxf.read_text()
+    assert txt.count("POLYLINE") == 2
+    # one closed (70 -> 1) and one open (70 -> 0) polyline
+    assert "70\n1\n" in txt and "70\n0\n" in txt
 
 
 def test_construction_line_roundtrips_and_is_not_exported(tmp_path):

@@ -126,7 +126,7 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Duplicate / Delete / Fit** | `Ctrl+D` / `Del` or `Backspace` / `F` |
 | **Zoom / pan** | mouse wheel / middle-drag |
 | **Save / Open** | `Ctrl+S` / `Ctrl+O` (JSON project files) |
-| **Export** | SVG `Ctrl+E` or DXF — millimetre-accurate, layer-coloured |
+| **Export** | SVG `Ctrl+E` or DXF — millimetre-accurate, layer-coloured. DXF outlines export as connected **POLYLINE**s (closed shapes carry the closed flag), so LightBurn / Illustrator import them as one contour instead of loose line segments |
 
 Everything is in **millimetres**, Y-up, and the canvas is WYSIWYG with the export.
 

@@ -885,6 +885,109 @@ class ShapeItem(QGraphicsItem):
         return s
 
 
+class RotateHandle(QGraphicsItem):
+    """A rotation grip floating above the selected shape's box. Dragging it
+    spins the shape's transform.rotation about its own origin, snapped to 1°
+    (hold Shift for 15° detents). Drag is driven manually, like ResizeHandle,
+    so Qt's item-move machinery never fights it."""
+
+    SIZE = 4.5  # px (ignores view transform)
+    OFFSET_PX = 22.0    # gap above the top-centre resize grip
+
+    def __init__(self, owner, canvas):
+        super().__init__()
+        self.owner = owner
+        self.canvas = canvas
+        self.grip = ("rotate",)          # never equals a resize grip
+        self._dragged = False
+        self._start_rot = 0.0
+        self._start_ang = 0.0
+        self.setFlags(QGraphicsItem.ItemIgnoresTransformations)
+        self.setZValue(2100)
+        self.setCursor(Qt.OpenHandCursor)
+        self.reposition()
+
+    def _grip_world(self):
+        owner = self.owner
+        ext = owner.resize_extents()
+        if ext is None:
+            return None
+        _hx, hy = ext
+        t = owner.model.transform
+        pad = self.OFFSET_PX / max(getattr(self.canvas, "_zoom", 3.0), 1e-6)
+        return t.apply(Vec2(0.0, hy + pad))
+
+    def reposition(self):
+        w = self._grip_world()
+        if w is not None:
+            self.setPos(w.x, w.y)
+
+    def boundingRect(self) -> QRectF:
+        s = self.SIZE + 5
+        return QRectF(-s, -s, 2 * s, 2 * s)
+
+    def shape(self):
+        p = QPainterPath()
+        s = self.SIZE + 4
+        p.addEllipse(QPointF(0, 0), s, s)
+        return p
+
+    def paint(self, painter, option, widget=None):
+        painter.setRenderHint(painter.RenderHint.Antialiasing, True)
+        s = self.SIZE
+        painter.setPen(QPen(QColor(30, 110, 220), 1.2))
+        painter.setBrush(QBrush(QColor(255, 255, 255)))
+        painter.drawEllipse(QPointF(0, 0), s, s)
+        painter.setBrush(QBrush(QColor(30, 110, 220)))
+        painter.drawEllipse(QPointF(0, 0), 1.2, 1.2)
+
+    # -- manual drag ------------------------------------------------------
+    def _origin(self) -> Vec2:
+        t = self.owner.model.transform
+        return t.apply(Vec2(0.0, 0.0))
+
+    def mousePressEvent(self, event):
+        import math
+        o = self._origin()
+        sp = event.scenePos()
+        self._start_ang = math.degrees(math.atan2(sp.y() - o.y, sp.x() - o.x))
+        self._start_rot = self.owner.model.transform.rotation
+        self._dragged = False
+        if self.canvas is not None:
+            self.canvas._active_resize = self       # don't reposition me mid-drag
+        self.setCursor(Qt.ClosedHandCursor)
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        import math
+        o = self._origin()
+        sp = event.scenePos()
+        ang = math.degrees(math.atan2(sp.y() - o.y, sp.x() - o.x))
+        snap = 15.0 if (event.modifiers() & Qt.ShiftModifier) else 1.0
+        rot = self._start_rot + (ang - self._start_ang)
+        rot = round(rot / snap) * snap
+        self.apply_rotation(rot)
+        self._dragged = True
+        event.accept()
+
+    def apply_rotation(self, degrees_ccw: float) -> None:
+        t = self.owner.model.transform
+        t.rotation = ((degrees_ccw + 180.0) % 360.0) - 180.0
+        self.owner.sync_from_model()
+        self.reposition()
+        if self.canvas is not None:
+            self.canvas.resize_handle_moved(self)
+
+    def mouseReleaseEvent(self, event):
+        self.setCursor(Qt.OpenHandCursor)
+        if self.canvas is not None:
+            self.canvas._active_resize = None
+        if self._dragged and self.canvas is not None:
+            self._dragged = False
+            self.canvas.commitRequested.emit()
+        event.accept()
+
+
 class NodeRef:
     """One editable node: its world position + a setter that takes a new world
     point and writes it back to the model (converting to local)."""

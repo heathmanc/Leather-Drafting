@@ -98,6 +98,11 @@ The user guide travels inside the app (Help → User guide still works).
 * **Canvas** (centre) — your drawing. The grid is in mm; the origin is marked.
   * **Zoom**: mouse wheel. **Pan**: drag with the middle mouse button.
   * **Fit to content**: `F` (or View → Fit to content).
+  * **Rulers** — mm rulers frame the canvas (View → Rulers to toggle), with a
+    marker tracking your cursor. **Drag out of a ruler** onto the canvas to
+    drop a **guide**: the top ruler drops a horizontal guide, the left ruler a
+    vertical one. Guides are ordinary construction lines — snappable along
+    their whole length, never cut or exported, delete like any shape.
 * **Tool palette** (left, draggable/pinnable) — drawing and modify tools.
   Related tools are grouped into **fan-out buttons**: *Rectangles*,
   *Circles & ellipse* and *Arcs*. Click the button for its current variant, or
@@ -208,7 +213,10 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
   box handles — the opposite corner stays pinned. Holes recalculate for the
   new size automatically.
 * **Resize exactly**: type in the Properties fields. Both stay in sync.
-* **Rotate / mirror**: Properties → Rotation / "Mirror (laser from back)".
+* **Rotate**: drag the round **rotation grip** floating above a selected
+  shape's box — snaps to 1° (hold **Shift** for 15° detents) — or type an
+  exact angle in Properties → Rotation.
+* **Mirror**: Properties → "Mirror (laser from back)".
 * **Duplicate**: `Ctrl+D` (copies land beside the original).
 * **Delete**: `Delete` or `Backspace`.
 * **Undo / Redo**: `Ctrl+Z` / `Ctrl+Shift+Z` — every discrete edit is undoable.

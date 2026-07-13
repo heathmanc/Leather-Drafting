@@ -25,7 +25,8 @@ from leathercad.stitchline import StitchLine
 from leathercad.holes import LooseHole
 from leathercad.stitching import stitch_polyline, Hole, StitchResult, flip_symmetry
 from .items import (ShapeItem, StitchLineItem, VertexHandle, HoleItem,
-                    ResizeHandle, DimensionItem, TextItem, bake_text_contours)
+                    ResizeHandle, RotateHandle, DimensionItem, TextItem,
+                    bake_text_contours)
 
 try:
     import shiboken6
@@ -1669,6 +1670,9 @@ class Canvas(QGraphicsView):
             h = ResizeHandle(g, owner, self)
             self.scene_obj.addItem(h)
             self._resize_handles.append(h)
+        rot = RotateHandle(owner, self)          # spin grip above the box
+        self.scene_obj.addItem(rot)
+        self._resize_handles.append(rot)
 
     def clear_resize_handles(self) -> None:
         for h in self._resize_handles:
@@ -1727,6 +1731,26 @@ class Canvas(QGraphicsView):
             self._add_item(TextItem(tx, self))
         self.apply_layer_visibility()
         self.documentChangedSig.emit()
+
+    def add_guide(self, orientation: str, coord: float) -> ShapeItem:
+        """Drop a ruler guide: a long construction line at x (``'v'``) or y
+        (``'h'``) = ``coord``. Guides snap along their whole body, never export
+        and delete like any shape."""
+        rect = self.mapToScene(self.viewport().rect()).boundingRect()
+        span = max(rect.width(), rect.height()) * 2 + 200
+        if orientation == "h":
+            a = Vec2(rect.center().x() - span / 2 - 0, 0.0)
+            b = Vec2(rect.center().x() + span / 2, 0.0)
+            t = Transform(x=0.0, y=coord)
+            pts = [Vec2(a.x, 0.0), Vec2(b.x, 0.0)]
+        else:
+            t = Transform(x=coord, y=0.0)
+            pts = [Vec2(0.0, rect.center().y() - span / 2),
+                   Vec2(0.0, rect.center().y() + span / 2)]
+        sh = PathShape(points=pts, close_path=False, transform=t,
+                       layer=self._current_layer)
+        sh.construction = True
+        return self.add_shape(sh)
 
     def _do_fillet(self, world: Vec2, chamfer: bool = False,
                    force_ask: bool = False) -> None:

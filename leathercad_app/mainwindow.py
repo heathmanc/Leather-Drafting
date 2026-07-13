@@ -101,7 +101,7 @@ class MainWindow(QMainWindow):
         self.resize(1200, 800)
 
         self.canvas = Canvas(self.doc)
-        self.setCentralWidget(self.canvas)
+        self.setCentralWidget(self._wrap_with_rulers(self.canvas))
 
         self.properties = PropertiesPanel(self.canvas)
         self.layers = LayersPanel(self.canvas)
@@ -142,6 +142,32 @@ class MainWindow(QMainWindow):
         self._autosave_timer.start()
 
         self._update_title()
+
+    def _wrap_with_rulers(self, canvas) -> QWidget:
+        """The canvas framed by mm rulers (top + left) and a corner box."""
+        from PySide6.QtWidgets import QGridLayout
+        from .rulers import Ruler, THICKNESS
+        frame = QWidget()
+        grid = QGridLayout(frame)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(0)
+        corner = QLabel("mm")
+        corner.setFixedSize(THICKNESS, THICKNESS)
+        corner.setAlignment(Qt.AlignCenter)
+        corner.setStyleSheet("background:#f6f6f4;color:#6e6e70;font-size:9px;")
+        self.ruler_h = Ruler(canvas, horizontal=True)
+        self.ruler_v = Ruler(canvas, horizontal=False)
+        grid.addWidget(corner, 0, 0)
+        grid.addWidget(self.ruler_h, 0, 1)
+        grid.addWidget(self.ruler_v, 1, 0)
+        grid.addWidget(canvas, 1, 1)
+        self._ruler_corner = corner
+        return frame
+
+    def _set_rulers_visible(self, on: bool) -> None:
+        for w in (self.ruler_h, self.ruler_v, self._ruler_corner):
+            w.setVisible(on)
+        self._settings().setValue("rulersVisible", on)
 
     # -- persist toolbar/window layout across sessions ------------------
     def _settings(self) -> QSettings:
@@ -564,6 +590,13 @@ class MainWindow(QMainWindow):
         vm.addAction(la)
         self._add(vm, "Reset panels", None, self._reset_panels)
         vm.addSeparator()
+        self.act_rulers = QAction("Rulers", self)
+        self.act_rulers.setCheckable(True)
+        self.act_rulers.setChecked(
+            self._settings().value("rulersVisible", True, type=bool))
+        self.act_rulers.toggled.connect(self._set_rulers_visible)
+        self._set_rulers_visible(self.act_rulers.isChecked())
+        vm.addAction(self.act_rulers)
         self.act_drag_draw = QAction("Drag to draw (hold && release)", self)
         self.act_drag_draw.setCheckable(True)
         self.act_drag_draw.setChecked(self.canvas.drag_to_draw)

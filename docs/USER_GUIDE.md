@@ -72,6 +72,25 @@ python -m leathercad_app  # or directly from the repo
 Run the test suite any time with `python -m pytest` — everything in this
 guide is covered by it.
 
+### Sharing the app with family & friends
+
+Recipients don't need Python. Build a double-clickable app once and send it:
+
+```bash
+cd packaging
+./build_macos.sh        # macOS  -> dist/Leather-Drafting.app
+build_windows.bat       # Windows -> dist\Leather-Drafting\Leather-Drafting.exe
+./build_linux.sh        # Linux  -> dist/Leather-Drafting/Leather-Drafting
+```
+
+Zip the result and send it. Each script finishes by launching the freshly
+built app in a self-check (`--smoke`) so a broken build never ships silently.
+The user guide travels inside the app (Help → User guide still works).
+
+> macOS note: the app is unsigned, so the first launch needs
+> **right-click → Open** (once). Builds must be made *on* the platform they
+> target — build the Mac app on a Mac, the Windows exe on Windows.
+
 ---
 
 ## 3. The workspace

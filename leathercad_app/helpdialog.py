@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -11,7 +12,11 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTextBrowser,
 
 
 def guide_path() -> Path:
-    """docs/USER_GUIDE.md next to the package (repo layout)."""
+    """docs/USER_GUIDE.md — next to the package in a repo checkout, or inside
+    the bundle in a PyInstaller build (sys._MEIPASS)."""
+    frozen_base = getattr(sys, "_MEIPASS", None)
+    if frozen_base:                                   # packaged app
+        return Path(frozen_base) / "docs" / "USER_GUIDE.md"
     return Path(__file__).resolve().parent.parent / "docs" / "USER_GUIDE.md"
 
 

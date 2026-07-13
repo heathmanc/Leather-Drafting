@@ -62,6 +62,18 @@ def test_documented_defaults_match_code(guide_text):
     assert f"{st.inset:g} mm" in guide_text           # default inset quoted right
 
 
+def test_packaging_files_present(guide_text):
+    """The standalone-app build kit exists and is documented."""
+    root = GUIDE.parent.parent
+    for f in ("packaging/leather-drafting.spec", "packaging/launch.py",
+              "packaging/build_macos.sh", "packaging/build_windows.bat",
+              "packaging/build_linux.sh"):
+        assert (root / f).exists(), f"missing {f}"
+    spec = (root / "packaging/leather-drafting.spec").read_text()
+    assert "USER_GUIDE.md" in spec          # the guide ships inside the app
+    assert "build_macos.sh" in guide_text   # and the guide explains building
+
+
 def test_help_dialog_renders_guide(qapp):
     from leathercad_app.helpdialog import HelpDialog
     dlg = HelpDialog()

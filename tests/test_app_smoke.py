@@ -2147,3 +2147,29 @@ def test_pdf_export_1to1_tiled(qapp, tmp_path):
     rows, cols = export_pdf_tiled(big, str(p2))
     assert rows >= 2 and cols >= 2                # genuinely tiled
     assert p2.read_bytes()[:5] == b"%PDF-"
+
+
+def test_tool_palette_flyout_groups(qapp):
+    """Related shape tools are grouped into fan-out buttons; picking a variant
+    activates it and becomes the button's face, and selection stays exclusive."""
+    from leathercad_app.mainwindow import MainWindow, TOOL_LAYOUT
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    # rectangles, circles/ellipse and arcs each collapse into one flyout
+    groups = [e for e in TOOL_LAYOUT if not isinstance(e, str)]
+    assert len(groups) == 3
+    all_modes = [m for e in TOOL_LAYOUT for m in ([e] if isinstance(e, str) else e[2])]
+    assert all(m in win._action_for_mode for m in all_modes)
+    # the four round-shape variants all live behind one shared flyout button
+    circle_btns = {id(win._group_button_for_action[win._action_for_mode[m]])
+                   for m in (cm.CIRCLE, cm.ELLIPSE, cm.CIRCLE2, cm.CIRCLE3)}
+    assert len(circle_btns) == 1
+    a = win._action_for_mode[cm.CIRCLE3]
+    a.trigger()
+    assert win.canvas.tool == cm.CIRCLE3
+    btn = win._group_button_for_action[a]
+    assert btn.defaultAction() is a and a.isChecked()
+    win._action_for_mode[cm.RECT].trigger()
+    assert not a.isChecked() and win.canvas.tool == cm.RECT

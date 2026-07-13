@@ -88,6 +88,7 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 
 | | |
 |---|---|
+| **Tool palette** | Related shape tools collapse into **fan-out buttons** to keep the palette tidy — **Rectangles** (rectangle / rounded), **Circles & ellipse** (circle / ellipse / 2-point / 3-point) and **Arcs** (3-point / centre). Click the button for its current variant, or the little ▸ arrow to pick another; the button then remembers your choice. Every variant still has its own keyboard shortcut |
 | **Draw** | Rectangle `R`, Rounded rect `O`, Ellipse `E`, Circle `C`, Polygon `P` (click points, double-click to finish), Line `L` (2-point) |
 | **Circle by points** | **2-point circle** `2` (click the two ends of a diameter) and **3-point circle** `3` (click three points on the rim) — snap them onto existing geometry to fit a circle exactly |
 | **Arc** | **3-point arc** `4` (click start, end, then a point on the arc to set its bulge) and **centre arc** `5` (click centre, start, then end — sweeps counter-clockwise). Arcs are kept as real arcs (an editable `EditablePath`), so double-click to node-edit and drag the midpoint handle to reshape; they stitch and export like any edge |

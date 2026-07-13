@@ -10,6 +10,7 @@ from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow, QDockWidget, QFileDialog, QToolBar, QLabel, QMessageBox,
     QWidget, QScrollArea, QComboBox, QInputDialog, QDoubleSpinBox,
+    QToolButton, QMenu,
 )
 
 from leathercad.document import Document
@@ -59,6 +60,31 @@ _ICON_FOR = {
     canvas_mod.ARC3: "arc", canvas_mod.ARCCENTER: "arc",
 }
 
+_TOOL_BY_MODE = {mode: (label, key) for label, mode, key in TOOLS}
+
+# Palette layout: a bare mode is a single button; a ("label", "icon", [modes])
+# tuple is a fan-out flyout button (click the arrow to pick a variant; the button
+# then remembers your choice). Keeps the vertical tool palette uncluttered.
+TOOL_LAYOUT = [
+    canvas_mod.SELECT,
+    ("Rectangles", "rect", [canvas_mod.RECT, canvas_mod.ROUNDED]),
+    ("Circles & ellipse", "circle",
+     [canvas_mod.CIRCLE, canvas_mod.ELLIPSE, canvas_mod.CIRCLE2, canvas_mod.CIRCLE3]),
+    ("Arcs", "arc", [canvas_mod.ARC3, canvas_mod.ARCCENTER]),
+    canvas_mod.POLYGON,
+    canvas_mod.PEN,
+    canvas_mod.LINE,
+    canvas_mod.CONSTRUCTION,
+    canvas_mod.HOLE,
+    canvas_mod.SLOT,
+    canvas_mod.SCORE,
+    canvas_mod.STITCHLINE,
+    canvas_mod.TRIM,
+    canvas_mod.TEXT,
+    canvas_mod.MEASURE,
+    canvas_mod.DIMENSION,
+]
+
 
 class MainWindow(QMainWindow):
     def __init__(self, document: Optional[Document] = None):
@@ -84,7 +110,8 @@ class MainWindow(QMainWindow):
         self.canvas.selectionChangedSig.connect(self._selection_changed)
         self.canvas.documentChangedSig.connect(self._document_changed)
         self.canvas.toolFinished.connect(self._tool_finished)
-        self.canvas.requestSelectTool.connect(lambda: self._select_tool_action(0))
+        self.canvas.requestSelectTool.connect(
+            lambda: self._select_mode(canvas_mod.SELECT))
         self.canvas.cursorMoved.connect(self._cursor_moved)
         self.canvas.statusMessage.connect(self.sb_dims.setText)
         self.canvas.commitRequested.connect(self.commit)
@@ -166,18 +193,43 @@ class MainWindow(QMainWindow):
         tb.addAction(self.act_pin)
         tb.addSeparator()
 
-        self._tool_group = QActionGroup(self)
-        self._tool_actions = []
-        for i, (label, mode, key) in enumerate(TOOLS):
+        self._tool_group = QActionGroup(self)      # exclusive: one tool at a time
+        self._action_for_mode = {}
+        self._group_button_for_action = {}         # action -> its flyout button
+
+        def make_action(mode):
+            label, key = _TOOL_BY_MODE[mode]
             act = QAction(tool_icon(_ICON_FOR.get(mode, "rect")), label, self)
             act.setCheckable(True)
-            act.setShortcut(QKeySequence(key))
+            if key:
+                act.setShortcut(QKeySequence(key))
             act.setToolTip(f"{label}  ({key})")
-            act.triggered.connect(lambda checked, m=mode: self._set_tool(m))
+            act.triggered.connect(
+                lambda checked, m=mode, a=act: self._tool_triggered(m, a))
             self._tool_group.addAction(act)
-            tb.addAction(act)
-            self._tool_actions.append(act)
-        self._tool_actions[0].setChecked(True)
+            self.addAction(act)                    # keep the shortcut window-wide
+            self._action_for_mode[mode] = act
+            return act
+
+        for entry in TOOL_LAYOUT:
+            if isinstance(entry, str):
+                tb.addAction(make_action(entry))
+                continue
+            glabel, gicon, modes = entry
+            btn = QToolButton()
+            btn.setPopupMode(QToolButton.MenuButtonPopup)
+            btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            btn.setToolTip(f"{glabel} (click ▸ for variants)")
+            menu = QMenu(btn)
+            acts = [make_action(m) for m in modes]
+            for a in acts:
+                menu.addAction(a)
+                self._group_button_for_action[a] = btn
+            btn.setMenu(menu)
+            btn.setDefaultAction(acts[0])          # the front / remembered variant
+            tb.addWidget(btn)
+
+        self._action_for_mode[canvas_mod.SELECT].setChecked(True)
 
     def _make_action_toolbar(self):
         """Top toolbar for edit actions and snapping controls."""
@@ -373,12 +425,26 @@ class MainWindow(QMainWindow):
                 "Trim: click the part of an outline to cut back to where it "
                 "crosses another shape")
 
-    def _select_tool_action(self, index):
-        self._tool_actions[index].setChecked(True)
-        self.canvas.tool = TOOLS[index][1]
+    def _tool_triggered(self, mode, act):
+        # promote the chosen variant to its flyout button's face, then activate
+        btn = self._group_button_for_action.get(act)
+        if btn is not None:
+            btn.setDefaultAction(act)
+        self._set_tool(mode)
+
+    def _select_mode(self, mode):
+        """Programmatically activate a tool (e.g. dropping back to Select after a
+        shape is finished), updating the palette highlight and any flyout face."""
+        act = self._action_for_mode.get(mode)
+        if act is not None:
+            act.setChecked(True)
+            btn = self._group_button_for_action.get(act)
+            if btn is not None:
+                btn.setDefaultAction(act)
+        self._set_tool(mode)
 
     def _tool_finished(self):
-        self._select_tool_action(0)
+        self._select_mode(canvas_mod.SELECT)
         # let the user type an exact size for the shape just created
         self.properties.focus_primary_dimension()
 

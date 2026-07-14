@@ -62,9 +62,19 @@ def test_vertical_wallet_seams_fold_symmetric():
     ymin_left = min(p.y for p in body.points if p.x < 0)
     ymin_right = min(p.y for p in body.points if p.x > 0)
     assert ymin_right > ymin_left
-    # one fold line on the Score layer, a divider piece beside the body
-    assert any(s.layer == "Score" for s in doc.shapes)
-    assert any("Divider" in s.name for s in doc.shapes)
+    # SINGLE piece: only the body is on the Cut layer
+    assert [s for s in doc.shapes if s.layer == "Cut"] == [body]
+    # the flap: the piece extends past the back panel (y=100), tapered, and
+    # the seams stop below the flap fold (the flap is never stitched)
+    ymax = max(p.y for p in body.points)
+    assert ymax > 100.0
+    tip_w = (max(p.x for p in body.points if p.y > 100.0)
+             - min(p.x for p in body.points if p.y > 100.0))
+    assert tip_w < 70.0
+    for seam in doc.stitch_lines:
+        assert max(p.y for p in seam.points) < 100.0
+    # two fold lines on the Score layer (pocket fold + flap fold)
+    assert sum(1 for s in doc.shapes if s.layer == "Score") == 2
 
 
 def test_new_from_template_adopts_document(win):

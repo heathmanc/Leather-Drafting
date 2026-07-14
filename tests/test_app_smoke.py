@@ -202,6 +202,44 @@ def test_hole_style_visibility_toggles(qapp):
     assert form.isRowVisible(p.slit_len) and not form.isRowVisible(p.hole_dia)
 
 
+def test_baked_holes_hide_distribution_controls(qapp):
+    """Baked/grouped holes have fixed positions, so the distribution controls
+    (pitch, fit, symmetry, corners...) must be hidden -- only the appearance
+    rows (style / ø / slit) stay. They do show for an auto-spaced shape."""
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import ShapeItem, HoleItem
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    p = win.properties
+    f = p._stitch_form
+    item = c.add_shape(Rectangle(
+        width=60, height=40, transform=Transform(x=0, y=0),
+        stitch=StitchSettings(enabled=True, hole_style="slit"), layer="Cut"))
+
+    # auto-spaced: distribution controls are visible
+    c.scene_obj.clearSelection(); item.setSelected(True); c.selection_changed()
+    p.show_selection([item])
+    assert f.isRowVisible(p.symmetry) and f.isRowVisible(p.corner_style)
+    assert f.isRowVisible(p.pitch)
+
+    # ungroup then group back -> baked holes
+    c.ungroup_selected()
+    holes = [it for it in c.scene_obj.items() if isinstance(it, HoleItem)]
+    shp = next(it for it in c.scene_obj.items() if isinstance(it, ShapeItem))
+    c.scene_obj.clearSelection(); shp.setSelected(True)
+    for h in holes:
+        h.setSelected(True)
+    c.group_selected()
+    p.show_selection([shp])
+    # distribution controls hidden, appearance controls still shown
+    assert not f.isRowVisible(p.symmetry)
+    assert not f.isRowVisible(p.corner_style)
+    assert not f.isRowVisible(p.pitch) and not f.isRowVisible(p.fit)
+    assert f.isRowVisible(p.hole_style) and f.isRowVisible(p.slit_len)
+
+
 def test_rounded_rect_converts_to_arc_nodes_and_locks(qapp):
     from PySide6.QtWidgets import QGraphicsItem
     from leathercad_app.mainwindow import MainWindow

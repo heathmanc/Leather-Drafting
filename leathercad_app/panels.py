@@ -349,8 +349,14 @@ class PropertiesPanel(QWidget):
         self._update_readout()
 
     def _set_path_rows_visible(self, vis: bool):
+        # every control that governs where holes GO (as opposed to how they
+        # look). Hidden for baked/grouped holes and loose holes, whose
+        # positions are fixed -- only the appearance rows (style / ø / slit)
+        # stay. Symmetry and Corners belong here too: they only steer the
+        # auto-distribution, so they'd do nothing on baked holes.
         for w in (self.iron, self.pitch, self.inset, self.fit, self.rows,
-                  self.row_spacing, self.backstitch):
+                  self.row_spacing, self.backstitch, self.symmetry,
+                  self.corner_style):
             self._stitch_form.setRowVisible(w, vis)
 
     def _sync_hole_vis(self):

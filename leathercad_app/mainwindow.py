@@ -21,6 +21,7 @@ from leathercad import export
 from . import canvas as canvas_mod
 from .canvas import Canvas
 from .panels import PropertiesPanel, LayersPanel
+from .mathspin import NoWheelComboBox, NoWheelSpinBox
 from .history import History
 from .icons import tool_icon
 
@@ -187,6 +188,13 @@ class MainWindow(QMainWindow):
         palette), canvas paper/grid/axis, rulers, and re-tinted tool icons."""
         from .theme import apply_app_theme, RULER
         apply_app_theme(dark)
+        # Make the dock resize dividers easy to see and grab -- the default
+        # separator is a nearly-invisible hairline.
+        sep = "rgba(120, 124, 132, 0.75)" if dark else "rgba(150, 152, 158, 0.6)"
+        self.setStyleSheet(
+            "QMainWindow::separator { background: %s; width: 6px; height: 6px; }"
+            "QMainWindow::separator:hover { background: rgba(42,130,218,0.85); }"
+            % sep)
         self.canvas.set_dark_theme(dark)
         self._ruler_corner.setStyleSheet(RULER[dark]["corner_css"])
         self.ruler_h.update()
@@ -489,7 +497,7 @@ class MainWindow(QMainWindow):
         tb.addAction(self.act_snap_grid)
 
         tb.addWidget(QLabel(" grid "))
-        self.grid_combo = QComboBox()
+        self.grid_combo = NoWheelComboBox()
         for mm in (0.5, 1.0, 2.0, 2.5, 5.0, 10.0):
             self.grid_combo.addItem(f"{mm:g} mm", mm)
         self.grid_combo.setCurrentIndex(1)  # 1 mm
@@ -532,7 +540,7 @@ class MainWindow(QMainWindow):
         # active (no popup, no modifier keys)
         self._fillet_sep = tb.addSeparator()
         self._fillet_lbl = tb.addWidget(QLabel(" corner "))
-        self.fillet_mode = QComboBox()
+        self.fillet_mode = NoWheelComboBox()
         self.fillet_mode.addItem("Round", False)
         self.fillet_mode.addItem("Chamfer", True)
         self.fillet_mode.setToolTip("Round = fillet arc · Chamfer = straight bevel")
@@ -978,7 +986,7 @@ class MainWindow(QMainWindow):
 
         cw = _spin("genCardW", 85.6, 20, 200, "Bank card: 85.6 mm")
         ch = _spin("genCardH", 54.0, 20, 200, "Bank card: 54 mm")
-        n = QSpinBox()
+        n = NoWheelSpinBox()
         n.setRange(1, 10)
         n.setValue(int(s.value("genCardCount", 4, type=int)))
         reveal = _spin("genCardReveal", 12.0, 4, 40,
@@ -1030,7 +1038,7 @@ class MainWindow(QMainWindow):
         hint.setWordWrap(True)
         lay.addWidget(hint)
         form = QFormLayout()
-        size = QComboBox()
+        size = NoWheelComboBox()
         for k in ZIP_WINDOW:
             size.addItem(f"{k}   ({ZIP_WINDOW[k]:g} mm window)", k)
         size.setCurrentIndex(max(0, size.findData(

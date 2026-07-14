@@ -14,9 +14,27 @@ the parameter later and every bound field re-evaluates.
 from __future__ import annotations
 
 from PySide6.QtGui import QValidator
-from PySide6.QtWidgets import QDoubleSpinBox
+from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QSpinBox
 
 from leathercad.expr import evaluate, names_in  # noqa: F401  (re-exported)
+
+
+class _NoWheel:
+    """Mixin: the scroll wheel never changes the value. The event is ignored
+    (not consumed) so it bubbles up to the enclosing scroll area -- the panel
+    still scrolls, but hovering a field and scrolling can't nudge it by
+    accident. Change values by typing or the keyboard instead."""
+
+    def wheelEvent(self, event):   # noqa: N802 (Qt naming)
+        event.ignore()
+
+
+class NoWheelComboBox(_NoWheel, QComboBox):
+    pass
+
+
+class NoWheelSpinBox(_NoWheel, QSpinBox):
+    pass
 
 # module-level hook: returns {param name: value} for the current document.
 # Installed by the main window; None -> plain arithmetic only.
@@ -52,6 +70,11 @@ class MathSpinBox(QDoubleSpinBox):
 
     def _mark_edited(self, _text) -> None:
         self._user_edited = True
+
+    def wheelEvent(self, event):   # noqa: N802
+        # ignore (don't consume) so the panel scroll area still scrolls, but a
+        # stray wheel over the field can't change the value -- see _NoWheel.
+        event.ignore()
 
     def setValue(self, v) -> None:            # programmatic load
         self.last_expr = None

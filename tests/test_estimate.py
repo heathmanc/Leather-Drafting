@@ -282,6 +282,31 @@ def _pick(combo, value):
             return
 
 
+def test_wheel_does_not_change_panel_fields():
+    """Scrolling over a spin box or combo box must not nudge its value -- the
+    event is ignored (not consumed) so the panel scroll area still scrolls."""
+    win, shp = _win_with_stitched_rect()
+    p = win.properties
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtCore import QPointF, QPoint, Qt
+    from PySide6.QtWidgets import QApplication
+
+    def wheel(w):
+        ev = QWheelEvent(QPointF(3, 3), QPointF(3, 3), QPoint(0, 0),
+                         QPoint(0, -120), Qt.NoButton, Qt.NoModifier,
+                         Qt.ScrollPhase.NoScrollPhase, False)
+        QApplication.sendEvent(w, ev)
+        return ev.isAccepted()
+
+    before = (p.pitch.value(), p.inset.value(), p.fit.currentIndex(),
+              p.punch_style.currentIndex())
+    for w in (p.pitch, p.inset, p.fit, p.punch_style, p.backstitch):
+        assert not wheel(w)              # ignored -> bubbles to the scroll area
+    after = (p.pitch.value(), p.inset.value(), p.fit.currentIndex(),
+             p.punch_style.currentIndex())
+    assert before == after               # nothing moved
+
+
 def test_set_tool_always_refreshes_the_status_hint():
     import os
     import pytest

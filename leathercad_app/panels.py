@@ -16,6 +16,7 @@ from leathercad.stitchsettings import StitchSettings
 from leathercad.shapes import Rectangle, Ellipse, Circle, Polygon, PathShape
 from leathercad.layers import Layer, ROLES
 from .items import ShapeItem, StitchLineItem, HoleItem, DimensionItem, TextItem
+from .mathspin import NoWheelComboBox, NoWheelSpinBox
 
 try:
     import shiboken6
@@ -60,6 +61,21 @@ class PropertiesPanel(QWidget):
     def _build(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
+        # A clearer frame around each group -- the Fusion default hairline is
+        # nearly invisible. A mid grey with alpha reads on both light and dark.
+        self.setStyleSheet("""
+            QGroupBox {
+                border: 1px solid rgba(140, 142, 148, 0.85);
+                border-radius: 5px;
+                margin-top: 9px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 8px;
+                padding: 0 4px;
+            }
+        """)
 
         # Transform
         self.g_transform = QGroupBox("Transform")
@@ -115,7 +131,7 @@ class PropertiesPanel(QWidget):
         # Appearance
         self.g_appear = QGroupBox("Appearance")
         fa = QFormLayout(self.g_appear)
-        self.layer_combo = QComboBox()
+        self.layer_combo = NoWheelComboBox()
         self.opacity = QSlider(Qt.Horizontal)
         self.opacity.setRange(10, 100)
         fa.addRow("Layer", self.layer_combo)
@@ -127,41 +143,38 @@ class PropertiesPanel(QWidget):
         self.g_stitch.setCheckable(True)
         fs = QFormLayout(self.g_stitch)
         self._stitch_form = fs
-        # Punch cascade: style -> maker -> size. Style picks the hole SHAPE,
-        # maker + size pick the pitch. ``_cur_hole_style`` is the low-level
-        # render/export primitive (round | slit | diamond) the style maps to.
         # Punch = style + pitch. Style picks the hole SHAPE; pitch (the standard
         # ladder, shared across makers) is the primary selector. Round holes add
         # a diameter selector. ``_cur_hole_style`` is the low-level render/export
         # primitive (round | slit | diamond) the style maps to.
         self._cur_hole_style = "round"
         self._path_rows_vis = True     # pitch/fit/... shown (hidden for baked)
-        self.punch_style = QComboBox()
+        self.punch_style = NoWheelComboBox()
         for key in ("round", "oblique", "french", "diamond"):
             self.punch_style.addItem(key.capitalize(), key)
-        self.pitch_combo = QComboBox()
+        self.pitch_combo = NoWheelComboBox()
         self._build_pitch_combo()
         self.pitch = _spin(0.5, 50, 0.05)
-        self.hole_dia_combo = QComboBox()
+        self.hole_dia_combo = NoWheelComboBox()
         self._build_dia_combo()
         self.inset = _spin(0.0, 100, 0.5)
-        self.fit = QComboBox()
+        self.fit = NoWheelComboBox()
         self.fit.addItems(["auto", "endpoints", "closed", "none"])
         self.hole_dia = _spin(0.1, 10, 0.1)
         self.slit_len = _spin(0.2, 10, 0.1)
         self.slit_angle = _spin(-89, 89, 1.0, 1, " °")
-        self.rows = QComboBox()
+        self.rows = NoWheelComboBox()
         self.rows.addItems(["1 (single)", "2 (double)"])
         self.row_spacing = _spin(0.5, 20, 0.5)
-        self.backstitch = QSpinBox()
+        self.backstitch = NoWheelSpinBox()
         self.backstitch.setRange(0, 8)
         self.backstitch.setSuffix(" holes")
         self.backstitch.setButtonSymbols(QAbstractSpinBox.NoButtons)
-        self.symmetry = QComboBox()
+        self.symmetry = NoWheelComboBox()
         self.symmetry.addItems(["none", "vertical", "horizontal"])
         self.symmetry.setToolTip(
             "Force flip-symmetric holes so a flipped piece lines up back-to-back")
-        self.corner_style = QComboBox()
+        self.corner_style = NoWheelComboBox()
         self.corner_style.addItems(["auto", "midpoint", "straddle"])
         self.corner_style.setToolTip(
             "Rounded-corner holes are always symmetric about the arc midpoint.\n"
@@ -422,7 +435,7 @@ class PropertiesPanel(QWidget):
         i = self.corner_style.findText(getattr(st, "corner_style", "auto"))
         self.corner_style.setCurrentIndex(i if i >= 0 else 0)
         self._sync_hole_vis()
-        self.row_spacing.setVisible(self.rows.currentIndex() == 1)
+        self._stitch_form.setRowVisible(self.row_spacing, self.rows.currentIndex() == 1)
 
     # -- punch: style + pitch (+ diameter for round) --------------------
     @staticmethod
@@ -585,7 +598,7 @@ class PropertiesPanel(QWidget):
             self._write_stitch(it.line.settings)
             it.line.settings.inset = 0.0
         self._sync_hole_vis()
-        self.row_spacing.setVisible(self.rows.currentIndex() == 1)
+        self._stitch_form.setRowVisible(self.row_spacing, self.rows.currentIndex() == 1)
         self.canvas.refresh_item(it)
         self._update_readout()
 
@@ -732,7 +745,7 @@ class LayersPanel(QWidget):
         row.addWidget(self.btn_vis)
         root.addLayout(row)
 
-        self.role = QComboBox()
+        self.role = NoWheelComboBox()
         self.role.addItems(list(ROLES))
         self.role.currentIndexChanged.connect(self._role_changed)
         rl = QHBoxLayout()

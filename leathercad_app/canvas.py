@@ -3739,10 +3739,20 @@ class Canvas(QGraphicsView):
     # -- join / weld segments back into a continuous path --------------
     def join_selected(self, tol: float = 0.6) -> None:
         """Chain selected pieces whose endpoints coincide into continuous
-        paths (arcs preserved). Disconnected pieces form separate paths."""
-        shapes = [it for it in self.selected_items() if isinstance(it, ShapeItem)]
+        paths (arcs preserved). Disconnected pieces form separate paths.
+
+        Only OPEN, CUT-layer segments are joined. Score / engrave / stitch
+        pieces and already-closed shapes (circles, finished outlines) are left
+        untouched, so selecting the whole document welds only the loose cut
+        edges -- never a fold line, and never a standalone relief hole."""
+        sel = [it for it in self.selected_items() if isinstance(it, ShapeItem)]
+        shapes = [it for it in sel if self._is_open_cut(it.model)]
         if len(shapes) < 2:
-            self.statusMessage.emit("Select 2+ pieces to join")
+            if len(sel) >= 2:
+                self.statusMessage.emit(
+                    "Join welds open Cut segments — select 2+ of them")
+            else:
+                self.statusMessage.emit("Select 2+ open cut segments to join")
             return
         layer = shapes[0].model.layer
         # collect every edge as a world-space segment (a, b, kind, mid)
@@ -3759,17 +3769,6 @@ class Canvas(QGraphicsView):
             chain, remaining = _chain_segments(remaining, tol)
             made.append(_path_from_chain(chain, tol, layer))
 
-        # A weld that closes into an outline is a leather piece: give it stitch
-        # holes right away (draw lines -> weld -> stitched shape). Toggle the
-        # Stitching box off in Properties if it's a cut-only piece.
-        n_stitched = 0
-        for m in made:
-            closed = bool(getattr(m, "closed", False)
-                          or getattr(m, "close_path", False))
-            if closed and getattr(m, "stitch", None) is None:
-                m.stitch = self._default_stitch()
-                n_stitched += 1
-
         self._suppress_commit = True
         for it in shapes:
             self.doc.remove_shape(it.model)
@@ -3780,13 +3779,24 @@ class Canvas(QGraphicsView):
         self.scene_obj.clearSelection()
         for m in items:
             m.setSelected(True)
-        if n_stitched:
-            self.statusMessage.emit(
-                "Welded into a closed shape — stitch holes added "
-                "(adjust or disable in Properties → Stitching)")
         self.documentChangedSig.emit()
         self.selectionChangedSig.emit()
         self._emit_commit()
+
+    def _layer_role(self, name: str) -> str:
+        lyr = self.doc.layer(name)
+        return lyr.role if lyr is not None else "cut"
+
+    def _is_open_cut(self, m) -> bool:
+        """True for an OPEN cut-layer segment -- the only thing join welds.
+        Excludes score/engrave/stitch layers and already-closed shapes
+        (circles, ellipses, rectangles, closed polygons / paths)."""
+        if self._layer_role(m.layer) != "cut":
+            return False
+        if isinstance(m, (Circle, Ellipse, Rectangle)):
+            return False
+        return not (getattr(m, "closed", False)
+                    or getattr(m, "close_path", False))
 
     def _segments_world(self, sh):
         """Return [(kind, [world points]), ...] -- 'line' has [a,b], 'arc'

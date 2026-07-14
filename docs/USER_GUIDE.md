@@ -418,11 +418,11 @@ extra construction.
 * **Break apart** (`Ctrl+B`) — explode a shape into its individual edges
   (lines and arcs), each independently movable.
 * **Join / weld** (`Ctrl+J`) — select several touching segments and weld them
-  back into one continuous path (arcs kept). **If the weld closes into a
-  loop, the shape gets stitch holes automatically** — so *draw lines → weld →
-  stitched piece* is one step (untick Stitching in Properties for a cut-only
-  piece). Loose holes inside a welded outline can then be attached with
-  `Ctrl+Shift+A`.
+  back into one continuous path (arcs kept). Only **Cut**-layer pieces are
+  joined; score / engrave / stitch lines in the selection are left alone, so
+  you can select a whole broken-apart piece and only its outline welds. The
+  result is a plain path — turn on **Stitching** in Properties to add holes,
+  and attach loose holes inside a welded outline with `Ctrl+Shift+A`.
 * **Offset / seam allowance** (`Ctrl+Shift+O`) — create a parallel copy of the
   selected outline: positive = outward, negative = inward. Use it for seam
   allowances, linings, or an outer glue line. Circles and (rounded)

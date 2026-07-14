@@ -224,20 +224,24 @@ def fold_over_wallet() -> Document:
         doc.add_shape(PathShape(name=name, points=pts, close_path=False,
                                 transform=Transform(x=0, y=0), layer="Score"))
 
-    # seams, 5 mm pitch. Each panel carries its own
-    # rows, 4 mm inside its edges and folds (no hole ever lands ON a crease):
-    # the left wing gets top, outer-edge and bottom rows; the right wing a
-    # bottom row; the middle section its own top row and a vertical row just
-    # INSIDE the right wing fold. Only the MIDDLE section's bottom -- the
-    # fold zone with the thumb scoop -- stays unstitched: the block folds up
-    # there, so that part of the finished wallet is a crease, not a seam.
+    # seams, 5 mm pitch, 4 mm inside their edges/folds (no hole on a crease).
+    # The two BOTTOM rows are the seam that closes the pouch: when the wings
+    # fold in (left about x = CL, right about x = CR) they land on each other,
+    # so the rows must register hole-for-hole. A left-wing hole at x reflects
+    # to 2*CL - x; a right-wing hole to 2*CR - x; the pair coincides when
+    # x_right = x_left + 2*(CR - CL). Both rows are therefore the SAME length
+    # (60 mm -> 13 holes at exactly 5 mm) and placed as mirror partners onto
+    # the shared target span x in [82, 142] of the folded pouch front.
+    span = 60.0                                        # = 12 gaps at 5 mm
+    lb0, lb1 = 2 * CL - 142.0, 2 * CL - 82.0           # left-wing bottom: 14..74
+    rb0, rb1 = lb0 + 2 * (CR - CL), lb1 + 2 * (CR - CL)  # right: 154..214
     runs = [
         ("Top seam (left wing)", [Vec2(4, 86), Vec2(74, 86)]),
         ("Top seam (middle)", [Vec2(82, 86), Vec2(144, 86)]),
         ("Left edge seam", [Vec2(4, 8), Vec2(4, 82)]),
         ("Middle seam", [Vec2(144, 8), Vec2(144, 82)]),
-        ("Bottom seam (left wing)", [Vec2(4, 4), Vec2(74, 4)]),
-        ("Bottom seam (right wing)", [Vec2(152, 4), Vec2(215, 4)]),
+        ("Bottom seam (left wing)", [Vec2(lb0, 4), Vec2(lb1, 4)]),
+        ("Bottom seam (right wing)", [Vec2(rb0, 4), Vec2(rb1, 4)]),
     ]
     for name, pts in runs:
         seam = StitchLine(points=pts,

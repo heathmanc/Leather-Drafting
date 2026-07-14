@@ -158,6 +158,18 @@ def test_fold_over_wallet_matches_source_pattern():
         assert not any(h.point.y < 8.0 and 78.0 < h.point.x < 148.0
                        for h in sl.result().holes)
 
+    # the bottom rows are the pouch seam: when the wings fold in (left about
+    # x = 78, right about x = 148) they must land hole-for-hole
+    lb, rb = bot_l.result().holes, bot_r.result().holes
+    assert len(lb) == len(rb) >= 12
+    lf = sorted(round(2 * 78.0 - h.point.x, 4) for h in lb)   # fold left
+    rf = sorted(round(2 * 148.0 - h.point.x, 4) for h in rb)  # fold right
+    assert all(abs(a - b) < 1e-6 for a, b in zip(lf, rf))
+    # ...at a true 5 mm pitch, not the fitter's fudge on mismatched lengths
+    for sl in (bot_l, bot_r):
+        gaps = sl.result().chord_spacings()
+        assert all(abs(g - 5.0) < 1e-3 for g in gaps)
+
 
 def test_new_from_template_adopts_document(win):
     from leathercad.templates import card_holder

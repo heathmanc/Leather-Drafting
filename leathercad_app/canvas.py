@@ -3852,13 +3852,16 @@ class Canvas(QGraphicsView):
             self.doc.remove_hole(h.hole)
             self._remove_item(h)
         sh.baked_holes = baked
-        # keep a style on the shape for baked-hole rendering
+        # baked holes render in the shape's stitch STYLE, so adopt the grouped
+        # holes' style (round / slit + sizes) -- otherwise slit holes baked
+        # into a round-stitched shape would come out round, and vice versa.
+        h0 = holes[0].hole
         if sh.stitch is None:
-            sh.stitch = StitchSettings(enabled=False,
-                                       hole_style=holes[0].hole.hole_style,
-                                       hole_diameter=holes[0].hole.hole_diameter,
-                                       slit_length=holes[0].hole.slit_length,
-                                       slit_angle=holes[0].hole.slit_angle)
+            sh.stitch = StitchSettings(enabled=False)
+        sh.stitch.hole_style = h0.hole_style
+        sh.stitch.hole_diameter = h0.hole_diameter
+        sh.stitch.slit_length = h0.slit_length
+        sh.stitch.slit_angle = h0.slit_angle
         shape_item.sync_from_model()
         self.scene_obj.clearSelection()
         shape_item.setSelected(True)

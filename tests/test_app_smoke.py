@@ -655,6 +655,39 @@ def test_ungroup_makes_individual_holes_then_group_back(qapp):
     assert item.hole_count == n - 3  # now render as baked, move with the shape
 
 
+def test_group_holes_adopts_their_style(qapp):
+    """Baked holes render in the shape's stitch STYLE, so grouping must adopt
+    the grouped holes' style -- slit holes baked into a round-stitched shape
+    must come out slit, not round (regression)."""
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import HoleItem
+    from leathercad.document import Document, LooseHole
+    from leathercad.geometry import Vec2
+
+    win = MainWindow(Document())
+    c = win.canvas
+    # a shape already carrying a ROUND stitch...
+    item = c.add_shape(Rectangle(
+        width=60, height=40, transform=Transform(x=0, y=0),
+        stitch=StitchSettings(enabled=False, hole_style="round"), layer="Cut"))
+    # ...and SLIT loose holes
+    for x in (-20, 0, 20):
+        win.doc.holes.append(LooseHole(point=Vec2(x, -18), hole_style="slit",
+                                       slit_length=2.0, slit_angle=25.0))
+    c.rebuild()
+    item = next(it for it in c.scene_obj.items()
+                if getattr(it, "model", None) is not None
+                and it.model is win.doc.shapes[0])
+    c.scene_obj.clearSelection()
+    item.setSelected(True)
+    for h in [it for it in c.scene_obj.items() if isinstance(it, HoleItem)]:
+        h.setSelected(True)
+    c.group_selected()
+    st = item.model.stitch
+    assert st.hole_style == "slit"           # adopts the holes' style
+    assert st.slit_length == 2.0 and st.slit_angle == 25.0
+
+
 def test_grouped_holes_move_with_shape(qapp):
     from leathercad_app.mainwindow import MainWindow
     from leathercad.document import Document

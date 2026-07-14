@@ -136,11 +136,12 @@ def fold_over_wallet() -> Document:
         over the entrance and tucks down the front; the small notch in the
         block's bottom edge gives your thumb room to lift the tip back out.
 
-    Stitching is 5 mm pitch: the left wing carries a top row and an
-    outer-edge row, the middle section its own top row and a vertical row
-    just inside the right wing fold. The bottom edge and thumb notch are
-    unstitched (the wallet bottom is a fold), and the sloped top and the
-    diagonal slot stay open -- that's where cards go in and out.
+    Stitching is 5 mm pitch: the left wing carries top, outer-edge and
+    bottom rows, the right wing a bottom row, and the middle section its
+    own top row plus a vertical row just inside the right wing fold. The
+    middle's bottom -- the fold zone with the thumb scoop -- is unstitched
+    (that part of the wallet is a crease), and the sloped top and diagonal
+    slot stay open -- that's where cards go in and out.
     Mirror everything (Ctrl+M) for a left-handed version.
     """
     doc = Document("Fold-over wallet")
@@ -210,18 +211,18 @@ def fold_over_wallet() -> Document:
 
     # seams, 5 mm pitch. Each panel carries its own
     # rows, 4 mm inside its edges and folds (no hole ever lands ON a crease):
-    # the left wing gets a top row and an outer-edge row; the middle section
-    # gets its own top row and a vertical row just INSIDE the right wing
-    # fold. Wing and middle rows share the pitch, so the layers line up when
-    # you prick through the assembled pouch. The bottom edge and the thumb
-    # notch carry NO stitching at all -- the block folds up, so the finished
-    # wallet's bottom is a crease, not a sewn edge (the notch ends up at the
-    # pouch opening as a thumb scoop).
+    # the left wing gets top, outer-edge and bottom rows; the right wing a
+    # bottom row; the middle section its own top row and a vertical row just
+    # INSIDE the right wing fold. Only the MIDDLE section's bottom -- the
+    # fold zone with the thumb scoop -- stays unstitched: the block folds up
+    # there, so that part of the finished wallet is a crease, not a seam.
     runs = [
         ("Top seam (left wing)", [Vec2(4, 86), Vec2(74, 86)]),
         ("Top seam (middle)", [Vec2(82, 86), Vec2(144, 86)]),
         ("Left edge seam", [Vec2(4, 8), Vec2(4, 82)]),
         ("Middle seam", [Vec2(144, 8), Vec2(144, 82)]),
+        ("Bottom seam (left wing)", [Vec2(4, 4), Vec2(74, 4)]),
+        ("Bottom seam (right wing)", [Vec2(152, 4), Vec2(215, 4)]),
     ]
     for name, pts in runs:
         seam = StitchLine(points=pts,

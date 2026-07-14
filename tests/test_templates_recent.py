@@ -122,15 +122,15 @@ def test_fold_over_wallet_matches_source_pattern():
     ends = {(p.x, p.y) for p in (a, b)}
     assert {(c.transform.x, c.transform.y) for c in reliefs} == ends
 
-    # three folds; four 5 mm seams confined to the block, every row 4 mm
+    # three folds; six 5 mm seams confined to the block, every row 4 mm
     # inside its panel -- no hole on or across a fold line
     assert sum(1 for s in doc.shapes if s.layer == "Score") == 3
-    assert len(doc.stitch_lines) == 4
+    assert len(doc.stitch_lines) == 6
     for sl in doc.stitch_lines:
         assert sl.settings.pitch_mm == 5.0
         assert sl.result().count >= 12
         assert max(p.y for p in sl.points) <= 90.0
-    top_w, top_m, left, middle = doc.stitch_lines
+    top_w, top_m, left, middle, bot_l, bot_r = doc.stitch_lines
     assert max(p.x for p in top_w.points) < 78.0            # wing side only
     assert 78.0 < min(p.x for p in top_m.points)            # middle only...
     assert max(p.x for p in top_m.points) < 148.0           # ...inside the fold
@@ -141,10 +141,15 @@ def test_fold_over_wallet_matches_source_pattern():
     assert len(L) == len(M)
     assert all(abs(a.point.y - b.point.y) < 1e-6 for a, b in zip(L, M))
 
-    # NOTHING is stitched along the bottom edge or the thumb notch -- the
-    # finished wallet's bottom is a fold, not a sewn edge
+    # BOTH wings carry a bottom row, each confined to its own wing --
+    # but the middle section's bottom (the fold zone with the thumb
+    # scoop) stays unstitched
+    assert all(p.y == 4.0 for p in bot_l.points + bot_r.points)
+    assert max(p.x for p in bot_l.points) < 78.0
+    assert min(p.x for p in bot_r.points) > 148.0
     for sl in doc.stitch_lines:
-        assert all(h.point.y >= 8.0 for h in sl.result().holes)
+        assert not any(h.point.y < 8.0 and 78.0 < h.point.x < 148.0
+                       for h in sl.result().holes)
 
 
 def test_new_from_template_adopts_document(win):

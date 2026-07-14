@@ -154,6 +154,61 @@ def _grid_of_rects(n_side, sel_count):
     return win, sel
 
 
+# -- big multi-select / duplicate stay O(N), not O(N^2) -----------------------
+def test_multiselect_coalesces_panel_and_keeps_o1_grip_test(qapp):
+    """Selecting a big batch must not rebuild the Properties panel per member
+    (the O(N^2) lock). The heavy emit coalesces to one deferred fire, and the
+    resize-grip decision reads an O(1) tally, not a filtered scene scan."""
+    win, sel = _grid_of_rects(6, 0)          # 36 shapes, none selected yet
+    c = win.canvas
+    from leathercad_app.items import ShapeItem
+    shapes = [it for it in c.scene_obj.items() if isinstance(it, ShapeItem)]
+
+    rebuilds = []
+    c.selectionChangedSig.connect(lambda: rebuilds.append(1))
+    c.scene_obj.clearSelection()
+    qapp.processEvents()
+    rebuilds.clear()
+
+    for it in shapes:                        # select all 36
+        it.setSelected(True)
+    # the tally tracks every selected shape without a scene scan
+    assert len(c._selected_shapes) == 36
+    # many selected -> no box grips, and only a single coalesced emit is pending
+    assert not c._resize_handles
+    assert c._selchg_emit_pending
+    qapp.processEvents()
+    assert len(rebuilds) == 1                 # ONE panel rebuild for the burst
+
+    # dropping back to a single shape brings the grips back (still O(1))
+    c.scene_obj.clearSelection()
+    shapes[0].setSelected(True)
+    qapp.processEvents()
+    assert len(c._selected_shapes) == 1
+    assert c._resize_handles                  # 8 grips + rotate handle
+
+
+def test_duplicate_batch_refreshes_once(qapp):
+    """Duplicating a big selection positions each new item, but the per-item
+    move-refresh (dimension re-anchor + total_holes scene scan) is suspended so
+    the whole batch costs one refresh, not one per item."""
+    win, sel = _grid_of_rects(5, 25)          # select all 25
+    c = win.canvas
+    from leathercad_app.items import ShapeItem
+    before = len([it for it in c.scene_obj.items()
+                  if isinstance(it, ShapeItem)])
+
+    hits = []
+    c.documentChangedSig.connect(lambda: hits.append(1))
+    c.duplicate_selected()
+    # one document-changed for the whole duplicate, not 25
+    assert len(hits) <= 1
+    assert not c._suspend_move_refresh        # flag always cleared
+    after = len([it for it in c.scene_obj.items()
+                 if isinstance(it, ShapeItem)])
+    assert after == before + 25               # every shape duplicated
+
+
 # -- multi-select drag stays realtime -----------------------------------------
 def test_drag_snap_uses_spatial_grid(qapp):
     """The move-snap cache is bucketed at drag start so each mouse move scans

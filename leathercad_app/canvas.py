@@ -292,7 +292,10 @@ class Canvas(QGraphicsView):
         self._trim_hover: Optional[QGraphicsPathItem] = None
         self._align_guides: List[QGraphicsLineItem] = []
 
-        self.scene_obj.selectionChanged.connect(self.selectionChangedSig)
+        self._selchg_emit_pending = False
+        self._selected_shapes = set()     # live tally for O(1) resize-grip test
+        self._suspend_move_refresh = False   # set during bulk creates (duplicate)
+        self.scene_obj.selectionChanged.connect(self._emit_selection_changed)
 
     # -- zoom / view ----------------------------------------------------
     def _apply_zoom(self) -> None:
@@ -2652,6 +2655,10 @@ class Canvas(QGraphicsView):
         from leathercad.geometry import Vec2
         new_items = []
         self._suppress_commit = True
+        # Positioning each freshly-created item fires item_moved -> a full
+        # document refresh (dimension re-anchor + total_holes scene scan); doing
+        # that per item is O(N^2). Suspend it and refresh once at the end.
+        self._suspend_move_refresh = True
         for it in self.selected_items():
             if isinstance(it, ShapeItem):
                 sh = copy.deepcopy(it.model)
@@ -2660,7 +2667,11 @@ class Canvas(QGraphicsView):
                 from leathercad.shapes import _next_id
                 sh.shape_id = _next_id("shape")
                 sh.group_id = None          # a copy is not in the original group
-                new_items.append(self.add_shape(sh))
+                # Lightweight add (like the hole/seam branches): the per-shape
+                # add_shape() does clearSelection + documentChangedSig + commit
+                # each, which is O(N^2) selection churn for a big duplicate.
+                self.doc.add_shape(sh)
+                new_items.append(self._add_item(ShapeItem(sh, self)))
             elif isinstance(it, HoleItem):
                 from leathercad.holes import _next_id as _next_hole_id
                 lh = copy.deepcopy(it.hole)
@@ -2678,6 +2689,7 @@ class Canvas(QGraphicsView):
                 self.doc.add_stitch_line(sl)
                 new_items.append(self._add_item(StitchLineItem(sl, self)))
         self._suppress_commit = False
+        self._suspend_move_refresh = False
         self.scene_obj.clearSelection()
         for it in new_items:
             it.setSelected(True)
@@ -3327,6 +3339,8 @@ class Canvas(QGraphicsView):
         self._emit_commit()
 
     def item_moved(self, item) -> None:
+        if self._suspend_move_refresh:
+            return      # bulk op (duplicate/array): one refresh happens at end
         self._moved_during_press = True
         if self._group_driving:
             return      # a driven group member; the drag leader reports once
@@ -3356,10 +3370,34 @@ class Canvas(QGraphicsView):
         self._last_move_refresh = time.monotonic()
         self._move_refresh()
 
-    def selection_changed(self) -> None:
+    def selection_changed(self, item=None, selected=None) -> None:
+        # Maintain an O(1) tally of selected ShapeItems so a big multi-select
+        # doesn't rebuild a filtered Python list per member (the O(N^2) lock).
+        if item is not None and selected is not None and isinstance(item, ShapeItem):
+            if selected:
+                self._selected_shapes.add(item)
+            else:
+                self._selected_shapes.discard(item)
         if self._edit_owner is not None and not self._edit_owner.isSelected():
             self.clear_vertex_handles()
         self._refresh_resize_handles()
+        self._emit_selection_changed()
+
+    def _emit_selection_changed(self) -> None:
+        """Coalesce properties-panel rebuilds.
+
+        Every selected item fires an ``ItemSelectedHasChanged`` event, and the
+        scene emits ``selectionChanged`` once per item too, so a large
+        multi-select (rubber-band, Select All, duplicate) would otherwise
+        rebuild the panel O(N) times -- O(N^2) work that locked the UI.
+        Collapse a burst into a single emit on the next event-loop turn."""
+        if self._selchg_emit_pending:
+            return
+        self._selchg_emit_pending = True
+        QTimer.singleShot(0, self._flush_selection_emit)
+
+    def _flush_selection_emit(self) -> None:
+        self._selchg_emit_pending = False
         self.selectionChangedSig.emit()
 
     def _refresh_resize_handles(self) -> None:
@@ -3368,11 +3406,20 @@ class Canvas(QGraphicsView):
         if self._edit_owner is not None:
             self.clear_resize_handles()
             return
-        sel = [it for it in self.selected_items() if isinstance(it, ShapeItem)]
-        if len(sel) == 1 and sel[0].resize_extents() is not None:
-            self.show_resize_handles(sel[0])
-        else:
-            self.clear_resize_handles()
+        # O(1): consult the maintained set instead of building a filtered list
+        # per member (the old comprehension was the O(N^2) multi-select lock).
+        # Only prune/validate near a single selection -- when many are selected
+        # we clear the grips regardless, so a stale entry there is harmless and
+        # scanning the whole set would resurrect the O(N) cost.
+        if len(self._selected_shapes) <= 2:
+            self._selected_shapes = {it for it in self._selected_shapes
+                                     if _alive(it) and it.isSelected()}
+        if len(self._selected_shapes) == 1:
+            it = next(iter(self._selected_shapes))
+            if it.resize_extents() is not None:
+                self.show_resize_handles(it)
+                return
+        self.clear_resize_handles()
 
     def _reposition_resize_handles(self) -> None:
         # never reposition the handle the user is actively dragging -- that

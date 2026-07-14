@@ -419,7 +419,7 @@ class TextItem(QGraphicsItem):
                 self.canvas.item_moved(self)
         elif change == QGraphicsItem.ItemSelectedHasChanged:
             if self.canvas is not None:
-                self.canvas.selection_changed()
+                self.canvas.selection_changed(self, bool(value))
         return super().itemChange(change, value)
 
 
@@ -492,7 +492,7 @@ class DimensionItem(QGraphicsItem):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemSelectedHasChanged and self.canvas is not None:
-            self.canvas.selection_changed()
+            self.canvas.selection_changed(self, bool(value))
         return super().itemChange(change, value)
 
 
@@ -572,7 +572,7 @@ class HoleItem(QGraphicsItem):
                 self.canvas.item_moved(self)
         elif change == QGraphicsItem.ItemSelectedHasChanged:
             if self.canvas is not None:
-                self.canvas.selection_changed()
+                self.canvas.selection_changed(self, bool(value))
         return super().itemChange(change, value)
 
     @property
@@ -779,7 +779,7 @@ class ShapeItem(QGraphicsItem):
                 self.canvas.item_moved(self)
         elif change == QGraphicsItem.ItemSelectedHasChanged:
             if self.canvas is not None:
-                self.canvas.selection_changed()
+                self.canvas.selection_changed(self, bool(value))
         return super().itemChange(change, value)
 
     @property
@@ -1151,7 +1151,7 @@ class StitchLineItem(QGraphicsItem):
                 self.canvas.item_moved(self)
         elif change == QGraphicsItem.ItemSelectedHasChanged:
             if self.canvas is not None:
-                self.canvas.selection_changed()
+                self.canvas.selection_changed(self, bool(value))
         return super().itemChange(change, value)
 
     def mousePressEvent(self, event):

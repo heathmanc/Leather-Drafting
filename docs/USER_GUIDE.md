@@ -133,21 +133,38 @@ The user guide travels inside the app (Help → User guide still works).
 
 Don't want to start from nothing? **File → New from template** opens a
 complete starter pattern — **Card holder**, **Belt** (with buckle slot, fold
-line and sizing holes), **Key fob**, or the **Vertical wallet** — matching
-the tutorials in this guide. Adapt and Save As.
+line and sizing holes), **Key fob**, the **Slim card holder**, or the
+**Fold-over wallet** — matching the tutorials in this guide. Adapt and
+Save As.
 
-The **Curved card wallet** is the flagship demo — an elegant vertical card
-holder (~70 × 110 mm) with a softly **domed top** and three **stepped,
-thumb-scooped** card pockets. One continuous run of fine saddle stitching
-wraps the whole curved perimeter of the back panel, and it stays perfectly
-even as it flows around the dome and the rounded corners — that is the
-program's signature (pricking-iron-accurate **chord spacing**), the thing a
-"space along the contour" tool gets wrong on curves. The three front pockets
-stack bottom-aligned and share the back panel's width, so the perimeter
-stitch passes through every layer down the sides and across the bottom to
-hold the stack together; their scooped mouths step up so each card's head is
-easy to thumb out. Every edge is a true arc — node-edit the dome or the
-scoops (`Ctrl+K`) and the stitching re-fits itself.
+The **Slim card holder** is a practical, flat, front-pocket card wallet
+(~70 × 92 mm — barely bigger than a card, with a flat top so it doesn't snag
+going into a pocket). A rectangular back panel and three stacked front
+pockets, all the same width with lightly rounded corners. The pockets are
+**deep** and their mouths step up only ~8 mm apart, so every card is gripped
+on both sides for ~68–84 mm of its 86 mm height — it stays put — while each
+card's head still clears the pocket in front of it for an easy thumb-out.
+One saddle-stitch seam runs down both sides and across the bottom (a **U**,
+not a closed loop), leaving the top **open** so cards slide in; because the
+pockets share the back's width, that single seam passes through every layer
+and holds the whole stack together.
+
+The **Fold-over wallet** is a one-piece pouch wallet in the style of the
+Oldis One (originally *The Lucais* by JJ Leathersmith): a **T-shaped** flat
+pattern, 219 × 290 mm, folding to a ~70 × 100 mm vertical flap wallet. The
+full-width block along the bottom is the pouch — both wings fold inward
+along the column edges (score lines) to form the internal card and cash
+compartments. The right wing's **sloped top edge** is the pouch entrance,
+and its **diagonal quick-access slot** (with a round relief hole punched at
+each end so the cut can't tear) lets you slide a card out one-handed. The
+70 mm column is the back panel and, above the flap fold, the long closing
+**flap**: its pointed tip — with a small **step-notch catch** on the right
+shoulder — folds over the entrance and tucks down the front, and the little
+**thumb notch** in the block's bottom edge is where you lift it back out.
+Seams are **3 mm pitch** like the original sheet: around the left wing and
+along the right wing's bottom; the entrance and slot stay open. Everything
+is right-handed as drawn — select all and **Make back piece** (`Ctrl+M`)
+for a left-handed mirror.
 
 ### Tracing a real object
 

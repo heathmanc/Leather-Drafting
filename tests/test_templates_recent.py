@@ -45,41 +45,85 @@ def test_templates_build_and_have_content():
     assert sum(1 for s in belt.shapes if s.kind == "circle") == 5   # sizing holes
 
 
-def test_curved_card_holder_flagship():
-    """Flagship demo: arched-top card holder whose fine perimeter stitch flows
-    evenly around the curve -- the program's signature -- with three stepped,
-    thumb-scooped pockets."""
-    from leathercad.templates import curved_card_holder
-    from leathercad.stitching import holes_for_shape
-    doc = curved_card_holder()
+def test_slim_card_holder_practical():
+    """Flat, compact front-pocket card holder: deep pockets that grip a card,
+    and a U seam (open top) so cards can be inserted."""
+    from leathercad.templates import slim_card_holder
+    doc = slim_card_holder()
 
-    # four one-piece curved panels; all share one width
-    assert len(doc.shapes) == 4
-    assert all(s.layer == "Cut" and s.kind == "editpath" for s in doc.shapes)
-    widths = {round(s.bounds()[2] - s.bounds()[0], 6) for s in doc.shapes}
-    assert len(widths) == 1
+    cut = [s for s in doc.shapes if s.layer == "Cut"]
+    assert len(cut) == 4 and all(s.kind == "rectangle" for s in cut)
+    # all one width; flat rectangular back (no domed top to snag a pocket)
+    assert len({round(s.width, 6) for s in cut}) == 1
+    back, pockets = cut[0], cut[1:]
+    assert back.height == 92.0                      # compact, flat top
 
-    back, pockets = doc.shapes[0], doc.shapes[1:]
-    # only the back panel is stitched; it is the tallest (domed top)
-    assert back.stitch and back.stitch.enabled
-    assert all(not p.stitch.enabled for p in pockets)
-    assert back.bounds()[3] == max(s.bounds()[3] for s in doc.shapes)
-    # dome is tangent: peak = straight-side height + half-width (semicircle),
-    # give or take the arc-flattening sample step
-    assert abs(back.bounds()[3] - (75.0 + 35.0)) < 0.1
+    # deep pockets in small steps -> a card (86 mm) is gripped, not loose
+    heights = [p.height for p in pockets]
+    assert heights == [84.0, 76.0, 68.0]
+    assert min(heights) >= 66                       # >= ~66 mm card engagement
+    assert max(heights) - min(heights) <= 20        # gentle staircase
 
-    # pockets step up (side tops decreasing) and each mouth is a concave scoop
-    tops = [p.nodes[1].y for p in pockets]
-    assert tops == sorted(tops, reverse=True)
-    for p in pockets:
-        assert p.edges[1].mid.y < p.nodes[1].y     # scoop dips below the sides
+    # one U seam down the sides + bottom, top left OPEN for inserting cards
+    assert len(doc.stitch_lines) == 1
+    seam = doc.stitch_lines[0]
+    assert not seam.closed
+    holes = seam.result().holes
+    assert len(holes) >= 40
+    ys = [h.point.y for h in holes]
+    assert min(ys) < 6                              # stitched across the bottom
+    assert max(ys) < back.height - 4                # top edge unstitched (open)
 
-    # the hero: dense stitching that wraps the dome with even chord spacing
-    res = holes_for_shape(back)
-    assert res.count >= 60
-    assert max(h.point.y for h in res.holes) > 100          # holes on the dome
-    gaps = res.chord_spacings()
-    assert max(gaps) < 1.35 * min(gaps)                     # pricking-iron even
+
+def test_fold_over_wallet_matches_source_pattern():
+    """The Oldis One / Lucais-style T pattern: 219 x 290 flat, pointed flap
+    with a step-notch catch, sloped right entrance with a relief-holed
+    diagonal slot, thumb notch, and 3 mm seams that leave the entrance open."""
+    from leathercad.templates import fold_over_wallet
+    doc = fold_over_wallet()
+    body = doc.shapes[0]
+
+    # overall printed-sheet size and the 70 mm column (the corner rounding
+    # softens the flap tip by a couple of mm, like the real pattern)
+    x0, y0, x1, y1 = body.bounds()
+    assert abs((x1 - x0) - 219) < 0.5 and abs((y1 - y0) - 290) < 3.0
+    col_x = sorted({p.x for p in body.points if p.y > 100})
+    assert col_x[-1] - col_x[0] == 70.0
+
+    # the flap point is the highest node; a step-notch sits on its right
+    peak = max(body.points, key=lambda p: p.y)
+    assert peak.y == 290.0 and 78.0 < peak.x < 148.0
+    assert any(p.x == 143.0 for p in body.points)          # the catch step
+
+    # right wing top slopes down to the entrance; left wing top is straight
+    assert any(p.x == 219.0 and p.y == 62.0 for p in body.points)
+    assert any(p.x == 0.0 and p.y == 90.0 for p in body.points)
+    # thumb notch in the bottom edge, centred under the column
+    notch = [p for p in body.points if p.y == 16.0]
+    assert len(notch) == 2 and 78 < min(n.x for n in notch) \
+        and max(n.x for n in notch) < 148
+
+    # diagonal quick-access slot with a relief circle at each end
+    slot = [s for s in doc.shapes if s.name == "Quick-access slot"][0]
+    a, b = slot.points
+    assert a.y != b.y and a.x != b.x                        # genuinely diagonal
+    reliefs = [s for s in doc.shapes if s.kind == "circle"]
+    assert len(reliefs) == 2
+    ends = {(p.x, p.y) for p in (a, b)}
+    assert {(c.transform.x, c.transform.y) for c in reliefs} == ends
+
+    # three folds; two seams at the sheet's stated 3 mm pitch, both confined
+    # to the block (the entrance and slot stay open)
+    assert sum(1 for s in doc.shapes if s.layer == "Score") == 3
+    assert len(doc.stitch_lines) == 2
+    for sl in doc.stitch_lines:
+        assert sl.settings.pitch_mm == 3.0
+        assert sl.result().count > 20
+        assert max(p.y for p in sl.points) <= 90.0
+    # gap in the bottom seams where the thumb notch is
+    left, right = doc.stitch_lines
+    assert max(p.x for p in left.points) < 95.0
+    assert min(p.x for p in right.points) > 131.0
 
 
 def test_new_from_template_adopts_document(win):

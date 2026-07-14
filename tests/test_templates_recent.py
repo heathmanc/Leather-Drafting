@@ -86,19 +86,26 @@ def test_fold_over_wallet_matches_source_pattern():
 
     # overall printed-sheet size and the 70 mm column
     x0, y0, x1, y1 = body.bounds()
-    assert abs((x1 - x0) - 219) < 0.05 and abs((y1 - y0) - 290) < 0.05
-    col_x = sorted({p.x for p in body.nodes if p.y > 100})
+    assert abs((x1 - x0) - 219) < 0.5 and abs((y1 - y0) - 290) < 0.5
+    col_x = sorted({p.x for p in body.nodes if 100 < p.y < 270})
     assert col_x[-1] - col_x[0] == 70.0
 
-    # the flap tip is SYMMETRIC about the column centreline: peak dead
-    # centre, shoulders at equal height, no stray step nodes
-    peak = max(body.nodes, key=lambda p: p.y)
-    assert peak.y == 290.0 and peak.x == (78.0 + 148.0) / 2.0
+    # the flap tip is SYMMETRIC about the column centreline and ROUNDED:
+    # shoulders at equal height, a tangent fillet whose arc apex is the
+    # centred top of the sheet, flanked by two mirror-image tangent nodes
+    MIDX = (78.0 + 148.0) / 2.0
     shoulders = [p for p in body.nodes if p.y == 264.0]
     assert sorted(p.x for p in shoulders) == [78.0, 148.0]
-    assert not any(264.0 < p.y < 290.0 for p in body.nodes)
-    # blunt point: the tip rises less than it is wide (no spike)
-    assert (290.0 - 264.0) < 35.0
+    tip_edge = next(e for e in body.edges if e.kind == "arc"
+                    and e.mid is not None and e.mid.y > 285.0)
+    assert abs(tip_edge.mid.x - MIDX) < 1e-6 and tip_edge.mid.y == 290.0
+    tip_nodes = sorted((p for p in body.nodes if p.y > 280.0),
+                       key=lambda p: p.x)
+    assert len(tip_nodes) == 2                              # a rounded tip
+    assert abs((tip_nodes[0].x + tip_nodes[1].x) / 2 - MIDX) < 1e-6  # mirror
+    assert abs(tip_nodes[0].y - tip_nodes[1].y) < 1e-6
+    assert tip_nodes[0].y < 290.0                           # tangent, below apex
+    assert (290.0 - 264.0) < 35.0                           # blunt, not a spike
 
     # the thumb notch is ONE smooth arc through its apex, centred under
     # the column

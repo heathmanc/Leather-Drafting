@@ -158,7 +158,7 @@ compartments. The right wing's **sloped top edge** is the pouch entrance,
 and its **diagonal quick-access slot** (with a round relief hole punched at
 each end so the cut can't tear) lets you slide a card out one-handed. The
 70 mm column is the back panel and, above the flap fold, the long closing
-**flap**: its symmetric pointed tip folds over the entrance and tucks down
+**flap**: its symmetric round-tipped gable folds over the entrance and tucks down
 the front, and the smooth **arched thumb notch** in the block's bottom edge
 is where you lift it back out. Seams are **5 mm pitch**, and every row
 sits 4 mm inside its own panel so no hole lands on a fold: the left wing

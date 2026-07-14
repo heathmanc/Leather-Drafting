@@ -131,10 +131,10 @@ def fold_over_wallet() -> Document:
         entrance) and carries a DIAGONAL quick-access card slot with a round
         relief hole punched at each end so the cut can't tear;
       * a 70 mm COLUMN rising from the block -- the back panel and, above
-        the flap fold line, the long closing FLAP. Its pointed tip (with a
-        small step-notch on the right shoulder that acts as the catch) folds
-        over the entrance and tucks down the front; the small notch in the
-        block's bottom edge gives your thumb room to lift the tip back out.
+        the flap fold line, the long closing FLAP. Its blunt, round-tipped
+        gable folds over the entrance and tucks down the front; the small
+        notch in the block's bottom edge gives your thumb room to lift the
+        tip back out.
 
     Stitching is 5 mm pitch: the left wing carries top, outer-edge and
     bottom rows, the right wing a bottom row, and the middle section its
@@ -152,6 +152,18 @@ def fold_over_wallet() -> Document:
     # sloped-entrance corner at (219, 62): unit direction toward (CR, 90)
     sl = math.hypot(CR - 219.0, 90.0 - 62.0)
     sdx, sdy = (CR - 219.0) / sl, (90.0 - 62.0) / sl
+    # rounded flap tip: chamfers rise from the shoulders (·, 264) to a
+    # tangent fillet whose arc APEX sits on the 290 mm sheet top. The
+    # notional sharp vertex is above the apex by (r/sin θ − r); θ (half the
+    # tip angle) depends on the vertex height, so solve it iteratively.
+    r_tip, sh_y, apex_y = 12.0, 264.0, 290.0
+    vy = apex_y
+    for _ in range(60):
+        vy = apex_y + r_tip / (abs(CR - MID) / math.hypot(CR - MID, sh_y - vy)) - r_tip
+    tdx, tdy = CR - MID, sh_y - vy             # vertex -> right shoulder
+    tL = math.hypot(tdx, tdy)
+    tt = r_tip * abs(tdy) / abs(tdx)           # tangent dist from the vertex
+    rtx, rty = MID + tt * tdx / tL, vy + tt * tdy / tL   # right tangent point
     body = EditablePath(
         name="Wallet body (one piece)",
         nodes=[
@@ -163,9 +175,11 @@ def fold_over_wallet() -> Document:
             Vec2(219, 62 - r),                   # into the entrance corner
             Vec2(219 + r * sdx, 62 + r * sdy),   # onto the sloped entrance
             Vec2(CR, 90),                        # sloped pouch entrance
-            Vec2(CR, 264),                       # up the column
-            Vec2(MID, 290),                      # the flap point (on centre)
-            Vec2(CL, 264),                       # symmetric left shoulder
+            Vec2(CR, sh_y),                      # right shoulder
+            # rounded tip: two mirror tangent points + an arc apex on 290
+            Vec2(rtx, rty),
+            Vec2(MID - (rtx - MID), rty),
+            Vec2(CL, sh_y),                      # symmetric left shoulder
             Vec2(CL, 90),                        # down the column
             Vec2(r, 90),                         # left wing top
             Vec2(0, 90 - r),
@@ -181,6 +195,7 @@ def fold_over_wallet() -> Document:
             Edge("line"),
             Edge("line"),                        # up the column (right)
             Edge("line"),                        # chamfer to the tip
+            Edge("arc", Vec2(MID, 290.0)),       # the radiused tip
             Edge("line"),                        # chamfer off the tip
             Edge("line"),                        # down the column (left)
             Edge("line"),                        # left wing top

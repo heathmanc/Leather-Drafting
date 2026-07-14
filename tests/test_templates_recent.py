@@ -45,36 +45,42 @@ def test_templates_build_and_have_content():
     assert sum(1 for s in belt.shapes if s.kind == "circle") == 5   # sizing holes
 
 
-def test_vertical_wallet_seams_fold_symmetric():
-    """The wallet's whole trick: each flat side seam is centred on the fold,
-    so folding the front panel up lands every front hole on its back hole."""
+def test_vertical_wallet_is_cross_single_piece():
+    """The Oldis One is one cross-shaped piece: narrow spine with a pointed
+    flap on top, a bottom tab, and two wide wings that wrap into the pocket."""
     from leathercad.templates import vertical_wallet
     doc = vertical_wallet()
-    assert len(doc.stitch_lines) == 2
-    for seam in doc.stitch_lines:
-        res = seam.result()
-        assert res.count >= 20                      # a real seam, not a stub
-        ys = sorted(h.point.y for h in res.holes)
-        for y in ys:                                # mirror partner exists
-            assert min(abs(-y - y2) for y2 in ys) < 0.01   # within 10 µm
-    # the diagonal opening: right side shorter than left (right-handed)
     body = doc.shapes[0]
-    ymin_left = min(p.y for p in body.points if p.x < 0)
-    ymin_right = min(p.y for p in body.points if p.x > 0)
-    assert ymin_right > ymin_left
-    # SINGLE piece: only the body is on the Cut layer
+
+    # SINGLE piece cut: only the body is on the Cut layer
     assert [s for s in doc.shapes if s.layer == "Cut"] == [body]
-    # the flap: the piece extends past the back panel (y=100), tapered, and
-    # the seams stop below the flap fold (the flap is never stitched)
-    ymax = max(p.y for p in body.points)
-    assert ymax > 100.0
-    tip_w = (max(p.x for p in body.points if p.y > 100.0)
-             - min(p.x for p in body.points if p.y > 100.0))
-    assert tip_w < 70.0
-    for seam in doc.stitch_lines:
-        assert max(p.y for p in seam.points) < 100.0
-    # two fold lines on the Score layer (pocket fold + flap fold)
-    assert sum(1 for s in doc.shapes if s.layer == "Score") == 2
+    xs = [p.x for p in body.points]
+    ys = [p.y for p in body.points]
+    # cross: much wider at the wing band than at the top spine
+    full_w = max(xs) - min(xs)
+    top_w = (max(p.x for p in body.points if p.y > 200)
+             - min(p.x for p in body.points if p.y > 200))
+    assert full_w > 200 and top_w < 90 and full_w > 2 * top_w
+    # a pointed flap at the very top, centred on the spine
+    apex = max(body.points, key=lambda p: p.y)
+    assert abs(apex.x) < 1e-6 and apex.y == max(ys)
+    # bottom tab narrower than the spine (70 mm)
+    tab_w = (max(p.x for p in body.points if p.y < 1)
+             - min(p.x for p in body.points if p.y < 1))
+    assert 0 < tab_w < 70
+    # right-handed: the right wing's top is cut lower than the left wing's
+    left_wing_top = max(p.y for p in body.points if p.x < -80)
+    right_wing_top = max(p.y for p in body.points if p.x > 80)
+    assert right_wing_top < left_wing_top
+
+    # four fold lines (Score) framing the central pocket panel
+    assert sum(1 for s in doc.shapes if s.layer == "Score") == 4
+    # one seam per wing, each a real run of holes that reaches out to the tip
+    assert len(doc.stitch_lines) == 2
+    for sl in doc.stitch_lines:
+        holes = sl.result().holes
+        assert len(holes) >= 20
+        assert max(abs(h.point.x) for h in holes) > 90    # wraps the wing tip
 
 
 def test_new_from_template_adopts_document(win):

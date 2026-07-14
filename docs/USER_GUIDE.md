@@ -136,18 +136,19 @@ complete starter pattern — **Card holder**, **Belt** (with buckle slot, fold
 line and sizing holes), **Key fob**, or the **Vertical wallet** — matching
 the tutorials in this guide. Adapt and Save As.
 
-The **Vertical wallet** is a minimalist **single-piece** wallet with a
-fold-down top flap, in the style of the Oldis One: 70 × 100 mm closed. It
-is drawn **flat**, bottom to top: the front pocket panel (folds **up** at
-the lower score line, with a **diagonal opening edge** — lower on the
-right, for right-handed thumb access), the back panel, and the tapered
-**flap** above the upper score line, which folds **down** over the pocket
-to keep cards and folded bills in — no snap or strap, just the leather's
-memory. The two side seams are single straight stitch lines **centred on
-the pocket fold**, so the fitted holes come out mirror-symmetric about it —
-fold the front up and every front hole lands exactly on its back hole. The
-flap is never stitched. Select the piece and **Make back piece** (`Ctrl+M`)
-for a left-handed mirror.
+The **Vertical wallet** is a minimalist **single-piece** wallet in the
+style of the Oldis One, cut from one **cross-shaped** piece of leather
+(~219 × 290 mm flat) that folds down to a ~70 × 100 mm vertical wallet.
+The flat pattern is a plus / cross: a central **spine** (≈70 mm wide — the
+finished width) running top to bottom, ending in a pointed envelope **flap**
+at the top and a small tapered **tab** at the bottom, with two wide
+horizontal **wings** at the crossing. Each wing folds forward along the
+spine edge and wraps around to build the front pocket; the **right wing's
+top is cut on a diagonal** for right-handed thumb access (select the piece
+and **Make back piece**, `Ctrl+M`, for a left-hander). Score lines frame
+the four folds around the central pocket panel, and each wing carries its
+own **U-shaped seam** (top, end and bottom edges); the spine, flap and tab
+are never stitched.
 
 ### Tracing a real object
 

@@ -70,56 +70,85 @@ def key_fob() -> Document:
 
 
 def vertical_wallet() -> Document:
-    """A minimalist SINGLE-PIECE vertical wallet with a fold-down top flap
-    (in the style of the Oldis One): 70 x 100 mm closed.
+    """A minimalist SINGLE-PIECE vertical wallet in the style of the Oldis
+    One: one continuous cross-shaped piece of leather, ~219 x 290 mm flat,
+    that folds down to a ~70 x 100 mm (2.75 x 3.95 in) vertical wallet.
 
-    One continuous piece, drawn FLAT, bottom to top: front pocket panel
-    (folds UP at the lower score line, diagonal opening edge -- lower on
-    the right for right-handed thumb access), back panel, and a tapered
-    flap above the upper score line that folds DOWN over the pocket to
-    keep everything in. No hardware: the leather's memory holds it closed.
+    The flat pattern is a plus / cross:
 
-    Each side seam is one straight stitch line centred on the pocket fold,
-    so the fitted holes come out mirror-symmetric about it -- fold the
-    front up and every front hole lands exactly on its back hole. The flap
-    is never stitched. Mirror the piece (Ctrl+M) for a left-handed version.
+      * a central spine (~70 mm wide -- the finished width) running top to
+        bottom, ending in a pointed envelope FLAP at the top and a small
+        tapered TAB at the bottom;
+      * two wide horizontal WINGS at the crossing. Each wing folds forward
+        along the spine edge and wraps around to form the front pocket; the
+        right wing's top edge is cut down on a diagonal for right-handed
+        thumb access (mirror the piece, Ctrl+M, for a left-hander).
+
+    The wings are stitched around their top / end / bottom edges (one seam
+    per wing); the spine, flap and tab are never stitched. Score lines mark
+    the four folds around the central pocket panel.
     """
     doc = Document("Vertical wallet")
-    W, BACK_H = 70.0, 100.0            # closed size: 2.75 x 3.95 in
-    F_LEFT, F_RIGHT = 78.0, 62.0       # front pocket side heights (diagonal
-    #                                    opening: lower on the right = thumb
-    #                                    access for a right-hander)
-    FLAP_H, FLAP_W = 48.0, 62.0        # flap length + tapered tip width
-    hw, ht = W / 2.0, FLAP_W / 2.0
+    hw = 35.0                          # central spine half-width (70 mm)
+    tip = 110.0                        # wing tip half-span (220 mm overall)
+    apex, shoulder = 290.0, 248.0      # top flap point / where it squares off
+    band_top, band_bot = 130.0, 45.0   # the horizontal wing band
+    r_top = 108.0                      # right wing top-outer (diagonal cut)
+    lower, tab = 22.0, 26.0            # lower spine / bottom tab half-width
+
     body = Polygon(
         name="Wallet body (one piece)",
-        points=[Vec2(-hw, -F_LEFT), Vec2(hw, -F_RIGHT),   # front, diagonal
-                Vec2(hw, BACK_H),                         # up the right side
-                Vec2(ht, BACK_H + FLAP_H),                # tapered flap tip
-                Vec2(-ht, BACK_H + FLAP_H),
-                Vec2(-hw, BACK_H)],                       # down the left side
-        close_path=True, corner_radius=6.0,
+        points=[
+            Vec2(0.0, apex),                 # flap point
+            Vec2(hw, shoulder),              # right shoulder
+            Vec2(hw, band_top),              # right spine, band top
+            Vec2(tip, r_top),                # right wing tip (sloped)
+            Vec2(tip, band_bot),             # right wing bottom
+            Vec2(hw, band_bot),              # back to spine
+            Vec2(hw, lower),                 # lower spine right
+            Vec2(tab, 0.0),                  # bottom tab right
+            Vec2(-tab, 0.0),                 # bottom tab left
+            Vec2(-hw, lower),                # lower spine left
+            Vec2(-hw, band_bot),             # spine, band bottom
+            Vec2(-tip, band_bot),            # left wing bottom
+            Vec2(-tip, band_top),            # left wing tip (square)
+            Vec2(-hw, band_top),             # back to spine
+            Vec2(-hw, shoulder),             # left shoulder
+        ],
+        close_path=True, corner_radius=3.0,
         transform=Transform(x=0, y=0),
         stitch=StitchSettings(enabled=False), layer="Cut")
     doc.add_shape(body)
-    # fold lines: pocket fold (front turns UP) and flap fold (turns DOWN)
-    doc.add_shape(PathShape(
-        name="Pocket fold", points=[Vec2(-hw, 0), Vec2(hw, 0)],
-        close_path=False, transform=Transform(x=0, y=0), layer="Score"))
-    doc.add_shape(PathShape(
-        name="Flap fold", points=[Vec2(-hw, BACK_H), Vec2(hw, BACK_H)],
-        close_path=False, transform=Transform(x=0, y=0), layer="Score"))
-    # side seams, drawn flat: one straight run centred on the pocket fold,
-    # ending 4 mm short of the opening edge. fit="endpoints" spaces the
-    # holes symmetrically about the middle, i.e. about the fold.
-    inset = 3.5
-    for x, half in ((-(hw - inset), F_LEFT - 4.0),
-                    (hw - inset, F_RIGHT - 4.0)):
-        seam = StitchLine(points=[Vec2(x, -half), Vec2(x, half)],
-                          settings=StitchSettings(pitch_mm=3.85,
-                                                  fit="endpoints"))
-        seam.name = "Side seam"
-        doc.add_stitch_line(seam)
+
+    # fold lines: the rectangle around the central pocket panel (wings fold
+    # up along the two verticals; flap folds down, tab folds up)
+    folds = [("Left wing fold", [Vec2(-hw, band_bot), Vec2(-hw, band_top)]),
+             ("Right wing fold", [Vec2(hw, band_bot), Vec2(hw, band_top)]),
+             ("Flap fold", [Vec2(-hw, band_top), Vec2(hw, band_top)]),
+             ("Bottom fold", [Vec2(-hw, band_bot), Vec2(hw, band_bot)])]
+    for name, pts in folds:
+        doc.add_shape(PathShape(name=name, points=pts, close_path=False,
+                                transform=Transform(x=0, y=0), layer="Score"))
+
+    # one seam per wing: a U of holes 6 mm in from the top / end / bottom
+    # edges. The left wing is square; the right follows its diagonal top.
+    d = 6.0
+    left = StitchLine(
+        points=[Vec2(-hw, band_top - d), Vec2(-tip + d, band_top - d),
+                Vec2(-tip + d, band_bot + d), Vec2(-hw, band_bot + d)],
+        corner_points=[Vec2(-tip + d, band_top - d),
+                       Vec2(-tip + d, band_bot + d)],
+        settings=StitchSettings(pitch_mm=3.85, fit="endpoints"))
+    left.name = "Left wing seam"
+    right = StitchLine(
+        points=[Vec2(hw, band_top - d), Vec2(tip - d, r_top - d),
+                Vec2(tip - d, band_bot + d), Vec2(hw, band_bot + d)],
+        corner_points=[Vec2(tip - d, r_top - d),
+                       Vec2(tip - d, band_bot + d)],
+        settings=StitchSettings(pitch_mm=3.85, fit="endpoints"))
+    right.name = "Right wing seam"
+    doc.add_stitch_line(left)
+    doc.add_stitch_line(right)
     return doc
 
 

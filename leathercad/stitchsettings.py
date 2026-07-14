@@ -13,11 +13,17 @@ class StitchSettings:
     fit: str = "auto"               # auto / endpoints / closed / none
     max_dev: float = 0.12           # max fractional pitch nudge when fitting
     inset: float = 3.5              # stitch-line distance in from the edge (mm)
-    # hole appearance for export
-    hole_style: str = "round"       # "round" or "slit"
+    # which real stitching punch this piece is cut for. ``punch_style`` picks
+    # the catalogue cascade (style -> maker -> size) and the hole SHAPE; it maps
+    # to the low-level ``hole_style`` render/export primitive as
+    # round->round, oblique/french->slit, diamond->diamond.
+    punch_style: str = "round"      # round | oblique | french | diamond
+    punch_brand: str = ""           # maker label (free text; catalogue-driven)
+    # hole appearance for render + export (the primitive geometry)
+    hole_style: str = "round"       # "round" | "slit" | "diamond"
     hole_diameter: float = 1.0      # mm (round holes)
-    slit_length: float = 1.6        # mm (slit holes)
-    slit_angle: float = 30.0        # deg off tangent (diamond-awl slant)
+    slit_length: float = 1.6        # mm (slit / diamond length)
+    slit_angle: float = 30.0        # deg off tangent (slit / diamond slant)
     # where hole marching starts around a closed loop (mm along the inset
     # outline). Keeping this equal between two pieces guarantees identical
     # holes -> perfect registration.

@@ -191,9 +191,10 @@ opacity, hide, or remove it from the same menu.
    **Height** (say 100 × 70) and press Enter.
 3. In Properties, the **Stitching** box is already on: you get a blue row of
    stitch holes inset 3.5 mm from the edge at a 3.85 mm pitch.
-4. Pick your iron from the **Iron** dropdown (pitches shown in mm and SPI) —
-   the holes redistribute instantly. The readout at the bottom of the panel
-   shows the hole count and the exact chord spacing range.
+4. Pick your punch with the **Punch → Maker → Size** dropdowns (round / oblique
+   / french / diamond, then a maker, then its pitch) — the hole shape and
+   spacing update instantly. The readout at the bottom of the panel shows the
+   hole count and the exact chord spacing range.
 5. File → **Export SVG** (`Ctrl+E`) or **Export DXF** — send that to your
    laser software. Done.
 
@@ -333,11 +334,13 @@ disappear).
 
 | Setting | What it does |
 |---|---|
-| **Iron** | A maker catalogue grouped by brand — KS Blade Punch, Amy Roke, Sinabroks, Crimson Hides, Wuta (mm irons) and Weaver, Tandy Pro, Blanchard (SPI/points irons). Picking one sets Pitch; editing Pitch by hand flips it to *Custom pitch…*. Brand is just a label — pitch is what drives the geometry, so two makers' 3.85 mm irons are interchangeable. |
+| **Punch** | The cutting-edge style, which sets the hole **shape**: **Round** (round holes), **Oblique** (a flat, shallow-slanted slit), **French** (a fine, steeper slanted slit — the Blanchard look), **Diamond** (a diamond / lozenge, angled like the awl). Round → circle; oblique/french → a slit at that slant; diamond → a true diamond, on screen and in the SVG/DXF export. |
+| **Maker** | The manufacturer that makes this style — e.g. KS Blade Punch, Amy Roke, Sinabroks, Crimson Hides, Wuta, Seiwa (mm makers) and Blanchard, Vergez-Blanchard, Joseph Dixon, Weaver (SPI / points makers). Just a label; the pitch is what drives the geometry. |
+| **Size** | The pitch the chosen maker sells in this style — millimetres (2.7…4.0 mm) or SPI for the harness/French makers. Picking one sets Pitch; hand-editing Pitch flips Size to *Custom…*. |
 | **Pitch** | The straight-line (chord) hole spacing — your iron's tooth spacing. Default 3.85 mm ≈ 6.6 SPI. |
 | **Inset from edge** | How far the stitch line sits in from the cut edge. Default 3.5 mm. |
 | **Fit** | How holes are fitted to the path. **auto** picks *closed* for closed outlines, *endpoints* for open ones — the pitch is nudged (≤ 12 %) so whole holes land on every corner and both ends. **none** marches at the *exact* pitch and lets the last hole fall wherever it lands. |
-| **Hole style** | **round** (diameter below) or **slit** (length + slant angle, like a diamond awl). |
+| **Hole ø / Slit length / Slit angle** | The hole dimensions the Punch sets by default and you can fine-tune: diameter for round, length + slant for oblique/french/diamond. |
 | **Rows** | **2 (double)** adds a second parallel row (aligned rungs) for saddle-stitched straps; set **Row spacing**. |
 | **Backstitch** | Marks N holes at each end of an open seam as the backstitch zone (markers only — you sew back through existing holes). |
 | **Symmetry** | Force the hole set to be mirror-symmetric about the shape's **vertical** or **horizontal** axis, so a flipped piece lines up back-to-back. |

@@ -12,6 +12,8 @@ from typing import List, Optional, Sequence, Tuple
 
 from .geometry import Vec2
 from .document import Document
+from .holes import diamond_points
+from .irons import DIAMOND_WIDTH_RATIO
 from .stitching import StitchResult, stitch_polyline
 
 
@@ -172,7 +174,17 @@ def export_svg(doc: Document, path: str, *, margin: float = 6.0,
 
     out.append("  <g id='stitches' fill='none'>")
     for res, settings, color in stitches:
-        if settings.hole_style == "slit":
+        if settings.hole_style == "diamond":
+            # the beam enlarges the hole: shrink the length by ~a kerf
+            length = max(0.1, settings.slit_length - k)
+            for hle in res.holes:
+                pts = diamond_points(hle.point, hle.tangent, length,
+                                     settings.slit_angle, DIAMOND_WIDTH_RATIO)
+                pstr = " ".join(f"{_fmt(X(p.x))},{_fmt(Y(p.y))}" for p in pts)
+                out.append(
+                    f"    <polygon points='{pstr}' stroke='{color}' "
+                    f"stroke-width='{hairline}' />")
+        elif settings.hole_style == "slit":
             # the beam widens/lengthens the slit by ~a kerf: cut it shorter
             half = max(0.05, (settings.slit_length - k) / 2.0)
             slant = math.radians(settings.slit_angle)
@@ -291,7 +303,13 @@ def export_dxf(doc: Document, path: str, *, kerf: float | None = None) -> None:
 
     saci = _aci(stitch_color)
     for res, settings, _ in stitches:
-        if settings.hole_style == "slit":
+        if settings.hole_style == "diamond":
+            length = max(0.1, settings.slit_length - k)
+            for hle in res.holes:
+                pts = diamond_points(hle.point, hle.tangent, length,
+                                     settings.slit_angle, DIAMOND_WIDTH_RATIO)
+                polyline(pts, saci, True)
+        elif settings.hole_style == "slit":
             half = max(0.05, (settings.slit_length - k) / 2.0)
             slant = math.radians(settings.slit_angle)
             for hle in res.holes:

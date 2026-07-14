@@ -13,6 +13,20 @@ from dataclasses import dataclass, field
 from .geometry import Vec2
 
 
+def diamond_points(point: Vec2, tangent: Vec2, length: float,
+                   angle_deg: float, width_ratio: float = 0.4):
+    """The 4 corners of a diamond/lozenge hole centred at ``point``: a slim
+    rhombus of ``length`` along the seam tangent rotated ``angle_deg``, and
+    ``length * width_ratio`` across. Shared by the canvas render and the SVG /
+    DXF exporters so the shape matches everywhere."""
+    import math
+    d = tangent.rotate(math.radians(angle_deg)).normalized()
+    n = d.perp()
+    hl = length / 2.0
+    hw = length * width_ratio / 2.0
+    return [point + d * hl, point + n * hw, point - d * hl, point - n * hw]
+
+
 _hole_counter = [0]
 
 

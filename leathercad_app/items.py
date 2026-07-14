@@ -47,7 +47,18 @@ def _holes_to_path(holes, style, diameter, slit_len, slit_angle) -> QPainterPath
     drawEllipse -- the difference between 4 fps and realtime on big patterns."""
     import math
     path = QPainterPath()
-    if style == "slit":
+    if style == "diamond":
+        from leathercad.holes import diamond_points
+        from leathercad.irons import DIAMOND_WIDTH_RATIO
+        for h in holes:
+            a, b, c, d = diamond_points(h.point, h.tangent, slit_len,
+                                        slit_angle, DIAMOND_WIDTH_RATIO)
+            path.moveTo(a.x, a.y)
+            path.lineTo(b.x, b.y)
+            path.lineTo(c.x, c.y)
+            path.lineTo(d.x, d.y)
+            path.closeSubpath()
+    elif style == "slit":
         half = slit_len / 2.0
         ca = math.cos(math.radians(slit_angle))
         sa = math.sin(math.radians(slit_angle))
@@ -65,7 +76,14 @@ def _holes_to_path(holes, style, diameter, slit_len, slit_angle) -> QPainterPath
 
 def _draw_holes(painter, holes, style, diameter, slit_len, slit_angle):
     import math
-    if style == "slit":
+    if style == "diamond":
+        from leathercad.holes import diamond_points
+        from leathercad.irons import DIAMOND_WIDTH_RATIO
+        for h in holes:
+            pts = diamond_points(h.point, h.tangent, slit_len, slit_angle,
+                                 DIAMOND_WIDTH_RATIO)
+            painter.drawPolygon(QPolygonF([QPointF(p.x, p.y) for p in pts]))
+    elif style == "slit":
         half = slit_len / 2.0
         ca = math.cos(math.radians(slit_angle))
         sa = math.sin(math.radians(slit_angle))
@@ -652,9 +670,10 @@ class ShapeItem(QGraphicsItem):
         # pre-batch the holes into one path (and their centres into one polygon
         # for the zoomed-out dot LOD) so paint() is a single draw call
         if self._holes and self._holes.count:
-            if st and st.hole_style == "slit":
+            style = st.hole_style if st else "round"
+            if style in ("slit", "diamond"):
                 self._holes_path = _holes_to_path(
-                    self._holes.holes, "slit", 0.0,
+                    self._holes.holes, style, 0.0,
                     st.slit_length, st.slit_angle)
                 self._holes_size_mm = st.slit_length
             else:
@@ -1085,9 +1104,10 @@ class StitchLineItem(QGraphicsItem):
         # paint() is a single draw call
         st = self.line.settings
         if self._rel_holes:
-            if st and st.hole_style == "slit":
+            style = st.hole_style if st else "round"
+            if style in ("slit", "diamond"):
                 self._holes_path = _holes_to_path(
-                    self._rel_holes, "slit", 0.0, st.slit_length, st.slit_angle)
+                    self._rel_holes, style, 0.0, st.slit_length, st.slit_angle)
                 self._holes_size_mm = st.slit_length
             else:
                 self._holes_path = _holes_to_path(

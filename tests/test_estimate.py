@@ -4,6 +4,8 @@ import math
 
 from leathercad import irons
 from leathercad.document import Document
+from leathercad.geometry import Vec2 as _V
+from leathercad.holes import diamond_points
 from leathercad.estimate import estimate_project, format_report
 from leathercad.geometry import Vec2
 from leathercad.holes import LooseHole
@@ -18,18 +20,66 @@ def test_spi_mm_roundtrip():
     assert math.isclose(irons.mm_to_spi(25.4), 1.0)
 
 
-def test_catalog_has_named_makers_with_branded_irons():
-    b = irons.brands()
-    assert "KS Blade Punch" in b and "Blanchard" in b
-    ks = irons.irons_for("KS Blade Punch")
-    assert any(abs(i.pitch_mm - 3.85) < 1e-9 for i in ks)
-    assert all(i.brand == "KS Blade Punch" for i in ks)
+def test_catalog_is_style_then_maker_then_size():
+    assert list(irons.styles()) == ["round", "oblique", "french", "diamond"]
+    # Blanchard is a French maker; KS Blade offers diamond
+    assert "Blanchard" in irons.brands_for("french")
+    ks = irons.punches_for("diamond", "KS Blade Punch")
+    assert any(abs(p.pitch_mm - 3.85) < 1e-9 for p in ks)
+    assert all(p.style == "diamond" and p.brand == "KS Blade Punch" for p in ks)
 
 
-def test_spi_makers_store_correct_pitch():
-    # Weaver 6 SPI == 25.4/6 mm
-    weaver = {round(i.spi): i for i in irons.irons_for("Weaver Leather")}
+def test_spi_makers_store_correct_pitch_and_label():
+    # Weaver 6 SPI == 25.4/6 mm, labelled in SPI
+    weaver = {round(p.spi): p for p in irons.punches_for("diamond",
+                                                         "Weaver Leather")}
     assert math.isclose(weaver[6].pitch_mm, 25.4 / 6.0)
+    assert weaver[6].size_label == "6 SPI"
+    # mm makers label in mm
+    ks = irons.punches_for("diamond", "KS Blade Punch")[0]
+    assert ks.size_label.endswith("mm")
+
+
+def test_geometry_for_maps_style_to_hole_shape():
+    assert irons.geometry_for("round", 3.85)["hole_style"] == "round"
+    assert irons.geometry_for("oblique", 3.85)["hole_style"] == "slit"
+    assert irons.geometry_for("french", 3.85)["hole_style"] == "slit"
+    assert irons.geometry_for("diamond", 3.85)["hole_style"] == "diamond"
+    # oblique and french are both slits but at visibly different slants
+    assert (irons.geometry_for("french", 3.85)["slit_angle"]
+            != irons.geometry_for("oblique", 3.85)["slit_angle"])
+    # slit length scales with pitch
+    assert (irons.geometry_for("diamond", 4.0)["slit_length"]
+            > irons.geometry_for("diamond", 3.0)["slit_length"])
+
+
+def test_diamond_points_make_a_slim_rhombus():
+    # horizontal tangent, no slant: long axis along X, short axis along Y
+    pts = diamond_points(_V(0, 0), _V(1, 0), length=2.0, angle_deg=0.0,
+                         width_ratio=0.4)
+    assert len(pts) == 4
+    length = math.hypot(pts[0].x - pts[2].x, pts[0].y - pts[2].y)
+    width = math.hypot(pts[1].x - pts[3].x, pts[1].y - pts[3].y)
+    assert abs(length - 2.0) < 1e-9
+    assert abs(width - 0.8) < 1e-9          # 2.0 * 0.4
+    assert width < length                    # slim
+
+
+def test_diamond_exports_as_polygon_and_closed_polyline(tmp_path):
+    from leathercad import export
+    from leathercad.shapes import Rectangle, Transform
+    doc = Document()
+    doc.add_shape(Rectangle(width=80, height=50, transform=Transform(x=0, y=0),
+                            layer="Cut",
+                            stitch=StitchSettings(pitch_mm=4.0, inset=4.0,
+                                                  punch_style="diamond",
+                                                  hole_style="diamond")))
+    svg = tmp_path / "d.svg"
+    dxf = tmp_path / "d.dxf"
+    export.export_svg(doc, str(svg))
+    export.export_dxf(doc, str(dxf))
+    assert "<polygon" in svg.read_text()     # diamonds, not circles or lines
+    assert "POLYLINE" in dxf.read_text()
 
 
 def test_nearest_labels_a_saved_pitch():
@@ -115,8 +165,8 @@ def test_report_is_readable_and_guards_empty():
     assert "Pieces" in text and "Thread needed" in text and "Cut length" in text
 
 
-# -- GUI: branded iron dropdown drives the pitch -----------------------------
-def test_iron_dropdown_is_brand_grouped_and_sets_pitch():
+# -- GUI: punch cascade (style -> maker -> size) -----------------------------
+def _win_with_stitched_rect():
     import os
     import pytest
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -125,7 +175,6 @@ def test_iron_dropdown_is_brand_grouped_and_sets_pitch():
     from leathercad_app.mainwindow import MainWindow
     from leathercad_app.items import ShapeItem
     QApplication.instance() or QApplication([])
-
     doc = Document()
     doc.add_shape(_stitched_rect())
     win = MainWindow(doc)
@@ -133,19 +182,47 @@ def test_iron_dropdown_is_brand_grouped_and_sets_pitch():
     shp = [it for it in win.canvas.scene_obj.items()
            if isinstance(it, ShapeItem)][0]
     shp.setSelected(True)
+    win.properties.show_selection([shp])
+    return win, shp
+
+
+def test_punch_cascade_style_maker_size_sets_shape_and_pitch():
+    win, shp = _win_with_stitched_rect()
     p = win.properties
-    p.show_selection([shp])
 
-    labels = [p.iron.itemText(i) for i in range(p.iron.count())]
-    assert any("KS Blade Punch" in t for t in labels)
-    assert any("Blanchard" in t for t in labels)
-    assert labels[-1].startswith("Custom")
+    # pick Diamond -> hole primitive becomes diamond
+    p.punch_style.setCurrentIndex(p.punch_style.findData("diamond"))
+    assert shp.model.stitch.punch_style == "diamond"
+    assert shp.model.stitch.hole_style == "diamond"
+    assert "KS Blade Punch" in [p.punch_brand.itemText(i)
+                                for i in range(p.punch_brand.count())]
 
-    # a saved 3.85 mm pitch round-trips to a branded label, not "Custom"
-    p._sync_iron_combo(3.85)
-    assert "3.85 mm" in p.iron.currentText() and "·" in p.iron.currentText()
-
-    # picking a catalogue entry writes its pitch onto the shape
-    idx = next(i for i, t in enumerate(labels) if "4 mm" in t)
-    p.iron.setCurrentIndex(idx)
+    # switch maker to a maker offering this style, then pick a size
+    i = p.punch_brand.findData("Wuta")
+    if i >= 0:
+        p.punch_brand.setCurrentIndex(i)
+    # choose the 4 mm size if present
+    for k in range(p.punch_size.count()):
+        if p.punch_size.itemData(k) and abs(p.punch_size.itemData(k) - 4.0) < 1e-6:
+            p.punch_size.setCurrentIndex(k)
+            break
     assert abs(shp.model.stitch.pitch_mm - 4.0) < 1e-6
+
+    # French maker labels sizes in SPI
+    p.punch_style.setCurrentIndex(p.punch_style.findData("french"))
+    assert shp.model.stitch.hole_style == "slit"
+    assert "Blanchard" in [p.punch_brand.itemText(i)
+                           for i in range(p.punch_brand.count())]
+
+
+def test_saved_pitch_round_trips_and_custom_shows():
+    win, shp = _win_with_stitched_rect()
+    p = win.properties
+    p.punch_style.setCurrentIndex(p.punch_style.findData("diamond"))
+    # a 3.85 KS Blade size is a real catalogue entry, not Custom
+    p.punch_brand.setCurrentIndex(p.punch_brand.findData("KS Blade Punch"))
+    p._select_size_for_pitch(3.85)
+    assert "3.85" in p.punch_size.currentText()
+    # a pitch no maker offers falls back to Custom
+    p._select_size_for_pitch(3.55)
+    assert p.punch_size.currentText().startswith("Custom")

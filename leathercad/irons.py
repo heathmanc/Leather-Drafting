@@ -1,16 +1,23 @@
-"""Pricking iron / stitching chisel pitch helpers and a maker catalog.
+"""Stitching-punch catalog and hole geometry.
 
-Irons are sold two ways:
-  * by pitch in millimetres (most bench makers -- e.g. 3.0, 3.38, 3.85, 4.0 mm)
-  * by SPI, stitches per inch (US/harness + French tradition -- 5..12 SPI)
+Real stitching punches come in four cutting-edge styles, and each leaves a
+differently shaped hole:
 
-``pitch_mm = 25.4 / spi``. These helpers keep the two straight.
+    round    -- a round hole (round-hole pricking irons / drive punches)
+    oblique  -- a flat, shallow-slanted slit
+    french   -- a fine, steeper slanted slit (the Blanchard look)
+    diamond  -- a diamond / lozenge, angled like the awl
 
-The :data:`CATALOG` groups the pitches the well-known makers actually sell so
-"KS Blade 3.85 mm" is one pick instead of a number to look up. Pitch is what
-drives the geometry, so two makers' 3.85 mm irons are interchangeable here --
-the brand is a convenience label. Line-ups shift over time and this is not
-exhaustive; treat it as a starting point, and type any pitch you like.
+Punches are then organised maker -> size, where "size" is the stitch *pitch*
+(tooth spacing). Bench makers sell by millimetre (2.7 .. 4.0 mm); the harness
+and French traditions sell by SPI / points-per-inch. Pitch drives the geometry,
+so two makers' 3.85 mm diamond irons are interchangeable here -- the maker is a
+convenience label.
+
+The catalog groups it all as ``style -> maker -> [Punch]`` and
+:func:`geometry_for` hands back the hole dimensions a style implies (which the
+size fields can still override). Line-ups shift and this is not exhaustive;
+treat it as a curated starting point and type any pitch you like.
 """
 
 from __future__ import annotations
@@ -19,6 +26,13 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 MM_PER_INCH = 25.4
+
+# the four cutting-edge styles, in catalogue order
+ROUND, OBLIQUE, FRENCH, DIAMOND = "round", "oblique", "french", "diamond"
+STYLES = (ROUND, OBLIQUE, FRENCH, DIAMOND)
+
+# diamond hole width as a fraction of its length (a slim lozenge)
+DIAMOND_WIDTH_RATIO = 0.4
 
 
 def spi_to_mm(spi: float) -> float:
@@ -32,95 +46,140 @@ def mm_to_spi(pitch_mm: float) -> float:
 
 
 @dataclass(frozen=True)
-class Iron:
-    name: str
+class Punch:
+    style: str
+    brand: str
     pitch_mm: float
-    brand: str = ""
+    unit: str = "mm"          # how this maker labels sizes: "mm" or "spi"
 
     @property
     def spi(self) -> float:
         return mm_to_spi(self.pitch_mm)
 
+    @property
+    def size_label(self) -> str:
+        if self.unit == "spi":
+            return f"{round(self.spi)} SPI"
+        return f"{self.pitch_mm:g} mm"
+
     @classmethod
-    def from_spi(cls, spi: float, name: Optional[str] = None,
-                 brand: str = "") -> "Iron":
-        return cls(name or f"{spi:g} SPI", spi_to_mm(spi), brand)
+    def from_spi(cls, style: str, brand: str, spi: float) -> "Punch":
+        return cls(style, brand, spi_to_mm(spi), "spi")
 
 
-# A handful of commonly sold pitches, indexed for round-tripping a saved
-# pitch back to a friendly label. Not brand-specific -- see CATALOG for that.
-PRESETS = {
-    "2.0mm": Iron("2.0 mm (fine, ~12.7 SPI)", 2.0),
-    "2.45mm": Iron("2.45 mm (~10.4 SPI)", 2.45),
-    "2.7mm": Iron("2.7 mm (~9.4 SPI)", 2.7),
-    "3.0mm": Iron("3.0 mm (~8.5 SPI)", 3.0),
-    "3.38mm": Iron("3.38 mm (~7.5 SPI)", 3.38),
-    "3.85mm": Iron("3.85 mm (~6.6 SPI)", 3.85),
-    "4.0mm": Iron("4.0 mm (~6.4 SPI)", 4.0),
-    "4.5mm": Iron("4.5 mm (~5.6 SPI)", 4.5),
-    "5.0mm": Iron("5.0 mm (~5.1 SPI)", 5.0),
-    "5spi": Iron.from_spi(5),
-    "6spi": Iron.from_spi(6),
-    "7spi": Iron.from_spi(7),
+# Per-style hole geometry. ``len_ratio`` scales the slit / diamond length to the
+# pitch; ``angle`` is the slant off the seam tangent. Round holes are a fixed
+# small diameter. These are defaults -- the size fields override them.
+STYLE_DEFAULTS: Dict[str, dict] = {
+    ROUND:   {"hole_style": "round",   "hole_diameter": 1.0,
+              "len_ratio": 0.0,  "angle": 0.0},
+    OBLIQUE: {"hole_style": "slit",    "hole_diameter": 1.0,
+              "len_ratio": 0.42, "angle": 22.0},
+    FRENCH:  {"hole_style": "slit",    "hole_diameter": 1.0,
+              "len_ratio": 0.38, "angle": 42.0},
+    DIAMOND: {"hole_style": "diamond", "hole_diameter": 1.0,
+              "len_ratio": 0.42, "angle": 35.0},
 }
 
 
-def _mm(brand: str, pitches: List[float]) -> List[Iron]:
-    return [Iron(f"{p:g} mm", p, brand) for p in pitches]
+def geometry_for(style: str, pitch_mm: float) -> dict:
+    """Hole dimensions a ``style`` implies at ``pitch_mm``: a dict of the
+    StitchSettings hole fields (hole_style / hole_diameter / slit_length /
+    slit_angle) ready to apply."""
+    d = STYLE_DEFAULTS.get(style, STYLE_DEFAULTS[ROUND])
+    slit_len = round(max(0.4, d["len_ratio"] * pitch_mm), 2) if d["len_ratio"] \
+        else 1.6
+    return {
+        "hole_style": d["hole_style"],
+        "hole_diameter": d["hole_diameter"],
+        "slit_length": slit_len,
+        "slit_angle": d["angle"],
+    }
 
 
-def _spi(brand: str, spis: List[float]) -> List[Iron]:
-    return [Iron.from_spi(s, brand=brand) for s in spis]
+def _mm(pitches: List[float]) -> str:
+    return ("mm", list(pitches))
 
 
-# Maker line-ups. mm makers first (Japanese/Chinese/Korean bench irons), then
-# the SPI/points-per-inch tradition (US harness + French).
-CATALOG: Dict[str, List[Iron]] = {
-    # Japanese bench irons -- the de-facto fine-leather standard pitches.
-    "KS Blade Punch": _mm("KS Blade Punch", [2.7, 3.0, 3.38, 3.85, 4.0]),
-    # Hong Kong; sold straight by millimetre.
-    "Amy Roke": _mm("Amy Roke", [2.0, 2.45, 2.7, 3.0, 3.38, 3.85]),
-    # Korea.
-    "Sinabroks": _mm("Sinabroks", [3.0, 3.38, 3.85]),
-    # US maker, popular mm irons.
-    "Crimson Hides": _mm("Crimson Hides", [3.0, 3.38, 3.85]),
-    # Budget China irons, wide mm range.
-    "Wuta": _mm("Wuta", [2.7, 3.0, 3.38, 3.85, 4.0, 5.0]),
-    # US harness/saddlery, sold by stitches-per-inch.
-    "Weaver Leather": _spi("Weaver Leather", [5, 6, 7, 8]),
-    "Tandy Pro": _spi("Tandy Pro", [5, 6, 7]),
-    # French tradition -- points per inch (finer at the high end).
-    "Blanchard": _spi("Blanchard", [8, 9, 10, 11, 12]),
+def _spi(spis: List[float]) -> str:
+    return ("spi", list(spis))
+
+
+# style -> maker -> (unit, [sizes in that unit]). Curated + editable.
+_RAW: Dict[str, Dict[str, tuple]] = {
+    ROUND: {
+        "KS Blade Punch": _mm([3.0, 3.38, 3.85, 4.0]),
+        "Amy Roke": _mm([2.7, 3.0, 3.38, 3.85]),
+        "Wuta": _mm([3.0, 3.38, 3.85, 4.0]),
+        "Sinabroks": _mm([3.0, 3.85]),
+    },
+    OBLIQUE: {
+        "KS Blade Punch": _mm([2.7, 3.0, 3.38, 3.85, 4.0]),
+        "Amy Roke": _mm([2.7, 3.0, 3.38, 3.85]),
+        "Wuta": _mm([3.0, 3.38, 3.85, 4.0]),
+        "Seiwa": _mm([3.0, 3.5, 4.0]),
+    },
+    FRENCH: {
+        "Blanchard": _spi([8, 9, 10, 11, 12]),
+        "Vergez-Blanchard": _spi([8, 9, 10, 11]),
+        "Joseph Dixon": _spi([6, 7, 8, 9]),
+    },
+    DIAMOND: {
+        "KS Blade Punch": _mm([2.7, 3.0, 3.38, 3.85, 4.0]),
+        "Amy Roke": _mm([2.0, 2.45, 2.7, 3.0, 3.38, 3.85]),
+        "Crimson Hides": _mm([3.0, 3.38, 3.85]),
+        "Sinabroks": _mm([3.0, 3.38, 3.85]),
+        "Wuta": _mm([3.0, 3.38, 3.85, 4.0]),
+        "Weaver Leather": _spi([5, 6, 7]),
+    },
 }
 
 
-def brands() -> List[str]:
-    """Maker names in catalogue order."""
-    return list(CATALOG.keys())
+def _build() -> Dict[str, Dict[str, List[Punch]]]:
+    catalog: Dict[str, Dict[str, List[Punch]]] = {}
+    for style, makers in _RAW.items():
+        catalog[style] = {}
+        for brand, (unit, sizes) in makers.items():
+            if unit == "spi":
+                catalog[style][brand] = [Punch.from_spi(style, brand, s)
+                                         for s in sizes]
+            else:
+                catalog[style][brand] = [Punch(style, brand, p, "mm")
+                                         for p in sizes]
+    return catalog
 
 
-def irons_for(brand: str) -> List[Iron]:
-    """The irons a maker sells (empty list if unknown)."""
-    return CATALOG.get(brand, [])
+CATALOG: Dict[str, Dict[str, List[Punch]]] = _build()
 
 
-def all_irons() -> List[Iron]:
-    """Every catalogued iron, flattened."""
-    return [iron for irons in CATALOG.values() for iron in irons]
+def styles() -> List[str]:
+    return list(STYLES)
 
 
-def nearest(pitch_mm: float, tol: float = 0.03) -> Optional[Iron]:
-    """The catalogued iron whose pitch matches ``pitch_mm`` within ``tol`` mm
-    (used to label a saved pitch), or None if nothing is close."""
+def brands_for(style: str) -> List[str]:
+    """Makers that offer ``style`` (catalogue order)."""
+    return list(CATALOG.get(style, {}).keys())
+
+
+def punches_for(style: str, brand: str) -> List[Punch]:
+    """The sizes a maker sells in ``style`` (empty if unknown)."""
+    return CATALOG.get(style, {}).get(brand, [])
+
+
+def all_punches() -> List[Punch]:
+    return [p for makers in CATALOG.values() for ps in makers.values()
+            for p in ps]
+
+
+def nearest(pitch_mm: float, style: Optional[str] = None,
+            tol: float = 0.03) -> Optional[Punch]:
+    """The catalogued punch whose pitch matches within ``tol`` mm (optionally
+    restricted to ``style``), used to label a saved pitch. None if none close."""
     best, best_d = None, tol
-    for iron in all_irons():
-        d = abs(iron.pitch_mm - pitch_mm)
+    for p in all_punches():
+        if style is not None and p.style != style:
+            continue
+        d = abs(p.pitch_mm - pitch_mm)
         if d <= best_d:
-            best, best_d = iron, d
+            best, best_d = p, d
     return best
-
-
-def get(name: str) -> Iron:
-    if name in PRESETS:
-        return PRESETS[name]
-    raise KeyError(f"unknown iron preset {name!r}; available: {sorted(PRESETS)}")

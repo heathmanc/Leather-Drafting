@@ -22,7 +22,8 @@ from .stitching import (
     holes_for_shape,
 )
 from .stitchsettings import StitchSettings
-from .irons import Iron, spi_to_mm, mm_to_spi, get as get_iron, PRESETS
+from .irons import (Punch, spi_to_mm, mm_to_spi, geometry_for, STYLES,
+                    brands_for, punches_for)
 from .offset import offset_closed_inward
 from .shapes import (Transform, Shape, Rectangle, Ellipse, Circle, Polygon,
                      PathShape, EditablePath, Edge, arc_through)
@@ -43,7 +44,8 @@ __all__ = [
     "march_chord", "march_arclength", "polyline_from_path",
     "flip_symmetry", "holes_for_shape",
     "StitchSettings",
-    "Iron", "spi_to_mm", "mm_to_spi", "get_iron", "PRESETS",
+    "Punch", "spi_to_mm", "mm_to_spi", "geometry_for", "STYLES",
+    "brands_for", "punches_for",
     "offset_closed_inward",
     "Transform", "Shape", "Rectangle", "Ellipse", "Circle", "Polygon",
     "PathShape", "EditablePath", "Edge", "arc_through",

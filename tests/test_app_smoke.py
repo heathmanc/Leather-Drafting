@@ -194,10 +194,13 @@ def test_hole_style_visibility_toggles(qapp):
     p.show_selection([hole])
     form = p._stitch_form
     assert form.isRowVisible(p.slit_len) and not form.isRowVisible(p.hole_dia)
-    p.hole_style.setCurrentText("round")
+    p.punch_style.setCurrentText("Round")
     assert hole.hole.hole_style == "round"
     assert form.isRowVisible(p.hole_dia) and not form.isRowVisible(p.slit_len)
-    p.hole_style.setCurrentText("slit")
+    p.punch_style.setCurrentText("Diamond")
+    assert hole.hole.hole_style == "diamond"
+    assert form.isRowVisible(p.slit_len) and not form.isRowVisible(p.hole_dia)
+    p.punch_style.setCurrentText("Oblique")
     assert hole.hole.hole_style == "slit"
     assert form.isRowVisible(p.slit_len) and not form.isRowVisible(p.hole_dia)
 
@@ -237,7 +240,7 @@ def test_baked_holes_hide_distribution_controls(qapp):
     assert not f.isRowVisible(p.symmetry)
     assert not f.isRowVisible(p.corner_style)
     assert not f.isRowVisible(p.pitch) and not f.isRowVisible(p.fit)
-    assert f.isRowVisible(p.hole_style) and f.isRowVisible(p.slit_len)
+    assert f.isRowVisible(p.punch_style) and f.isRowVisible(p.slit_len)
 
 
 def test_rounded_rect_converts_to_arc_nodes_and_locks(qapp):

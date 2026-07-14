@@ -209,6 +209,32 @@ def test_duplicate_batch_refreshes_once(qapp):
     assert after == before + 25               # every shape duplicated
 
 
+def test_delete_batch_is_single_pass(qapp):
+    """Deleting a subset of many loose holes must rebuild the document list
+    once, not call list.remove() per hole (which was O(M*N) -- a 20 s stall on
+    a 20k-hole document)."""
+    from leathercad.holes import LooseHole
+    from leathercad_app.items import HoleItem
+    doc = Document()
+    for i in range(400):
+        doc.holes.append(LooseHole(point=Vec2((i % 20) * 3.0, (i // 20) * 3.0)))
+    from leathercad_app.mainwindow import MainWindow
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    holes = [it for it in c.scene_obj.items() if isinstance(it, HoleItem)]
+    victims = holes[100:250]                  # 150 in the middle
+    survivors = {id(h.hole) for h in holes if h not in victims}
+    for it in victims:
+        it.setSelected(True)
+    c.delete_selected()
+    assert len(doc.holes) == 250              # 400 - 150
+    assert {id(h) for h in doc.holes} == survivors   # exactly the right ones
+    # scene items gone too (no dangling HoleItems)
+    assert len([it for it in c.scene_obj.items()
+                if isinstance(it, HoleItem)]) == 250
+
+
 # -- multi-select drag stays realtime -----------------------------------------
 def test_drag_snap_uses_spatial_grid(qapp):
     """The move-snap cache is bucketed at drag start so each mouse move scans

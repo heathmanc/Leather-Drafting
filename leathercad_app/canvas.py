@@ -2632,19 +2632,42 @@ class Canvas(QGraphicsView):
                                    DimensionItem, TextItem))]
 
     def delete_selected(self) -> None:
-        for it in self.selected_items():
+        items = self.selected_items()
+        if not items:
+            return
+        # Bucket the models to drop by identity, then rebuild each document
+        # list in a single pass. Per-item doc.remove_*() does an ``in`` scan +
+        # list.remove() -- O(N) each, so deleting M of N holes was O(M*N) (the
+        # 20 s stall on a 20k-hole document).
+        del_shapes, del_lines, del_holes = set(), set(), set()
+        del_dims, del_texts = set(), set()
+        for it in items:
             if isinstance(it, ShapeItem):
-                self.doc.remove_shape(it.model)
+                del_shapes.add(id(it.model))
             elif isinstance(it, StitchLineItem):
-                self.doc.remove_stitch_line(it.line)
+                del_lines.add(id(it.line))
             elif isinstance(it, DimensionItem):
-                if it.dim in self.doc.dimensions:
-                    self.doc.dimensions.remove(it.dim)
+                del_dims.add(id(it.dim))
             elif isinstance(it, TextItem):
-                if it.model in self.doc.texts:
-                    self.doc.texts.remove(it.model)
+                del_texts.add(id(it.model))
             else:  # HoleItem
-                self.doc.remove_hole(it.hole)
+                del_holes.add(id(it.hole))
+        if del_shapes:
+            self.doc.shapes = [s for s in self.doc.shapes
+                               if id(s) not in del_shapes]
+        if del_lines:
+            self.doc.stitch_lines = [l for l in self.doc.stitch_lines
+                                     if id(l) not in del_lines]
+        if del_holes:
+            self.doc.holes = [h for h in self.doc.holes
+                              if id(h) not in del_holes]
+        if del_dims:
+            self.doc.dimensions = [d for d in self.doc.dimensions
+                                   if id(d) not in del_dims]
+        if del_texts:
+            self.doc.texts = [t for t in self.doc.texts
+                              if id(t) not in del_texts]
+        for it in items:
             self._remove_item(it)
         self.documentChangedSig.emit()
         self.selectionChangedSig.emit()

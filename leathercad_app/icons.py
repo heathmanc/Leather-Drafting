@@ -185,6 +185,15 @@ def tool_icon(kind: str, size: int = 22, dark: bool = False) -> QIcon:
         p.setPen(QPen(_ACCENT, 1.4))
         p.drawLine(QPointF(wall_x - 4, y - 3), QPointF(wall_x, y))
         p.drawLine(QPointF(wall_x - 4, y + 3), QPointF(wall_x, y))
+    elif kind == "offset":
+        # a shape with its dashed offset outline around it
+        inner = rect.adjusted(3.5, 3.5, -3.5, -3.5)
+        p.drawRoundedRect(inner, 2, 2)
+        ap = QPen(_ACCENT)
+        ap.setWidthF(1.4)
+        ap.setStyle(Qt.DashLine)
+        p.setPen(ap)
+        p.drawRoundedRect(rect, 4, 4)
     elif kind == "pen":
         # an S-curve with its two bezier control handles + anchor dots
         a = QPointF(m, size - m)

@@ -109,6 +109,66 @@ def offset_closed(points: Sequence[Vec2], dist: float) -> List[Vec2]:
     return new_pts
 
 
+def offset_shape(shape, dist: float):
+    """Offset ``shape`` by ``dist`` mm as a NEW shape (``dist`` > 0 outward,
+    < 0 inward). Circles and (rounded) rectangles stay parametric -- a circle
+    offsets to a true circle, a rounded rectangle to a rounded rectangle with
+    the corner radius grown/shrunk to the geometrically correct offset curve.
+    Everything else offsets its flattened outline (mitered corners). Returns
+    ``None`` when the offset would collapse the shape (inward past its size).
+    """
+    import copy
+    from .shapes import Circle, Rectangle, Polygon, PathShape, Transform, _next_id
+
+    if abs(dist) < _EPS:
+        return None
+
+    if isinstance(shape, Circle):
+        r = shape.rx + dist
+        if r <= _EPS:                                  # collapses -> refuse
+            return None
+        sh = Circle(rx=r, ry=r, transform=copy.deepcopy(shape.transform),
+                    layer=shape.layer)
+    elif type(shape) is Rectangle:
+        w = shape.width + 2.0 * dist
+        h = shape.height + 2.0 * dist
+        if w <= _EPS or h <= _EPS:                     # collapses -> refuse
+            return None
+        cr = shape.corner_radius
+        # the true offset of a rounded corner is an arc of radius r+dist;
+        # shrinking past the radius leaves a sharp (mitered) corner
+        new_cr = max(0.0, cr + dist) if cr > _EPS else 0.0
+        sh = Rectangle(width=w, height=h, corner_radius=new_cr,
+                       transform=copy.deepcopy(shape.transform),
+                       layer=shape.layer)
+    else:
+        wpts, _corners, closed = shape.world_polyline()
+        if len(wpts) < 2:
+            return None
+        if closed:
+            ring = offset_closed(wpts, dist)
+            if len(ring) >= 2 and (ring[0] - ring[-1]).length() < 1e-6:
+                ring = ring[:-1]
+            if len(ring) < 3:
+                return None
+            cx = sum(p.x for p in ring) / len(ring)
+            cy = sum(p.y for p in ring) / len(ring)
+            sh = Polygon(points=[Vec2(p.x - cx, p.y - cy) for p in ring],
+                         close_path=True, transform=Transform(x=cx, y=cy),
+                         layer=shape.layer)
+        else:
+            line = offset_open(wpts, dist)
+            if len(line) < 2:
+                return None
+            cx = sum(p.x for p in line) / len(line)
+            cy = sum(p.y for p in line) / len(line)
+            sh = PathShape(points=[Vec2(p.x - cx, p.y - cy) for p in line],
+                           close_path=False, transform=Transform(x=cx, y=cy),
+                           layer=shape.layer)
+    sh.shape_id = _next_id("shape")
+    return sh
+
+
 def offset_open(points: Sequence[Vec2], dist: float) -> List[Vec2]:
     """Offset an open polyline sideways by ``dist`` mm (right of travel for
     ``dist`` > 0). Corners are mitered; the two ends just shift along their

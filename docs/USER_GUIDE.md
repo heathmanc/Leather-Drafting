@@ -195,6 +195,7 @@ Hold **Shift** while placing any line-like point to lock the segment to
 | **Trim** | `X` | Click the piece of an outline you want gone (red preview on hover). |
 | **Fillet / chamfer corner** | `6` | Click any corner of a polygon/path to **round** it with a true arc; **Shift-click** to chamfer (bevel); **Ctrl-click** to change the radius. |
 | **Extend to intersection** | `7` | Click the **end** of a line/path: it grows until it meets the next outline or guide (the opposite of Trim). |
+| **Offset outline** | `8` | Click a shape, then move the cursor **inside or outside** it — a dashed preview follows with the live distance in the status bar. Click to place the offset copy, or press **Enter** to type an exact distance. Circles offset to true circles and rounded rectangles keep proper rounded corners. |
 | **Text** | `A` | Click to place engraved lettering. |
 | **Measure** | `Q` | Two clicks; length/angle/dx/dy in the status bar. |
 | **Dimension** | `D` | Two clicks; a permanent dimension annotation. |
@@ -378,7 +379,11 @@ extra construction.
   `Ctrl+Shift+A`.
 * **Offset / seam allowance** (`Ctrl+Shift+O`) — create a parallel copy of the
   selected outline: positive = outward, negative = inward. Use it for seam
-  allowances, linings, or an outer glue line.
+  allowances, linings, or an outer glue line. Circles and (rounded)
+  rectangles offset to true circles / rounded rectangles; other outlines
+  become polygons with mitered corners. For a visual, cursor-driven version
+  use the **Offset outline** tool (`8`): click the shape, move inside or
+  outside, click to place (or press Enter for an exact distance).
 * **Boolean operations** — select two or more **closed** shapes:
   **Union (merge shapes)** (`Ctrl+U`) welds them into one outline;
   **Subtract (bottom − top)** (`Ctrl+Shift+U`) removes the upper shapes from
@@ -600,6 +605,7 @@ what the **Stitch line** tool is for.
 | `X` | Trim to intersections |
 | `6` | Fillet / chamfer corner |
 | `7` | Extend to intersection |
+| `8` | Offset outline |
 | `A` | Text |
 | `Q` | Measure |
 | `D` | Dimension |

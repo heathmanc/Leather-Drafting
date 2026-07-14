@@ -61,6 +61,7 @@ TEXT = "text"
 PEN = "pen"
 FILLET = "fillet"        # click a corner to round it (Shift = chamfer)
 EXTEND = "extend"        # click a line's end to grow it to the next outline
+OFFSET = "offset"        # click a shape, move inside/outside, click to place
 UNDERLAYCAL = "underlaycal"   # two clicks on the tracing image -> real distance
 ARC3 = "arc3"            # 3-point arc: start, end, then a point on the arc
 ARCCENTER = "arccenter"  # centre arc: centre, start, end (sweeps CCW)
@@ -272,6 +273,12 @@ class Canvas(QGraphicsView):
         self._group_driving = False   # snap_move is repositioning members
         self._last_move_refresh = 0.0     # rate-limit for item_moved refresh
         self._move_refresh_pending = False
+        # interactive Offset tool state (armed shape + live preview)
+        self._offset_item = None          # the ShapeItem being offset
+        self._offset_pts = []             # its world outline (flattened)
+        self._offset_closed = True
+        self._offset_dist = 0.0           # live signed distance (mm)
+        self._offset_preview = None       # dashed QGraphicsPathItem
         self._nonmovable_members = []   # items we temporarily froze for a group drag
         self.line_width = 1.0     # on-screen outline stroke width (cosmetic px)
 
@@ -917,6 +924,16 @@ class Canvas(QGraphicsView):
                 self._do_extend(Vec2(raw.x(), raw.y()))
             event.accept()
             return
+        if self.tool == OFFSET:
+            if event.button() == Qt.LeftButton:
+                if self._offset_item is None:
+                    self._arm_offset(Vec2(raw.x(), raw.y()))
+                else:
+                    self._commit_offset()
+            elif event.button() == Qt.RightButton:
+                self._cancel_offset()
+            event.accept()
+            return
         if self.tool == UNDERLAYCAL:
             if event.button() == Qt.LeftButton:
                 self._cal_pts.append(QPointF(raw))
@@ -1146,6 +1163,12 @@ class Canvas(QGraphicsView):
             self._update_trim_hover(Vec2(raw.x(), raw.y()))
             super().mouseMoveEvent(event)
             return
+        if self.tool == OFFSET:
+            self._hide_snap_marker()
+            if self._offset_item is not None:
+                self._update_offset_preview(Vec2(raw.x(), raw.y()))
+            super().mouseMoveEvent(event)
+            return
         pos = raw
         if self.tool != SELECT:
             pos, vtx, guides, kind = self._smart_snap(raw)
@@ -1369,10 +1392,12 @@ class Canvas(QGraphicsView):
             # progress) drops back to the pointer/Select tool.
             busy = (bool(self._poly_pts) or bool(self._pen_pts)
                     or bool(self._multi_pts) or bool(self._cal_pts)
+                    or self._offset_item is not None
                     or self._start is not None or bool(self._handles))
             self._cancel_poly()
             self._cancel_pen()
             self._cancel_multi()
+            self._cancel_offset()
             self._cal_pts = []
             self.clear_vertex_handles()
             if self._start is not None:      # cancel an in-progress click-draw
@@ -1387,6 +1412,8 @@ class Canvas(QGraphicsView):
                 self._finalize_poly()
             elif self._pen_pts:
                 self._finish_pen(closed=False)
+            elif self.tool == OFFSET and self._offset_item is not None:
+                self._ask_offset_exact()
         else:
             super().keyPressEvent(event)
 
@@ -2760,39 +2787,17 @@ class Canvas(QGraphicsView):
 
     def offset_selected(self, dist: float) -> None:
         """Offset each selected shape's outline by ``dist`` mm (>0 outward / seam
-        allowance, <0 inward) as a NEW shape on the same layer. Arcs are
-        flattened -- the result is a polygon following the offset outline."""
-        from leathercad.offset import offset_closed, offset_open
-        from leathercad.shapes import Polygon, PathShape, _next_id
+        allowance, <0 inward) as a NEW shape on the same layer. Circles and
+        (rounded) rectangles stay parametric; other outlines become polygons."""
+        from leathercad.offset import offset_shape
         if abs(dist) < 1e-9:
             return
         made = []
         self._suppress_commit = True
         for it in self._shape_items():
-            wpts, _corners, closed = it.model.world_polyline()
-            if len(wpts) < 2:
+            sh = offset_shape(it.model, dist)
+            if sh is None:
                 continue
-            if closed:
-                ring = offset_closed(wpts, dist)
-                if len(ring) >= 2 and (ring[0] - ring[-1]).length() < 1e-6:
-                    ring = ring[:-1]
-                if len(ring) < 3:
-                    continue
-                cx = sum(p.x for p in ring) / len(ring)
-                cy = sum(p.y for p in ring) / len(ring)
-                sh = Polygon(points=[Vec2(p.x - cx, p.y - cy) for p in ring],
-                             close_path=True, transform=Transform(x=cx, y=cy),
-                             layer=it.model.layer)
-            else:
-                line = offset_open(wpts, dist)
-                if len(line) < 2:
-                    continue
-                cx = sum(p.x for p in line) / len(line)
-                cy = sum(p.y for p in line) / len(line)
-                sh = PathShape(points=[Vec2(p.x - cx, p.y - cy) for p in line],
-                               close_path=False, transform=Transform(x=cx, y=cy),
-                               layer=it.model.layer)
-            sh.shape_id = _next_id("shape")
             self.doc.add_shape(sh)
             made.append(self._add_item(ShapeItem(sh, self)))
         self._suppress_commit = False
@@ -2802,6 +2807,117 @@ class Canvas(QGraphicsView):
         if made:
             self.documentChangedSig.emit()
             self._emit_commit()
+
+    # -- interactive Offset tool ----------------------------------------
+    _OFFSET_HINT = ("Offset: move the cursor inside / outside · click to "
+                    "place · Enter = type an exact distance · Esc cancels")
+
+    def _arm_offset(self, p: Vec2) -> None:
+        """First click of the Offset tool: pick the shape under the cursor and
+        start the live inside/outside preview."""
+        vp = self.mapFromScene(QPointF(p.x, p.y))
+        target = None
+        for it in self.items(vp):
+            if isinstance(it, ShapeItem):
+                target = it
+                break
+        if target is None:
+            self.statusMessage.emit("Offset: click a shape's outline")
+            return
+        wpts, _corners, closed = target.model.world_polyline()
+        if len(wpts) < 2:
+            return
+        self._offset_item = target
+        self._offset_pts = [Vec2(q.x, q.y) for q in wpts]
+        self._offset_closed = closed
+        self._update_offset_preview(p)
+
+    def _signed_offset_dist(self, p: Vec2) -> float:
+        """Distance from ``p`` to the armed outline; sign picks the side
+        (>0 outward / right of travel, <0 inward / left)."""
+        from leathercad.geometry import point_in_polygon
+        pts = self._offset_pts
+        best_d2, best_i, best_t = float("inf"), 0, 0.0
+        for i in range(len(pts) - 1):
+            a, b = pts[i], pts[i + 1]
+            dx, dy = b.x - a.x, b.y - a.y
+            L2 = dx * dx + dy * dy
+            t = 0.0 if L2 < 1e-12 else max(0.0, min(1.0, ((p.x - a.x) * dx
+                                                          + (p.y - a.y) * dy) / L2))
+            qx, qy = a.x + t * dx, a.y + t * dy
+            d2 = (p.x - qx) ** 2 + (p.y - qy) ** 2
+            if d2 < best_d2:
+                best_d2, best_i, best_t = d2, i, t
+        dist = best_d2 ** 0.5
+        if self._offset_closed:
+            return -dist if point_in_polygon(p, pts) else dist
+        a, b = pts[best_i], pts[best_i + 1]
+        cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)
+        return -dist if cross > 0 else dist    # right of travel = positive
+
+    def _update_offset_preview(self, p: Vec2) -> None:
+        from leathercad.offset import offset_closed, offset_open
+        dist = self._signed_offset_dist(p)
+        if self.snap_to_grid and self.snap_grid > 0:      # honour grid steps
+            dist = round(dist / self.snap_grid) * self.snap_grid
+        self._offset_dist = dist
+        out = (offset_closed(self._offset_pts, dist) if self._offset_closed
+               else offset_open(self._offset_pts, dist))
+        path = QPainterPath()
+        if len(out) >= 2:
+            path.moveTo(out[0].x, out[0].y)
+            for q in out[1:]:
+                path.lineTo(q.x, q.y)
+        if self._offset_preview is None:
+            self._offset_preview = QGraphicsPathItem()
+            pen = QPen(QColor(30, 140, 255), 0, Qt.DashLine)
+            pen.setCosmetic(True)
+            self._offset_preview.setPen(pen)
+            self._offset_preview.setZValue(997)
+            self.scene_obj.addItem(self._offset_preview)
+        self._offset_preview.setPath(path)
+        side = "outward" if dist > 0 else "inward"
+        self.statusMessage.emit(
+            f"Offset {abs(dist):.2f} mm {side} · click to place · "
+            f"Enter = type an exact distance · Esc cancels")
+
+    def _commit_offset(self, dist: Optional[float] = None) -> None:
+        from leathercad.offset import offset_shape
+        it = self._offset_item
+        d = self._offset_dist if dist is None else dist
+        self._cancel_offset()
+        if it is None or not _alive(it) or abs(d) < 1e-9:
+            return
+        sh = offset_shape(it.model, d)
+        if sh is None:
+            self.statusMessage.emit(
+                "Offset: too far inward — the shape would collapse")
+            return
+        self.doc.add_shape(sh)
+        new_item = self._add_item(ShapeItem(sh, self))
+        self.scene_obj.clearSelection()
+        new_item.setSelected(True)
+        self.documentChangedSig.emit()
+        self._emit_commit()
+        self.statusMessage.emit(self._OFFSET_HINT)
+
+    def _ask_offset_exact(self) -> None:
+        """Enter while the Offset preview is live: type the exact distance."""
+        from PySide6.QtWidgets import QInputDialog
+        d, ok = QInputDialog.getDouble(
+            self, "Offset outline",
+            "Distance (mm)   —   positive = outward, negative = inward:",
+            round(self._offset_dist, 2), -1000.0, 1000.0, 2)
+        if ok:
+            self._commit_offset(d)
+
+    def _cancel_offset(self) -> None:
+        if self._offset_preview is not None:
+            self.scene_obj.removeItem(self._offset_preview)
+            self._offset_preview = None
+        self._offset_item = None
+        self._offset_pts = []
+        self._offset_dist = 0.0
 
     def make_back_piece_selected(self) -> None:
         """Duplicate each selected shape as its mirror image -- the matching

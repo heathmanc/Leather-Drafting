@@ -46,6 +46,7 @@ TOOLS = [
     ("Trim to intersections", canvas_mod.TRIM, "X"),
     ("Fillet / chamfer corner", canvas_mod.FILLET, "6"),
     ("Extend to intersection", canvas_mod.EXTEND, "7"),
+    ("Offset outline", canvas_mod.OFFSET, "8"),
     ("Text", canvas_mod.TEXT, "A"),
     ("Measure", canvas_mod.MEASURE, "Q"),
     ("Dimension", canvas_mod.DIMENSION, "D"),
@@ -64,6 +65,7 @@ _ICON_FOR = {
     canvas_mod.CIRCLE2: "circle2", canvas_mod.CIRCLE3: "circle3",
     canvas_mod.ARC3: "arc", canvas_mod.ARCCENTER: "arc",
     canvas_mod.FILLET: "fillet", canvas_mod.EXTEND: "extend",
+    canvas_mod.OFFSET: "offset",
 }
 
 _TOOL_BY_MODE = {mode: (label, key) for label, mode, key in TOOLS}
@@ -88,6 +90,7 @@ TOOL_LAYOUT = [
     canvas_mod.TRIM,
     canvas_mod.FILLET,
     canvas_mod.EXTEND,
+    canvas_mod.OFFSET,
     canvas_mod.TEXT,
     canvas_mod.MEASURE,
     canvas_mod.DIMENSION,
@@ -715,7 +718,13 @@ class MainWindow(QMainWindow):
         self.canvas.viewport().setCursor(cur)
         if mode != canvas_mod.TRIM:
             self.canvas._clear_trim_hover()
-        if mode == canvas_mod.TRIM:
+        if mode != canvas_mod.OFFSET:
+            self.canvas._cancel_offset()
+        if mode == canvas_mod.OFFSET:
+            self.canvas.statusMessage.emit(
+                "Offset: click a shape, move the cursor inside or outside, "
+                "click to place · Enter = type an exact distance")
+        elif mode == canvas_mod.TRIM:
             self.canvas.statusMessage.emit(
                 "Trim: click the part of an outline to cut back to where it "
                 "crosses another shape")

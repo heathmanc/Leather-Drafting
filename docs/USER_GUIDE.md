@@ -161,12 +161,15 @@ each end so the cut can't tear) lets you slide a card out one-handed. The
 **flap**: its symmetric pointed tip folds over the entrance and tucks down
 the front, and the smooth **arched thumb notch** in the block's bottom edge
 is where you lift it back out. Seams are **3 mm pitch** like the original
-sheet — five straight rows placed so the **left wing fold maps hole onto
-hole**: the top row (spanning wing and middle) is symmetric about the fold
-and lands on itself, and the wing's outer-edge row folds exactly onto the
-middle section's own vertical row; two bottom runs flank the thumb notch.
-The entrance and slot stay open. Everything is right-handed as drawn —
-select all and **Make back piece** (`Ctrl+M`) for a left-handed mirror.
+sheet, and every row sits 4 mm inside its own panel so no hole lands on a
+fold: the left wing carries a top and an outer-edge row, the middle section
+its **own top row and a vertical row just inside the right wing fold**
+(same pitch as the wing's, so the layers line up when you prick through the
+assembled pouch), and the **bottom seam is one continuous run that arcs
+around the thumb notch** — the chord spacing stays iron-even the whole way
+round the curve. The entrance and slot stay open. Everything is
+right-handed as drawn — select all and **Make back piece** (`Ctrl+M`) for
+a left-handed mirror.
 
 ### Tracing a real object
 

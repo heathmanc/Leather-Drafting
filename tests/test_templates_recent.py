@@ -119,27 +119,34 @@ def test_fold_over_wallet_matches_source_pattern():
     ends = {(p.x, p.y) for p in (a, b)}
     assert {(c.transform.x, c.transform.y) for c in reliefs} == ends
 
-    # three folds; FIVE 3 mm seams confined to the block, incl. the middle
-    # section's vertical + horizontal rows, with a gap at the thumb notch
+    # three folds; five 3 mm seams confined to the block, every row 4 mm
+    # inside its panel -- no hole on or across a fold line
     assert sum(1 for s in doc.shapes if s.layer == "Score") == 3
     assert len(doc.stitch_lines) == 5
     for sl in doc.stitch_lines:
         assert sl.settings.pitch_mm == 3.0
-        assert sl.result().count > 20
+        assert sl.result().count >= 18
         assert max(p.y for p in sl.points) <= 90.0
-    top, left, middle, bot_l, bot_r = doc.stitch_lines
-    assert max(p.x for p in bot_l.points) < 95.0            # notch gap
-    assert min(p.x for p in bot_r.points) > 131.0
-
-    # folding the left wing (about x = 78) must land hole on hole:
-    # the top row maps onto itself, the outer row onto the middle row
-    tx = sorted(h.point.x for h in top.result().holes)
-    assert max(min(abs((156.0 - x) - x2) for x2 in tx) for x in tx) < 1e-3
+    top_w, top_m, left, middle, bottom = doc.stitch_lines
+    assert max(p.x for p in top_w.points) < 78.0            # wing side only
+    assert 78.0 < min(p.x for p in top_m.points)            # middle only...
+    assert max(p.x for p in top_m.points) < 148.0           # ...inside the fold
+    # the middle vertical row sits just INSIDE the right wing fold
+    assert all(p.x == 144.0 for p in middle.points)
+    # wing and middle vertical rows match hole-for-hole in height
     L, M = left.result().holes, middle.result().holes
     assert len(L) == len(M)
-    for hl, hm in zip(L, M):
-        assert abs((156.0 - hl.point.x) - hm.point.x) < 1e-3
-        assert abs(hl.point.y - hm.point.y) < 1e-3
+    assert all(abs(a.point.y - b.point.y) < 1e-6 for a, b in zip(L, M))
+
+    # the bottom seam is ONE continuous run that arcs AROUND the thumb
+    # notch: holes climb over the arch and the chords stay iron-even
+    holes = bottom.result().holes
+    over = [h for h in holes if h.point.y > 10.0]
+    assert len(over) >= 8
+    assert all(95.0 < h.point.x < 131.0 for h in over)
+    assert max(h.point.y for h in holes) > 18.0             # clears the apex
+    gaps = bottom.result().chord_spacings()
+    assert max(gaps) < 1.15 * min(gaps)
 
 
 def test_new_from_template_adopts_document(win):

@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QColorDialog, QSpinBox, QAbstractSpinBox,
 )
 
-from leathercad.irons import PRESETS
 from leathercad.stitchsettings import StitchSettings
 from leathercad.shapes import Rectangle, Ellipse, Circle, Polygon, PathShape
 from leathercad.layers import Layer, ROLES
@@ -129,10 +128,10 @@ class PropertiesPanel(QWidget):
         fs = QFormLayout(self.g_stitch)
         self._stitch_form = fs
         self.iron = QComboBox()
-        self._iron_keys = list(PRESETS.keys())
-        for k in self._iron_keys:
-            self.iron.addItem(f"{PRESETS[k].pitch_mm:.2f} mm  ({PRESETS[k].spi:.1f} SPI)", k)
-        self.iron.addItem("Custom", "custom")
+        # Maker catalogue, grouped by brand with separators. Each entry stores
+        # its pitch (mm) as item data -- brand is just a friendly label, pitch
+        # is what drives the geometry.
+        self._build_iron_combo()
         self.pitch = _spin(0.5, 50, 0.05)
         self.inset = _spin(0.0, 100, 0.5)
         self.fit = QComboBox()
@@ -395,9 +394,24 @@ class PropertiesPanel(QWidget):
         self._sync_hole_vis()
         self.row_spacing.setVisible(self.rows.currentIndex() == 1)
 
+    def _build_iron_combo(self):
+        from leathercad.irons import CATALOG
+        self.iron.blockSignals(True)
+        self.iron.clear()
+        for brand, irons in CATALOG.items():
+            if self.iron.count():
+                self.iron.insertSeparator(self.iron.count())
+            for iron in irons:
+                self.iron.addItem(
+                    f"{brand} · {iron.pitch_mm:g} mm  ({iron.spi:.1f} SPI)",
+                    round(iron.pitch_mm, 4))
+        self.iron.addItem("Custom pitch…", None)
+        self.iron.blockSignals(False)
+
     def _sync_iron_combo(self, pitch):
-        for i, k in enumerate(self._iron_keys):
-            if abs(PRESETS[k].pitch_mm - pitch) < 1e-6:
+        for i in range(self.iron.count()):
+            data = self.iron.itemData(i)
+            if data is not None and abs(float(data) - pitch) < 0.02:
                 self.iron.setCurrentIndex(i)
                 return
         self.iron.setCurrentIndex(self.iron.count() - 1)  # Custom
@@ -405,10 +419,10 @@ class PropertiesPanel(QWidget):
     def _on_iron(self):
         if self._loading:
             return
-        key = self.iron.currentData()
-        if key and key != "custom":
+        data = self.iron.currentData()
+        if data is not None:
             self._loading = True
-            self.pitch.setValue(PRESETS[key].pitch_mm)
+            self.pitch.setValue(float(data))
             self._loading = False
             self._apply()
             self._commit()

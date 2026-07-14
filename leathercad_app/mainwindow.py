@@ -634,6 +634,7 @@ class MainWindow(QMainWindow):
                   self.canvas.make_back_piece_selected)
         self._add(em, "Check back-to-back symmetry…", None, self._check_symmetry)
         self._add(em, "Check seam mates…", None, self._check_seam_mates)
+        self._add(em, "Job estimate (cut summary)…", None, self._job_estimate)
         self._add(em, "Thread estimate…", None, self._thread_estimate)
         self._add(em, "Area / leather usage…", None, self._area_report)
         em.addSeparator()
@@ -1200,6 +1201,76 @@ class MainWindow(QMainWindow):
             w.value(), h.value(), margin=margin.value(),
             spacing=gap.value(), allow_rotate=rot.isChecked())
         QMessageBox.information(self, "Nest on sheet", report)
+
+    def _job_estimate(self):
+        """One dialog for the numbers a maker quotes a job with: pieces, holes,
+        thread, cut/score/engrave lengths, leather + waste, laser time, cost.
+        Prices default to 0 and their cost lines simply don't show until set."""
+        from PySide6.QtWidgets import (QDialog, QFormLayout, QDialogButtonBox,
+                                       QVBoxLayout, QLabel)
+        from PySide6.QtGui import QFontDatabase
+        from .mathspin import MathSpinBox
+        from leathercad.estimate import estimate_project, format_report
+        s = self._settings()
+
+        def _spin(key, default, lo, hi, suffix, dec, tip=""):
+            sp = MathSpinBox()
+            sp.setRange(lo, hi)
+            sp.setDecimals(dec)
+            sp.setSuffix(suffix)
+            sp.setValue(s.value(key, default, type=float))
+            if tip:
+                sp.setToolTip(tip)
+            return sp
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Job estimate")
+        lay = QVBoxLayout(dlg)
+        form = QFormLayout()
+        thick = _spin("threadThickness", 3.0, 0.2, 30.0, " mm", 1,
+                      "TOTAL leather stack at the seam (all layers)")
+        tail = _spin("threadTail", 150.0, 0.0, 1000.0, " mm", 0,
+                     "Needle-grip allowance at EACH end of a run")
+        feed = _spin("laserFeed", 20.0, 0.0, 500.0, " mm/s", 0,
+                     "Cutting feed rate; 0 to skip the run-time estimate")
+        usable = _spin("leatherUsable", 75.0, 10.0, 100.0, " %", 0,
+                       "Usable portion of the hide — the rest is waste")
+        price_l = _spin("priceLeather", 0.0, 0.0, 999.0, " $/sq ft", 2)
+        price_t = _spin("priceThread", 0.0, 0.0, 99.0, " $/m", 2)
+        price_j = _spin("priceLaser", 0.0, 0.0, 999.0, " $/min", 2)
+        form.addRow("Leather stack", thick)
+        form.addRow("Needle tail", tail)
+        form.addRow("Laser feed", feed)
+        form.addRow("Hide yield", usable)
+        form.addRow("Leather price", price_l)
+        form.addRow("Thread price", price_t)
+        form.addRow("Laser price", price_j)
+        lay.addLayout(form)
+        hint = QLabel("Prices are optional — leave at 0 to skip a cost line.")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                              | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        for key, w in (("threadThickness", thick), ("threadTail", tail),
+                       ("laserFeed", feed), ("leatherUsable", usable),
+                       ("priceLeather", price_l), ("priceThread", price_t),
+                       ("priceLaser", price_j)):
+            s.setValue(key, w.value())
+        est = estimate_project(
+            self.doc, thickness_mm=thick.value(), tail_mm=tail.value(),
+            feed_mm_s=feed.value(), usable_pct=usable.value(),
+            price_per_sqft=price_l.value(), price_thread_per_m=price_t.value(),
+            price_laser_per_min=price_j.value())
+        box = QMessageBox(self)
+        box.setWindowTitle("Job estimate")
+        box.setText(format_report(est, usable_pct=usable.value()))
+        box.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+        box.exec()
 
     def _area_report(self):
         """Ask the usable-hide percentage (remembered), show material usage."""

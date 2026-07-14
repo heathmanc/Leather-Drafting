@@ -333,7 +333,7 @@ disappear).
 
 | Setting | What it does |
 |---|---|
-| **Iron** | Presets by pitch (mm) and SPI. Picking one sets Pitch; editing Pitch by hand flips it to *Custom*. |
+| **Iron** | A maker catalogue grouped by brand — KS Blade Punch, Amy Roke, Sinabroks, Crimson Hides, Wuta (mm irons) and Weaver, Tandy Pro, Blanchard (SPI/points irons). Picking one sets Pitch; editing Pitch by hand flips it to *Custom pitch…*. Brand is just a label — pitch is what drives the geometry, so two makers' 3.85 mm irons are interchangeable. |
 | **Pitch** | The straight-line (chord) hole spacing — your iron's tooth spacing. Default 3.85 mm ≈ 6.6 SPI. |
 | **Inset from edge** | How far the stitch line sits in from the cut edge. Default 3.5 mm. |
 | **Fit** | How holes are fitted to the path. **auto** picks *closed* for closed outlines, *endpoints* for open ones — the pitch is nudged (≤ 12 %) so whole holes land on every corner and both ends. **none** marches at the *exact* pitch and lets the last hole fall wherever it lands. |
@@ -345,6 +345,17 @@ disappear).
 
 The **readout** at the bottom shows the hole count, the min–max chord spacing
 (these should hug your pitch), and the effective pitch per span.
+
+### Quoting a whole job
+
+**Edit → Job estimate (cut summary)…** rolls the entire pattern up into the
+numbers you quote and cut with, in one dialog: piece count, total stitch
+holes, thread needed, **cut / score / engrave** travel lengths (split by layer
+role), leather used by the parts vs. their footprint (**layout waste %**), an
+optional **laser run-time** from your cutting feed rate, and — if you enter
+prices — a **leather + thread + laser cost** breakdown with a total. Every
+input (leather stack, needle tail, feed rate, hide yield, prices) is
+remembered; leave any price at 0 to hide its cost line.
 
 ### Seam mates — will these two pieces sew together?
 

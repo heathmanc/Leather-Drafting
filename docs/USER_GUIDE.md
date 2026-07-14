@@ -136,19 +136,17 @@ complete starter pattern — **Card holder**, **Belt** (with buckle slot, fold
 line and sizing holes), **Key fob**, or the **Vertical wallet** — matching
 the tutorials in this guide. Adapt and Save As.
 
-The **Vertical wallet** is a minimalist **single-piece** wallet in the
-style of the Oldis One, cut from one **cross-shaped** piece of leather
-(~219 × 290 mm flat) that folds down to a ~70 × 100 mm vertical wallet.
-The flat pattern is a plus / cross: a central **spine** (≈70 mm wide — the
-finished width) running top to bottom, ending in a pointed envelope **flap**
-at the top and a small tapered **tab** at the bottom, with two wide
-horizontal **wings** at the crossing. Each wing folds forward along the
-spine edge and wraps around to build the front pocket; the **right wing's
-top is cut on a diagonal** for right-handed thumb access (select the piece
-and **Make back piece**, `Ctrl+M`, for a left-hander). Score lines frame
-the four folds around the central pocket panel, and each wing carries its
-own **U-shaped seam** (top, end and bottom edges); the spine, flap and tab
-are never stitched.
+The **Bifold wallet** is a clean **single-piece** horizontal bifold, cut
+from one rectangle (~200 × 140 mm flat) that folds to a ~100 × 95 mm
+bifold. It has just two folds: a horizontal **pocket fold** — the bottom
+45 mm turns up over the front to make a full-width pocket for cards and
+folded cash — and a vertical **centre fold** so the whole thing closes like
+a book, which also splits the pocket into a left and a right compartment on
+its own (no seam needed down the middle). One straight **seam up each outer
+side** closes the two pocket sides; the pocket bottom is the fold (already
+closed) and the top stays open so cards slide in. Because each seam is a
+single straight line, the pocket's holes sit directly over the shell's when
+you fold it up.
 
 ### Tracing a real object
 

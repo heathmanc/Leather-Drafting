@@ -69,86 +69,50 @@ def key_fob() -> Document:
     return doc
 
 
-def vertical_wallet() -> Document:
-    """A minimalist SINGLE-PIECE vertical wallet in the style of the Oldis
-    One: one continuous cross-shaped piece of leather, ~219 x 290 mm flat,
-    that folds down to a ~70 x 100 mm (2.75 x 3.95 in) vertical wallet.
+def bifold_wallet() -> Document:
+    """A clean SINGLE-PIECE horizontal bifold (my own design), cut from one
+    rectangle, ~200 x 140 mm flat, folding to a ~100 x 95 mm bifold.
 
-    The flat pattern is a plus / cross:
+    Two folds, no separate pieces:
 
-      * a central spine (~70 mm wide -- the finished width) running top to
-        bottom, ending in a pointed envelope FLAP at the top and a small
-        tapered TAB at the bottom;
-      * two wide horizontal WINGS at the crossing. Each wing folds forward
-        along the spine edge and wraps around to form the front pocket; the
-        right wing's top edge is cut down on a diagonal for right-handed
-        thumb access (mirror the piece, Ctrl+M, for a left-hander).
+      * a horizontal POCKET fold -- the bottom 45 mm turns up over the front
+        to make a full-width pocket for cards and folded cash;
+      * a vertical CENTRE fold -- the whole thing then closes like a book,
+        and that crease splits the pocket into a left and a right
+        compartment on its own (no seam needed down the middle).
 
-    The wings are stitched around their top / end / bottom edges (one seam
-    per wing); the spine, flap and tab are never stitched. Score lines mark
-    the four folds around the central pocket panel.
+    Stitching is one straight seam up each outer side, through both the
+    pocket layer and the shell, closing the two pocket sides; the pocket
+    bottom is the fold (already closed) and the top is left open so cards
+    slide in. Everything registers because each seam is a single straight
+    line -- fold the pocket up and its holes sit directly over the shell's.
     """
-    doc = Document("Vertical wallet")
-    hw = 35.0                          # central spine half-width (70 mm)
-    tip = 110.0                        # wing tip half-span (220 mm overall)
-    apex, shoulder = 290.0, 248.0      # top flap point / where it squares off
-    band_top, band_bot = 130.0, 45.0   # the horizontal wing band
-    r_top = 108.0                      # right wing top-outer (diagonal cut)
-    lower, tab = 22.0, 26.0            # lower spine / bottom tab half-width
+    doc = Document("Bifold wallet")
+    W, H = 200.0, 140.0                # flat sheet; closed ~100 x 95 mm
+    POCKET = 45.0                      # bottom strip that folds up
+    hw, hh = W / 2.0, H / 2.0
+    fold_y = -hh + POCKET              # pocket-fold height (from the bottom)
 
-    body = Polygon(
-        name="Wallet body (one piece)",
-        points=[
-            Vec2(0.0, apex),                 # flap point
-            Vec2(hw, shoulder),              # right shoulder
-            Vec2(hw, band_top),              # right spine, band top
-            Vec2(tip, r_top),                # right wing tip (sloped)
-            Vec2(tip, band_bot),             # right wing bottom
-            Vec2(hw, band_bot),              # back to spine
-            Vec2(hw, lower),                 # lower spine right
-            Vec2(tab, 0.0),                  # bottom tab right
-            Vec2(-tab, 0.0),                 # bottom tab left
-            Vec2(-hw, lower),                # lower spine left
-            Vec2(-hw, band_bot),             # spine, band bottom
-            Vec2(-tip, band_bot),            # left wing bottom
-            Vec2(-tip, band_top),            # left wing tip (square)
-            Vec2(-hw, band_top),             # back to spine
-            Vec2(-hw, shoulder),             # left shoulder
-        ],
-        close_path=True, corner_radius=3.0,
+    doc.add_shape(Rectangle(
+        name="Wallet body (one piece)", width=W, height=H, corner_radius=8.0,
         transform=Transform(x=0, y=0),
-        stitch=StitchSettings(enabled=False), layer="Cut")
-    doc.add_shape(body)
-
-    # fold lines: the rectangle around the central pocket panel (wings fold
-    # up along the two verticals; flap folds down, tab folds up)
-    folds = [("Left wing fold", [Vec2(-hw, band_bot), Vec2(-hw, band_top)]),
-             ("Right wing fold", [Vec2(hw, band_bot), Vec2(hw, band_top)]),
-             ("Flap fold", [Vec2(-hw, band_top), Vec2(hw, band_top)]),
-             ("Bottom fold", [Vec2(-hw, band_bot), Vec2(hw, band_bot)])]
-    for name, pts in folds:
-        doc.add_shape(PathShape(name=name, points=pts, close_path=False,
-                                transform=Transform(x=0, y=0), layer="Score"))
-
-    # one seam per wing: a U of holes 6 mm in from the top / end / bottom
-    # edges. The left wing is square; the right follows its diagonal top.
-    d = 6.0
-    left = StitchLine(
-        points=[Vec2(-hw, band_top - d), Vec2(-tip + d, band_top - d),
-                Vec2(-tip + d, band_bot + d), Vec2(-hw, band_bot + d)],
-        corner_points=[Vec2(-tip + d, band_top - d),
-                       Vec2(-tip + d, band_bot + d)],
-        settings=StitchSettings(pitch_mm=3.85, fit="endpoints"))
-    left.name = "Left wing seam"
-    right = StitchLine(
-        points=[Vec2(hw, band_top - d), Vec2(tip - d, r_top - d),
-                Vec2(tip - d, band_bot + d), Vec2(hw, band_bot + d)],
-        corner_points=[Vec2(tip - d, r_top - d),
-                       Vec2(tip - d, band_bot + d)],
-        settings=StitchSettings(pitch_mm=3.85, fit="endpoints"))
-    right.name = "Right wing seam"
-    doc.add_stitch_line(left)
-    doc.add_stitch_line(right)
+        stitch=StitchSettings(enabled=False), layer="Cut"))
+    # fold lines
+    doc.add_shape(PathShape(
+        name="Pocket fold", points=[Vec2(-hw, fold_y), Vec2(hw, fold_y)],
+        close_path=False, transform=Transform(x=0, y=0), layer="Score"))
+    doc.add_shape(PathShape(
+        name="Centre fold", points=[Vec2(0, -hh), Vec2(0, hh)],
+        close_path=False, transform=Transform(x=0, y=0), layer="Score"))
+    # one straight seam up each outer side of the pocket region
+    d = 4.0
+    for sign, name in ((-1, "Left pocket seam"), (1, "Right pocket seam")):
+        seam = StitchLine(
+            points=[Vec2(sign * (hw - d), -hh + d), Vec2(sign * (hw - d),
+                                                         fold_y - d)],
+            settings=StitchSettings(pitch_mm=3.85, fit="endpoints"))
+        seam.name = name
+        doc.add_stitch_line(seam)
     return doc
 
 
@@ -157,5 +121,5 @@ TEMPLATES = [
     ("Card holder", card_holder),
     ("Belt", belt),
     ("Key fob", key_fob),
-    ("Vertical wallet", vertical_wallet),
+    ("Bifold wallet", bifold_wallet),
 ]

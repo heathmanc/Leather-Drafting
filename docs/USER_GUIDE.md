@@ -160,8 +160,8 @@ each end so the cut can't tear) lets you slide a card out one-handed. The
 70 mm column is the back panel and, above the flap fold, the long closing
 **flap**: its symmetric pointed tip folds over the entrance and tucks down
 the front, and the smooth **arched thumb notch** in the block's bottom edge
-is where you lift it back out. Seams are **3 mm pitch** like the original
-sheet, and every row sits 4 mm inside its own panel so no hole lands on a
+is where you lift it back out. Seams are **5 mm pitch**, and every row
+sits 4 mm inside its own panel so no hole lands on a
 fold: the left wing carries a top and an outer-edge row, and the middle
 section its **own top row and a vertical row just inside the right wing
 fold** (same pitch as the wing's, so the layers line up when you prick

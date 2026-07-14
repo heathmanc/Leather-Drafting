@@ -136,10 +136,11 @@ def fold_over_wallet() -> Document:
         over the entrance and tucks down the front; the small notch in the
         block's bottom edge gives your thumb room to lift the tip back out.
 
-    Stitching is 3 mm pitch, as on the original pattern sheet: one seam
-    around the left wing (top edge, outer edge, then the bottom run to the
-    thumb notch) and one along the bottom of the right wing. The sloped top
-    and the diagonal slot stay open -- that's where cards go in and out.
+    Stitching is 5 mm pitch: the left wing carries a top row and an
+    outer-edge row, the middle section its own top row and a vertical row
+    just inside the right wing fold. The bottom edge and thumb notch are
+    unstitched (the wallet bottom is a fold), and the sloped top and the
+    diagonal slot stay open -- that's where cards go in and out.
     Mirror everything (Ctrl+M) for a left-handed version.
     """
     doc = Document("Fold-over wallet")
@@ -161,9 +162,9 @@ def fold_over_wallet() -> Document:
             Vec2(219, 62 - r),                   # into the entrance corner
             Vec2(219 + r * sdx, 62 + r * sdy),   # onto the sloped entrance
             Vec2(CR, 90),                        # sloped pouch entrance
-            Vec2(CR, 238),                       # up the column
+            Vec2(CR, 264),                       # up the column
             Vec2(MID, 290),                      # the flap point (on centre)
-            Vec2(CL, 238),                       # symmetric left shoulder
+            Vec2(CL, 264),                       # symmetric left shoulder
             Vec2(CL, 90),                        # down the column
             Vec2(r, 90),                         # left wing top
             Vec2(0, 90 - r),
@@ -171,7 +172,7 @@ def fold_over_wallet() -> Document:
         ],
         edges=[
             Edge("line"),
-            Edge("arc", Vec2(113, 16)),          # the notch: one smooth arc
+            Edge("arc", Vec2(113, 8)),           # the notch: a shallow scoop
             Edge("line"),
             Edge("arc", Vec2(219 - o, o)),       # bottom-right fillet
             Edge("line"),
@@ -207,7 +208,7 @@ def fold_over_wallet() -> Document:
         doc.add_shape(PathShape(name=name, points=pts, close_path=False,
                                 transform=Transform(x=0, y=0), layer="Score"))
 
-    # seams, 3 mm pitch like the original sheet. Each panel carries its own
+    # seams, 5 mm pitch. Each panel carries its own
     # rows, 4 mm inside its edges and folds (no hole ever lands ON a crease):
     # the left wing gets a top row and an outer-edge row; the middle section
     # gets its own top row and a vertical row just INSIDE the right wing
@@ -224,7 +225,7 @@ def fold_over_wallet() -> Document:
     ]
     for name, pts in runs:
         seam = StitchLine(points=pts,
-                          settings=StitchSettings(pitch_mm=3.0,
+                          settings=StitchSettings(pitch_mm=5.0,
                                                   fit="endpoints"))
         seam.name = name
         doc.add_stitch_line(seam)

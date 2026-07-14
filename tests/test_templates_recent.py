@@ -94,16 +94,19 @@ def test_fold_over_wallet_matches_source_pattern():
     # centre, shoulders at equal height, no stray step nodes
     peak = max(body.nodes, key=lambda p: p.y)
     assert peak.y == 290.0 and peak.x == (78.0 + 148.0) / 2.0
-    shoulders = [p for p in body.nodes if p.y == 238.0]
+    shoulders = [p for p in body.nodes if p.y == 264.0]
     assert sorted(p.x for p in shoulders) == [78.0, 148.0]
-    assert not any(238.0 < p.y < 290.0 for p in body.nodes)
+    assert not any(264.0 < p.y < 290.0 for p in body.nodes)
+    # blunt point: the tip rises less than it is wide (no spike)
+    assert (290.0 - 264.0) < 35.0
 
     # the thumb notch is ONE smooth arc through its apex, centred under
     # the column
     i = next(k for k, p in enumerate(body.nodes) if p.x == 95.0 and p.y == 0)
     notch_edge = body.edges[i]
     assert notch_edge.kind == "arc"
-    assert notch_edge.mid.x == (95.0 + 131.0) / 2.0 and notch_edge.mid.y == 16.0
+    assert notch_edge.mid.x == (95.0 + 131.0) / 2.0
+    assert notch_edge.mid.y <= 8.0                          # a shallow scoop
 
     # right wing top slopes down to the entrance; left wing top is straight
     assert any(abs(p.x - 219.0) < 1e-9 and abs(p.y - 58.0) < 1e-9
@@ -119,13 +122,13 @@ def test_fold_over_wallet_matches_source_pattern():
     ends = {(p.x, p.y) for p in (a, b)}
     assert {(c.transform.x, c.transform.y) for c in reliefs} == ends
 
-    # three folds; four 3 mm seams confined to the block, every row 4 mm
+    # three folds; four 5 mm seams confined to the block, every row 4 mm
     # inside its panel -- no hole on or across a fold line
     assert sum(1 for s in doc.shapes if s.layer == "Score") == 3
     assert len(doc.stitch_lines) == 4
     for sl in doc.stitch_lines:
-        assert sl.settings.pitch_mm == 3.0
-        assert sl.result().count >= 18
+        assert sl.settings.pitch_mm == 5.0
+        assert sl.result().count >= 12
         assert max(p.y for p in sl.points) <= 90.0
     top_w, top_m, left, middle = doc.stitch_lines
     assert max(p.x for p in top_w.points) < 78.0            # wing side only

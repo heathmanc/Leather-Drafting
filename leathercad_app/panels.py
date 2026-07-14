@@ -439,6 +439,7 @@ class PropertiesPanel(QWidget):
             sh.opacity = self.opacity.value() / 100.0
             sh.layer = self.layer_combo.currentData() or sh.layer
             self._apply_shape_geometry(sh)
+            self._record_bindings(sh)
             if sh.stitch is None:
                 sh.stitch = StitchSettings(enabled=False)
             self._write_hole_style(sh.stitch)
@@ -455,6 +456,7 @@ class PropertiesPanel(QWidget):
             sh.opacity = self.opacity.value() / 100.0
             sh.layer = self.layer_combo.currentData() or sh.layer
             self._apply_shape_geometry(sh)
+            self._record_bindings(sh)
             if self.g_stitch.isChecked():
                 if sh.stitch is None:
                     sh.stitch = StitchSettings()
@@ -490,6 +492,26 @@ class PropertiesPanel(QWidget):
             p1 = Vec2(p0.x + length * math.cos(ang),
                       p0.y + length * math.sin(ang))
             sh.points[1] = sh.transform.inverse_apply(p1)
+
+    def _record_bindings(self, sh) -> None:
+        """Remember which fields the user set FROM a parameter expression, so
+        editing the parameter later re-drives them (see Document.bindings).
+        A field re-typed as a plain number drops its binding."""
+        doc = self.canvas.doc
+        pairs = [(self.pos_x, "x"), (self.pos_y, "y"), (self.rot, "rot"),
+                 (self.w, "w"), (self.h, "h"), (self.corner, "corner"),
+                 (self.rx, "rx"), (self.ry, "ry"),
+                 (self.poly_radius, "corner"),
+                 (self.pitch, "pitch"), (self.inset, "inset")]
+        for spin, field in pairs:
+            expr = getattr(spin, "last_expr", None)
+            if expr is None:
+                continue                       # untouched since load
+            key = f"{sh.shape_id}:{field}"
+            if expr:
+                doc.bindings[key] = expr
+            else:
+                doc.bindings.pop(key, None)    # plain number typed: unlink
 
     def _write_hole_style(self, obj):
         obj.hole_style = self.hole_style.currentText()

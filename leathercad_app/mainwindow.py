@@ -107,6 +107,9 @@ class MainWindow(QMainWindow):
 
         self.canvas = Canvas(self.doc)
         self.setCentralWidget(self._wrap_with_rulers(self.canvas))
+        # every MathSpinBox in the app can use this document's parameters
+        from . import mathspin
+        mathspin.set_params_provider(lambda: self.doc.param_values())
 
         self.properties = PropertiesPanel(self.canvas)
         self.layers = LayersPanel(self.canvas)
@@ -577,6 +580,7 @@ class MainWindow(QMainWindow):
                   self._offset_selected)
         self._add(em, "Array…", "Ctrl+Shift+R", self._array_selected)
         self._add(em, "Nest on sheet…", "Ctrl+Shift+N", self._nest_dialog)
+        self._add(em, "Parameters…", "Ctrl+Shift+P", self._params_dialog)
         em.addSeparator()
         self._add(em, "Union (merge shapes)", "Ctrl+U",
                   lambda: self.canvas.boolean_selected("union"))
@@ -871,6 +875,112 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self, "Thread estimate",
             self.canvas.thread_report(thick.value(), tail.value()))
+
+    def _params_dialog(self):
+        """Edit the document's named parameters (usable in any numeric field);
+        applying re-drives every field that was set from a parameter."""
+        from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout,
+                                       QTableWidget, QTableWidgetItem,
+                                       QPushButton, QDialogButtonBox, QLabel)
+        from leathercad.expr import resolve, valid_name
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Parameters")
+        dlg.resize(430, 340)
+        lay = QVBoxLayout(dlg)
+        hint = QLabel(
+            "Named values you can use in <b>any</b> numeric field — type "
+            "<code>strap_w*2+5</code> into a width box and it stays "
+            "<b>linked</b>: change the parameter here and every field that "
+            "used it updates. Parameters may use each other and units "
+            "(<code>1in</code>, <code>3cm</code>).")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        table = QTableWidget(0, 3)
+        table.setHorizontalHeaderLabels(["Name", "Expression", "Value"])
+        table.horizontalHeader().setStretchLastSection(True)
+        lay.addWidget(table)
+
+        def add_row(name="", expr=""):
+            r = table.rowCount()
+            table.insertRow(r)
+            table.setItem(r, 0, QTableWidgetItem(name))
+            table.setItem(r, 1, QTableWidgetItem(expr))
+            val = QTableWidgetItem("")
+            val.setFlags(val.flags() & ~Qt.ItemIsEditable)
+            table.setItem(r, 2, val)
+
+        for n, e in self.doc.params.items():
+            add_row(n, e)
+
+        def collect():
+            """Rows -> ordered dict; raises ValueError on bad input."""
+            out = {}
+            for r in range(table.rowCount()):
+                name = (table.item(r, 0).text() if table.item(r, 0) else "").strip()
+                expr = (table.item(r, 1).text() if table.item(r, 1) else "").strip()
+                if not name and not expr:
+                    continue                       # blank row
+                if not valid_name(name):
+                    raise ValueError(f"bad name: {name!r} (letters, digits, _ "
+                                     "— and not a unit word)")
+                if name in out:
+                    raise ValueError(f"duplicate name: {name}")
+                if not expr:
+                    raise ValueError(f"{name}: empty expression")
+                out[name] = expr
+            return out
+
+        def recompute(*_a):
+            try:
+                vals = resolve(collect())
+                err = None
+            except ValueError as e:
+                vals, err = {}, str(e)
+            for r in range(table.rowCount()):
+                name = (table.item(r, 0).text() if table.item(r, 0) else "").strip()
+                if table.item(r, 2) is not None:
+                    table.item(r, 2).setText(
+                        f"{vals[name]:g} mm" if name in vals else "—")
+            status.setText(err or "")
+
+        table.cellChanged.connect(recompute)
+        btns = QHBoxLayout()
+        add_btn = QPushButton("Add")
+        add_btn.clicked.connect(lambda: add_row())
+        del_btn = QPushButton("Delete")
+        del_btn.clicked.connect(lambda: table.removeRow(table.currentRow())
+                                if table.currentRow() >= 0 else None)
+        btns.addWidget(add_btn)
+        btns.addWidget(del_btn)
+        btns.addStretch(1)
+        lay.addLayout(btns)
+        status = QLabel("")
+        status.setWordWrap(True)
+        lay.addWidget(status)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                              | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        recompute()
+        while dlg.exec() == QDialog.DialogCode.Accepted:
+            try:
+                params = collect()
+                resolve(params)                    # full validation
+            except ValueError as e:
+                QMessageBox.warning(self, "Parameters", str(e))
+                continue
+            self.doc.params = params
+            problems = self.canvas.apply_param_bindings()
+            self.commit()
+            if problems:
+                QMessageBox.warning(
+                    self, "Parameters",
+                    "Some linked fields could not update:\n"
+                    + "\n".join(problems))
+            return
+        # cancelled: nothing written
 
     def _nest_dialog(self):
         """Ask the sheet size + gaps (remembered), pack the pieces, report."""

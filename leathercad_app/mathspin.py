@@ -1,62 +1,62 @@
-"""Numeric fields that evaluate arithmetic.
+"""Numeric fields that evaluate arithmetic -- and user parameters.
 
-Type ``105/2 + 3`` or ``4*25.4`` into any dimension box and it just works.
-Evaluation is a whitelisted AST walk -- numbers and + - * / // % ** ( ) only,
-no names, no calls -- so it is safe. Unit suffixes typed by hand are also
-understood: ``1in`` -> 25.4, ``3cm`` -> 30 (the field's own display suffix is
-stripped first).
+Type ``105/2 + 3`` or ``4*25.4`` into any dimension box and it just works;
+unit suffixes typed by hand are understood too (``1in`` -> 25.4). When a
+document defines parameters (Edit -> Parameters), their names work in any
+field: ``strap_w * 2 + 5``. The evaluation core lives in ``leathercad.expr``
+(a whitelisted AST walk -- safe by construction).
+
+A field remembers WHETHER the user's last entry used a parameter
+(``last_expr``), so the Properties panel can record a live binding: change
+the parameter later and every bound field re-evaluates.
 """
 
 from __future__ import annotations
 
-import ast
-import re
-
 from PySide6.QtGui import QValidator
 from PySide6.QtWidgets import QDoubleSpinBox
 
-_ALLOWED_BINOPS = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv,
-                   ast.Mod, ast.Pow)
-_UNIT = re.compile(r"(\d(?:[\d.]*))\s*(mm|cm|in)\b", re.IGNORECASE)
-_UNIT_MM = {"mm": 1.0, "cm": 10.0, "in": 25.4}
+from leathercad.expr import evaluate, names_in  # noqa: F401  (re-exported)
+
+# module-level hook: returns {param name: value} for the current document.
+# Installed by the main window; None -> plain arithmetic only.
+_params_provider = None
 
 
-def _eval_node(node) -> float:
-    if isinstance(node, ast.Expression):
-        return _eval_node(node.body)
-    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-        return float(node.value)
-    if isinstance(node, ast.BinOp) and isinstance(node.op, _ALLOWED_BINOPS):
-        a = _eval_node(node.left)
-        b = _eval_node(node.right)
-        if isinstance(node.op, ast.Add):
-            return a + b
-        if isinstance(node.op, ast.Sub):
-            return a - b
-        if isinstance(node.op, ast.Mult):
-            return a * b
-        if isinstance(node.op, ast.Div):
-            return a / b
-        if isinstance(node.op, ast.FloorDiv):
-            return a // b
-        if isinstance(node.op, ast.Mod):
-            return a % b
-        return a ** b
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
-        v = _eval_node(node.operand)
-        return -v if isinstance(node.op, ast.USub) else v
-    raise ValueError("not a plain arithmetic expression")
+def set_params_provider(fn) -> None:
+    global _params_provider
+    _params_provider = fn
 
 
-def evaluate(text: str) -> float:
-    """Evaluate ``text`` as safe arithmetic (with mm/cm/in suffixes) in mm."""
-    s = text.strip().replace(",", ".")
-    s = _UNIT.sub(lambda m: f"({m.group(1)}*{_UNIT_MM[m.group(2).lower()]})", s)
-    return _eval_node(ast.parse(s, mode="eval"))
+def current_params() -> dict:
+    try:
+        return dict(_params_provider()) if _params_provider else {}
+    except Exception:
+        return {}
 
 
 class MathSpinBox(QDoubleSpinBox):
-    """QDoubleSpinBox that accepts arithmetic expressions while typing."""
+    """QDoubleSpinBox that accepts arithmetic expressions while typing.
+
+    ``last_expr`` tracks the user's latest committed entry:
+      * ``None``  -- untouched since the last programmatic setValue (a load)
+      * ``""``    -- the user typed a plain number (clears any binding)
+      * ``"..."`` -- the user typed an expression that uses a parameter
+    """
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.last_expr = None
+        self._user_edited = False
+        self.lineEdit().textEdited.connect(self._mark_edited)
+
+    def _mark_edited(self, _text) -> None:
+        self._user_edited = True
+
+    def setValue(self, v) -> None:            # programmatic load
+        self.last_expr = None
+        self._user_edited = False
+        super().setValue(v)
 
     def validate(self, text: str, pos: int):
         # accept anything while typing; valueFromText decides on commit
@@ -71,11 +71,15 @@ class MathSpinBox(QDoubleSpinBox):
         if suffix and s.endswith(suffix):
             s = s[: -len(suffix)]
         s = s.strip()
-        # a degree/px suffix stripped may still leave the unit word
+        params = current_params()
         try:
-            return float(evaluate(s))
+            v = float(evaluate(s, params))
         except Exception:
             try:
-                return float(s.replace(",", "."))
+                v = float(s.replace(",", "."))
             except ValueError:
                 return self.value()          # unparseable: keep the old value
+        if self._user_edited:
+            used = names_in(s) & set(params)
+            self.last_expr = s if used else ""
+        return v

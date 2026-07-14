@@ -210,6 +210,12 @@ class Document:
         # tracing underlay: a reference photo behind the drawing (never
         # exported). {path, x, y, scale, opacity, visible} or None.
         self.underlay: Optional[dict] = None
+        # user parameters (Fusion-style): ordered {name: expression}, usable
+        # in any numeric field. bindings remember which shape fields were set
+        # FROM a parameter expression ("shape_id:field" -> expression), so a
+        # parameter edit re-drives every field that used it.
+        self.params: dict = {}
+        self.bindings: dict = {}
 
     # -- collection helpers --------------------------------------------
     def add_shape(self, shape: Shape) -> Shape:
@@ -236,6 +242,11 @@ class Document:
         if hole in self.holes:
             self.holes.remove(hole)
 
+    def param_values(self) -> dict:
+        """Concrete values of all user parameters (may reference each other)."""
+        from .expr import resolve
+        return resolve(self.params)
+
     def layer(self, name: str) -> Optional[Layer]:
         for lyr in self.layers:
             if lyr.name == name:
@@ -260,6 +271,8 @@ class Document:
             "texts": [tx.to_dict() for tx in self.texts],
             "kerf": self.kerf,
             "underlay": self.underlay,
+            "params": dict(self.params),
+            "bindings": dict(self.bindings),
         }
 
     @classmethod
@@ -278,6 +291,8 @@ class Document:
         doc.texts = [TextShape.from_dict(x) for x in d.get("texts", [])]
         doc.kerf = float(d.get("kerf", 0.0))
         doc.underlay = d.get("underlay") or None
+        doc.params = dict(d.get("params", {}))
+        doc.bindings = dict(d.get("bindings", {}))
         return doc
 
     def save(self, path: str) -> None:

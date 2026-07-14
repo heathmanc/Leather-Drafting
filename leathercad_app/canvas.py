@@ -2919,6 +2919,67 @@ class Canvas(QGraphicsView):
         self._offset_pts = []
         self._offset_dist = 0.0
 
+    # -- user parameters: re-drive bound fields --------------------------
+    def apply_param_bindings(self) -> list:
+        """Re-evaluate every parameter-bound shape field (Document.bindings)
+        against the current parameter values and push the results into the
+        models. Returns a list of human-readable problems (bad expressions);
+        an empty list means everything applied cleanly."""
+        from leathercad.expr import evaluate
+        doc = self.doc
+        if not doc.bindings:
+            return []
+        try:
+            vals = doc.param_values()
+        except ValueError as e:
+            return [str(e)]
+        by_id = {sh.shape_id: sh for sh in doc.shapes}
+        errors, changed = [], False
+        for key, expr in list(doc.bindings.items()):
+            sid, _, field = key.rpartition(":")
+            sh = by_id.get(sid)
+            if sh is None:                       # shape was deleted
+                doc.bindings.pop(key, None)
+                continue
+            try:
+                v = float(evaluate(expr, vals))
+            except Exception as e:
+                errors.append(f"{sh.name or sid} · {field} = {expr}: {e}")
+                continue
+            if self._set_bound_field(sh, field, v):
+                changed = True
+        if changed:
+            self.rebuild()
+            self.documentChangedSig.emit()
+        return errors
+
+    @staticmethod
+    def _set_bound_field(sh, field: str, v: float) -> bool:
+        t = sh.transform
+        if field == "x":
+            t.x = v
+        elif field == "y":
+            t.y = v
+        elif field == "rot":
+            t.rotation = v
+        elif field == "w" and hasattr(sh, "width"):
+            sh.width = v
+        elif field == "h" and hasattr(sh, "height"):
+            sh.height = v
+        elif field == "corner" and hasattr(sh, "corner_radius"):
+            sh.corner_radius = v
+        elif field == "rx" and hasattr(sh, "rx"):
+            sh.rx = v
+        elif field == "ry" and hasattr(sh, "ry"):
+            sh.ry = v
+        elif field == "pitch" and sh.stitch is not None:
+            sh.stitch.pitch_mm = v
+        elif field == "inset" and sh.stitch is not None:
+            sh.stitch.inset = v
+        else:
+            return False
+        return True
+
     # -- nesting: pack pieces onto a leather sheet ----------------------
     def nest_selected(self, sheet_w: float, sheet_h: float, *,
                       margin: float = 5.0, spacing: float = 3.0,

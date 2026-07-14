@@ -235,6 +235,14 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
 * **Resize exactly**: type in the Properties fields. Both stay in sync.
   **Every number field does math**: type `105/2 + 3`, `4*25.4`, or even
   `1in` / `3cm` and it evaluates on Enter.
+* **Parameters** (`Ctrl+Shift+P`) — Fusion-style named values. Define
+  `strap_w = 20` once in Edit → **Parameters…**, then type `strap_w` (or
+  `strap_w*2+5`) into any numeric field. A field set from a parameter stays
+  **linked**: change the parameter and every linked field re-evaluates and
+  the shapes update. Re-type a plain number into a field to unlink it.
+  Parameters may reference each other (`half_w = strap_w/2`) and understand
+  units (`1in`), are saved in the file, and a parameter edit is one undo
+  step. Great for "the whole wallet, resizable from one table".
 * **Rotate**: drag the round **rotation grip** floating above a selected
   shape's box — snaps to 1° (hold **Shift** for 15° detents) — or type an
   exact angle in Properties → Rotation.
@@ -642,6 +650,7 @@ what the **Stitch line** tool is for.
 | `Ctrl+Shift+O` | Offset / seam allowance |
 | `Ctrl+Shift+R` | Array (grid / circular) |
 | `Ctrl+Shift+N` | Nest on sheet |
+| `Ctrl+Shift+P` | Parameters |
 | `Ctrl+M` | Make back piece (mirror) |
 | `F` | Fit view to content |
 | `Ctrl+1` / `Ctrl+2` | Properties / Layers panel |

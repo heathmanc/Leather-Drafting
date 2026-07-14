@@ -2919,6 +2919,163 @@ class Canvas(QGraphicsView):
         self._offset_pts = []
         self._offset_dist = 0.0
 
+    # -- nesting: pack pieces onto a leather sheet ----------------------
+    def nest_selected(self, sheet_w: float, sheet_h: float, *,
+                      margin: float = 5.0, spacing: float = 3.0,
+                      allow_rotate: bool = True) -> str:
+        """Pack the selected shapes (or ALL shapes if nothing is selected)
+        onto a sheet_w x sheet_h mm sheet, using their real outlines. Grouped
+        shapes travel as one piece; anything sitting INSIDE a piece (slots,
+        hardware holes, loose stitch holes, seams, lettering) rides along.
+        Draws the sheet as a construction rectangle and returns a report."""
+        from leathercad.nesting import NestPiece, nest, rotate90
+        from leathercad.geometry import point_in_polygon
+        from leathercad.shapes import Rectangle as _Rect
+
+        cand = [it for it in self._shape_items()
+                if not getattr(it.model, "construction", False)]
+        if not cand:
+            cand = [it for it in self.scene_obj.items()
+                    if isinstance(it, ShapeItem)
+                    and not getattr(it.model, "construction", False)]
+        if not cand:
+            return "Nothing to nest — draw or select some pieces first."
+
+        # 1. move-groups nest as one piece
+        groups: dict = {}
+        for it in cand:
+            gid = getattr(it.model, "group_id", None) or id(it)
+            groups.setdefault(gid, []).append(it)
+
+        def outline_of(it):
+            pts, _c, closed = it.model.world_polyline()
+            return [Vec2(p.x, p.y) for p in pts], closed
+
+        pieces = []          # [ {shapes, outlines, bbox, ring} ]
+        for gid, members in groups.items():
+            outlines = [outline_of(m) for m in members]
+            allpts = [p for pts, _c in outlines for p in pts]
+            if len(allpts) < 2:
+                continue
+            xs = [p.x for p in allpts]
+            ys = [p.y for p in allpts]
+            ring = max((pts for pts, c in outlines if c and len(pts) >= 3),
+                       key=lambda r: len(r), default=None)
+            pieces.append({"shapes": list(members), "outlines": outlines,
+                           "bbox": (min(xs), min(ys), max(xs), max(ys)),
+                           "ring": ring, "holes": [], "seams": [], "texts": []})
+
+        def containing_piece(x, y, exclude=None):
+            best = None
+            for pc in pieces:
+                if pc is exclude or pc["ring"] is None:
+                    continue
+                bx = pc["bbox"]
+                if not (bx[0] <= x <= bx[2] and bx[1] <= y <= bx[3]):
+                    continue
+                if point_in_polygon(Vec2(x, y), pc["ring"]):
+                    area = (bx[2] - bx[0]) * (bx[3] - bx[1])
+                    if best is None or area < best[0]:
+                        best = (area, pc)
+            return best[1] if best else None
+
+        # 2. a piece fully inside another (a slot in a panel) merges into it
+        for pc in sorted(pieces, key=lambda p: (p["bbox"][2] - p["bbox"][0])
+                         * (p["bbox"][3] - p["bbox"][1])):
+            b = pc["bbox"]
+            host = containing_piece(0.5 * (b[0] + b[2]), 0.5 * (b[1] + b[3]),
+                                    exclude=pc)
+            if host is not None and host in pieces and pc in pieces \
+                    and host["bbox"][0] <= b[0] and host["bbox"][1] <= b[1] \
+                    and host["bbox"][2] >= b[2] and host["bbox"][3] >= b[3]:
+                host["shapes"] += pc["shapes"]
+                host["outlines"] += pc["outlines"]
+                pieces.remove(pc)
+
+        # 3. loose holes / seams / lettering inside a piece ride along
+        for h in self.doc.holes:
+            pc = containing_piece(h.point.x, h.point.y)
+            if pc is not None:
+                pc["holes"].append(h)
+        for sl in self.doc.stitch_lines:
+            if not sl.points:
+                continue
+            mx = sum(p.x for p in sl.points) / len(sl.points)
+            my = sum(p.y for p in sl.points) / len(sl.points)
+            pc = containing_piece(mx, my)
+            if pc is not None:
+                pc["seams"].append(sl)
+        for tx in getattr(self.doc, "texts", []):
+            pc = containing_piece(tx.transform.x, tx.transform.y)
+            if pc is not None:
+                pc["texts"].append(tx)
+
+        # 4. sheet sits at the min corner of everything being nested
+        sx = min(pc["bbox"][0] for pc in pieces)
+        sy = min(pc["bbox"][1] for pc in pieces)
+        nest_pieces = [NestPiece(key=i, outlines=pc["outlines"],
+                                 allow_rotate=allow_rotate)
+                       for i, pc in enumerate(pieces)]
+        placements, unplaced, used = nest(
+            nest_pieces, sheet_w, sheet_h,
+            margin=margin, spacing=spacing, sheet_x=sx, sheet_y=sy)
+        if not placements:
+            return ("No piece fits the sheet — try a bigger sheet, a smaller "
+                    "margin, or allow rotation.")
+
+        # 5. move every member of every placed piece as a rigid unit
+        def move_xy(x, y, pl):
+            if pl.rotated:
+                p = rotate90(Vec2(x, y), pl.pivot)
+                x, y = p.x, p.y
+            return x + pl.dx, y + pl.dy
+
+        for pl in placements:
+            pc = pieces[pl.key]
+            for it in pc["shapes"]:
+                t = it.model.transform
+                t.x, t.y = move_xy(t.x, t.y, pl)
+                if pl.rotated:
+                    t.rotation = ((t.rotation + 90 + 180) % 360) - 180
+            for tx in pc["texts"]:
+                t = tx.transform
+                t.x, t.y = move_xy(t.x, t.y, pl)
+                if pl.rotated:
+                    t.rotation = ((t.rotation + 90 + 180) % 360) - 180
+            for h in pc["holes"]:
+                h.point = Vec2(*move_xy(h.point.x, h.point.y, pl))
+                if pl.rotated:
+                    h.tangent = Vec2(-h.tangent.y, h.tangent.x)
+            for sl in pc["seams"]:
+                sl.points = [Vec2(*move_xy(p.x, p.y, pl)) for p in sl.points]
+                sl.corner_points = [Vec2(*move_xy(p.x, p.y, pl))
+                                    for p in sl.corner_points]
+
+        # 6. show the sheet itself as a construction rectangle
+        sheet = _Rect(name="Sheet", width=sheet_w, height=sheet_h,
+                      transform=Transform(x=sx + sheet_w / 2.0,
+                                          y=sy + sheet_h / 2.0),
+                      layer="Cut")
+        sheet.construction = True
+        self.doc.add_shape(sheet)
+
+        self.rebuild()
+        self.documentChangedSig.emit()
+        self._emit_commit()
+
+        lines = [f"Placed {len(placements)} of {len(pieces)} piece"
+                 f"{'s' if len(pieces) != 1 else ''} on the "
+                 f"{sheet_w:g} × {sheet_h:g} mm sheet.",
+                 f"Sheet blocked out (incl. {spacing:g} mm gaps): {used:.0%}."]
+        if unplaced:
+            names = [pieces[k]['shapes'][0].model.name
+                     or f"piece {k + 1}" for k in unplaced]
+            lines.append("Didn't fit: " + ", ".join(names) + ".")
+        if allow_rotate:
+            lines.append("Rotated pieces are turned 90° — check grain "
+                         "direction before cutting.")
+        return "\n".join(lines)
+
     def make_back_piece_selected(self) -> None:
         """Duplicate each selected shape as its mirror image -- the matching
         back piece you laser from the reverse side. The mirror keeps every hole

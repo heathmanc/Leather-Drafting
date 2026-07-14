@@ -576,6 +576,7 @@ class MainWindow(QMainWindow):
         self._add(em, "Offset / seam allowance…", "Ctrl+Shift+O",
                   self._offset_selected)
         self._add(em, "Array…", "Ctrl+Shift+R", self._array_selected)
+        self._add(em, "Nest on sheet…", "Ctrl+Shift+N", self._nest_dialog)
         em.addSeparator()
         self._add(em, "Union (merge shapes)", "Ctrl+U",
                   lambda: self.canvas.boolean_selected("union"))
@@ -870,6 +871,67 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self, "Thread estimate",
             self.canvas.thread_report(thick.value(), tail.value()))
+
+    def _nest_dialog(self):
+        """Ask the sheet size + gaps (remembered), pack the pieces, report."""
+        from PySide6.QtWidgets import (QDialog, QFormLayout, QDialogButtonBox,
+                                       QVBoxLayout, QCheckBox, QLabel)
+        from .mathspin import MathSpinBox
+        s = self._settings()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Nest on sheet")
+        lay = QVBoxLayout(dlg)
+        hint = QLabel("Packs the selected pieces (or everything, if nothing "
+                      "is selected) onto one sheet of leather, using their "
+                      "real outlines. Grouped shapes and anything inside a "
+                      "piece (slots, holes, seams) travel with it.")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        form = QFormLayout()
+
+        def _spin(key, default, lo, hi, tip):
+            sp = MathSpinBox()
+            sp.setRange(lo, hi)
+            sp.setDecimals(1)
+            sp.setSuffix(" mm")
+            sp.setValue(s.value(key, default, type=float))
+            sp.setToolTip(tip)
+            return sp
+
+        w = _spin("nestSheetW", 600.0, 20.0, 5000.0,
+                  "Width of the leather you're cutting from")
+        h = _spin("nestSheetH", 450.0, 20.0, 5000.0,
+                  "Height of the leather you're cutting from")
+        margin = _spin("nestMargin", 5.0, 0.0, 100.0,
+                       "Keep-out border along the sheet edges")
+        gap = _spin("nestGap", 3.0, 0.5, 50.0,
+                    "Minimum space between neighbouring pieces")
+        rot = QCheckBox("Allow 90° rotation")
+        rot.setChecked(s.value("nestRotate", True, type=bool))
+        rot.setToolTip("Turn off if grain / stretch direction matters "
+                       "for every piece")
+        form.addRow("Sheet width", w)
+        form.addRow("Sheet height", h)
+        form.addRow("Edge margin", margin)
+        form.addRow("Gap between pieces", gap)
+        form.addRow("", rot)
+        lay.addLayout(form)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                              | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        s.setValue("nestSheetW", w.value())
+        s.setValue("nestSheetH", h.value())
+        s.setValue("nestMargin", margin.value())
+        s.setValue("nestGap", gap.value())
+        s.setValue("nestRotate", rot.isChecked())
+        report = self.canvas.nest_selected(
+            w.value(), h.value(), margin=margin.value(),
+            spacing=gap.value(), allow_rotate=rot.isChecked())
+        QMessageBox.information(self, "Nest on sheet", report)
 
     def _area_report(self):
         """Ask the usable-hide percentage (remembered), show material usage."""

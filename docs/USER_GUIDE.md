@@ -397,6 +397,19 @@ extra construction.
   (rows × columns at spacings) or a **circle** (count around a centre,
   optionally rotating each copy). Perfect for belt holes and decorative
   punching.
+* **Nest on sheet** (`Ctrl+Shift+N`) — pack the selected pieces (or
+  everything, if nothing is selected) onto one sheet of leather. Enter the
+  sheet size, an edge margin and the minimum gap between pieces; the packer
+  uses each piece's **real outline**, so a flap can tuck into a gusset's
+  hollow instead of blocking out its whole bounding box. Grouped shapes nest
+  as one piece, and anything sitting *inside* a piece — slots, hardware
+  holes, loose stitch holes, seams, lettering — automatically travels with
+  it. The sheet is drawn as a dashed construction rectangle (it never
+  exports), pieces that don't fit stay where they were and are named in the
+  report, and **Allow 90° rotation** can be turned off when grain or stretch
+  direction matters. Pieces are placed biggest-first; it aims for a tight,
+  sensible layout, not a mathematically perfect one — nudge afterwards if
+  you spot a better pocket.
 * **Fillet / chamfer** (`6`) — click any corner of a polygon or path to round
   it with a real arc (asks the radius on first use; **Ctrl-click** to change
   it, **Shift-click** for a straight chamfer instead). It also works across
@@ -628,6 +641,7 @@ what the **Stitch line** tool is for.
 | `Ctrl+J` | Join / weld segments |
 | `Ctrl+Shift+O` | Offset / seam allowance |
 | `Ctrl+Shift+R` | Array (grid / circular) |
+| `Ctrl+Shift+N` | Nest on sheet |
 | `Ctrl+M` | Make back piece (mirror) |
 | `F` | Fit view to content |
 | `Ctrl+1` / `Ctrl+2` | Properties / Layers panel |

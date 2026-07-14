@@ -178,7 +178,7 @@ class PropertiesPanel(QWidget):
         self.corner_style.addItems(["auto", "midpoint", "straddle"])
         self.corner_style.setToolTip(
             "Rounded-corner holes are always symmetric about the arc midpoint.\n"
-            "auto: best-fitting count for your iron.\n"
+            "auto: the arrangement with the least pitch deviation.\n"
             "midpoint: force a hole on the corner apex.\n"
             "straddle: force an even pair around the apex, none on it.")
         fs.addRow("Punch", self.punch_style)

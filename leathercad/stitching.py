@@ -310,7 +310,7 @@ def _span_is_arc(poly: Polyline, a: float, span_len: float, total: float,
     return max_dev > tol
 
 
-def _plan_corners(poly: Polyline, cor: List[float], settings):
+def _plan_corners(poly: Polyline, cor: List[float], settings, style=None):
     """Decide where holes are forced around a closed outline's corners.
 
     Given the projected corner anchor arc-lengths ``cor`` (sharp corners plus the
@@ -334,7 +334,10 @@ def _plan_corners(poly: Polyline, cor: List[float], settings):
     """
     total = poly.length
     p = settings.pitch_mm
-    style = getattr(settings, "corner_style", "auto")
+    if style is None:
+        style = getattr(settings, "corner_style", "auto")
+    if style == "auto":
+        style = "tangent"          # concrete default (see _fit_corner_style)
     # Merge near-coincident anchors (e.g. a corner whose inset collapsed the arc
     # to a point when the inset >= the radius) so it becomes one hole, not two
     # stacked on top of each other.
@@ -374,7 +377,7 @@ def _plan_corners(poly: Polyline, cor: List[float], settings):
                 straddle.add((a, b))
             else:
                 forced.add(apex)          # too tight to straddle -> apex hole
-        else:  # auto
+        else:  # tangent (the anchor-both-tangent-points strategy)
             if chord_tt >= p * 0.98:
                 forced |= {a, b}          # arc fitted on its own (symmetric)
             else:
@@ -743,11 +746,51 @@ def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
 
     cor = [poly.nearest_arclength(cp) for cp in (corner_points or [])]
 
+    # ``auto`` means "whichever corner strategy the iron marches with the least
+    # pitch deviation" -- try each concrete strategy and keep the best. For open
+    # paths or an explicit style there is nothing to choose.
+    want = getattr(settings, "corner_style", "auto")
+    if closed and want == "auto":
+        best, best_bad = None, None
+        for style in ("tangent", "midpoint", "straddle"):
+            res = _march_corner_style(poly, cor, settings, style, closed, fit,
+                                      total, symmetric, axis_forced)
+            bad = _gap_badness(res, settings.pitch_mm)
+            if best_bad is None or bad < best_bad:
+                best, best_bad = res, bad
+        return _apply_rows(best, settings)
+
+    res = _march_corner_style(poly, cor, settings, want, closed, fit,
+                              total, symmetric, axis_forced)
+    return _apply_rows(res, settings)
+
+
+def _gap_badness(res: "StitchResult", pitch: float):
+    """How far a fit strays from the iron: (worst, mean) fractional gap error
+    over the chord gaps between consecutive holes. Lower is better; ``auto``
+    minimises it. Fewer than two holes can't be judged, so it's worst-ranked."""
+    pts = [h.point for h in res.holes]
+    if len(pts) < 2 or pitch <= 0:
+        return (float("inf"), float("inf"))
+    n = len(pts)
+    span = range(n) if res.closed else range(n - 1)
+    devs = [abs((pts[i] - pts[(i + 1) % n]).length() - pitch) / pitch
+            for i in span]
+    return (max(devs), sum(devs) / len(devs))
+
+
+def _march_corner_style(poly: Polyline, cor: List[float], settings, style: str,
+                        closed: bool, fit: str, total: float, symmetric: bool,
+                        axis_forced: set) -> "StitchResult":
+    """March the holes for one concrete corner ``style`` (tangent / midpoint /
+    straddle). Extracted so ``auto`` can try each and pick the least-deviation
+    result. Works on a private rotation of ``poly`` so candidates don't
+    interfere."""
     straddle: set = set()
     if closed:
         # Plan corner holes: single apex hole on tight radii (no cramming),
         # a fitted arc span on generous ones. See _plan_corners.
-        forced, straddle = _plan_corners(poly, cor, settings)
+        forced, straddle = _plan_corners(poly, cor, settings, style)
         forced |= axis_forced
         # The span machinery needs a hole at arc-length 0. The final hole set is
         # invariant to which corner we start at (each span is fitted from its own
@@ -768,8 +811,8 @@ def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
     anchors = _anchors_from(corners_for_anchors, total, closed, fit)
     if anchors is None:
         positions = march_chord(poly, settings.pitch_mm)
-        return _apply_rows(_result_from_positions(
-            poly, positions, [settings.pitch_mm], closed), settings)
+        return _result_from_positions(
+            poly, positions, [settings.pitch_mm], closed)
 
     straddle_keys = {(round(a, 4), round(b, 4)) for (a, b) in straddle}
 
@@ -793,8 +836,7 @@ def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
         positions.extend(span_positions[:-1])
     if not closed:
         positions.append(anchors[-1])
-    return _apply_rows(
-        _result_from_positions(poly, positions, pitches, closed), settings)
+    return _result_from_positions(poly, positions, pitches, closed)
 
 
 def _apply_rows(result: StitchResult, settings) -> StitchResult:

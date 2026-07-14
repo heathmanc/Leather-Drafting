@@ -130,3 +130,50 @@ def test_curved_path_endpoints_and_spacing():
     # chord spacing stays close to pitch everywhere
     for g in gaps:
         assert abs(g - res.pitches[0]) < 0.05
+
+
+# ---------------------------------------------------------------------------
+# corner_style "auto" = the least-deviation strategy of the concrete ones.
+# ---------------------------------------------------------------------------
+def _rounded_rect_holes(corner_style):
+    import copy
+    from leathercad.shapes import Rectangle, Transform
+    from leathercad.stitchsettings import StitchSettings
+    from leathercad.stitching import holes_for_shape
+    sh = Rectangle(width=90, height=60, corner_radius=8,
+                   transform=Transform(x=0, y=0),
+                   stitch=StitchSettings(pitch_mm=3.85, inset=3.5,
+                                         corner_style=corner_style), layer="Cut")
+    return holes_for_shape(sh)
+
+
+def _max_gap_dev(res, pitch):
+    pts = [h.point for h in res.holes]
+    n = len(pts)
+    return max(abs((pts[i] - pts[(i + 1) % n]).length() - pitch) / pitch
+               for i in range(n))
+
+
+def test_auto_corner_style_picks_least_deviation():
+    """On a generous corner (r8, 3.85 mm iron) the anchor-both-tangents strategy
+    strands ~8% off pitch while an apex hole holds ~1.5%. 'auto' must land on the
+    better one, never worse than every concrete strategy."""
+    pitch = 3.85
+    devs = {s: _max_gap_dev(_rounded_rect_holes(s), pitch)
+            for s in ("tangent", "midpoint", "straddle")}
+    auto = _max_gap_dev(_rounded_rect_holes("auto"), pitch)
+    assert auto <= min(devs.values()) + 1e-9      # no worse than the best
+    assert auto < devs["tangent"] - 0.03          # and it actually improved
+    assert auto < 0.03                             # ~1.5% here, tidy
+
+
+def test_auto_matches_the_winning_strategy_hole_for_hole():
+    from leathercad.stitching import holes_for_shape  # noqa: F401
+    pitch = 3.85
+    best = min(("tangent", "midpoint", "straddle"),
+               key=lambda s: _max_gap_dev(_rounded_rect_holes(s), pitch))
+    a = _rounded_rect_holes("auto").holes
+    b = _rounded_rect_holes(best).holes
+    assert len(a) == len(b)
+    for ha, hb in zip(a, b):
+        assert (ha.point - hb.point).length() < 1e-6

@@ -342,7 +342,7 @@ disappear).
 | **Rows** | **2 (double)** adds a second parallel row (aligned rungs) for saddle-stitched straps; set **Row spacing**. |
 | **Backstitch** | Marks N holes at each end of an open seam as the backstitch zone (markers only — you sew back through existing holes). |
 | **Symmetry** | Force the hole set to be mirror-symmetric about the shape's **vertical** or **horizontal** axis, so a flipped piece lines up back-to-back. |
-| **Corners** | How holes sit on a rounded corner's arc: **auto** = best count for your iron, **midpoint** = force a hole on the apex, **straddle** = force a pair around a bare apex. Tight corners always collapse to a single apex hole — no cramming. |
+| **Corners** | How holes sit on a rounded corner's arc: **auto** tries each strategy and keeps the one whose chord spacing strays least from your pitch, **midpoint** = force a hole on the apex, **straddle** = force a pair around a bare apex. Tight corners always collapse to a single apex hole — no cramming. |
 
 The **readout** at the bottom shows the hole count, the min–max chord spacing
 (these should hug your pitch), and the effective pitch per span.

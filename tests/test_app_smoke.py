@@ -416,6 +416,57 @@ def test_convert_shape_to_nodes(qapp):
     assert xs == [-30.0, 30.0] and ys == [-20.0, 20.0]
 
 
+def test_ortho_snaps_onto_crossed_edge(qapp):
+    """Shift-ortho must still object-snap: locked horizontal from a point on a
+    fold line, the endpoint snaps to where the ray crosses a vertical cut
+    edge (regression -- ortho used to discard the snap entirely)."""
+    from PySide6.QtCore import QPointF, Qt
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    from leathercad.shapes import Rectangle, PathShape, Transform
+    from leathercad.geometry import Vec2
+    import leathercad_app.canvas as cm
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.snap_to_nodes = True
+    c.snap_to_grid = False
+    # a vertical cut edge at x = 100 (rectangle left side) + a fold line at y=50
+    c.add_shape(Rectangle(width=60, height=80, transform=Transform(x=130, y=50),
+                          layer="Cut"))
+    c.add_shape(PathShape(name="Fold", points=[Vec2(0, 50), Vec2(60, 50)],
+                          close_path=False, transform=Transform(x=0, y=0),
+                          layer="Score"))
+    c.rebuild()
+    c.tool = cm.LINE
+    c._start = QPointF(20.0, 50.0)                 # first point on the fold line
+
+    class _Shift:
+        def modifiers(self):
+            return Qt.ShiftModifier
+
+    # cursor near the vertical edge, slightly off the horizontal: ortho locks
+    # y to 50 AND snaps x to the crossed edge at 100
+    raw = QPointF(98.5, 53.0)
+    pos, applied, kind = c._maybe_ortho(raw, raw, _Shift())
+    assert applied and kind == "cross"
+    assert abs(pos.x() - 100.0) < 1e-6 and abs(pos.y() - 50.0) < 1e-6
+    # also catches the edge when the cursor has passed it
+    pos2, _a, k2 = c._maybe_ortho(QPointF(101.5, 53.0), QPointF(101.5, 53.0),
+                                  _Shift())
+    assert k2 == "cross" and abs(pos2.x() - 100.0) < 1e-6
+    # far from any edge: plain ortho, y locked, x free (no phantom snap)
+    pos3, _a3, k3 = c._maybe_ortho(QPointF(60.0, 53.0), QPointF(60.0, 53.0),
+                                   _Shift())
+    assert k3 is None and abs(pos3.y() - 50.0) < 1e-6 and abs(pos3.x() - 60.0) < 1
+    # node-snap off: ortho stays a plain lock, no edge snapping
+    c.snap_to_nodes = False
+    pos4, _a4, k4 = c._maybe_ortho(QPointF(98.5, 53.0), QPointF(98.5, 53.0),
+                                   _Shift())
+    assert k4 is None and abs(pos4.y() - 50.0) < 1e-6      # y still locked
+    assert abs(pos4.x() - 100.0) > 1.0                     # but NOT on the edge
+
+
 def test_magnetic_node_snap_on_move(qapp):
     from PySide6.QtCore import QPointF
     from leathercad_app.mainwindow import MainWindow

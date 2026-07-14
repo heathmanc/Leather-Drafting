@@ -959,7 +959,7 @@ class Canvas(QGraphicsView):
         pos = raw
         if self.tool != SELECT:
             pos, _v = self.snap(pos)
-            pos, _o = self._maybe_ortho(raw, pos, event)
+            pos, _o, _k = self._maybe_ortho(raw, pos, event)
         if self.tool == SELECT:
             return super().mousePressEvent(event)
         if event.button() == Qt.LeftButton:
@@ -1141,14 +1141,52 @@ class Canvas(QGraphicsView):
             return self._poly_pts[-1]
         return None
 
-    def _maybe_ortho(self, raw: QPointF, pos: QPointF, event) -> tuple[QPointF, bool]:
-        """Return (pos, applied): lock to 0/45/90 from the anchor when Shift held."""
+    def _ortho_edge_snap(self, anchor: QPointF, op: QPointF):
+        """Ortho + object snap: when locked to an ortho ray, snap the point to
+        where that ray CROSSES a nearby outline / guide edge (e.g. a vertical
+        cut line while you draw horizontally). Returns a QPointF or None."""
+        if not self.snap_to_nodes:
+            return None
+        dx, dy = op.x() - anchor.x(), op.y() - anchor.y()
+        L = math.hypot(dx, dy)
+        if L < 1e-9:
+            return None
+        ux, uy = dx / L, dy / L                     # unit along the ortho ray
+        ox, oy = anchor.x(), anchor.y()
+        thr = 10.0 / self._zoom
+        best, best_d = None, thr
+        for a, b, _owner in self._all_edges():
+            ex, ey = b.x - a.x, b.y - a.y
+            det = ex * uy - ux * ey                 # ray dir x edge dir
+            if abs(det) < 1e-12:                    # parallel: no crossing
+                continue
+            rx, ry = a.x - ox, a.y - oy
+            s = (ux * ry - uy * rx) / det           # param along the edge
+            if s < -1e-9 or s > 1 + 1e-9:
+                continue                            # crossing is off the edge
+            px, py = a.x + s * ex, a.y + s * ey
+            if (px - ox) * ux + (py - oy) * uy <= 1e-9:
+                continue                            # behind the anchor
+            d = math.hypot(px - op.x(), py - op.y())
+            if d < best_d:
+                best_d, best = d, QPointF(px, py)
+        return best
+
+    def _maybe_ortho(self, raw: QPointF, pos: QPointF, event):
+        """Return (pos, applied, kind): lock to 0/45/90 from the anchor when
+        Shift held. While locked, still snap to where the ortho ray crosses a
+        nearby edge, so you can e.g. draw horizontally onto a vertical cut
+        line; ``kind`` is 'cross' when such a snap took, else None."""
         if not (event.modifiers() & Qt.ShiftModifier):
-            return pos, False
+            return pos, False, None
         anchor = self._ortho_anchor()
         if anchor is None:
-            return pos, False
-        return self._apply_ortho(anchor, raw), True
+            return pos, False, None
+        op = self._apply_ortho(anchor, raw)
+        crossed = self._ortho_edge_snap(anchor, op)
+        if crossed is not None:
+            return crossed, True, "cross"
+        return op, True, None
 
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.MiddleButton and hasattr(self, "_pan_last"):
@@ -1172,9 +1210,9 @@ class Canvas(QGraphicsView):
         pos = raw
         if self.tool != SELECT:
             pos, vtx, guides, kind = self._smart_snap(raw)
-            pos, applied = self._maybe_ortho(raw, pos, event)   # 0/45/90 lock
+            pos, applied, okind = self._maybe_ortho(raw, pos, event)  # 0/45/90
             if applied:
-                guides, kind = [], None
+                guides, kind = [], okind
             self._show_align_guides(guides)
             self._show_snap_nodes(raw)
             self._show_snap_marker(pos, kind)

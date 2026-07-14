@@ -2341,12 +2341,14 @@ def test_offset_preview_survives_rebuild_midflight(qapp):
     assert shiboken6.isValid(c._offset_preview)
 
 
-def test_draw_color_override_is_display_only(qapp):
-    """A bright on-screen draw colour overrides the outline pen for visibility
-    while tracing, but leaves the layer colour (and export) untouched."""
+def test_draw_color_tints_preview_not_finished_shapes(qapp):
+    """The draw colour tints the WHILE-DRAWING preview only; a finished shape
+    keeps its layer colour (and export is untouched)."""
+    from PySide6.QtCore import QPointF
     from PySide6.QtGui import QColor
     from leathercad_app.mainwindow import MainWindow
     from leathercad_app.items import ShapeItem
+    from leathercad_app import canvas as cm
     from leathercad.document import Document
     from leathercad.shapes import Rectangle
 
@@ -2359,13 +2361,24 @@ def test_draw_color_override_is_display_only(qapp):
     layer_col = QColor(c.layer_color("Cut")).name()
 
     win._set_draw_color(QColor(0, 230, 255))
-    assert c.display_color.name() == "#00e6ff"
-    # the model's layer + the layer colour are unchanged (export stays correct)
-    assert shp.model.layer == "Cut"
-    assert QColor(c.layer_color("Cut")).name() == layer_col
+    assert c.draw_color.name() == "#00e6ff"
+    assert c.preview_color().name() == "#00e6ff"
+    # a finished shape keeps its layer colour -- the override is preview-only
+    assert shp._color.name() == layer_col
 
-    win._set_draw_color(None)               # back to layer colours
-    assert c.display_color is None
+    # start a rectangle drag -> the live preview uses the draw colour
+    c.tool = cm.RECT
+    c._start = QPointF(0, 0)
+    c._preview = None
+    from PySide6.QtGui import QPen
+    from PySide6.QtWidgets import QGraphicsPathItem
+    c._preview = QGraphicsPathItem()
+    c._preview.setPen(QPen(c.preview_color(), 2))
+    assert c._preview.pen().color().name() == "#00e6ff"
+
+    win._set_draw_color(None)               # back to the bright default
+    assert c.draw_color is None
+    assert c.preview_color().name() == QColor(30, 140, 255).name()
 
 
 def test_pointing_tools_get_crosshair_cursor(qapp):

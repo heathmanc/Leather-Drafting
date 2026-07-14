@@ -188,10 +188,10 @@ Adjust opacity, hide, or remove it from the same menu.
 **Seeing what you draw over a photo.** Every drawing tool uses a high-contrast
 crosshair cursor so the pointer stays visible on a busy image. In the toolbar,
 the **line px** field sets the on-screen stroke width, and the **draw-colour**
-swatch (next to it) picks a bright on-screen colour for your outlines — pick
-something that pops against your photo, or choose *Use layer colours* to go
-back. The draw colour is display-only: the layer/role still drives the cut and
-the SVG/DXF export.
+swatch (next to it) picks the colour of the line/outline *while you draw it* —
+pick something that pops against your photo. As soon as you finish the shape it
+takes its **layer colour**, so the cut/score/engrave role (and the SVG/DXF
+export) is never affected — the bright colour is purely a drawing aid.
 
 1. Press `R` (Rectangle). Click once for the first corner, move, click again
    for the opposite corner. *(Prefer press-drag-release? Toggle

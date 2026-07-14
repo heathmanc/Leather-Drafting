@@ -732,10 +732,7 @@ class ShapeItem(QGraphicsItem):
         elif selected:
             pen = QPen(QColor(30, 140, 255))
         else:
-            # a display-only override colour (e.g. bright for tracing) wins over
-            # the layer colour on screen; export still uses the layer/role.
-            dc = self.canvas.display_color if self.canvas else None
-            pen = QPen(dc if dc is not None else self._color)
+            pen = QPen(self._color)          # finished shape -> its layer colour
         pen.setCosmetic(True)
         w = self.canvas.outline_width(selected) if self.canvas else 1.0
         pen.setWidthF(w)

@@ -525,15 +525,15 @@ class MainWindow(QMainWindow):
         # back to the layer colours. Display only -- export uses layer/role.
         self.draw_color_btn = QToolButton()
         self.draw_color_btn.setToolTip(
-            "On-screen drawing colour — pick something bright for tracing.\n"
-            "The layer colours still drive the cut and the export.")
+            "Colour of the line/outline WHILE you draw — pick something bright\n"
+            "for tracing. The finished shape uses its layer colour.")
         self.draw_color_btn.setPopupMode(QToolButton.InstantPopup)
         dc_menu = QMenu(self.draw_color_btn)
         dc_menu.addAction("Pick colour…", self._pick_draw_color)
-        dc_menu.addAction("Use layer colours", lambda: self._set_draw_color(None))
+        dc_menu.addAction("Default (blue)", lambda: self._set_draw_color(None))
         self.draw_color_btn.setMenu(dc_menu)
         saved = self._settings().value("drawColor", "", type=str)
-        self.canvas.display_color = QColor(saved) if saved else None
+        self.canvas.draw_color = QColor(saved) if saved else None
         self._update_draw_color_swatch()
         tb.addWidget(self.draw_color_btn)
 
@@ -596,33 +596,26 @@ class MainWindow(QMainWindow):
         self._settings().setValue("lineWidth", w)
 
     def _pick_draw_color(self):
-        cur = self.canvas.display_color or QColor(255, 40, 190)
-        c = QColorDialog.getColor(cur, self, "On-screen drawing colour")
+        cur = self.canvas.preview_color()
+        c = QColorDialog.getColor(cur, self, "While-drawing colour")
         if c.isValid():
             self._set_draw_color(c)
 
     def _set_draw_color(self, color):
-        self.canvas.set_display_color(color)
+        self.canvas.set_draw_color(color)
         self._settings().setValue("drawColor", color.name() if color else "")
         self._update_draw_color_swatch()
 
     def _update_draw_color_swatch(self):
-        """Paint the toolbar button as a swatch of the current draw colour, or a
-        diagonal-split chip when it's off (layer colours)."""
+        """Paint the toolbar button as a swatch of the current while-drawing
+        colour (the bright default if none is set)."""
         from PySide6.QtGui import QPainter
-        c = self.canvas.display_color
         pm = QPixmap(18, 18)
         pm.fill(Qt.transparent)
         pr = QPainter(pm)
         pr.setPen(QColor(120, 120, 120))
-        if c is not None:
-            pr.setBrush(c)
-            pr.drawRoundedRect(1, 1, 15, 15, 3, 3)
-        else:                              # "layer colours" -> a small palette hint
-            pr.setBrush(QColor(200, 60, 60))
-            pr.drawRect(1, 3, 7, 12)
-            pr.setBrush(QColor(60, 120, 220))
-            pr.drawRect(8, 3, 7, 12)
+        pr.setBrush(self.canvas.preview_color())
+        pr.drawRoundedRect(1, 1, 15, 15, 3, 3)
         pr.end()
         self.draw_color_btn.setIcon(QIcon(pm))
 

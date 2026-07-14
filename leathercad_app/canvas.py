@@ -282,11 +282,12 @@ class Canvas(QGraphicsView):
         self._offset_preview = None       # dashed QGraphicsPathItem
         self._nonmovable_members = []   # items we temporarily froze for a group drag
         self.line_width = 1.0     # on-screen outline stroke width (cosmetic px)
-        # optional on-screen override colour for shape outlines (brighter than
-        # the layer colour, e.g. while tracing a photo). None -> use layer
-        # colours. Export and the layer/role are unaffected -- this is display
-        # only.
-        self.display_color: Optional[QColor] = None
+        # colour of the line/outline WHILE drawing (the live preview), for
+        # visibility over a tracing photo. The finished shape reverts to its
+        # layer colour -- this only tints the in-progress preview. None -> the
+        # default bright blue.
+        self.draw_color: Optional[QColor] = None
+        self._default_preview_color = QColor(30, 140, 255)
 
         # snapping -- grid and node snapping toggle independently
         self.snap_to_nodes = True    # ends / midpoints / centres / intersections
@@ -991,7 +992,7 @@ class Canvas(QGraphicsView):
                 else:
                     # anchor a live rubber line at the first click
                     self._preview = QGraphicsPathItem()
-                    pen = QPen(QColor(30, 140, 255), 2, Qt.DashLine)
+                    pen = QPen(self.preview_color(), 2, Qt.DashLine)
                     pen.setCosmetic(True)
                     self._preview.setPen(pen)
                     self.scene_obj.addItem(self._preview)
@@ -1038,7 +1039,7 @@ class Canvas(QGraphicsView):
                 if self._start is None:
                     self._start = pos
                     self._preview = QGraphicsPathItem()
-                    pen = QPen(QColor(30, 140, 255), 2, Qt.DashLine)
+                    pen = QPen(self.preview_color(), 2, Qt.DashLine)
                     pen.setCosmetic(True)
                     self._preview.setPen(pen)
                     self.scene_obj.addItem(self._preview)
@@ -1069,7 +1070,7 @@ class Canvas(QGraphicsView):
                     # begin (drag-mode press, or first click of click-to-place)
                     self._start = pos
                     self._preview = QGraphicsPathItem()
-                    pen = QPen(QColor(30, 140, 255), 2, Qt.DashLine)
+                    pen = QPen(self.preview_color(), 2, Qt.DashLine)
                     pen.setCosmetic(True)
                     self._preview.setPen(pen)
                     self.scene_obj.addItem(self._preview)
@@ -1545,7 +1546,7 @@ class Canvas(QGraphicsView):
     def _update_poly_preview(self, cur: QPointF) -> None:
         if self._preview is None:
             self._preview = QGraphicsPathItem()
-            pen = QPen(QColor(30, 140, 255), 2, Qt.DashLine)
+            pen = QPen(self.preview_color(), 2, Qt.DashLine)
             pen.setCosmetic(True)
             self._preview.setPen(pen)
             self.scene_obj.addItem(self._preview)
@@ -1674,7 +1675,7 @@ class Canvas(QGraphicsView):
             self._bez_seg(curve, a, ha, cursor, None)
         if self._preview is None:
             self._preview = QGraphicsPathItem()
-            pen = QPen(QColor(30, 140, 255), 2, Qt.DashLine)
+            pen = QPen(self.preview_color(), 2, Qt.DashLine)
             pen.setCosmetic(True)
             self._preview.setPen(pen)
             self.scene_obj.addItem(self._preview)
@@ -1814,7 +1815,7 @@ class Canvas(QGraphicsView):
                             path.lineTo(p.x, p.y)
         if self._preview is None:
             self._preview = QGraphicsPathItem()
-            pen = QPen(QColor(30, 140, 255), 2, Qt.DashLine)
+            pen = QPen(self.preview_color(), 2, Qt.DashLine)
             pen.setCosmetic(True)
             self._preview.setPen(pen)
             self.scene_obj.addItem(self._preview)
@@ -3543,12 +3544,20 @@ class Canvas(QGraphicsView):
     def set_line_width(self, w: float) -> None:
         self.line_width = max(0.2, w)
 
-    def set_display_color(self, color) -> None:
-        """Override on-screen outline colour (display only; None -> layer
-        colours). Repaints every shape."""
-        self.display_color = QColor(color) if color is not None else None
-        self.refresh_all()
-        self.viewport().update()
+    def preview_color(self) -> QColor:
+        """Colour for the in-progress drawing preview (user's draw colour, or a
+        bright default)."""
+        return self.draw_color or self._default_preview_color
+
+    def set_draw_color(self, color) -> None:
+        """Set the WHILE-DRAWING preview colour (None -> bright default). Only
+        tints the live preview; finished shapes keep their layer colour."""
+        self.draw_color = QColor(color) if color is not None else None
+        # recolour a preview that's currently on screen
+        if self._preview is not None and _alive(self._preview):
+            pen = self._preview.pen()
+            pen.setColor(self.preview_color())
+            self._preview.setPen(pen)
         for it in self.scene_obj.items():
             if hasattr(it, "update"):
                 it.update()

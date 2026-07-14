@@ -162,14 +162,14 @@ each end so the cut can't tear) lets you slide a card out one-handed. The
 the front, and the smooth **arched thumb notch** in the block's bottom edge
 is where you lift it back out. Seams are **3 mm pitch** like the original
 sheet, and every row sits 4 mm inside its own panel so no hole lands on a
-fold: the left wing carries a top and an outer-edge row, the middle section
-its **own top row and a vertical row just inside the right wing fold**
-(same pitch as the wing's, so the layers line up when you prick through the
-assembled pouch), and the **bottom seam is one continuous run that arcs
-around the thumb notch** — the chord spacing stays iron-even the whole way
-round the curve. The entrance and slot stay open. Everything is
-right-handed as drawn — select all and **Make back piece** (`Ctrl+M`) for
-a left-handed mirror.
+fold: the left wing carries a top and an outer-edge row, and the middle
+section its **own top row and a vertical row just inside the right wing
+fold** (same pitch as the wing's, so the layers line up when you prick
+through the assembled pouch). The **bottom edge and the thumb notch carry
+no stitching at all** — the block folds up, so the finished wallet's bottom
+is a crease, not a sewn edge. The entrance and slot stay open too.
+Everything is right-handed as drawn — select all and **Make back piece**
+(`Ctrl+M`) for a left-handed mirror.
 
 ### Tracing a real object
 

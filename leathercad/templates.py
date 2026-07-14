@@ -212,30 +212,16 @@ def fold_over_wallet() -> Document:
     # the left wing gets a top row and an outer-edge row; the middle section
     # gets its own top row and a vertical row just INSIDE the right wing
     # fold. Wing and middle rows share the pitch, so the layers line up when
-    # you prick through the assembled pouch.
+    # you prick through the assembled pouch. The bottom edge and the thumb
+    # notch carry NO stitching at all -- the block folds up, so the finished
+    # wallet's bottom is a crease, not a sewn edge (the notch ends up at the
+    # pouch opening as a thumb scoop).
     runs = [
         ("Top seam (left wing)", [Vec2(4, 86), Vec2(74, 86)]),
         ("Top seam (middle)", [Vec2(82, 86), Vec2(144, 86)]),
         ("Left edge seam", [Vec2(4, 8), Vec2(4, 82)]),
         ("Middle seam", [Vec2(144, 8), Vec2(144, 82)]),
     ]
-    # the bottom seam is ONE continuous run: it follows the bottom edge at
-    # 4 mm and arcs AROUND the thumb notch at the same offset (the notch arc
-    # through (95,0)/(113,16)/(131,0) has centre (113, -2.125), R = 18.125;
-    # the seam rides the R + 4 offset arc). Chord spacing stays even the
-    # whole way round -- pricking-iron behaviour on a curve.
-    ncx, ncy, nr = 113.0, -2.125, 18.125 + 4.0
-    xj = math.sqrt(nr * nr - (4.0 - ncy) ** 2)     # where the arc meets y=4
-    a0 = math.atan2(4.0 - ncy, -xj)
-    a1 = math.atan2(4.0 - ncy, xj)
-    bottom = [Vec2(4, 4), Vec2(ncx - xj, 4)]
-    steps = 12
-    for i in range(1, steps):
-        a = a0 + (a1 - a0) * i / steps
-        bottom.append(Vec2(ncx + nr * math.cos(a), ncy + nr * math.sin(a)))
-    bottom += [Vec2(ncx + xj, 4), Vec2(215, 4)]
-    runs.append(("Bottom seam", bottom))
-
     for name, pts in runs:
         seam = StitchLine(points=pts,
                           settings=StitchSettings(pitch_mm=3.0,

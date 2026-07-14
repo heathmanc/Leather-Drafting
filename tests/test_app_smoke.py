@@ -2394,3 +2394,55 @@ def test_pointing_tools_get_crosshair_cursor(qapp):
     assert c.viewport().cursor().shape() == Qt.BitmapCursor
     win._set_tool(cm.SELECT)
     assert c.viewport().cursor().shape() == Qt.ArrowCursor
+
+
+def test_polygon_and_paths_get_box_resize(qapp):
+    """A drawn polygon (and multi-point / editable paths) now box-resize like
+    rectangles; a 2-point line still doesn't (it keeps length/angle)."""
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import ShapeItem, ResizeHandle
+    from leathercad.document import Document
+    from leathercad.shapes import Polygon, PathShape, EditablePath, Transform
+    from leathercad.geometry import Vec2
+
+    doc = Document()
+    doc.add_shape(Polygon(points=[Vec2(-20, -15), Vec2(20, -15), Vec2(25, 18),
+                                  Vec2(0, 30), Vec2(-25, 18)], close_path=True,
+                          transform=Transform(x=40, y=40), layer="Cut"))
+    doc.add_shape(PathShape(points=[Vec2(0, 0), Vec2(30, 0), Vec2(30, 20)],
+                            close_path=False, transform=Transform(x=200, y=0),
+                            layer="Cut"))                       # open, 3 pts
+    doc.add_shape(PathShape(points=[Vec2(0, 0), Vec2(40, 0)], close_path=False,
+                            transform=Transform(x=0, y=200), layer="Cut"))  # line
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    items = [it for it in c.scene_obj.items() if isinstance(it, ShapeItem)]
+    poly = next(it for it in items if isinstance(it.model, Polygon))
+    path3 = next(it for it in items if isinstance(it.model, PathShape)
+                 and len(it.model.points) == 3)
+    line = next(it for it in items if isinstance(it.model, PathShape)
+                and len(it.model.points) == 2)
+
+    assert poly.resize_extents() is not None      # polygon: resizable
+    assert path3.resize_extents() is not None      # open multi-point path: yes
+    assert line.resize_extents() is None           # 2-point line: no box
+
+    # selecting the polygon shows the 8 grips
+    c.scene_obj.clearSelection(); poly.setSelected(True); c.selection_changed()
+    grips = [it for it in c.scene_obj.items() if isinstance(it, ResizeHandle)]
+    assert len(grips) == 8
+
+    # drag the +1,+1 grip out; the opposite (-1,-1) corner must stay pinned and
+    # the polygon must actually grow
+    hx0, hy0 = poly.resize_extents()
+    cx, cy = poly.resize_center()
+    t = poly.model.transform
+    anchor_world = t.apply(Vec2(cx - hx0, cy - hy0))
+    g = next(h for h in grips if h.grip == (1, 1))
+    g._apply_resize(Vec2(anchor_world.x + 200, anchor_world.y + 160))
+    hx1, hy1 = poly.resize_extents()
+    assert hx1 > hx0 and hy1 > hy0                  # grew
+    cx1, cy1 = poly.resize_center()
+    anchor_after = t.apply(Vec2(cx1 - hx1, cy1 - hy1))
+    assert (anchor_after - anchor_world).length() < 1e-6   # opposite corner pinned

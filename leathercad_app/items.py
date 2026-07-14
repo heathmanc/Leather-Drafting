@@ -254,8 +254,9 @@ class ResizeHandle(QGraphicsItem):
         if ext is None:
             return None
         hx, hy = ext
+        cx, cy = self.owner.resize_center()
         gx, gy = self.grip
-        return t.apply(Vec2(gx * hx, gy * hy))
+        return t.apply(Vec2(cx + gx * hx, cy + gy * hy))
 
     def reposition(self):
         w = self._grip_world()
@@ -317,19 +318,21 @@ class ResizeHandle(QGraphicsItem):
         if ext is None:
             return
         hx, hy = ext
+        cx, cy = owner.resize_center()
         t = owner.model.transform
         gx, gy = self.grip
-        anchor_local = Vec2(-gx * hx, -gy * hy)      # opposite corner/edge
-        anchor_world = t.apply(anchor_local)         # stays fixed
+        anchor_local = Vec2(cx - gx * hx, cy - gy * hy)   # opposite corner/edge
+        anchor_world = t.apply(anchor_local)              # stays fixed
         g_local = t.inverse_apply(grip_world)
         hx_new = abs(g_local.x - anchor_local.x) / 2.0 if gx else hx
         hy_new = abs(g_local.y - anchor_local.y) / 2.0 if gy else hy
         hx_new = max(0.5, hx_new)
         hy_new = max(0.5, hy_new)
         owner.set_resize_extents(hx_new, hy_new)
-        # keep the anchor pinned: place the new (symmetric) box so its opposite
-        # corner still lands on anchor_world.
-        anchor_new = Vec2(-gx * hx_new, -gy * hy_new)
+        # keep the anchor pinned. Scaling preserves the local box centre, so the
+        # opposite corner is (cx,cy) +/- the new half-extents; place the shape so
+        # it still lands on anchor_world.
+        anchor_new = Vec2(cx - gx * hx_new, cy - gy * hy_new)
         o = anchor_world - t.apply_dir(anchor_new)
         t.x, t.y = o.x, o.y
         owner.sync_from_model()
@@ -839,28 +842,98 @@ class ShapeItem(QGraphicsItem):
         return out
 
     # -- box resize (drag-handle) support ------------------------------
+    def _resize_points(self):
+        """The local points a path-like shape box-resizes by (nodes + any arc /
+        bezier control points), or None for non-path shapes. Polygons and open
+        multi-point paths resize by their points; a 2-point line keeps its
+        length/angle fields instead."""
+        from leathercad.shapes import Polygon, PathShape, EditablePath
+        sh = self.model
+        if isinstance(sh, EditablePath):
+            pts = list(sh.nodes)
+            for e in sh.edges:
+                for q in (e.mid, e.c1, e.c2):
+                    if q is not None:
+                        pts.append(q)
+            return pts if len(pts) >= 2 else None
+        if isinstance(sh, Polygon):
+            return sh.points if len(sh.points) >= 3 else None
+        if isinstance(sh, PathShape) and len(sh.points) >= 3:
+            return sh.points          # a 2-point line is excluded (it's a line)
+        return None
+
+    def _resize_box(self):
+        """(cx, cy, hx, hy) of the local point hull, or None."""
+        pts = self._resize_points()
+        if not pts:
+            return None
+        xs = [p.x for p in pts]
+        ys = [p.y for p in pts]
+        return ((min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0,
+                (max(xs) - min(xs)) / 2.0, (max(ys) - min(ys)) / 2.0)
+
     def resize_extents(self):
         """Local half-extents (hx, hy) of a box-resizable shape, or None.
-        Rectangles resize by width/height, circles/ellipses by rx/ry."""
+        Rectangles resize by width/height, circles/ellipses by rx/ry, polygons
+        and multi-point paths by their bounding box."""
         from leathercad.shapes import Rectangle, Circle, Ellipse
         sh = self.model
         if isinstance(sh, Rectangle):
             return sh.width / 2.0, sh.height / 2.0
         if isinstance(sh, (Circle, Ellipse)):
             return sh.rx, sh.ry
-        return None
+        box = self._resize_box()
+        return (box[2], box[3]) if box is not None else None
+
+    def resize_center(self):
+        """The local point the box grips are measured from. Rect/circle/ellipse
+        are centred on the origin; a path-like shape uses its bbox centre (its
+        points aren't origin-centred, so the grips must follow it)."""
+        from leathercad.shapes import Rectangle, Circle, Ellipse
+        if isinstance(self.model, (Rectangle, Circle, Ellipse)):
+            return 0.0, 0.0
+        box = self._resize_box()
+        return (box[0], box[1]) if box is not None else (0.0, 0.0)
 
     def set_resize_extents(self, hx: float, hy: float) -> None:
-        from leathercad.shapes import Rectangle, Circle, Ellipse
+        from leathercad.shapes import (Rectangle, Circle, Ellipse, Polygon,
+                                        PathShape, EditablePath)
         sh = self.model
         hx = max(0.5, hx)
         hy = max(0.5, hy)
         if isinstance(sh, Rectangle):
             sh.width, sh.height = 2.0 * hx, 2.0 * hy
-        elif isinstance(sh, Circle):
+            return
+        if isinstance(sh, Circle):
             sh.rx = sh.ry = max(hx, hy)     # a circle stays round
-        elif isinstance(sh, Ellipse):
+            return
+        if isinstance(sh, Ellipse):
             sh.rx, sh.ry = hx, hy
+            return
+        box = self._resize_box()
+        if box is None:
+            return
+        cx, cy, ohx, ohy = box
+        sx = hx / ohx if ohx > 1e-9 else 1.0
+        sy = hy / ohy if ohy > 1e-9 else 1.0
+
+        def scaled(p):
+            return Vec2(cx + sx * (p.x - cx), cy + sy * (p.y - cy))
+
+        if isinstance(sh, EditablePath):
+            sh.nodes = [scaled(p) for p in sh.nodes]
+            for e in sh.edges:
+                if e.mid is not None:
+                    e.mid = scaled(e.mid)
+                if e.c1 is not None:
+                    e.c1 = scaled(e.c1)
+                if e.c2 is not None:
+                    e.c2 = scaled(e.c2)
+        else:                              # Polygon or open PathShape
+            sh.points = [scaled(p) for p in sh.points]
+            cr = getattr(sh, "corner_radius", 0.0)
+            if cr:
+                sh.corner_radius = cr * min(sx, sy)
 
     def world_snap_nodes(self):
         t = self.model.transform
@@ -978,9 +1051,10 @@ class RotateHandle(QGraphicsItem):
         if ext is None:
             return None
         _hx, hy = ext
+        cx, cy = owner.resize_center()
         t = owner.model.transform
         pad = self.OFFSET_PX / max(getattr(self.canvas, "_zoom", 3.0), 1e-6)
-        return t.apply(Vec2(0.0, hy + pad))
+        return t.apply(Vec2(cx, cy + hy + pad))
 
     def reposition(self):
         w = self._grip_world()

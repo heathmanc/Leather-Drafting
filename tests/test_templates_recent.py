@@ -45,41 +45,41 @@ def test_templates_build_and_have_content():
     assert sum(1 for s in belt.shapes if s.kind == "circle") == 5   # sizing holes
 
 
-def test_bifold_wallet_one_piece():
-    """One-piece horizontal bifold: a single rectangle, a horizontal pocket
-    fold + a vertical centre fold, and one straight seam up each pocket side."""
-    from leathercad.templates import bifold_wallet
-    doc = bifold_wallet()
+def test_curved_card_holder_flagship():
+    """Flagship demo: arched-top card holder whose fine perimeter stitch flows
+    evenly around the curve -- the program's signature -- with three stepped,
+    thumb-scooped pockets."""
+    from leathercad.templates import curved_card_holder
+    from leathercad.stitching import holes_for_shape
+    doc = curved_card_holder()
 
-    # SINGLE piece cut: exactly one Cut shape, a wide rectangle
-    cut = [s for s in doc.shapes if s.layer == "Cut"]
-    assert len(cut) == 1
-    body = cut[0]
-    assert body.kind == "rectangle"
-    assert body.width > body.height                 # horizontal
-    x0, y0, x1, y1 = body.bounds()
-    fold_y = y0 + 45.0                              # pocket = bottom 45 mm
+    # four one-piece curved panels; all share one width
+    assert len(doc.shapes) == 4
+    assert all(s.layer == "Cut" and s.kind == "editpath" for s in doc.shapes)
+    widths = {round(s.bounds()[2] - s.bounds()[0], 6) for s in doc.shapes}
+    assert len(widths) == 1
 
-    # two folds: one horizontal (pocket, spans the full width, below centre),
-    # one vertical (centre bifold, spans the full height at x = 0)
-    scores = [s for s in doc.shapes if s.layer == "Score"]
-    assert len(scores) == 2
-    horiz = [s for s in scores if abs(s.points[0].y - s.points[1].y) < 1e-6]
-    vert = [s for s in scores if abs(s.points[0].x - s.points[1].x) < 1e-6]
-    assert len(horiz) == 1 and len(vert) == 1
-    assert horiz[0].points[0].y < 0                # pocket fold is low
-    assert abs(vert[0].points[0].x) < 1e-6         # centre fold on the axis
+    back, pockets = doc.shapes[0], doc.shapes[1:]
+    # only the back panel is stitched; it is the tallest (domed top)
+    assert back.stitch and back.stitch.enabled
+    assert all(not p.stitch.enabled for p in pockets)
+    assert back.bounds()[3] == max(s.bounds()[3] for s in doc.shapes)
+    # dome is tangent: peak = straight-side height + half-width (semicircle),
+    # give or take the arc-flattening sample step
+    assert abs(back.bounds()[3] - (75.0 + 35.0)) < 0.1
 
-    # one straight vertical seam up each pocket side, mirror-symmetric,
-    # living entirely in the pocket region (below the fold)
-    assert len(doc.stitch_lines) == 2
-    for sl in doc.stitch_lines:
-        assert abs(sl.points[0].x - sl.points[1].x) < 1e-6      # vertical
-        assert max(p.y for p in sl.points) <= fold_y + 1e-6     # in pocket
-        holes = sl.result().holes
-        assert len(holes) >= 8
-    (lx,), (rx,) = ({sl.points[0].x} for sl in doc.stitch_lines)
-    assert abs(lx + rx) < 1e-6                     # left/right mirror
+    # pockets step up (side tops decreasing) and each mouth is a concave scoop
+    tops = [p.nodes[1].y for p in pockets]
+    assert tops == sorted(tops, reverse=True)
+    for p in pockets:
+        assert p.edges[1].mid.y < p.nodes[1].y     # scoop dips below the sides
+
+    # the hero: dense stitching that wraps the dome with even chord spacing
+    res = holes_for_shape(back)
+    assert res.count >= 60
+    assert max(h.point.y for h in res.holes) > 100          # holes on the dome
+    gaps = res.chord_spacings()
+    assert max(gaps) < 1.35 * min(gaps)                     # pricking-iron even
 
 
 def test_new_from_template_adopts_document(win):

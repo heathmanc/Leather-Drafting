@@ -136,17 +136,18 @@ complete starter pattern — **Card holder**, **Belt** (with buckle slot, fold
 line and sizing holes), **Key fob**, or the **Vertical wallet** — matching
 the tutorials in this guide. Adapt and Save As.
 
-The **Bifold wallet** is a clean **single-piece** horizontal bifold, cut
-from one rectangle (~200 × 140 mm flat) that folds to a ~100 × 95 mm
-bifold. It has just two folds: a horizontal **pocket fold** — the bottom
-45 mm turns up over the front to make a full-width pocket for cards and
-folded cash — and a vertical **centre fold** so the whole thing closes like
-a book, which also splits the pocket into a left and a right compartment on
-its own (no seam needed down the middle). One straight **seam up each outer
-side** closes the two pocket sides; the pocket bottom is the fold (already
-closed) and the top stays open so cards slide in. Because each seam is a
-single straight line, the pocket's holes sit directly over the shell's when
-you fold it up.
+The **Curved card wallet** is the flagship demo — an elegant vertical card
+holder (~70 × 110 mm) with a softly **domed top** and three **stepped,
+thumb-scooped** card pockets. One continuous run of fine saddle stitching
+wraps the whole curved perimeter of the back panel, and it stays perfectly
+even as it flows around the dome and the rounded corners — that is the
+program's signature (pricking-iron-accurate **chord spacing**), the thing a
+"space along the contour" tool gets wrong on curves. The three front pockets
+stack bottom-aligned and share the back panel's width, so the perimeter
+stitch passes through every layer down the sides and across the bottom to
+hold the stack together; their scooped mouths step up so each card's head is
+easy to thumb out. Every edge is a true arc — node-edit the dome or the
+scoops (`Ctrl+K`) and the stitching re-fits itself.
 
 ### Tracing a real object
 

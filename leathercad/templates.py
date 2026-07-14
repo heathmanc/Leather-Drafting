@@ -7,9 +7,11 @@ the tutorials in the user guide.
 
 from __future__ import annotations
 
+import math
+
 from .document import Document
 from .geometry import Vec2
-from .shapes import (Rectangle, Circle, Polygon, PathShape, EditablePath,
+from .shapes import (Rectangle, Circle, Polygon, PathShape, EditablePath, Edge,
                      Transform)
 from .stitchline import StitchLine
 from .stitchsettings import StitchSettings
@@ -69,50 +71,67 @@ def key_fob() -> Document:
     return doc
 
 
-def bifold_wallet() -> Document:
-    """A clean SINGLE-PIECE horizontal bifold (my own design), cut from one
-    rectangle, ~200 x 140 mm flat, folding to a ~100 x 95 mm bifold.
+def _card_panel(name, side_top, top_mid, layer="Cut", stitch=None,
+                hw=35.0, r=9.0):
+    """A card-holder panel: width 2*hw, straight sides, softly rounded bottom
+    corners (radius r), and a single curved top edge through (0, top_mid).
+    top_mid > side_top gives a convex arched top (the back); top_mid < side_top
+    a concave thumb scoop (a pocket mouth). Built as an EditablePath so the top
+    stays a true arc -- the chord-spacing engine flows evenly around it with no
+    forced corners."""
+    o = r * math.cos(math.radians(45))         # fillet arc-midpoint offset
+    nodes = [
+        Vec2(-hw, r),                # 0 left side, above bottom fillet
+        Vec2(-hw, side_top),         # 1 left side top
+        Vec2(hw, side_top),          # 2 right side top
+        Vec2(hw, r),                 # 3 right side, above bottom fillet
+        Vec2(hw - r, 0.0),           # 4 bottom, after right fillet
+        Vec2(-hw + r, 0.0),          # 5 bottom, before left fillet
+    ]
+    edges = [
+        Edge("line"),                                   # left side
+        Edge("arc", Vec2(0.0, top_mid)),                # curved top edge
+        Edge("line"),                                   # right side
+        Edge("arc", Vec2(hw - r + o, r - o)),           # bottom-right fillet
+        Edge("line"),                                   # bottom
+        Edge("arc", Vec2(-hw + r - o, r - o)),          # bottom-left fillet
+    ]
+    return EditablePath(nodes=nodes, edges=edges, closed=True,
+                        transform=Transform(x=0, y=0), layer=layer,
+                        stitch=stitch, name=name)
 
-    Two folds, no separate pieces:
 
-      * a horizontal POCKET fold -- the bottom 45 mm turns up over the front
-        to make a full-width pocket for cards and folded cash;
-      * a vertical CENTRE fold -- the whole thing then closes like a book,
-        and that crease splits the pocket into a left and a right
-        compartment on its own (no seam needed down the middle).
+def curved_card_holder() -> Document:
+    """Flagship demo: an elegant vertical card holder, ~70 x 106 mm, with a
+    softly ARCHED top and three stepped, thumb-scooped card pockets.
 
-    Stitching is one straight seam up each outer side, through both the
-    pocket layer and the shell, closing the two pocket sides; the pocket
-    bottom is the fold (already closed) and the top is left open so cards
-    slide in. Everything registers because each seam is a single straight
-    line -- fold the pocket up and its holes sit directly over the shell's.
+    One continuous run of fine saddle stitching wraps the whole curved
+    perimeter of the back panel -- this is the piece that shows off the
+    program's signature: pricking-iron-accurate chord spacing that stays
+    even as it flows around the arch and the rounded corners, where naive
+    'space along the contour' stitching would bunch up.
+
+    The three front pockets stack bottom-aligned; their concave scoop
+    mouths step up so each card's head is easy to thumb out. The pockets
+    share the back panel's width, so the perimeter stitch passes through
+    all layers down the sides and across the bottom, holding the stack
+    together -- their mouths stay open and unstitched.
     """
-    doc = Document("Bifold wallet")
-    W, H = 200.0, 140.0                # flat sheet; closed ~100 x 95 mm
-    POCKET = 45.0                      # bottom strip that folds up
-    hw, hh = W / 2.0, H / 2.0
-    fold_y = -hh + POCKET              # pocket-fold height (from the bottom)
-
-    doc.add_shape(Rectangle(
-        name="Wallet body (one piece)", width=W, height=H, corner_radius=8.0,
-        transform=Transform(x=0, y=0),
-        stitch=StitchSettings(enabled=False), layer="Cut"))
-    # fold lines
-    doc.add_shape(PathShape(
-        name="Pocket fold", points=[Vec2(-hw, fold_y), Vec2(hw, fold_y)],
-        close_path=False, transform=Transform(x=0, y=0), layer="Score"))
-    doc.add_shape(PathShape(
-        name="Centre fold", points=[Vec2(0, -hh), Vec2(0, hh)],
-        close_path=False, transform=Transform(x=0, y=0), layer="Score"))
-    # one straight seam up each outer side of the pocket region
-    d = 4.0
-    for sign, name in ((-1, "Left pocket seam"), (1, "Right pocket seam")):
-        seam = StitchLine(
-            points=[Vec2(sign * (hw - d), -hh + d), Vec2(sign * (hw - d),
-                                                         fold_y - d)],
-            settings=StitchSettings(pitch_mm=3.85, fit="endpoints"))
-        seam.name = name
-        doc.add_stitch_line(seam)
+    doc = Document("Curved card wallet")
+    hw = 35.0
+    fine = StitchSettings(pitch_mm=3.5, inset=3.5, hole_diameter=1.0)
+    # back panel: a semicircular dome (radius = half-width) sits tangent on
+    # the straight sides, so the shoulders flow smoothly with no kink; the
+    # perimeter saddle stitch is the hero curve.
+    doc.add_shape(_card_panel("Back panel", side_top=75.0,
+                              top_mid=75.0 + hw, stitch=fine, hw=hw))
+    # three stepped pockets, tallest first (drawn back-to-front), scooped tops
+    steps = [("Card pocket (back)", 73.0), ("Card pocket (middle)", 57.0),
+             ("Card pocket (front)", 41.0)]
+    for name, side_top in steps:
+        doc.add_shape(_card_panel(name, side_top=side_top,
+                                  top_mid=side_top - 12.0,
+                                  stitch=StitchSettings(enabled=False), hw=hw))
     return doc
 
 
@@ -121,5 +140,5 @@ TEMPLATES = [
     ("Card holder", card_holder),
     ("Belt", belt),
     ("Key fob", key_fob),
-    ("Bifold wallet", bifold_wallet),
+    ("Curved card wallet", curved_card_holder),
 ]

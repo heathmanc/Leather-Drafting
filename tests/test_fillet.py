@@ -60,6 +60,48 @@ def test_arc_flanked_corner_refuses():
     assert not fillet_vertex(ep, 2, 5.0)
 
 
+def test_fillet_options_box_drives_radius_and_mode():
+    """The persistent toolbar box sets the radius/mode (no popup, no modifier
+    keys); the options show only while the fillet tool is active."""
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    import leathercad_app.canvas as cm
+    QApplication.instance() or QApplication([])
+
+    doc = Document()
+    doc.add_shape(Polygon(points=[Vec2(-30, -20), Vec2(30, -20), Vec2(30, 20),
+                                  Vec2(-30, 20)], close_path=True,
+                          transform=Transform(x=0, y=0), layer="Cut"))
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    # options hidden until the fillet tool is picked
+    assert not win._fillet_spin_act.isVisible()
+    win._set_tool(cm.FILLET)
+    assert win._fillet_spin_act.isVisible()
+    assert c.fillet_radius == win.fillet_spin.value()   # box drives the canvas
+
+    win.fillet_spin.setValue(8.0)
+    assert c.fillet_radius == 8.0
+    c._do_fillet(Vec2(30, 20))                           # no popup; uses 8 mm
+    sh = win.doc.shapes[0]
+    assert sh.kind == "editpath" and "arc" in [e.kind for e in sh.edges]
+
+    # re-selecting the tool keeps working (regression: dialog never re-fired)
+    win._set_tool(cm.SELECT)
+    assert not win._fillet_spin_act.isVisible()
+    win._set_tool(cm.FILLET)
+    c._do_fillet(Vec2(-30, 20))
+    assert sum(1 for e in win.doc.shapes[0].edges if e.kind == "arc") == 2
+
+    # Chamfer is a selector, not Shift
+    win.fillet_mode.setCurrentIndex(1)
+    assert c.fillet_chamfer is True
+
+
 def test_canvas_fillet_click():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     pytest.importorskip("PySide6")
@@ -81,8 +123,9 @@ def test_canvas_fillet_click():
     assert isinstance(sh, EditablePath)                  # auto-converted
     assert "arc" in [e.kind for e in sh.edges]
     assert win._unsaved_changes
-    # chamfer another corner via the same click path
-    c._do_fillet(Vec2(-20, -20), chamfer=True)
+    # chamfer another corner: mode is a persistent flag, not a click modifier
+    c.fillet_chamfer = True
+    c._do_fillet(Vec2(-20, -20))
     assert len(sh.nodes) == 6
 
 
@@ -147,7 +190,8 @@ def test_chamfer_across_two_lines_and_near_miss():
     c.rebuild()
     c.resize(500, 400)
     c.fillet_radius = 4.0
-    c._do_fillet(Vec2(20.2, 0.15), chamfer=True)
+    c.fillet_chamfer = True
+    c._do_fillet(Vec2(20.2, 0.15))
     assert len(win.doc.shapes) == 1
     assert [e.kind for e in win.doc.shapes[0].edges] == ["line", "line", "line"]
 

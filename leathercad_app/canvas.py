@@ -234,7 +234,8 @@ class Canvas(QGraphicsView):
         self.tool = SELECT
         self._default_stitch = lambda: StitchSettings(pitch_mm=3.85, inset=3.5)
         self._current_layer = "Cut"
-        self.fillet_radius: Optional[float] = None   # asked on first use
+        self.fillet_radius: Optional[float] = None   # set by the toolbar box
+        self.fillet_chamfer: bool = False            # Round vs Chamfer mode
         self.dark = False        # canvas swatches (paper/grid/axis), see theme.py
         self._underlay_item = None   # tracing photo behind the drawing
         self._cal_pts: List[QPointF] = []    # underlay calibration clicks
@@ -914,9 +915,7 @@ class Canvas(QGraphicsView):
             return
         if self.tool == FILLET:
             if event.button() == Qt.LeftButton:
-                self._do_fillet(Vec2(raw.x(), raw.y()),
-                                chamfer=bool(event.modifiers() & Qt.ShiftModifier),
-                                force_ask=bool(event.modifiers() & Qt.ControlModifier))
+                self._do_fillet(Vec2(raw.x(), raw.y()))
             event.accept()
             return
         if self.tool == EXTEND:
@@ -2391,13 +2390,14 @@ class Canvas(QGraphicsView):
         sh.construction = True
         return self.add_shape(sh)
 
-    def _do_fillet(self, world: Vec2, chamfer: bool = False,
-                   force_ask: bool = False) -> None:
-        """Round (or Shift: bevel) the corner nearest the click. Works on a
-        vertex inside one shape AND across two separate lines/paths whose ends
-        meet at the click -- those are welded into one path first (the
-        draw-two-lines-then-round-the-corner workflow)."""
+    def _do_fillet(self, world: Vec2) -> None:
+        """Round (or, in Chamfer mode, bevel) the corner nearest the click, at
+        the radius set in the toolbar. Works on a vertex inside one shape AND
+        across two separate lines/paths whose ends meet at the click -- those
+        are welded into one path first (the draw-two-lines-then-round-the-corner
+        workflow)."""
         from leathercad.modify import fillet_vertex, chamfer_vertex, to_editable
+        chamfer = bool(getattr(self, "fillet_chamfer", False))
 
         pick = 15.0 / max(self._zoom, 1e-6)       # generous ~15 px pick radius
         cands = []                                # (dist, item, idx, world pos)
@@ -2427,15 +2427,8 @@ class Canvas(QGraphicsView):
             return
         cands.sort(key=lambda c: c[0])
         _d, it, idx, wpos = cands[0]
-        if self.fillet_radius is None or force_ask:
-            from PySide6.QtWidgets import QInputDialog
-            val, ok = QInputDialog.getDouble(
-                self, "Fillet / chamfer",
-                "Radius / chamfer setback (mm):",
-                self.fillet_radius or 5.0, 0.1, 500.0, 2)
-            if not ok:
-                return
-            self.fillet_radius = val
+        if not self.fillet_radius:
+            self.fillet_radius = 6.0              # sane default, never a popup
 
         sh = it.model
         ep_probe = to_editable(sh)
@@ -2474,8 +2467,8 @@ class Canvas(QGraphicsView):
     def _fillet_done_msg(self, chamfer: bool) -> None:
         self.statusMessage.emit(
             f"{'Chamfered' if chamfer else 'Filleted'} at "
-            f"{self.fillet_radius:g} mm — keep clicking corners · "
-            "Shift-click = chamfer · Ctrl-click = change radius")
+            f"{self.fillet_radius:g} mm — keep clicking corners "
+            "(radius / mode in the toolbar)")
 
     def _fillet_polyline(self, sh):
         """World points of an open, all-straight shape (weldable for fillet),

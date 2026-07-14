@@ -231,7 +231,7 @@ Hold **Shift** while placing any line-like point to lock the segment to
 | **Score line** | `K` | Click points; lands on the **Score** layer (fold/skive/decoration). |
 | **Stitch line (seam)** | `M` | A standalone seam of holes — see [Tutorial 3](#16-tutorial-3--two-pieces-sharing-one-seam). |
 | **Trim** | `X` | Click the piece of an outline you want gone (red preview on hover). |
-| **Fillet / chamfer corner** | `6` | Click any corner of a polygon/path to **round** it with a true arc; **Shift-click** to chamfer (bevel); **Ctrl-click** to change the radius. |
+| **Fillet / chamfer corner** | `6` | Set the **radius** and **Round / Chamfer** mode in the toolbar box, then click any corner of a polygon/path to round or bevel it with a true arc. |
 | **Extend to intersection** | `7` | Click the **end** of a line/path: it grows until it meets the next outline or guide (the opposite of Trim). |
 | **Offset outline** | `8` | Click a shape, then move the cursor **inside or outside** it — a dashed preview follows with the live distance in the status bar. Click to place the offset copy, or press **Enter** to type an exact distance. Circles offset to true circles and rounded rectangles keep proper rounded corners. |
 | **Text** | `A` | Click to place engraved lettering. |
@@ -468,9 +468,11 @@ extra construction.
   direction matters. Pieces are placed biggest-first; it aims for a tight,
   sensible layout, not a mathematically perfect one — nudge afterwards if
   you spot a better pocket.
-* **Fillet / chamfer** (`6`) — click any corner of a polygon or path to round
-  it with a real arc (asks the radius on first use; **Ctrl-click** to change
-  it, **Shift-click** for a straight chamfer instead). It also works across
+* **Fillet / chamfer** (`6`) — with this tool active, a **radius box** and a
+  **Round / Chamfer** selector appear in the top toolbar; type the radius
+  (it's remembered), pick the mode, then click any corner of a polygon or
+  path to round (or bevel) it with a real arc. Change the radius any time —
+  it's a persistent box, no popup and no modifier keys. It also works across
   **two separate lines whose ends meet**: draw two lines into a corner (they
   snap), click the corner, and the lines are **welded into one path** with the
   arc between them — the classic draft-then-round workflow. The radius clamps

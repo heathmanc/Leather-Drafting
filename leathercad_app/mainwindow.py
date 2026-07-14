@@ -528,6 +528,44 @@ class MainWindow(QMainWindow):
         self.kerf_spin.valueChanged.connect(self._kerf_changed)
         tb.addWidget(self.kerf_spin)
 
+        # persistent Fillet / chamfer options -- shown only while that tool is
+        # active (no popup, no modifier keys)
+        self._fillet_sep = tb.addSeparator()
+        self._fillet_lbl = tb.addWidget(QLabel(" corner "))
+        self.fillet_mode = QComboBox()
+        self.fillet_mode.addItem("Round", False)
+        self.fillet_mode.addItem("Chamfer", True)
+        self.fillet_mode.setToolTip("Round = fillet arc · Chamfer = straight bevel")
+        self.fillet_mode.currentIndexChanged.connect(
+            lambda: setattr(self.canvas, "fillet_chamfer",
+                            bool(self.fillet_mode.currentData())))
+        self._fillet_mode_act = tb.addWidget(self.fillet_mode)
+        self.fillet_spin = MathSpinBox()
+        self.fillet_spin.setRange(0.1, 500.0)
+        self.fillet_spin.setDecimals(2)
+        self.fillet_spin.setSuffix(" mm")
+        self.fillet_spin.setKeyboardTracking(False)
+        self.fillet_spin.setToolTip("Corner radius (Round) / setback (Chamfer). "
+                                    "Type a value, then click corners.")
+        fr = self._settings().value("filletRadius", 6.0, type=float)
+        self.fillet_spin.setValue(fr)
+        self.canvas.fillet_radius = fr
+        self.canvas.fillet_chamfer = False
+        self.fillet_spin.valueChanged.connect(self._fillet_radius_changed)
+        self._fillet_spin_act = tb.addWidget(self.fillet_spin)
+        for a in (self._fillet_sep, self._fillet_lbl, self._fillet_mode_act,
+                  self._fillet_spin_act):
+            a.setVisible(False)
+
+    def _fillet_radius_changed(self, r):
+        self.canvas.fillet_radius = float(r)
+        self._settings().setValue("filletRadius", float(r))
+
+    def _show_fillet_options(self, on: bool):
+        for a in (self._fillet_sep, self._fillet_lbl, self._fillet_mode_act,
+                  self._fillet_spin_act):
+            a.setVisible(on)
+
     def _line_width_changed(self, w):
         self.canvas.set_line_width(w)
         self._settings().setValue("lineWidth", w)
@@ -728,6 +766,7 @@ class MainWindow(QMainWindow):
             self.canvas._clear_trim_hover()
         if mode != canvas_mod.OFFSET:
             self.canvas._cancel_offset()
+        self._show_fillet_options(mode == canvas_mod.FILLET)
         if mode == canvas_mod.OFFSET:
             self.canvas.statusMessage.emit(
                 "Offset: click a shape, move the cursor inside or outside, "
@@ -738,8 +777,8 @@ class MainWindow(QMainWindow):
                 "crosses another shape")
         elif mode == canvas_mod.FILLET:
             self.canvas.statusMessage.emit(
-                "Fillet: click a corner to round it · Shift-click = chamfer · "
-                "Ctrl-click = change radius")
+                "Corner: set the radius / mode in the toolbar above, then "
+                "click corners (or the point where two line ends meet)")
         elif mode == canvas_mod.EXTEND:
             self.canvas.statusMessage.emit(
                 "Extend: click the END of a line/path to grow it until it "

@@ -130,14 +130,19 @@ class PropertiesPanel(QWidget):
         # Punch cascade: style -> maker -> size. Style picks the hole SHAPE,
         # maker + size pick the pitch. ``_cur_hole_style`` is the low-level
         # render/export primitive (round | slit | diamond) the style maps to.
+        # Punch = style + pitch. Style picks the hole SHAPE; pitch (the standard
+        # ladder, shared across makers) is the primary selector. Round holes add
+        # a diameter selector. ``_cur_hole_style`` is the low-level render/export
+        # primitive (round | slit | diamond) the style maps to.
         self._cur_hole_style = "round"
         self.punch_style = QComboBox()
         for key in ("round", "oblique", "french", "diamond"):
             self.punch_style.addItem(key.capitalize(), key)
-        self.punch_brand = QComboBox()
-        self.punch_size = QComboBox()
-        self._rebuild_punch_brands("round")
+        self.pitch_combo = QComboBox()
+        self._build_pitch_combo()
         self.pitch = _spin(0.5, 50, 0.05)
+        self.hole_dia_combo = QComboBox()
+        self._build_dia_combo()
         self.inset = _spin(0.0, 100, 0.5)
         self.fit = QComboBox()
         self.fit.addItems(["auto", "endpoints", "closed", "none"])
@@ -163,12 +168,12 @@ class PropertiesPanel(QWidget):
             "midpoint: force a hole on the corner apex.\n"
             "straddle: force an even pair around the apex, none on it.")
         fs.addRow("Punch", self.punch_style)
-        fs.addRow("Maker", self.punch_brand)
-        fs.addRow("Size", self.punch_size)
-        fs.addRow("Pitch", self.pitch)
+        fs.addRow("Pitch", self.pitch_combo)
+        fs.addRow("Pitch (mm)", self.pitch)
         fs.addRow("Inset from edge", self.inset)
         fs.addRow("Fit", self.fit)
-        fs.addRow("Hole ø", self.hole_dia)
+        fs.addRow("Hole ø", self.hole_dia_combo)
+        fs.addRow("Hole ø (mm)", self.hole_dia)
         fs.addRow("Slit length", self.slit_len)
         fs.addRow("Slit angle", self.slit_angle)
         fs.addRow("Rows", self.rows)
@@ -207,9 +212,10 @@ class PropertiesPanel(QWidget):
         self.fit.currentIndexChanged.connect(self._apply_commit)
         self.g_stitch.toggled.connect(self._apply_commit)
         self.punch_style.currentIndexChanged.connect(self._on_punch_style)
-        self.punch_brand.currentIndexChanged.connect(self._on_punch_brand)
-        self.punch_size.currentIndexChanged.connect(self._on_punch_size)
+        self.pitch_combo.currentIndexChanged.connect(self._on_pitch_combo)
+        self.hole_dia_combo.currentIndexChanged.connect(self._on_dia_combo)
         self.pitch.valueChanged.connect(self._on_pitch_typed)
+        self.hole_dia.valueChanged.connect(self._on_dia_typed)
 
     # -- selection ------------------------------------------------------
     def set_layers(self, layers):
@@ -359,33 +365,34 @@ class PropertiesPanel(QWidget):
         # positions are fixed -- only the appearance rows (style / ø / slit)
         # stay. Symmetry and Corners belong here too: they only steer the
         # auto-distribution, so they'd do nothing on baked holes.
-        for w in (self.punch_brand, self.punch_size, self.pitch, self.inset,
+        for w in (self.pitch_combo, self.pitch, self.inset,
                   self.fit, self.rows, self.row_spacing, self.backstitch,
                   self.symmetry, self.corner_style):
             self._stitch_form.setRowVisible(w, vis)
 
     def _sync_hole_vis(self):
-        """Show Hole ø for round holes, slit length/angle for slit/diamond."""
+        """Show the Hole ø rows for round holes, slit length/angle for
+        slit/diamond."""
         slit = self._cur_hole_style in ("slit", "diamond")
+        self._stitch_form.setRowVisible(self.hole_dia_combo, not slit)
         self._stitch_form.setRowVisible(self.hole_dia, not slit)
         self._stitch_form.setRowVisible(self.slit_len, slit)
         self._stitch_form.setRowVisible(self.slit_angle, slit)
 
-    def _load_punch(self, hole_style, punch_style, pitch, brand):
-        """Point the style/maker/size cascade at a saved hole (shared by shapes,
+    def _load_punch(self, hole_style, punch_style, pitch):
+        """Point the style + pitch selectors at a saved hole (shared by shapes,
         seams and loose holes)."""
         self._cur_hole_style = hole_style
         style = self._infer_punch_style(hole_style, punch_style)
         i = self.punch_style.findData(style)
         self.punch_style.setCurrentIndex(i if i >= 0 else 0)
-        self._rebuild_punch_brands(style, keep=brand or None)
-        self._select_size_for_pitch(pitch)
+        self._select_preset(self.pitch_combo, pitch)
 
     def _load_hole_style(self, g):
         self._load_punch(g.hole_style, getattr(g, "punch_style", ""),
-                         getattr(g, "pitch_mm", self.pitch.value()),
-                         getattr(g, "punch_brand", ""))
+                         getattr(g, "pitch_mm", self.pitch.value()))
         self.hole_dia.setValue(g.hole_diameter)
+        self._select_preset(self.hole_dia_combo, g.hole_diameter)
         self.slit_len.setValue(g.slit_length)
         self.slit_angle.setValue(g.slit_angle)
         self._sync_hole_vis()
@@ -396,8 +403,9 @@ class PropertiesPanel(QWidget):
         i = self.fit.findText(st.fit)
         self.fit.setCurrentIndex(i if i >= 0 else 0)
         self._load_punch(st.hole_style, getattr(st, "punch_style", ""),
-                         st.pitch_mm, getattr(st, "punch_brand", ""))
+                         st.pitch_mm)
         self.hole_dia.setValue(st.hole_diameter)
+        self._select_preset(self.hole_dia_combo, st.hole_diameter)
         self.slit_len.setValue(st.slit_length)
         self.slit_angle.setValue(st.slit_angle)
         self.rows.setCurrentIndex(1 if getattr(st, "rows", 1) == 2 else 0)
@@ -410,7 +418,7 @@ class PropertiesPanel(QWidget):
         self._sync_hole_vis()
         self.row_spacing.setVisible(self.rows.currentIndex() == 1)
 
-    # -- punch cascade: style -> maker -> size --------------------------
+    # -- punch: style + pitch (+ diameter for round) --------------------
     @staticmethod
     def _infer_punch_style(hole_style, punch_style=""):
         """Best display style for a saved hole: trust an explicit oblique/french
@@ -422,46 +430,44 @@ class PropertiesPanel(QWidget):
             return "diamond"
         return punch_style if punch_style in ("oblique", "french") else "oblique"
 
-    def _rebuild_punch_brands(self, style, keep=None):
-        from leathercad.irons import brands_for
-        self.punch_brand.blockSignals(True)
-        self.punch_brand.clear()
-        for b in brands_for(style):
-            self.punch_brand.addItem(b, b)
-        if keep is not None:
-            i = self.punch_brand.findData(keep)
-            if i >= 0:
-                self.punch_brand.setCurrentIndex(i)
-        self.punch_brand.blockSignals(False)
-        self._rebuild_punch_sizes(style, self.punch_brand.currentData())
+    def _build_pitch_combo(self):
+        from leathercad.irons import STANDARD_PITCHES, mm_to_spi
+        self.pitch_combo.blockSignals(True)
+        self.pitch_combo.clear()
+        for p in STANDARD_PITCHES:
+            self.pitch_combo.addItem(f"{p:g} mm  ({mm_to_spi(p):.1f} SPI)",
+                                     round(p, 4))
+        self.pitch_combo.addItem("Custom…", None)
+        self.pitch_combo.blockSignals(False)
 
-    def _rebuild_punch_sizes(self, style, brand, keep_pitch=None):
-        from leathercad.irons import punches_for
-        self.punch_size.blockSignals(True)
-        self.punch_size.clear()
-        for p in punches_for(style, brand or ""):
-            self.punch_size.addItem(p.size_label, round(p.pitch_mm, 4))
-        self.punch_size.addItem("Custom…", None)
-        if keep_pitch is not None:
-            self._select_size_for_pitch(keep_pitch)
-        self.punch_size.blockSignals(False)
+    def _build_dia_combo(self):
+        from leathercad.irons import ROUND_DIAMETERS
+        self.hole_dia_combo.blockSignals(True)
+        self.hole_dia_combo.clear()
+        for d in ROUND_DIAMETERS:
+            self.hole_dia_combo.addItem(f"{d:g} mm", round(d, 4))
+        self.hole_dia_combo.addItem("Custom…", None)
+        self.hole_dia_combo.blockSignals(False)
 
-    def _select_size_for_pitch(self, pitch):
-        for i in range(self.punch_size.count()):
-            data = self.punch_size.itemData(i)
-            if data is not None and abs(float(data) - pitch) < 0.02:
-                self.punch_size.setCurrentIndex(i)
+    @staticmethod
+    def _select_preset(combo, value):
+        for i in range(combo.count()):
+            data = combo.itemData(i)
+            if data is not None and abs(float(data) - value) < 0.02:
+                combo.setCurrentIndex(i)
                 return
-        self.punch_size.setCurrentIndex(self.punch_size.count() - 1)  # Custom
+        combo.setCurrentIndex(combo.count() - 1)          # Custom…
 
     def _apply_style_geometry(self, style):
         """Set the hole primitive + default hole dimensions for a punch style."""
         from leathercad.irons import geometry_for
         geom = geometry_for(style, self.pitch.value())
         self._cur_hole_style = geom["hole_style"]
-        self.hole_dia.setValue(geom["hole_diameter"])
-        self.slit_len.setValue(geom["slit_length"])
-        self.slit_angle.setValue(geom["slit_angle"])
+        if style == "round":
+            self.hole_dia.setValue(geom["hole_diameter"])
+        else:
+            self.slit_len.setValue(geom["slit_length"])
+            self.slit_angle.setValue(geom["slit_angle"])
 
     def _on_punch_style(self):
         if self._loading:
@@ -469,50 +475,54 @@ class PropertiesPanel(QWidget):
         style = self.punch_style.currentData()
         self._loading = True
         self._apply_style_geometry(style)         # new hole shape, keep pitch
-        self._rebuild_punch_brands(style)
-        self._select_size_for_pitch(self.pitch.value())
         self._sync_hole_vis()
         self._loading = False
         self._apply()
         self._commit()
 
-    def _on_punch_brand(self):
+    def _on_pitch_combo(self):
         if self._loading:
             return
-        style = self.punch_style.currentData()
-        self._loading = True
-        self._rebuild_punch_sizes(style, self.punch_brand.currentData(),
-                                  keep_pitch=self.pitch.value())
-        data = self.punch_size.currentData()
-        if data is not None:
-            self.pitch.setValue(float(data))
-        self._loading = False
-        self._apply()
-        self._commit()
-
-    def _on_punch_size(self):
-        if self._loading:
-            return
-        data = self.punch_size.currentData()
+        data = self.pitch_combo.currentData()
         if data is None:
             return                       # "Custom…" -- leave pitch as typed
         from leathercad.irons import geometry_for
         self._loading = True
         self.pitch.setValue(float(data))
         # rescale the slit/diamond length to the new pitch (keep the slant)
-        self.slit_len.setValue(
-            geometry_for(self.punch_style.currentData(), float(data))
-            ["slit_length"])
+        if self._cur_hole_style in ("slit", "diamond"):
+            self.slit_len.setValue(
+                geometry_for(self.punch_style.currentData(), float(data))
+                ["slit_length"])
+        self._loading = False
+        self._apply()
+        self._commit()
+
+    def _on_dia_combo(self):
+        if self._loading:
+            return
+        data = self.hole_dia_combo.currentData()
+        if data is None:
+            return                       # "Custom…" -- leave ø as typed
+        self._loading = True
+        self.hole_dia.setValue(float(data))
         self._loading = False
         self._apply()
         self._commit()
 
     def _on_pitch_typed(self):
-        # hand-editing pitch flips the Size combo to Custom if nothing matches
+        # hand-editing pitch flips the Pitch combo to Custom if nothing matches
         if self._loading:
             return
         self._loading = True
-        self._select_size_for_pitch(self.pitch.value())
+        self._select_preset(self.pitch_combo, self.pitch.value())
+        self._loading = False
+
+    def _on_dia_typed(self):
+        if self._loading:
+            return
+        self._loading = True
+        self._select_preset(self.hole_dia_combo, self.hole_dia.value())
         self._loading = False
 
     def _commit(self):
@@ -631,7 +641,6 @@ class PropertiesPanel(QWidget):
         st.inset = self.inset.value()
         st.fit = self.fit.currentText()
         st.punch_style = self.punch_style.currentData() or "round"
-        st.punch_brand = self.punch_brand.currentData() or ""
         st.hole_style = self._cur_hole_style
         st.hole_diameter = self.hole_dia.value()
         st.slit_length = self.slit_len.value()

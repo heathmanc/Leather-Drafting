@@ -20,24 +20,15 @@ def test_spi_mm_roundtrip():
     assert math.isclose(irons.mm_to_spi(25.4), 1.0)
 
 
-def test_catalog_is_style_then_maker_then_size():
-    assert list(irons.styles()) == ["round", "oblique", "french", "diamond"]
-    # Blanchard is a French maker; KS Blade offers diamond
-    assert "Blanchard" in irons.brands_for("french")
-    ks = irons.punches_for("diamond", "KS Blade Punch")
-    assert any(abs(p.pitch_mm - 3.85) < 1e-9 for p in ks)
-    assert all(p.style == "diamond" and p.brand == "KS Blade Punch" for p in ks)
-
-
-def test_spi_makers_store_correct_pitch_and_label():
-    # Weaver 6 SPI == 25.4/6 mm, labelled in SPI
-    weaver = {round(p.spi): p for p in irons.punches_for("diamond",
-                                                         "Weaver Leather")}
-    assert math.isclose(weaver[6].pitch_mm, 25.4 / 6.0)
-    assert weaver[6].size_label == "6 SPI"
-    # mm makers label in mm
-    ks = irons.punches_for("diamond", "KS Blade Punch")[0]
-    assert ks.size_label.endswith("mm")
+def test_standard_pitch_ladder_and_round_diameters():
+    assert irons.STYLES == ("round", "oblique", "french", "diamond")
+    # the common ladder is present and ordered
+    for p in (2.7, 3.0, 3.38, 3.85, 4.0):
+        assert p in irons.STANDARD_PITCHES
+    assert irons.STANDARD_PITCHES == sorted(irons.STANDARD_PITCHES)
+    # round-hole diameters exist and stay in the thread-friendly range
+    assert 1.0 in irons.ROUND_DIAMETERS
+    assert all(0.5 <= d <= 2.0 for d in irons.ROUND_DIAMETERS)
 
 
 def test_geometry_for_maps_style_to_hole_shape():
@@ -80,12 +71,6 @@ def test_diamond_exports_as_polygon_and_closed_polyline(tmp_path):
     export.export_dxf(doc, str(dxf))
     assert "<polygon" in svg.read_text()     # diamonds, not circles or lines
     assert "POLYLINE" in dxf.read_text()
-
-
-def test_nearest_labels_a_saved_pitch():
-    hit = irons.nearest(3.86)          # a hair off 3.85
-    assert hit is not None and abs(hit.pitch_mm - 3.85) < 0.03
-    assert irons.nearest(3.55) is None  # nothing that close -> no false label
 
 
 # -- job estimate ------------------------------------------------------------
@@ -186,43 +171,49 @@ def _win_with_stitched_rect():
     return win, shp
 
 
-def test_punch_cascade_style_maker_size_sets_shape_and_pitch():
+def test_punch_style_sets_shape_and_toggles_diameter_vs_slit():
     win, shp = _win_with_stitched_rect()
     p = win.properties
+    f = p._stitch_form
 
-    # pick Diamond -> hole primitive becomes diamond
+    # Round -> circle primitive, Hole ø rows shown, slit rows hidden
+    p.punch_style.setCurrentIndex(p.punch_style.findData("round"))
+    assert shp.model.stitch.hole_style == "round"
+    assert f.isRowVisible(p.hole_dia_combo) and f.isRowVisible(p.hole_dia)
+    assert not f.isRowVisible(p.slit_len)
+
+    # Diamond -> diamond primitive, slit rows shown, Hole ø hidden
     p.punch_style.setCurrentIndex(p.punch_style.findData("diamond"))
     assert shp.model.stitch.punch_style == "diamond"
     assert shp.model.stitch.hole_style == "diamond"
-    assert "KS Blade Punch" in [p.punch_brand.itemText(i)
-                                for i in range(p.punch_brand.count())]
-
-    # switch maker to a maker offering this style, then pick a size
-    i = p.punch_brand.findData("Wuta")
-    if i >= 0:
-        p.punch_brand.setCurrentIndex(i)
-    # choose the 4 mm size if present
-    for k in range(p.punch_size.count()):
-        if p.punch_size.itemData(k) and abs(p.punch_size.itemData(k) - 4.0) < 1e-6:
-            p.punch_size.setCurrentIndex(k)
-            break
-    assert abs(shp.model.stitch.pitch_mm - 4.0) < 1e-6
-
-    # French maker labels sizes in SPI
-    p.punch_style.setCurrentIndex(p.punch_style.findData("french"))
-    assert shp.model.stitch.hole_style == "slit"
-    assert "Blanchard" in [p.punch_brand.itemText(i)
-                           for i in range(p.punch_brand.count())]
+    assert f.isRowVisible(p.slit_len) and f.isRowVisible(p.slit_angle)
+    assert not f.isRowVisible(p.hole_dia_combo)
 
 
-def test_saved_pitch_round_trips_and_custom_shows():
+def test_pitch_dropdown_sets_pitch_and_custom_shows():
     win, shp = _win_with_stitched_rect()
     p = win.properties
-    p.punch_style.setCurrentIndex(p.punch_style.findData("diamond"))
-    # a 3.85 KS Blade size is a real catalogue entry, not Custom
-    p.punch_brand.setCurrentIndex(p.punch_brand.findData("KS Blade Punch"))
-    p._select_size_for_pitch(3.85)
-    assert "3.85" in p.punch_size.currentText()
-    # a pitch no maker offers falls back to Custom
-    p._select_size_for_pitch(3.55)
-    assert p.punch_size.currentText().startswith("Custom")
+    # pick 4 mm from the pitch dropdown
+    for k in range(p.pitch_combo.count()):
+        if p.pitch_combo.itemData(k) and abs(p.pitch_combo.itemData(k) - 4.0) < 1e-6:
+            p.pitch_combo.setCurrentIndex(k)
+            break
+    assert abs(shp.model.stitch.pitch_mm - 4.0) < 1e-6
+    assert "SPI" in p.pitch_combo.currentText()      # mm + SPI shown
+    # a non-standard pitch typed by hand flips the dropdown to Custom
+    p.pitch.setValue(3.55)
+    assert p.pitch_combo.currentText().startswith("Custom")
+
+
+def test_round_diameter_dropdown_sets_diameter():
+    win, shp = _win_with_stitched_rect()
+    p = win.properties
+    p.punch_style.setCurrentIndex(p.punch_style.findData("round"))
+    for k in range(p.hole_dia_combo.count()):
+        if p.hole_dia_combo.itemData(k) and abs(p.hole_dia_combo.itemData(k) - 1.2) < 1e-6:
+            p.hole_dia_combo.setCurrentIndex(k)
+            break
+    assert abs(shp.model.stitch.hole_diameter - 1.2) < 1e-6
+    # a custom diameter typed by hand flips the dropdown to Custom
+    p.hole_dia.setValue(0.9)
+    assert p.hole_dia_combo.currentText().startswith("Custom")

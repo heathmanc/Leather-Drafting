@@ -7,7 +7,7 @@ of truth the GUI edits and the exporters read.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, fields as dc_fields
 from typing import List, Optional
 
 from .geometry import Vec2
@@ -43,7 +43,10 @@ def _stitch_to_dict(s: Optional[StitchSettings]) -> Optional[dict]:
 def _stitch_from_dict(d: Optional[dict]) -> Optional[StitchSettings]:
     if d is None:
         return None
-    return StitchSettings(**d)
+    # tolerate keys from other versions (added/removed fields) so documents
+    # round-trip across releases instead of raising on an unexpected kwarg
+    valid = {f.name for f in dc_fields(StitchSettings)}
+    return StitchSettings(**{k: v for k, v in d.items() if k in valid})
 
 
 def _shape_to_dict(sh: Shape) -> dict:

@@ -14,11 +14,9 @@ class StitchSettings:
     max_dev: float = 0.12           # max fractional pitch nudge when fitting
     inset: float = 3.5              # stitch-line distance in from the edge (mm)
     # which real stitching punch this piece is cut for. ``punch_style`` picks
-    # the catalogue cascade (style -> maker -> size) and the hole SHAPE; it maps
-    # to the low-level ``hole_style`` render/export primitive as
-    # round->round, oblique/french->slit, diamond->diamond.
+    # the hole SHAPE and maps to the low-level ``hole_style`` render/export
+    # primitive as round->round, oblique/french->slit, diamond->diamond.
     punch_style: str = "round"      # round | oblique | french | diamond
-    punch_brand: str = ""           # maker label (free text; catalogue-driven)
     # hole appearance for render + export (the primitive geometry)
     hole_style: str = "round"       # "round" | "slit" | "diamond"
     hole_diameter: float = 1.0      # mm (round holes)

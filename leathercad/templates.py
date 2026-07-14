@@ -225,22 +225,24 @@ def fold_over_wallet() -> Document:
                                 transform=Transform(x=0, y=0), layer="Score"))
 
     # seams, 5 mm pitch, 4 mm inside their edges/folds (no hole on a crease).
-    # The two BOTTOM rows are the seam that closes the pouch: when the wings
-    # fold in (left about x = CL, right about x = CR) they land on each other,
-    # so the rows must register hole-for-hole. A left-wing hole at x reflects
-    # to 2*CL - x; a right-wing hole to 2*CR - x; the pair coincides when
-    # x_right = x_left + 2*(CR - CL). Both rows are therefore the SAME length
-    # (60 mm -> 13 holes at exactly 5 mm) and placed as mirror partners onto
-    # the shared target span x in [82, 142] of the folded pouch front.
-    span = 60.0                                        # = 12 gaps at 5 mm
-    lb0, lb1 = 2 * CL - 142.0, 2 * CL - 82.0           # left-wing bottom: 14..74
-    rb0, rb1 = lb0 + 2 * (CR - CL), lb1 + 2 * (CR - CL)  # right: 154..214
+    # Rows that get sewn together when the wallet folds must register
+    # hole-for-hole. Reflection of a hole across a wing fold: left wing about
+    # x = CL -> 2*CL - x, right wing about x = CR -> 2*CR - x. Two things fold
+    # together here, so both share ONE 60 mm target span (x in [82, 142] ->
+    # 13 holes at exactly 5 mm) on the pouch front:
+    #   * the pouch-closing BOTTOM seam -- left and right wing bottoms land on
+    #     each other (x_right = x_left + 2*(CR - CL));
+    #   * the pouch-mouth TOP seam -- the left wing top folds down onto the
+    #     stationary middle-section top row.
+    T0, T1 = 82.0, 142.0                               # shared folded span
+    lw0, lw1 = 2 * CL - T1, 2 * CL - T0                # left wing rows: 14..74
+    rb0, rb1 = 2 * CR - T1, 2 * CR - T0                # right wing bottom: 154..214
     runs = [
-        ("Top seam (left wing)", [Vec2(4, 86), Vec2(74, 86)]),
-        ("Top seam (middle)", [Vec2(82, 86), Vec2(144, 86)]),
+        ("Top seam (left wing)", [Vec2(lw0, 86), Vec2(lw1, 86)]),
+        ("Top seam (middle)", [Vec2(T0, 86), Vec2(T1, 86)]),
         ("Left edge seam", [Vec2(4, 8), Vec2(4, 82)]),
         ("Middle seam", [Vec2(144, 8), Vec2(144, 82)]),
-        ("Bottom seam (left wing)", [Vec2(lb0, 4), Vec2(lb1, 4)]),
+        ("Bottom seam (left wing)", [Vec2(lw0, 4), Vec2(lw1, 4)]),
         ("Bottom seam (right wing)", [Vec2(rb0, 4), Vec2(rb1, 4)]),
     ]
     for name, pts in runs:

@@ -164,13 +164,13 @@ is where you lift it back out. Seams are **5 mm pitch**, and every row
 sits 4 mm inside its own panel so no hole lands on a fold: the left wing
 carries **top, outer-edge and bottom** rows, the right wing a **bottom**
 row, and the middle section its **own top row and a vertical row just
-inside the right wing fold** (same pitch as the wing's, so the layers line
-up when you prick through the assembled pouch). The two **bottom rows are
-the pouch seam** — when the wings fold in they land on each other, so both
-are the same length (13 holes at a true 5 mm pitch) and placed as mirror
-partners that **register hole-for-hole** when folded; the middle section's
-bottom (the fold zone with the thumb scoop) stays unstitched. The entrance
-and slot stay open too. Everything is
+inside the right wing fold**. The rows that get sewn together when the
+wallet folds **register hole-for-hole** — all 13 holes at a true 5 mm
+pitch, placed as mirror partners about their fold: the **bottom seam** (left
+and right wing bottoms land on each other to close the pouch) and the **top
+seam** (the left wing top folds down onto the middle top row to form the
+pouch mouth). The middle section's bottom (the fold zone with the thumb
+scoop) stays unstitched. The entrance and slot stay open too. Everything is
 right-handed as drawn — select all and **Make back piece** (`Ctrl+M`) for
 a left-handed mirror.
 

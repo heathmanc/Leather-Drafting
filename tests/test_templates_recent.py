@@ -141,6 +141,13 @@ def test_fold_over_wallet_matches_source_pattern():
     assert max(p.x for p in top_w.points) < 78.0            # wing side only
     assert 78.0 < min(p.x for p in top_m.points)            # middle only...
     assert max(p.x for p in top_m.points) < 148.0           # ...inside the fold
+    # the pouch-mouth TOP seam: the left wing top folds down (about x = 78)
+    # onto the stationary middle top row -- same count, registered
+    lt, mt = top_w.result().holes, top_m.result().holes
+    assert len(lt) == len(mt)
+    ltf = sorted(round(2 * 78.0 - h.point.x, 4) for h in lt)
+    mtf = sorted(round(h.point.x, 4) for h in mt)
+    assert all(abs(a - b) < 1e-6 for a, b in zip(ltf, mtf))
     # the middle vertical row sits just INSIDE the right wing fold
     assert all(p.x == 144.0 for p in middle.points)
     # wing and middle vertical rows match hole-for-hole in height

@@ -291,6 +291,11 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
   Parameters may reference each other (`half_w = strap_w/2`) and understand
   units (`1in`), are saved in the file, and a parameter edit is one undo
   step. Great for "the whole wallet, resizable from one table".
+* **Resize**: drag any of the 8 box grips on a selected shape (rectangles,
+  ellipses, **and polygons / multi-point paths**); the opposite corner or edge
+  stays pinned. Hold **Shift** to keep the aspect ratio, or turn on
+  **View → Lock aspect ratio on resize** to make that the default (then Shift
+  frees it).
 * **Rotate**: drag the round **rotation grip** floating above a selected
   shape's box — snaps to 1° (hold **Shift** for 15° detents) — or type an
   exact angle in Properties → Rotation.

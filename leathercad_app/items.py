@@ -297,7 +297,11 @@ class ResizeHandle(QGraphicsItem):
             return
         world = self.canvas.snap_node(event.scenePos())   # snap to other nodes
         self._dragged = True
-        self._apply_resize(Vec2(world.x(), world.y()))
+        # Shift locks the aspect ratio (Photoshop-style); the persistent
+        # canvas.aspect_lock toggle inverts what Shift does.
+        shift = bool(event.modifiers() & Qt.ShiftModifier)
+        lock = bool(getattr(self.canvas, "aspect_lock", False)) != shift
+        self._apply_resize(Vec2(world.x(), world.y()), lock)
         self._syncing = True
         self.setPos(world)                                 # glyph follows cursor
         self._syncing = False
@@ -312,7 +316,7 @@ class ResizeHandle(QGraphicsItem):
             self.canvas.commitRequested.emit()
         event.accept()
 
-    def _apply_resize(self, grip_world: Vec2) -> None:
+    def _apply_resize(self, grip_world: Vec2, lock: bool = False) -> None:
         owner = self.owner
         ext = owner.resize_extents()
         if ext is None:
@@ -326,6 +330,16 @@ class ResizeHandle(QGraphicsItem):
         g_local = t.inverse_apply(grip_world)
         hx_new = abs(g_local.x - anchor_local.x) / 2.0 if gx else hx
         hy_new = abs(g_local.y - anchor_local.y) / 2.0 if gy else hy
+        if lock and hx > 1e-9 and hy > 1e-9:
+            # keep the current aspect ratio. A corner follows whichever axis
+            # moved more; an edge grip scales the free axis to match.
+            if gx and gy:
+                s = max(hx_new / hx, hy_new / hy)
+            elif gx:
+                s = hx_new / hx
+            else:
+                s = hy_new / hy
+            hx_new, hy_new = hx * s, hy * s
         hx_new = max(0.5, hx_new)
         hy_new = max(0.5, hy_new)
         owner.set_resize_extents(hx_new, hy_new)

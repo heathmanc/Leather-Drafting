@@ -288,6 +288,9 @@ class Canvas(QGraphicsView):
         # default bright blue.
         self.draw_color: Optional[QColor] = None
         self._default_preview_color = QColor(30, 140, 255)
+        # when True, dragging a resize grip keeps the shape's aspect ratio;
+        # holding Shift inverts it (so Shift always toggles aspect-lock).
+        self.aspect_lock = False
 
         # snapping -- grid and node snapping toggle independently
         self.snap_to_nodes = True    # ends / midpoints / centres / intersections

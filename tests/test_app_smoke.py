@@ -2446,3 +2446,45 @@ def test_polygon_and_paths_get_box_resize(qapp):
     cx1, cy1 = poly.resize_center()
     anchor_after = t.apply(Vec2(cx1 - hx1, cy1 - hy1))
     assert (anchor_after - anchor_world).length() < 1e-6   # opposite corner pinned
+
+
+def test_aspect_lock_on_resize(qapp):
+    """Shift (or the persistent toggle) locks the aspect ratio while dragging a
+    resize grip; without it the axes move independently."""
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import ShapeItem, ResizeHandle
+    from leathercad.document import Document
+    from leathercad.shapes import Rectangle, Transform
+    from leathercad.geometry import Vec2
+
+    doc = Document()
+    doc.add_shape(Rectangle(width=80, height=40, transform=Transform(x=0, y=0),
+                            layer="Cut"))                        # aspect 2:1
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    shp = next(it for it in c.scene_obj.items() if isinstance(it, ShapeItem))
+    c.scene_obj.clearSelection(); shp.setSelected(True); c.selection_changed()
+    grips = [it for it in c.scene_obj.items() if isinstance(it, ResizeHandle)]
+    corner = next(g for g in grips if g.grip == (1, 1))
+
+    def aspect():
+        hx, hy = shp.resize_extents()
+        return hx / hy
+
+    # free drag to an off-ratio point changes the aspect
+    corner._apply_resize(Vec2(30, 60), lock=False)
+    assert abs(aspect() - 2.0) > 0.1
+
+    # reset, then a locked drag keeps 2:1
+    shp.model.width, shp.model.height = 80.0, 40.0
+    shp.model.transform.x = shp.model.transform.y = 0.0
+    shp.sync_from_model()
+    corner._apply_resize(Vec2(30, 60), lock=True)
+    assert abs(aspect() - 2.0) < 1e-6
+
+    # the persistent toggle drives the default lock state
+    win.act_aspect_lock.setChecked(True)
+    assert c.aspect_lock is True
+    win.act_aspect_lock.setChecked(False)
+    assert c.aspect_lock is False

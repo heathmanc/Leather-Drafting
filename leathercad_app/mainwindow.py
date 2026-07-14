@@ -591,6 +591,10 @@ class MainWindow(QMainWindow):
                   self._fillet_spin_act):
             a.setVisible(on)
 
+    def _toggle_aspect_lock(self, on):
+        self.canvas.aspect_lock = bool(on)
+        self._settings().setValue("aspectLock", bool(on))
+
     def _line_width_changed(self, w):
         self.canvas.set_line_width(w)
         self._settings().setValue("lineWidth", w)
@@ -769,6 +773,17 @@ class MainWindow(QMainWindow):
         self.act_drag_draw.toggled.connect(
             lambda on: setattr(self.canvas, "drag_to_draw", on))
         vm.addAction(self.act_drag_draw)
+
+        self.act_aspect_lock = QAction("Lock aspect ratio on resize", self)
+        self.act_aspect_lock.setCheckable(True)
+        self.act_aspect_lock.setToolTip(
+            "On: dragging a resize grip keeps the shape's proportions.\n"
+            "Hold Shift while dragging to invert this either way.")
+        self.act_aspect_lock.setChecked(
+            self._settings().value("aspectLock", False, type=bool))
+        self.canvas.aspect_lock = self.act_aspect_lock.isChecked()
+        self.act_aspect_lock.toggled.connect(self._toggle_aspect_lock)
+        vm.addAction(self.act_aspect_lock)
 
         hm = m.addMenu("&Help")
         self._add(hm, "User guide", "F1", self.show_help)

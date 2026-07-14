@@ -2339,3 +2339,45 @@ def test_offset_preview_survives_rebuild_midflight(qapp):
     c._offset_closed = closed
     c._update_offset_preview(Vec2(40, 0))          # must not raise
     assert shiboken6.isValid(c._offset_preview)
+
+
+def test_draw_color_override_is_display_only(qapp):
+    """A bright on-screen draw colour overrides the outline pen for visibility
+    while tracing, but leaves the layer colour (and export) untouched."""
+    from PySide6.QtGui import QColor
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import ShapeItem
+    from leathercad.document import Document
+    from leathercad.shapes import Rectangle
+
+    doc = Document()
+    doc.add_shape(Rectangle(width=60, height=40, layer="Cut"))
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    shp = next(it for it in c.scene_obj.items() if isinstance(it, ShapeItem))
+    layer_col = QColor(c.layer_color("Cut")).name()
+
+    win._set_draw_color(QColor(0, 230, 255))
+    assert c.display_color.name() == "#00e6ff"
+    # the model's layer + the layer colour are unchanged (export stays correct)
+    assert shp.model.layer == "Cut"
+    assert QColor(c.layer_color("Cut")).name() == layer_col
+
+    win._set_draw_color(None)               # back to layer colours
+    assert c.display_color is None
+
+
+def test_pointing_tools_get_crosshair_cursor(qapp):
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app import canvas as cm
+    from PySide6.QtCore import Qt
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+    win._set_tool(cm.LINE)
+    # a custom bitmap crosshair, not the plain arrow
+    assert c.viewport().cursor().shape() == Qt.BitmapCursor
+    win._set_tool(cm.SELECT)
+    assert c.viewport().cursor().shape() == Qt.ArrowCursor

@@ -180,9 +180,18 @@ Want to digitize a wallet you already own? Photograph or scan it with a ruler
 in the shot, then **View → Tracing image → Place image…**. The photo sits
 behind the canvas at half opacity. Now **Calibrate scale**: click two points a
 known distance apart (the ruler ends), type the real distance — the photo
-rescales so 1 mm on it is 1 mm for real. Trace over it with the pen/line
-tools; the image is never exported and is saved with your project. Adjust
-opacity, hide, or remove it from the same menu.
+rescales so 1 mm on it is 1 mm for real (a live rubber line + on-screen
+distance follows your cursor between the two clicks). Trace over it with the
+pen/line tools; the image is never exported and is saved with your project.
+Adjust opacity, hide, or remove it from the same menu.
+
+**Seeing what you draw over a photo.** Every drawing tool uses a high-contrast
+crosshair cursor so the pointer stays visible on a busy image. In the toolbar,
+the **line px** field sets the on-screen stroke width, and the **draw-colour**
+swatch (next to it) picks a bright on-screen colour for your outlines — pick
+something that pops against your photo, or choose *Use layer colours* to go
+back. The draw colour is display-only: the layer/role still drives the cut and
+the SVG/DXF export.
 
 1. Press `R` (Rectangle). Click once for the first corner, move, click again
    for the opposite corner. *(Prefer press-drag-release? Toggle

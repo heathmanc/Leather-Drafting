@@ -13,8 +13,8 @@ from typing import List, Optional
 import time
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import (QColor, QPainter, QPen, QPainterPath, QPolygonF,
-                           QTransform)
+from PySide6.QtGui import (QColor, QCursor, QPainter, QPen, QPainterPath,
+                           QPixmap, QPolygonF, QTransform)
 from PySide6.QtWidgets import (QGraphicsScene, QGraphicsView, QGraphicsPathItem,
                                QGraphicsItem, QGraphicsLineItem, QMenu)
 
@@ -282,6 +282,11 @@ class Canvas(QGraphicsView):
         self._offset_preview = None       # dashed QGraphicsPathItem
         self._nonmovable_members = []   # items we temporarily froze for a group drag
         self.line_width = 1.0     # on-screen outline stroke width (cosmetic px)
+        # optional on-screen override colour for shape outlines (brighter than
+        # the layer colour, e.g. while tracing a photo). None -> use layer
+        # colours. Export and the layer/role are unaffected -- this is display
+        # only.
+        self.display_color: Optional[QColor] = None
 
         # snapping -- grid and node snapping toggle independently
         self.snap_to_nodes = True    # ends / midpoints / centres / intersections
@@ -648,6 +653,35 @@ class Canvas(QGraphicsView):
             path.addRect(x - r, y - r, 2 * r, 2 * r)
         return path
 
+    def crosshair_cursor(self) -> QCursor:
+        """A precision '+' cursor with a white halo so it stays visible over a
+        busy tracing photo (the plain OS crosshair is a thin black line that
+        vanishes on dark or noisy images). Built once, cached."""
+        cur = getattr(self, "_crosshair_cur", None)
+        if cur is not None:
+            return cur
+        S = 29
+        pm = QPixmap(S, S)
+        pm.fill(Qt.transparent)
+        pr = QPainter(pm)
+        pr.setRenderHint(QPainter.Antialiasing, False)
+        c = S // 2
+        gap = 3                       # small hole at the centre so the exact
+        arm = c - 2                   # point is never covered
+        segs = [((c, 1), (c, c - gap)), ((c, c + gap), (c, S - 2)),
+                ((1, c), (c - gap, c)), ((c + gap, c), (S - 2, c))]
+        # white halo underneath, dark line on top
+        for width, col in ((3.0, QColor(255, 255, 255, 230)),
+                           (1.0, QColor(20, 20, 20, 255))):
+            pen = QPen(col, width)
+            pr.setPen(pen)
+            for (x0, y0), (x1, y1) in segs:
+                pr.drawLine(x0, y0, x1, y1)
+        pr.end()
+        cur = QCursor(pm, c, c)       # hotspot dead centre
+        self._crosshair_cur = cur
+        return cur
+
     def _show_snap_marker(self, pt: QPointF, kind):
         if not kind:
             if self._snap_marker is not None:
@@ -664,7 +698,7 @@ class Canvas(QGraphicsView):
             path.moveTo(pt.x(), pt.y() - r * 1.6); path.lineTo(pt.x(), pt.y() + r * 1.6)
         self._snap_marker.setPath(path)
         color = QColor(150, 150, 150) if kind == "grid" else QColor(255, 120, 0)
-        pen = QPen(color, 0)
+        pen = QPen(color, 2.0)          # thicker so it reads over a tracing photo
         pen.setCosmetic(True)
         self._snap_marker.setPen(pen)
         self._snap_marker.setBrush(Qt.NoBrush)
@@ -942,6 +976,8 @@ class Canvas(QGraphicsView):
                 if len(self._cal_pts) >= 2:
                     p1, p2 = self._cal_pts[0], self._cal_pts[1]
                     self._cal_pts = []
+                    self._clear_preview()
+                    self._hide_snap_marker()
                     from PySide6.QtWidgets import QInputDialog
                     real, ok = QInputDialog.getDouble(
                         self, "Calibrate tracing image",
@@ -953,6 +989,13 @@ class Canvas(QGraphicsView):
                             "1 mm in real life")
                     self.toolFinished.emit()
                 else:
+                    # anchor a live rubber line at the first click
+                    self._preview = QGraphicsPathItem()
+                    pen = QPen(QColor(30, 140, 255), 2, Qt.DashLine)
+                    pen.setCosmetic(True)
+                    self._preview.setPen(pen)
+                    self.scene_obj.addItem(self._preview)
+                    self._show_snap_marker(QPointF(raw.x(), raw.y()), "end")
                     self.statusMessage.emit(
                         "Calibrate: now click the SECOND point of the known "
                         "distance")
@@ -995,7 +1038,7 @@ class Canvas(QGraphicsView):
                 if self._start is None:
                     self._start = pos
                     self._preview = QGraphicsPathItem()
-                    pen = QPen(QColor(120, 120, 130), 0, Qt.DashLine)
+                    pen = QPen(QColor(30, 140, 255), 2, Qt.DashLine)
                     pen.setCosmetic(True)
                     self._preview.setPen(pen)
                     self.scene_obj.addItem(self._preview)
@@ -1026,7 +1069,7 @@ class Canvas(QGraphicsView):
                     # begin (drag-mode press, or first click of click-to-place)
                     self._start = pos
                     self._preview = QGraphicsPathItem()
-                    pen = QPen(QColor(120, 120, 120), 0, Qt.DashLine)
+                    pen = QPen(QColor(30, 140, 255), 2, Qt.DashLine)
                     pen.setCosmetic(True)
                     self._preview.setPen(pen)
                     self.scene_obj.addItem(self._preview)
@@ -1207,6 +1250,21 @@ class Canvas(QGraphicsView):
             self._hide_snap_marker()
             if self._offset_item is not None:
                 self._update_offset_preview(Vec2(raw.x(), raw.y()))
+            super().mouseMoveEvent(event)
+            return
+        if self.tool == UNDERLAYCAL and self._cal_pts:
+            # live rubber line + on-screen distance from the first calibration
+            # click, so it's obvious where the pointer and the span are
+            a = self._cal_pts[0]
+            if self._preview is not None and _alive(self._preview):
+                path = QPainterPath()
+                path.moveTo(a)
+                path.lineTo(raw)
+                self._preview.setPath(path)
+            self._show_snap_marker(QPointF(raw.x(), raw.y()), "end")
+            d = ((raw.x() - a.x()) ** 2 + (raw.y() - a.y()) ** 2) ** 0.5
+            self.statusMessage.emit(
+                f"Calibrate: {d:.1f} mm on screen · click the SECOND point")
             super().mouseMoveEvent(event)
             return
         pos = raw
@@ -1438,7 +1496,10 @@ class Canvas(QGraphicsView):
             self._cancel_pen()
             self._cancel_multi()
             self._cancel_offset()
-            self._cal_pts = []
+            if self._cal_pts:                # drop the calibration rubber line
+                self._cal_pts = []
+                self._clear_preview()
+                self._hide_snap_marker()
             self.clear_vertex_handles()
             if self._start is not None:      # cancel an in-progress click-draw
                 self._start = None
@@ -1484,7 +1545,7 @@ class Canvas(QGraphicsView):
     def _update_poly_preview(self, cur: QPointF) -> None:
         if self._preview is None:
             self._preview = QGraphicsPathItem()
-            pen = QPen(QColor(120, 120, 120), 0, Qt.DashLine)
+            pen = QPen(QColor(30, 140, 255), 2, Qt.DashLine)
             pen.setCosmetic(True)
             self._preview.setPen(pen)
             self.scene_obj.addItem(self._preview)
@@ -1613,7 +1674,7 @@ class Canvas(QGraphicsView):
             self._bez_seg(curve, a, ha, cursor, None)
         if self._preview is None:
             self._preview = QGraphicsPathItem()
-            pen = QPen(QColor(120, 120, 120), 0, Qt.DashLine)
+            pen = QPen(QColor(30, 140, 255), 2, Qt.DashLine)
             pen.setCosmetic(True)
             self._preview.setPen(pen)
             self.scene_obj.addItem(self._preview)
@@ -1753,7 +1814,7 @@ class Canvas(QGraphicsView):
                             path.lineTo(p.x, p.y)
         if self._preview is None:
             self._preview = QGraphicsPathItem()
-            pen = QPen(QColor(120, 120, 120), 0, Qt.DashLine)
+            pen = QPen(QColor(30, 140, 255), 2, Qt.DashLine)
             pen.setCosmetic(True)
             self._preview.setPen(pen)
             self.scene_obj.addItem(self._preview)
@@ -3481,6 +3542,13 @@ class Canvas(QGraphicsView):
 
     def set_line_width(self, w: float) -> None:
         self.line_width = max(0.2, w)
+
+    def set_display_color(self, color) -> None:
+        """Override on-screen outline colour (display only; None -> layer
+        colours). Repaints every shape."""
+        self.display_color = QColor(color) if color is not None else None
+        self.refresh_all()
+        self.viewport().update()
         for it in self.scene_obj.items():
             if hasattr(it, "update"):
                 it.update()

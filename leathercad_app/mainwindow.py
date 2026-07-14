@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt, QSize, QSettings, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence
+from PySide6.QtGui import (QAction, QActionGroup, QColor, QIcon, QKeySequence,
+                           QPixmap)
 from PySide6.QtWidgets import (
     QMainWindow, QDockWidget, QFileDialog, QToolBar, QLabel, QMessageBox,
     QWidget, QScrollArea, QComboBox, QInputDialog, QDoubleSpinBox,
-    QToolButton, QMenu,
+    QToolButton, QMenu, QColorDialog,
 )
 
 from leathercad.document import Document
@@ -520,6 +521,22 @@ class MainWindow(QMainWindow):
         self.line_width_spin.valueChanged.connect(self._line_width_changed)
         tb.addWidget(self.line_width_spin)
 
+        # on-screen drawing colour: pick a bright colour for tracing, or fall
+        # back to the layer colours. Display only -- export uses layer/role.
+        self.draw_color_btn = QToolButton()
+        self.draw_color_btn.setToolTip(
+            "On-screen drawing colour — pick something bright for tracing.\n"
+            "The layer colours still drive the cut and the export.")
+        self.draw_color_btn.setPopupMode(QToolButton.InstantPopup)
+        dc_menu = QMenu(self.draw_color_btn)
+        dc_menu.addAction("Pick colour…", self._pick_draw_color)
+        dc_menu.addAction("Use layer colours", lambda: self._set_draw_color(None))
+        self.draw_color_btn.setMenu(dc_menu)
+        saved = self._settings().value("drawColor", "", type=str)
+        self.canvas.display_color = QColor(saved) if saved else None
+        self._update_draw_color_swatch()
+        tb.addWidget(self.draw_color_btn)
+
         tb.addWidget(QLabel(" kerf "))
         self.kerf_spin = MathSpinBox()
         self.kerf_spin.setRange(0.0, 1.0)
@@ -577,6 +594,37 @@ class MainWindow(QMainWindow):
     def _line_width_changed(self, w):
         self.canvas.set_line_width(w)
         self._settings().setValue("lineWidth", w)
+
+    def _pick_draw_color(self):
+        cur = self.canvas.display_color or QColor(255, 40, 190)
+        c = QColorDialog.getColor(cur, self, "On-screen drawing colour")
+        if c.isValid():
+            self._set_draw_color(c)
+
+    def _set_draw_color(self, color):
+        self.canvas.set_display_color(color)
+        self._settings().setValue("drawColor", color.name() if color else "")
+        self._update_draw_color_swatch()
+
+    def _update_draw_color_swatch(self):
+        """Paint the toolbar button as a swatch of the current draw colour, or a
+        diagonal-split chip when it's off (layer colours)."""
+        from PySide6.QtGui import QPainter
+        c = self.canvas.display_color
+        pm = QPixmap(18, 18)
+        pm.fill(Qt.transparent)
+        pr = QPainter(pm)
+        pr.setPen(QColor(120, 120, 120))
+        if c is not None:
+            pr.setBrush(c)
+            pr.drawRoundedRect(1, 1, 15, 15, 3, 3)
+        else:                              # "layer colours" -> a small palette hint
+            pr.setBrush(QColor(200, 60, 60))
+            pr.drawRect(1, 3, 7, 12)
+            pr.setBrush(QColor(60, 120, 220))
+            pr.drawRect(8, 3, 7, 12)
+        pr.end()
+        self.draw_color_btn.setIcon(QIcon(pm))
 
     def _kerf_changed(self, k):
         self.doc.kerf = float(k)
@@ -769,8 +817,13 @@ class MainWindow(QMainWindow):
     # -- slots ----------------------------------------------------------
     def _set_tool(self, mode):
         self.canvas.tool = mode
-        cur = Qt.CrossCursor if mode == canvas_mod.TRIM else Qt.ArrowCursor
-        self.canvas.viewport().setCursor(cur)
+        # Every tool that places a point gets the high-contrast crosshair so the
+        # cursor stays visible (and precise) over a tracing photo; Select keeps
+        # the arrow for grabbing/dragging.
+        if mode == canvas_mod.SELECT:
+            self.canvas.viewport().setCursor(Qt.ArrowCursor)
+        else:
+            self.canvas.viewport().setCursor(self.canvas.crosshair_cursor())
         if mode != canvas_mod.TRIM:
             self.canvas._clear_trim_hover()
         if mode != canvas_mod.OFFSET:

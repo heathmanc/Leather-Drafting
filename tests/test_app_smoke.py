@@ -2301,3 +2301,41 @@ def test_tool_palette_flyout_groups(qapp):
     assert btn.defaultAction() is a and a.isChecked()
     win._action_for_mode[cm.RECT].trigger()
     assert not a.isChecked() and win.canvas.tool == cm.RECT
+
+
+def test_offset_preview_survives_rebuild_midflight(qapp):
+    """Regression: an offset preview left mid-flight when the scene is cleared
+    (undo / open / new) must not crash on the next mouse move -- the freed C++
+    wrapper is dropped and rebuilt, not dereferenced."""
+    import shiboken6
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document
+    from leathercad.shapes import Rectangle
+    from leathercad.geometry import Vec2
+
+    doc = Document()
+    doc.add_shape(Rectangle(width=80, height=50, layer="Cut"))
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    c.resize(500, 400)
+    c.tool = cm.OFFSET
+    # arm an offset on the shape, creating the live dashed preview
+    c._arm_offset(Vec2(40, 0))
+    assert c._offset_item is not None
+    assert c._offset_preview is not None and shiboken6.isValid(c._offset_preview)
+
+    # a rebuild (undo/open/new) clears the scene out from under the offset
+    c.rebuild()
+    assert c._offset_preview is None and c._offset_item is None
+
+    # even if the offset target lingered, a mouse-move must recover, not crash
+    shp = next(it for it in c.scene_obj.items()
+               if it.__class__.__name__ == "ShapeItem")
+    wpts, _cor, closed = shp.model.world_polyline()
+    c._offset_item = shp
+    c._offset_pts = [Vec2(p.x, p.y) for p in wpts]
+    c._offset_closed = closed
+    c._update_offset_preview(Vec2(40, 0))          # must not raise
+    assert shiboken6.isValid(c._offset_preview)

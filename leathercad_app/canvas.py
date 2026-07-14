@@ -1897,6 +1897,11 @@ class Canvas(QGraphicsView):
         self._edit_owner = None
         self._group_drag = None
         self._nonmovable_members = []
+        # any in-flight offset preview was freed by scene.clear(); drop the
+        # stale wrappers so a later mouse-move rebuilds them instead of crashing
+        self._offset_preview = None
+        self._offset_item = None
+        self._offset_pts = []
         for sh in self.doc.shapes:
             self._add_item(ShapeItem(sh, self))
         for sl in self.doc.stitch_lines:
@@ -2934,7 +2939,10 @@ class Canvas(QGraphicsView):
             path.moveTo(out[0].x, out[0].y)
             for q in out[1:]:
                 path.lineTo(q.x, q.y)
-        if self._offset_preview is None:
+        # Recreate if the C++ item was freed underneath us (e.g. a rebuild /
+        # scene.clear() while an offset was mid-flight) -- a dead wrapper is not
+        # None, so the plain ``is None`` check would sail past into a crash.
+        if self._offset_preview is None or not _alive(self._offset_preview):
             self._offset_preview = QGraphicsPathItem()
             pen = QPen(QColor(30, 140, 255), 0, Qt.DashLine)
             pen.setCosmetic(True)

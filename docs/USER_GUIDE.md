@@ -133,8 +133,20 @@ The user guide travels inside the app (Help → User guide still works).
 
 Don't want to start from nothing? **File → New from template** opens a
 complete starter pattern — **Card holder**, **Belt** (with buckle slot, fold
-line and sizing holes) or **Key fob** — matching the tutorials in this guide.
-Adapt and Save As.
+line and sizing holes), **Key fob**, or the **Vertical wallet** — matching
+the tutorials in this guide. Adapt and Save As.
+
+The **Vertical wallet** is a minimalist one-piece fold wallet in the style
+of the Oldis One: 70 × 100 mm closed, drawn **flat** — back panel above the
+fold score line, front panel below it with a **diagonal opening edge**
+(lower on the right, for right-handed thumb access; select the body and
+**Make back piece** `Ctrl+M` for a left-handed mirror). The two side seams
+are single straight stitch lines **centred on the fold**, so the fitted
+holes come out mirror-symmetric about it — fold the front up and every
+front hole lands exactly on its back hole. The separate divider piece makes
+the inner 2-card slot; it carries no holes of its own — glue it into the
+seams and prick through the main holes. Cash rides in the middle, behind
+the divider.
 
 ### Tracing a real object
 

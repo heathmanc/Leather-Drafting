@@ -45,6 +45,28 @@ def test_templates_build_and_have_content():
     assert sum(1 for s in belt.shapes if s.kind == "circle") == 5   # sizing holes
 
 
+def test_vertical_wallet_seams_fold_symmetric():
+    """The wallet's whole trick: each flat side seam is centred on the fold,
+    so folding the front panel up lands every front hole on its back hole."""
+    from leathercad.templates import vertical_wallet
+    doc = vertical_wallet()
+    assert len(doc.stitch_lines) == 2
+    for seam in doc.stitch_lines:
+        res = seam.result()
+        assert res.count >= 20                      # a real seam, not a stub
+        ys = sorted(h.point.y for h in res.holes)
+        for y in ys:                                # mirror partner exists
+            assert min(abs(-y - y2) for y2 in ys) < 0.01   # within 10 µm
+    # the diagonal opening: right side shorter than left (right-handed)
+    body = doc.shapes[0]
+    ymin_left = min(p.y for p in body.points if p.x < 0)
+    ymin_right = min(p.y for p in body.points if p.x > 0)
+    assert ymin_right > ymin_left
+    # one fold line on the Score layer, a divider piece beside the body
+    assert any(s.layer == "Score" for s in doc.shapes)
+    assert any("Divider" in s.name for s in doc.shapes)
+
+
 def test_new_from_template_adopts_document(win):
     from leathercad.templates import card_holder
     win._new_from_template(card_holder)

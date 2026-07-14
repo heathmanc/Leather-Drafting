@@ -158,13 +158,15 @@ compartments. The right wing's **sloped top edge** is the pouch entrance,
 and its **diagonal quick-access slot** (with a round relief hole punched at
 each end so the cut can't tear) lets you slide a card out one-handed. The
 70 mm column is the back panel and, above the flap fold, the long closing
-**flap**: its pointed tip — with a small **step-notch catch** on the right
-shoulder — folds over the entrance and tucks down the front, and the little
-**thumb notch** in the block's bottom edge is where you lift it back out.
-Seams are **3 mm pitch** like the original sheet: around the left wing and
-along the right wing's bottom; the entrance and slot stay open. Everything
-is right-handed as drawn — select all and **Make back piece** (`Ctrl+M`)
-for a left-handed mirror.
+**flap**: its symmetric pointed tip folds over the entrance and tucks down
+the front, and the smooth **arched thumb notch** in the block's bottom edge
+is where you lift it back out. Seams are **3 mm pitch** like the original
+sheet — five straight rows placed so the **left wing fold maps hole onto
+hole**: the top row (spanning wing and middle) is symmetric about the fold
+and lands on itself, and the wing's outer-edge row folds exactly onto the
+middle section's own vertical row; two bottom runs flank the thumb notch.
+The entrance and slot stay open. Everything is right-handed as drawn —
+select all and **Make back piece** (`Ctrl+M`) for a left-handed mirror.
 
 ### Tracing a real object
 

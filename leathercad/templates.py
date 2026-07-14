@@ -7,9 +7,11 @@ the tutorials in the user guide.
 
 from __future__ import annotations
 
+import math
+
 from .document import Document
 from .geometry import Vec2
-from .shapes import (Rectangle, Circle, Polygon, PathShape, EditablePath,
+from .shapes import (Rectangle, Circle, PathShape, EditablePath, Edge,
                      Transform)
 from .stitchline import StitchLine
 from .stitchsettings import StitchSettings
@@ -142,24 +144,49 @@ def fold_over_wallet() -> Document:
     """
     doc = Document("Fold-over wallet")
     CL, CR = 78.0, 148.0               # column edges (70 mm wide)
-    body = Polygon(
+    MID = (CL + CR) / 2.0              # column centreline: the flap tip axis
+    r = 4.0                            # outer-corner fillet radius
+    o = r * (1.0 - math.cos(math.radians(45)))   # fillet arc-mid pull-in
+    # sloped-entrance corner at (219, 62): unit direction toward (CR, 90)
+    sl = math.hypot(CR - 219.0, 90.0 - 62.0)
+    sdx, sdy = (CR - 219.0) / sl, (90.0 - 62.0) / sl
+    body = EditablePath(
         name="Wallet body (one piece)",
-        points=[
-            Vec2(0, 0),                          # block bottom-left
-            Vec2(95, 0), Vec2(104, 16),          # thumb notch (tuck access)
-            Vec2(122, 16), Vec2(131, 0),
-            Vec2(219, 0),                        # block bottom-right
-            Vec2(219, 62),                       # right edge (shorter side)
+        nodes=[
+            Vec2(r, 0),                          # after bottom-left fillet
+            Vec2(95, 0),                         # thumb notch: a smooth arch
+            Vec2(131, 0),
+            Vec2(219 - r, 0),                    # into bottom-right fillet
+            Vec2(219, r),
+            Vec2(219, 62 - r),                   # into the entrance corner
+            Vec2(219 + r * sdx, 62 + r * sdy),   # onto the sloped entrance
             Vec2(CR, 90),                        # sloped pouch entrance
             Vec2(CR, 238),                       # up the column
-            Vec2(143, 238), Vec2(143, 246),      # step-notch (flap catch)
-            Vec2(113, 290),                      # the flap point
-            Vec2(CL, 246),                       # left shoulder
+            Vec2(MID, 290),                      # the flap point (on centre)
+            Vec2(CL, 238),                       # symmetric left shoulder
             Vec2(CL, 90),                        # down the column
-            Vec2(0, 90),                         # left wing top
+            Vec2(r, 90),                         # left wing top
+            Vec2(0, 90 - r),
+            Vec2(0, r),                          # down the outer edge
         ],
-        close_path=True, corner_radius=3.0,
-        transform=Transform(x=0, y=0),
+        edges=[
+            Edge("line"),
+            Edge("arc", Vec2(113, 16)),          # the notch: one smooth arc
+            Edge("line"),
+            Edge("arc", Vec2(219 - o, o)),       # bottom-right fillet
+            Edge("line"),
+            Edge("arc", Vec2(218.0, 61.3)),      # entrance-corner fillet
+            Edge("line"),
+            Edge("line"),                        # up the column (right)
+            Edge("line"),                        # chamfer to the tip
+            Edge("line"),                        # chamfer off the tip
+            Edge("line"),                        # down the column (left)
+            Edge("line"),                        # left wing top
+            Edge("arc", Vec2(o, 90 - o)),        # top-left fillet
+            Edge("line"),
+            Edge("arc", Vec2(o, o)),             # bottom-left fillet
+        ],
+        closed=True, transform=Transform(x=0, y=0),
         stitch=StitchSettings(enabled=False), layer="Cut")
     doc.add_shape(body)
 
@@ -180,20 +207,28 @@ def fold_over_wallet() -> Document:
         doc.add_shape(PathShape(name=name, points=pts, close_path=False,
                                 transform=Transform(x=0, y=0), layer="Score"))
 
-    # seams, 3 mm pitch like the original sheet. Left wing: top -> outer
-    # edge -> bottom run to the thumb notch. Right wing: bottom run only --
-    # its sloped top and the slot stay open.
-    left = StitchLine(
-        points=[Vec2(74, 86), Vec2(4, 86), Vec2(4, 4), Vec2(91, 4)],
-        corner_points=[Vec2(4, 86), Vec2(4, 4)],
-        settings=StitchSettings(pitch_mm=3.0, fit="endpoints"))
-    left.name = "Left wing seam"
-    right = StitchLine(
-        points=[Vec2(135, 4), Vec2(215, 4)],
-        settings=StitchSettings(pitch_mm=3.0, fit="endpoints"))
-    right.name = "Right wing seam"
-    doc.add_stitch_line(left)
-    doc.add_stitch_line(right)
+    # seams, 3 mm pitch like the original sheet -- five straight rows laid
+    # out so the LEFT WING FOLD (x = 78) maps holes onto holes:
+    #   * the top row spans wing + middle and is symmetric about the fold,
+    #     so it folds onto itself;
+    #   * the outer-edge row (x = 4) and the middle row (x = 152) are the
+    #     same length at the same heights -- fold the wing and each outer
+    #     hole lands exactly on its middle partner;
+    #   * two bottom runs flank the thumb notch. The sloped entrance and
+    #     the diagonal slot stay open.
+    runs = [
+        ("Top seam", [Vec2(4, 86), Vec2(152, 86)]),
+        ("Left edge seam", [Vec2(4, 8), Vec2(4, 82)]),
+        ("Middle seam", [Vec2(152, 8), Vec2(152, 82)]),
+        ("Bottom seam (left)", [Vec2(4, 4), Vec2(91, 4)]),
+        ("Bottom seam (right)", [Vec2(135, 4), Vec2(215, 4)]),
+    ]
+    for name, pts in runs:
+        seam = StitchLine(points=pts,
+                          settings=StitchSettings(pitch_mm=3.0,
+                                                  fit="endpoints"))
+        seam.name = name
+        doc.add_stitch_line(seam)
     return doc
 
 

@@ -76,32 +76,39 @@ def test_slim_card_holder_practical():
 
 
 def test_fold_over_wallet_matches_source_pattern():
-    """The Oldis One / Lucais-style T pattern: 219 x 290 flat, pointed flap
-    with a step-notch catch, sloped right entrance with a relief-holed
-    diagonal slot, thumb notch, and 3 mm seams that leave the entrance open."""
+    """The Oldis One / Lucais-style T pattern: 219 x 290 flat, symmetric
+    pointed flap, smooth arched thumb notch, sloped entrance with a
+    relief-holed diagonal slot, and 3 mm seams (including the middle
+    vertical + horizontal rows) that register when the wing folds over."""
     from leathercad.templates import fold_over_wallet
     doc = fold_over_wallet()
     body = doc.shapes[0]
 
-    # overall printed-sheet size and the 70 mm column (the corner rounding
-    # softens the flap tip by a couple of mm, like the real pattern)
+    # overall printed-sheet size and the 70 mm column
     x0, y0, x1, y1 = body.bounds()
-    assert abs((x1 - x0) - 219) < 0.5 and abs((y1 - y0) - 290) < 3.0
-    col_x = sorted({p.x for p in body.points if p.y > 100})
+    assert abs((x1 - x0) - 219) < 0.05 and abs((y1 - y0) - 290) < 0.05
+    col_x = sorted({p.x for p in body.nodes if p.y > 100})
     assert col_x[-1] - col_x[0] == 70.0
 
-    # the flap point is the highest node; a step-notch sits on its right
-    peak = max(body.points, key=lambda p: p.y)
-    assert peak.y == 290.0 and 78.0 < peak.x < 148.0
-    assert any(p.x == 143.0 for p in body.points)          # the catch step
+    # the flap tip is SYMMETRIC about the column centreline: peak dead
+    # centre, shoulders at equal height, no stray step nodes
+    peak = max(body.nodes, key=lambda p: p.y)
+    assert peak.y == 290.0 and peak.x == (78.0 + 148.0) / 2.0
+    shoulders = [p for p in body.nodes if p.y == 238.0]
+    assert sorted(p.x for p in shoulders) == [78.0, 148.0]
+    assert not any(238.0 < p.y < 290.0 for p in body.nodes)
+
+    # the thumb notch is ONE smooth arc through its apex, centred under
+    # the column
+    i = next(k for k, p in enumerate(body.nodes) if p.x == 95.0 and p.y == 0)
+    notch_edge = body.edges[i]
+    assert notch_edge.kind == "arc"
+    assert notch_edge.mid.x == (95.0 + 131.0) / 2.0 and notch_edge.mid.y == 16.0
 
     # right wing top slopes down to the entrance; left wing top is straight
-    assert any(p.x == 219.0 and p.y == 62.0 for p in body.points)
-    assert any(p.x == 0.0 and p.y == 90.0 for p in body.points)
-    # thumb notch in the bottom edge, centred under the column
-    notch = [p for p in body.points if p.y == 16.0]
-    assert len(notch) == 2 and 78 < min(n.x for n in notch) \
-        and max(n.x for n in notch) < 148
+    assert any(abs(p.x - 219.0) < 1e-9 and abs(p.y - 58.0) < 1e-9
+               for p in body.nodes)
+    assert any(p.y == 90.0 and p.x < 10 for p in body.nodes)
 
     # diagonal quick-access slot with a relief circle at each end
     slot = [s for s in doc.shapes if s.name == "Quick-access slot"][0]
@@ -112,18 +119,27 @@ def test_fold_over_wallet_matches_source_pattern():
     ends = {(p.x, p.y) for p in (a, b)}
     assert {(c.transform.x, c.transform.y) for c in reliefs} == ends
 
-    # three folds; two seams at the sheet's stated 3 mm pitch, both confined
-    # to the block (the entrance and slot stay open)
+    # three folds; FIVE 3 mm seams confined to the block, incl. the middle
+    # section's vertical + horizontal rows, with a gap at the thumb notch
     assert sum(1 for s in doc.shapes if s.layer == "Score") == 3
-    assert len(doc.stitch_lines) == 2
+    assert len(doc.stitch_lines) == 5
     for sl in doc.stitch_lines:
         assert sl.settings.pitch_mm == 3.0
         assert sl.result().count > 20
         assert max(p.y for p in sl.points) <= 90.0
-    # gap in the bottom seams where the thumb notch is
-    left, right = doc.stitch_lines
-    assert max(p.x for p in left.points) < 95.0
-    assert min(p.x for p in right.points) > 131.0
+    top, left, middle, bot_l, bot_r = doc.stitch_lines
+    assert max(p.x for p in bot_l.points) < 95.0            # notch gap
+    assert min(p.x for p in bot_r.points) > 131.0
+
+    # folding the left wing (about x = 78) must land hole on hole:
+    # the top row maps onto itself, the outer row onto the middle row
+    tx = sorted(h.point.x for h in top.result().holes)
+    assert max(min(abs((156.0 - x) - x2) for x2 in tx) for x in tx) < 1e-3
+    L, M = left.result().holes, middle.result().holes
+    assert len(L) == len(M)
+    for hl, hm in zip(L, M):
+        assert abs((156.0 - hl.point.x) - hm.point.x) < 1e-3
+        assert abs(hl.point.y - hm.point.y) < 1e-3
 
 
 def test_new_from_template_adopts_document(win):

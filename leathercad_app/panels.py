@@ -135,6 +135,7 @@ class PropertiesPanel(QWidget):
         # a diameter selector. ``_cur_hole_style`` is the low-level render/export
         # primitive (round | slit | diamond) the style maps to.
         self._cur_hole_style = "round"
+        self._path_rows_vis = True     # pitch/fit/... shown (hidden for baked)
         self.punch_style = QComboBox()
         for key in ("round", "oblique", "french", "diamond"):
             self.punch_style.addItem(key.capitalize(), key)
@@ -214,8 +215,6 @@ class PropertiesPanel(QWidget):
         self.punch_style.currentIndexChanged.connect(self._on_punch_style)
         self.pitch_combo.currentIndexChanged.connect(self._on_pitch_combo)
         self.hole_dia_combo.currentIndexChanged.connect(self._on_dia_combo)
-        self.pitch.valueChanged.connect(self._on_pitch_typed)
-        self.hole_dia.valueChanged.connect(self._on_dia_typed)
 
     # -- selection ------------------------------------------------------
     def set_layers(self, layers):
@@ -365,19 +364,26 @@ class PropertiesPanel(QWidget):
         # positions are fixed -- only the appearance rows (style / ø / slit)
         # stay. Symmetry and Corners belong here too: they only steer the
         # auto-distribution, so they'd do nothing on baked holes.
-        for w in (self.pitch_combo, self.pitch, self.inset,
+        self._path_rows_vis = vis
+        for w in (self.pitch_combo, self.inset,
                   self.fit, self.rows, self.row_spacing, self.backstitch,
                   self.symmetry, self.corner_style):
             self._stitch_form.setRowVisible(w, vis)
+        self._sync_hole_vis()          # the mm entry boxes depend on this too
 
     def _sync_hole_vis(self):
-        """Show the Hole ø rows for round holes, slit length/angle for
-        slit/diamond."""
+        """Round holes show the Hole ø dropdown; slit/diamond show slit
+        length/angle. The exact mm entry boxes appear only when their dropdown
+        is on 'Custom…' -- otherwise the number duplicates the dropdown."""
         slit = self._cur_hole_style in ("slit", "diamond")
         self._stitch_form.setRowVisible(self.hole_dia_combo, not slit)
-        self._stitch_form.setRowVisible(self.hole_dia, not slit)
         self._stitch_form.setRowVisible(self.slit_len, slit)
         self._stitch_form.setRowVisible(self.slit_angle, slit)
+        pitch_custom = self.pitch_combo.currentData() is None
+        self._stitch_form.setRowVisible(self.pitch,
+                                        self._path_rows_vis and pitch_custom)
+        dia_custom = self.hole_dia_combo.currentData() is None
+        self._stitch_form.setRowVisible(self.hole_dia, (not slit) and dia_custom)
 
     def _load_punch(self, hole_style, punch_style, pitch):
         """Point the style + pitch selectors at a saved hole (shared by shapes,
@@ -459,12 +465,14 @@ class PropertiesPanel(QWidget):
         combo.setCurrentIndex(combo.count() - 1)          # Custom…
 
     def _apply_style_geometry(self, style):
-        """Set the hole primitive + default hole dimensions for a punch style."""
+        """Set the hole primitive + default hole dimensions for a punch style,
+        and re-sync the dimension dropdowns to match."""
         from leathercad.irons import geometry_for
         geom = geometry_for(style, self.pitch.value())
         self._cur_hole_style = geom["hole_style"]
         if style == "round":
             self.hole_dia.setValue(geom["hole_diameter"])
+            self._select_preset(self.hole_dia_combo, self.hole_dia.value())
         else:
             self.slit_len.setValue(geom["slit_length"])
             self.slit_angle.setValue(geom["slit_angle"])
@@ -483,47 +491,38 @@ class PropertiesPanel(QWidget):
     def _on_pitch_combo(self):
         if self._loading:
             return
-        data = self.pitch_combo.currentData()
-        if data is None:
-            return                       # "Custom…" -- leave pitch as typed
         from leathercad.irons import geometry_for
+        data = self.pitch_combo.currentData()
         self._loading = True
-        self.pitch.setValue(float(data))
-        # rescale the slit/diamond length to the new pitch (keep the slant)
-        if self._cur_hole_style in ("slit", "diamond"):
-            self.slit_len.setValue(
-                geometry_for(self.punch_style.currentData(), float(data))
-                ["slit_length"])
+        if data is not None:
+            self.pitch.setValue(float(data))
+            # rescale the slit/diamond length to the new pitch (keep the slant)
+            if self._cur_hole_style in ("slit", "diamond"):
+                self.slit_len.setValue(
+                    geometry_for(self.punch_style.currentData(), float(data))
+                    ["slit_length"])
+        self._sync_hole_vis()             # reveal/hide the "Custom" mm box
         self._loading = False
-        self._apply()
-        self._commit()
+        if data is not None:
+            self._apply()
+            self._commit()
+        else:
+            self.pitch.setFocus()         # Custom… -> let them type
 
     def _on_dia_combo(self):
         if self._loading:
             return
         data = self.hole_dia_combo.currentData()
-        if data is None:
-            return                       # "Custom…" -- leave ø as typed
         self._loading = True
-        self.hole_dia.setValue(float(data))
+        if data is not None:
+            self.hole_dia.setValue(float(data))
+        self._sync_hole_vis()
         self._loading = False
-        self._apply()
-        self._commit()
-
-    def _on_pitch_typed(self):
-        # hand-editing pitch flips the Pitch combo to Custom if nothing matches
-        if self._loading:
-            return
-        self._loading = True
-        self._select_preset(self.pitch_combo, self.pitch.value())
-        self._loading = False
-
-    def _on_dia_typed(self):
-        if self._loading:
-            return
-        self._loading = True
-        self._select_preset(self.hole_dia_combo, self.hole_dia.value())
-        self._loading = False
+        if data is not None:
+            self._apply()
+            self._commit()
+        else:
+            self.hole_dia.setFocus()
 
     def _commit(self):
         if not self._loading and _alive(self._item):

@@ -193,16 +193,16 @@ def test_hole_style_visibility_toggles(qapp):
     p = win.properties
     p.show_selection([hole])
     form = p._stitch_form
-    assert form.isRowVisible(p.slit_len) and not form.isRowVisible(p.hole_dia)
+    assert form.isRowVisible(p.slit_len) and not form.isRowVisible(p.hole_dia_combo)
     p.punch_style.setCurrentText("Round")
     assert hole.hole.hole_style == "round"
-    assert form.isRowVisible(p.hole_dia) and not form.isRowVisible(p.slit_len)
+    assert form.isRowVisible(p.hole_dia_combo) and not form.isRowVisible(p.slit_len)
     p.punch_style.setCurrentText("Diamond")
     assert hole.hole.hole_style == "diamond"
-    assert form.isRowVisible(p.slit_len) and not form.isRowVisible(p.hole_dia)
+    assert form.isRowVisible(p.slit_len) and not form.isRowVisible(p.hole_dia_combo)
     p.punch_style.setCurrentText("Oblique")
     assert hole.hole.hole_style == "slit"
-    assert form.isRowVisible(p.slit_len) and not form.isRowVisible(p.hole_dia)
+    assert form.isRowVisible(p.slit_len) and not form.isRowVisible(p.hole_dia_combo)
 
 
 def test_baked_holes_hide_distribution_controls(qapp):
@@ -225,7 +225,7 @@ def test_baked_holes_hide_distribution_controls(qapp):
     c.scene_obj.clearSelection(); item.setSelected(True); c.selection_changed()
     p.show_selection([item])
     assert f.isRowVisible(p.symmetry) and f.isRowVisible(p.corner_style)
-    assert f.isRowVisible(p.pitch)
+    assert f.isRowVisible(p.pitch_combo)
 
     # ungroup then group back -> baked holes
     c.ungroup_selected()
@@ -239,7 +239,7 @@ def test_baked_holes_hide_distribution_controls(qapp):
     # distribution controls hidden, appearance controls still shown
     assert not f.isRowVisible(p.symmetry)
     assert not f.isRowVisible(p.corner_style)
-    assert not f.isRowVisible(p.pitch) and not f.isRowVisible(p.fit)
+    assert not f.isRowVisible(p.pitch_combo) and not f.isRowVisible(p.fit)
     assert f.isRowVisible(p.punch_style) and f.isRowVisible(p.slit_len)
 
 
@@ -1816,12 +1816,15 @@ def test_stitchline_exposes_pitch_and_fit(qapp):
     p = win.properties
     p.show_selection([sl])
     fs = p._stitch_form
-    assert fs.isRowVisible(p.pitch)                # pitch row visible
+    assert fs.isRowVisible(p.pitch_combo)          # pitch dropdown visible
     assert fs.isRowVisible(p.fit)
     assert not fs.isRowVisible(p.inset)            # a seam is never inset
 
     # changing the pitch through the panel must recompute the seam's holes
-    p.pitch.setValue(2.0)
+    for k in range(p.pitch_combo.count()):
+        if p.pitch_combo.itemData(k) and abs(p.pitch_combo.itemData(k) - 2.0) < 1e-6:
+            p.pitch_combo.setCurrentIndex(k)
+            break
     assert sl.hole_count > n0
 
 

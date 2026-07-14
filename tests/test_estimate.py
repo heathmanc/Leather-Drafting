@@ -176,11 +176,13 @@ def test_punch_style_sets_shape_and_toggles_diameter_vs_slit():
     p = win.properties
     f = p._stitch_form
 
-    # Round -> circle primitive, Hole ø rows shown, slit rows hidden
+    # Round -> circle primitive, Hole ø dropdown shown, slit rows hidden
     p.punch_style.setCurrentIndex(p.punch_style.findData("round"))
     assert shp.model.stitch.hole_style == "round"
-    assert f.isRowVisible(p.hole_dia_combo) and f.isRowVisible(p.hole_dia)
+    assert f.isRowVisible(p.hole_dia_combo)
     assert not f.isRowVisible(p.slit_len)
+    # the exact-mm ø box stays hidden while a preset diameter is selected
+    assert not f.isRowVisible(p.hole_dia)
 
     # Diamond -> diamond primitive, slit rows shown, Hole ø hidden
     p.punch_style.setCurrentIndex(p.punch_style.findData("diamond"))
@@ -200,9 +202,14 @@ def test_pitch_dropdown_sets_pitch_and_custom_shows():
             break
     assert abs(shp.model.stitch.pitch_mm - 4.0) < 1e-6
     assert "SPI" in p.pitch_combo.currentText()      # mm + SPI shown
-    # a non-standard pitch typed by hand flips the dropdown to Custom
-    p.pitch.setValue(3.55)
+    f = p._stitch_form
+    assert not f.isRowVisible(p.pitch)               # mm box hidden on a preset
+    # picking "Custom…" reveals the exact-mm box; typing there sets the pitch
+    p.pitch_combo.setCurrentIndex(p.pitch_combo.count() - 1)
     assert p.pitch_combo.currentText().startswith("Custom")
+    assert f.isRowVisible(p.pitch)
+    p.pitch.setValue(3.55)
+    assert abs(shp.model.stitch.pitch_mm - 3.55) < 1e-6
 
 
 def test_round_diameter_dropdown_sets_diameter():
@@ -214,6 +221,85 @@ def test_round_diameter_dropdown_sets_diameter():
             p.hole_dia_combo.setCurrentIndex(k)
             break
     assert abs(shp.model.stitch.hole_diameter - 1.2) < 1e-6
-    # a custom diameter typed by hand flips the dropdown to Custom
+    # picking "Custom…" reveals the exact-mm ø box; typing there sets it
+    f = p._stitch_form
+    p.hole_dia_combo.setCurrentIndex(p.hole_dia_combo.count() - 1)
+    assert f.isRowVisible(p.hole_dia)
     p.hole_dia.setValue(0.9)
-    assert p.hole_dia_combo.currentText().startswith("Custom")
+    assert abs(shp.model.stitch.hole_diameter - 0.9) < 1e-6
+
+
+def _hole_fingerprint(item):
+    """A cheap signature of an item's rendered holes: count + path bbox."""
+    holes = getattr(item, "_holes", None)
+    n = holes.count if holes else len(getattr(item, "_rel_holes", []) or [])
+    path = getattr(item, "_holes_path", None)
+    br = path.boundingRect() if path is not None else None
+    box = (round(br.width(), 3), round(br.height(), 3)) if br else None
+    return (n, box)
+
+
+def test_every_stitching_control_recomputes_the_pattern():
+    """Each Stitching-box control must recompute + redraw the holes on change --
+    across an auto-spaced shape, its baked form, and a drawn seam."""
+    win, shp = _win_with_stitched_rect()
+    p = win.properties
+
+    def changes(item, action):
+        before = _hole_fingerprint(item)
+        action()
+        return _hole_fingerprint(item) != before
+
+    # auto-spaced shape: geometry AND appearance controls both redraw
+    assert changes(shp, lambda: _pick(p.pitch_combo, 3.0))
+    assert changes(shp, lambda: p.inset.setValue(6.0))
+    assert changes(shp, lambda: p.fit.setCurrentText("none"))
+    assert changes(shp, lambda: p.punch_style.setCurrentText("Diamond"))
+    assert changes(shp, lambda: p.slit_angle.setValue(12))
+    assert changes(shp, lambda: p.slit_len.setValue(2.5))
+    assert changes(shp, lambda: p.punch_style.setCurrentText("Round"))
+    assert changes(shp, lambda: _pick(p.hole_dia_combo, 1.5))
+    assert changes(shp, lambda: p.rows.setCurrentIndex(1))
+
+    # a drawn seam recomputes on a pitch change
+    from leathercad.stitchline import StitchLine
+    from leathercad.geometry import Vec2
+    from leathercad_app.items import StitchLineItem
+    win.doc.add_stitch_line(StitchLine(points=[Vec2(0, 200), Vec2(90, 200)],
+                                       settings=StitchSettings(pitch_mm=4.0)))
+    win.canvas.rebuild()
+    seam = [it for it in win.canvas.scene_obj.items()
+            if isinstance(it, StitchLineItem)][0]
+    seam.setSelected(True)
+    p.show_selection([seam])
+    assert changes(seam, lambda: _pick(p.pitch_combo, 2.7))
+
+
+def _pick(combo, value):
+    for k in range(combo.count()):
+        if combo.itemData(k) is not None and abs(combo.itemData(k) - value) < 1e-6:
+            combo.setCurrentIndex(k)
+            return
+
+
+def test_set_tool_always_refreshes_the_status_hint():
+    import os
+    import pytest
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+    from leathercad_app.mainwindow import MainWindow
+    import leathercad_app.canvas as cm
+    QApplication.instance() or QApplication([])
+    win = MainWindow(Document())
+
+    seen = []
+    win.canvas.statusMessage.connect(seen.append)
+    # a spread of tools that previously had NO hint -> stale status bar
+    for mode in (cm.LINE, cm.RECT, cm.POLYGON, cm.SELECT, cm.PEN, cm.DIMENSION):
+        win._set_tool(mode)
+        assert seen and seen[-1] == win._tool_hint(mode) and win._tool_hint(mode)
+    # switching tools actually changes the message (not left stale)
+    win._set_tool(cm.LINE)
+    win._set_tool(cm.SELECT)
+    assert seen[-1] != win._tool_hint(cm.LINE)

@@ -768,22 +768,52 @@ class MainWindow(QMainWindow):
         if mode != canvas_mod.OFFSET:
             self.canvas._cancel_offset()
         self._show_fillet_options(mode == canvas_mod.FILLET)
-        if mode == canvas_mod.OFFSET:
-            self.canvas.statusMessage.emit(
-                "Offset: click a shape, move the cursor inside or outside, "
-                "click to place · Enter = type an exact distance")
-        elif mode == canvas_mod.TRIM:
-            self.canvas.statusMessage.emit(
-                "Trim: click the part of an outline to cut back to where it "
-                "crosses another shape")
-        elif mode == canvas_mod.FILLET:
-            self.canvas.statusMessage.emit(
-                "Corner: set the radius / mode in the toolbar above, then "
-                "click corners (or the point where two line ends meet)")
-        elif mode == canvas_mod.EXTEND:
-            self.canvas.statusMessage.emit(
-                "Extend: click the END of a line/path to grow it until it "
-                "meets the next outline or guide")
+        # Always refresh the status hint so it reflects the CURRENT tool -- a
+        # missing entry used to leave the previous tool's instructions up.
+        self.canvas.statusMessage.emit(self._tool_hint(mode))
+
+    def _tool_hint(self, mode) -> str:
+        m = canvas_mod
+        hints = {
+            m.SELECT: "Select: click to pick, drag to move, drag a blank area "
+                      "to rubber-band · double-click a shape to edit its nodes",
+            m.RECT: "Rectangle: drag to draw · Shift = square · type W×H after",
+            m.ROUNDED: "Rounded rectangle: drag to draw, then set the corner "
+                       "radius in Properties",
+            m.ELLIPSE: "Ellipse: drag a bounding box · Shift = circle",
+            m.CIRCLE: "Circle: click the centre, drag out the radius",
+            m.POLYGON: "Polygon: click each vertex · double-click or Enter to "
+                       "close · Esc cancels",
+            m.LINE: "Line: click the start, click the end · Shift = ortho · "
+                    "snaps to nodes/edges",
+            m.CONSTRUCTION: "Construction line: click two points for an infinite "
+                            "guide (never exported)",
+            m.STITCHLINE: "Stitch line: click each point of the seam · "
+                          "double-click / Enter to finish (holes march along it)",
+            m.SCORE: "Score line: click each point · double-click / Enter to "
+                     "finish (a fold/score, not a cut)",
+            m.HOLE: "Hole: click to drop a single stitch hole",
+            m.SLOT: "Slot: drag to place a rounded slot",
+            m.PEN: "Pen: click for corners, click-drag for curves · "
+                   "double-click / Enter / right-click to finish",
+            m.DIMENSION: "Dimension: click two points to measure · click again "
+                         "to place the label",
+            m.MEASURE: "Measure: click two points to read the distance",
+            m.TEXT: "Text: click to place, then type in Properties",
+            m.TRIM: "Trim: click the part of an outline to cut back to where it "
+                    "crosses another shape",
+            m.OFFSET: "Offset: click a shape, move the cursor inside or outside, "
+                      "click to place · Enter = type an exact distance",
+            m.FILLET: "Corner: set the radius / mode in the toolbar above, then "
+                      "click corners (or the point where two line ends meet)",
+            m.EXTEND: "Extend: click the END of a line/path to grow it until it "
+                      "meets the next outline or guide",
+            m.ARC3: "3-point arc: click start, end, then a point on the arc",
+            m.ARCCENTER: "Centre arc: click the centre, the start, then the end",
+            m.CIRCLE2: "2-point circle: click the two ends of a diameter",
+            m.CIRCLE3: "3-point circle: click three points on the circle",
+        }
+        return hints.get(mode, "")
 
     def _tool_triggered(self, mode, act):
         # promote the chosen variant to its flyout button's face, then activate

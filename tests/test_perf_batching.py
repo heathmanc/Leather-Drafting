@@ -321,3 +321,33 @@ def test_stitchlineitem_batches_holes(qapp):
     assert it._holes_path is not None
     assert it._holes_path.elementCount() == it.hole_count * 13
     assert it._holes_pts.size() == it.hole_count
+
+
+def test_resize_skips_stitch_fit_until_release(qapp):
+    """Dragging a resize grip on a stitched shape must NOT re-fit the holes each
+    move (that made big stitched shapes lag); they recompute once at the end."""
+    from leathercad.shapes import Rectangle, Transform
+    from leathercad.stitchsettings import StitchSettings
+    from leathercad_app.items import ShapeItem, ResizeHandle
+    from leathercad_app.mainwindow import MainWindow
+    doc = Document()
+    doc.add_shape(Rectangle(width=120, height=80, corner_radius=6,
+                            transform=Transform(x=0, y=0), layer="Cut",
+                            stitch=StitchSettings(enabled=True, pitch_mm=3.85,
+                                                  inset=4.0)))
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    shp = next(it for it in c.scene_obj.items() if isinstance(it, ShapeItem))
+    assert shp._holes and shp._holes.count > 0
+    c.scene_obj.clearSelection(); shp.setSelected(True); c.selection_changed()
+    grip = next(g for g in c.scene_obj.items()
+                if isinstance(g, ResizeHandle) and g.grip == (1, 1))
+
+    hx0, hy0 = shp.resize_extents()
+    grip._apply_resize(Vec2(200, 140))               # a move: holes skipped
+    assert shp.resize_extents()[0] > hx0             # the shape did grow
+    assert shp._holes is None                        # ...but no re-fit yet
+
+    shp.sync_from_model()                            # release -> full recompute
+    assert shp._holes and shp._holes.count > 0

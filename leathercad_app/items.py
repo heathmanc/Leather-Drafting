@@ -313,6 +313,9 @@ class ResizeHandle(QGraphicsItem):
             self.canvas._active_resize = None
         if self._dragged and self.canvas is not None:
             self._dragged = False
+            # holes were skipped for a smooth drag -- recompute them now
+            self.owner.sync_from_model()
+            self.canvas.resize_handle_moved(self)
             self.canvas.commitRequested.emit()
         event.accept()
 
@@ -349,7 +352,7 @@ class ResizeHandle(QGraphicsItem):
         anchor_new = Vec2(cx - gx * hx_new, cy - gy * hy_new)
         o = anchor_world - t.apply_dir(anchor_new)
         t.x, t.y = o.x, o.y
-        owner.sync_from_model()
+        owner.sync_from_model(recompute_holes=False)   # smooth: holes on release
         if self.canvas is not None:
             self.canvas.resize_handle_moved(self)
 
@@ -638,8 +641,12 @@ class ShapeItem(QGraphicsItem):
         self.sync_from_model()
 
     # -- model sync -----------------------------------------------------
-    def sync_from_model(self) -> None:
-        """Rebuild geometry + holes from the model and reposition."""
+    def sync_from_model(self, recompute_holes: bool = True) -> None:
+        """Rebuild geometry + holes from the model and reposition.
+
+        ``recompute_holes=False`` skips the (expensive) stitch fit -- used
+        during a live resize drag so the outline stays smooth; the holes are
+        recomputed once when the drag ends."""
         self.prepareGeometryChange()
         t = self.model.transform
         path = self.model.local_path()
@@ -673,7 +680,7 @@ class ShapeItem(QGraphicsItem):
             oriented = [Hole(t.apply_dir(h.point), t.apply_dir(h.tangent))
                         for h in self.model.baked_holes]
             self._holes = StitchResult(holes=oriented)
-        elif st is not None and st.enabled:
+        elif st is not None and st.enabled and recompute_holes:
             _, corner_pts, closed = self._local_geometry()
             res = stitch_polyline([Vec2(p.x, p.y) for p in local],
                                   corner_pts, closed, st)

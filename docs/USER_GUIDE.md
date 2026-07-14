@@ -405,6 +405,18 @@ extra construction.
   (rows × columns at spacings) or a **circle** (count around a centre,
   optionally rotating each copy). Perfect for belt holes and decorative
   punching.
+* **Card pocket stack** (Edit menu) — generates every piece of a stepped
+  wallet interior from real numbers: card size (bank card 85.6 × 54 pre-set),
+  pocket count, reveal step, pocket depth and side allowance. Widths come out
+  so a card clears the side seams; the backing panel height is computed so a
+  card in the last pocket hides its bottom and shows its head. Pieces land
+  bottom-aligned in a row, named `Pocket 1 (front)` … `Pocket backing`.
+* **Zipper opening** (Edit menu) — a correctly-sized zip **window** (stadium
+  slot) with its stitch line already running around it at your offset. Pick
+  the gauge — `#3` (6 mm window), `#5` (8 mm) or `#8` (10 mm) — and the
+  opening length. Slot and stitch ring arrive **grouped**, so you drag the
+  pair onto your panel as one; Subtract the slot (or just cut) and sew
+  through the ring.
 * **Nest on sheet** (`Ctrl+Shift+N`) — pack the selected pieces (or
   everything, if nothing is selected) onto one sheet of leather. Enter the
   sheet size, an edge margin and the minimum gap between pieces; the packer

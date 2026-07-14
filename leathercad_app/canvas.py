@@ -2919,6 +2919,52 @@ class Canvas(QGraphicsView):
         self._offset_pts = []
         self._offset_dist = 0.0
 
+    # -- generated parts: insert centred in the view ---------------------
+    def insert_generated(self, shapes=(), stitch_lines=(),
+                         group: bool = False) -> None:
+        """Add generated model objects, centred on the current view, selected
+        and committed as one undo step. ``group=True`` welds them into a
+        move-group (e.g. a zip window + its stitch ring travel together)."""
+        from leathercad.shapes import _next_id as _nid
+        xs, ys = [], []
+        for sh in shapes:
+            b = sh.bounds()
+            xs += [b[0], b[2]]
+            ys += [b[1], b[3]]
+        for sl in stitch_lines:
+            xs += [p.x for p in sl.points]
+            ys += [p.y for p in sl.points]
+        if not xs:
+            return
+        target = self.mapToScene(self.viewport().rect().center())
+        dx = target.x() - 0.5 * (min(xs) + max(xs))
+        dy = target.y() - 0.5 * (min(ys) + max(ys))
+        gid = (_nid("group")
+               if group and len(shapes) + len(stitch_lines) > 1 else None)
+        made = []
+        self._suppress_commit = True
+        for sh in shapes:
+            sh.transform.x += dx
+            sh.transform.y += dy
+            if gid:
+                sh.group_id = gid
+            self.doc.add_shape(sh)
+            made.append(self._add_item(ShapeItem(sh, self)))
+        for sl in stitch_lines:
+            sl.points = [Vec2(p.x + dx, p.y + dy) for p in sl.points]
+            sl.corner_points = [Vec2(p.x + dx, p.y + dy)
+                                for p in sl.corner_points]
+            if gid:
+                sl.group_id = gid
+            self.doc.add_stitch_line(sl)
+            made.append(self._add_item(StitchLineItem(sl, self)))
+        self._suppress_commit = False
+        self.scene_obj.clearSelection()
+        for m in made:
+            m.setSelected(True)
+        self.documentChangedSig.emit()
+        self._emit_commit()
+
     # -- user parameters: re-drive bound fields --------------------------
     def apply_param_bindings(self) -> list:
         """Re-evaluate every parameter-bound shape field (Document.bindings)

@@ -582,6 +582,9 @@ class MainWindow(QMainWindow):
         self._add(em, "Nest on sheet…", "Ctrl+Shift+N", self._nest_dialog)
         self._add(em, "Parameters…", "Ctrl+Shift+P", self._params_dialog)
         em.addSeparator()
+        self._add(em, "Card pocket stack…", None, self._gen_card_pockets)
+        self._add(em, "Zipper opening…", None, self._gen_zipper)
+        em.addSeparator()
         self._add(em, "Union (merge shapes)", "Ctrl+U",
                   lambda: self.canvas.boolean_selected("union"))
         self._add(em, "Subtract (bottom − top)", "Ctrl+Shift+U",
@@ -875,6 +878,122 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self, "Thread estimate",
             self.canvas.thread_report(thick.value(), tail.value()))
+
+    def _gen_card_pockets(self):
+        """Generate a stepped card-pocket stack from real card dimensions."""
+        from PySide6.QtWidgets import (QDialog, QFormLayout, QDialogButtonBox,
+                                       QVBoxLayout, QSpinBox, QLabel)
+        from .mathspin import MathSpinBox
+        from leathercad.generators import card_pocket_stack
+        s = self._settings()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Card pocket stack")
+        lay = QVBoxLayout(dlg)
+        hint = QLabel("Generates every piece of a stepped card-pocket stack "
+                      "(wallet interior), sized so cards clear the side "
+                      "seams. Pieces land bottom-aligned in a row — arrange "
+                      "or nest them afterwards.")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        form = QFormLayout()
+
+        def _spin(key, default, lo, hi, tip, dec=1):
+            sp = MathSpinBox()
+            sp.setRange(lo, hi)
+            sp.setDecimals(dec)
+            sp.setSuffix(" mm")
+            sp.setValue(s.value(key, default, type=float))
+            sp.setToolTip(tip)
+            return sp
+
+        cw = _spin("genCardW", 85.6, 20, 200, "Bank card: 85.6 mm")
+        ch = _spin("genCardH", 54.0, 20, 200, "Bank card: 54 mm")
+        n = QSpinBox()
+        n.setRange(1, 10)
+        n.setValue(int(s.value("genCardCount", 4, type=int)))
+        reveal = _spin("genCardReveal", 12.0, 4, 40,
+                       "How much of each card row shows above the next pocket")
+        depth = _spin("genCardDepth", 38.0, 15, 200,
+                      "How deep a card sits in the front pocket")
+        allow = _spin("genCardAllow", 7.0, 3, 30,
+                      "Seam/stitch margin each side (card must clear it)")
+        form.addRow("Card width", cw)
+        form.addRow("Card height", ch)
+        form.addRow("Pockets", n)
+        form.addRow("Reveal step", reveal)
+        form.addRow("Pocket depth", depth)
+        form.addRow("Side allowance", allow)
+        lay.addLayout(form)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                              | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        for key, val in (("genCardW", cw.value()), ("genCardH", ch.value()),
+                         ("genCardCount", n.value()),
+                         ("genCardReveal", reveal.value()),
+                         ("genCardDepth", depth.value()),
+                         ("genCardAllow", allow.value())):
+            s.setValue(key, val)
+        pieces = card_pocket_stack(card_w=cw.value(), card_h=ch.value(),
+                                   count=n.value(), reveal=reveal.value(),
+                                   depth=depth.value(),
+                                   allowance=allow.value())
+        self.canvas.insert_generated(shapes=pieces)
+
+    def _gen_zipper(self):
+        """Generate a zip window slot + its surrounding stitch line."""
+        from PySide6.QtWidgets import (QDialog, QFormLayout, QDialogButtonBox,
+                                       QVBoxLayout, QComboBox, QLabel)
+        from .mathspin import MathSpinBox
+        from leathercad.generators import zipper_opening, ZIP_WINDOW
+        s = self._settings()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Zipper opening")
+        lay = QVBoxLayout(dlg)
+        hint = QLabel("A correctly-sized zipper window (stadium slot) with "
+                      "its stitch line running around it. Both are grouped — "
+                      "drag the pair onto your panel, then Subtract or just "
+                      "cut. Opening length = usable zip, not tape length.")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        form = QFormLayout()
+        size = QComboBox()
+        for k in ZIP_WINDOW:
+            size.addItem(f"{k}   ({ZIP_WINDOW[k]:g} mm window)", k)
+        size.setCurrentIndex(max(0, size.findData(
+            s.value("genZipSize", "#5", type=str))))
+        length = MathSpinBox()
+        length.setRange(30, 1000)
+        length.setDecimals(1)
+        length.setSuffix(" mm")
+        length.setValue(s.value("genZipLen", 150.0, type=float))
+        offset = MathSpinBox()
+        offset.setRange(1.5, 15)
+        offset.setDecimals(1)
+        offset.setSuffix(" mm")
+        offset.setValue(s.value("genZipOffset", 3.0, type=float))
+        form.addRow("Zip size", size)
+        form.addRow("Opening length", length)
+        form.addRow("Stitch offset", offset)
+        lay.addLayout(form)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                              | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        s.setValue("genZipSize", size.currentData())
+        s.setValue("genZipLen", length.value())
+        s.setValue("genZipOffset", offset.value())
+        slot, ring = zipper_opening(size=size.currentData(),
+                                    length=length.value(),
+                                    stitch_offset=offset.value())
+        self.canvas.insert_generated(shapes=[slot], stitch_lines=[ring],
+                                     group=True)
 
     def _params_dialog(self):
         """Edit the document's named parameters (usable in any numeric field);

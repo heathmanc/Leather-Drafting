@@ -72,6 +72,18 @@ the back. The slanted slits mirror too, so they line up when the piece is flippe
 
 ## Install & run
 
+### Windows: download the installer
+
+Grab **Leather-Drafting-Setup-\<version\>.exe** from the
+[**Releases**](https://github.com/heathmanc/leather-drafting/releases) page and
+run it — no Python needed. (It installs per-user, so there's no admin prompt.)
+
+New installers are built by the **Windows installer** GitHub Action: push a
+`v0.2.0`-style tag, or run the action manually (Actions → *Windows installer* →
+*Run workflow*), and it publishes the `.exe` to a Release automatically.
+
+### From source (any OS)
+
 ```bash
 git clone <this repo>
 cd Leather-Drafting

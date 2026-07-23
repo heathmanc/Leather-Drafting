@@ -123,11 +123,13 @@ The user guide travels inside the app (Help → User guide still works).
   all documents: select shapes (and any lettering) → **Save selection…**, then
   double-click a part in any project to place it at the view centre (fresh
   copies every time). It also comes preloaded with **built-in size templates**,
-  organised into categories — **US / Euro / UK currency** and **Cards** (ID-1
-  credit / bank card + US business card). Each is an exact-size outline with its
-  dimensions engraved inside and **grouped to the outline** (they move as one),
-  so you can build a wallet slot or card pocket around a real reference.
-  Built-ins can't be deleted.
+  organised into categories — **US / Euro / UK currency**, **US coins** (round,
+  by mint diameter), **Cards** (ID-1 credit / bank + business card),
+  **Passports** (ID-3), and **Apple devices** (iPhone, iPad, AirPods, AirTag).
+  Each is an exact-size outline with its dimensions engraved inside and
+  **grouped to the outline** (they move as one), so you can build a wallet slot,
+  coin pocket or device sleeve around a real reference. Built-ins can't be
+  deleted.
 * **Status bar** (bottom) — cursor position in mm, live measurements and tool
   hints, and the total hole count.
 * **Dark theme** — View → **Dark theme** switches the whole app (panels,

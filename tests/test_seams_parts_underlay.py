@@ -271,3 +271,32 @@ def test_placed_template_selects_as_a_group(qapp):
     c.select_group_of(shp)                    # what a mouse-press does
     assert shp.isSelected()
     assert all(t.isSelected() for t in labels)
+
+
+def test_builtin_coins_devices_and_passports(qapp):
+    """US coins + AirTag are round; passports and Apple devices are present."""
+    from leathercad_app import fonts, builtin_parts
+    from leathercad.shapes import Circle, Rectangle
+    fonts.register_bundled_fonts()
+    cats = {c for c, _rows in builtin_parts.categories()}
+    assert {"US coins", "Passports", "Apple devices"} <= cats
+
+    # a coin is a circle at its mint diameter, labelled with the diameter
+    coin, ct = builtin_parts.build_builtin("coin_quarter")
+    assert isinstance(coin[0], Circle)
+    assert abs(coin[0].rx * 2.0 - 24.26) < 1e-6
+    assert any("Ø" in t.text and "24.26" in t.text for t in ct)
+
+    # AirTag round; iPhone rectangular with its footprint in the label
+    at, _atc = builtin_parts.build_builtin("airtag")
+    assert isinstance(at[0], Circle) and abs(at[0].rx * 2 - 31.9) < 1e-6
+    ip, ipt = builtin_parts.build_builtin("ip_15pm")
+    assert isinstance(ip[0], Rectangle)
+    assert abs(ip[0].width - 76.7) < 1e-6 and abs(ip[0].height - 159.9) < 1e-6
+    assert any("159.9" in t.text for t in ipt)
+
+    # everything stays grouped (label rides with the outline)
+    for key in ("coin_dime", "airtag", "ipad_13", "pass_id3"):
+        sh, tx = builtin_parts.build_builtin(key)
+        gids = {sh[0].group_id} | {t.group_id for t in tx}
+        assert len(gids) == 1 and None not in gids

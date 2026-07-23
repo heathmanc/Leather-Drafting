@@ -2,9 +2,8 @@ name: Release builds
 
 # Builds downloadable desktop packages and publishes them to a public GitHub
 # Release:
-#   * Windows        -> Stitch-Hero-Setup-<ver>.exe        (Inno Setup)
-#   * macOS Apple Si -> Stitch-Hero-<ver>-macOS-arm64.dmg  (drag to /Apps)
-#   * macOS Intel    -> Stitch-Hero-<ver>-macOS-x86_64.dmg
+#   * Windows -> Stitch-Hero-Setup-<ver>.exe            (Inno Setup)
+#   * macOS   -> Stitch-Hero-<ver>-macOS-universal.dmg  (Intel + Apple Silicon)
 #   * The user manual (docs/Stitch-Hero-Manual.pdf) is attached too.
 #
 # Trigger by pushing a tag like v0.2.0, or Actions -> "Release builds" ->
@@ -101,40 +100,52 @@ jobs:
 
   macos:
     needs: version
-    # Two native builds: arm64 on the Apple-Silicon runner (macos-14) for
-    # M-series Macs, and x86_64 on the Intel runner (macos-13). Both unsigned.
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-14
-            arch: arm64
-          - runner: macos-13
-            arch: x86_64
-    runs-on: ${{ matrix.runner }}
+    # One universal2 build on the Apple-Silicon runner. GitHub's Intel
+    # (macos-13) runners are being retired and jobs targeting them sit
+    # "waiting for a runner" forever, so instead of a per-arch matrix we build
+    # a single fat app that runs natively on BOTH Intel and Apple Silicon.
+    # This needs a fat interpreter (python.org universal2, installed below) and
+    # PySide6's universal2 wheels; the result is unsigned.
+    runs-on: macos-14
+    env:
+      # python.org ships a genuine universal2 CPython; actions/setup-python
+      # only has thin per-arch builds, which can't produce a fat app.
+      PY_VER: "3.12.8"
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+
+      - name: Install universal2 Python from python.org
+        run: |
+          curl -fLO "https://www.python.org/ftp/python/${PY_VER}/python-${PY_VER}-macos11.pkg"
+          sudo installer -pkg "python-${PY_VER}-macos11.pkg" -target /
+          PYBIN="/Library/Frameworks/Python.framework/Versions/3.12/bin"
+          echo "$PYBIN" >> "$GITHUB_PATH"
+          "$PYBIN/python3" -c "import sys; print(sys.version)"
+          # confirm the interpreter itself is fat, else a universal2 app is impossible
+          lipo -archs "$PYBIN/python3.12" || lipo -archs "$(readlink -f "$PYBIN/python3")"
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install "PySide6>=6.5" pyinstaller
-          python -m pip install -e .
+          python3 -m pip install --upgrade pip
+          python3 -m pip install "PySide6>=6.5" pyinstaller
+          python3 -m pip install -e .
 
-      - name: Build the app (PyInstaller)
+      - name: Build the app (PyInstaller, universal2)
         working-directory: packaging
-        run: pyinstaller --noconfirm leather-drafting.spec
+        env:
+          SH_TARGET_ARCH: universal2
+        run: python3 -m PyInstaller --noconfirm leather-drafting.spec
 
-      - name: Check the build architecture
+      - name: Verify it is a fat (universal2) binary
         working-directory: packaging
         run: |
           BIN="dist/Stitch Hero.app/Contents/MacOS/Stitch Hero"
           file "$BIN"
-          lipo -archs "$BIN" | grep -q "${{ matrix.arch }}" \
-            || { echo "expected ${{ matrix.arch }}"; exit 1; }
+          ARCHS="$(lipo -archs "$BIN")"
+          echo "archs: $ARCHS"
+          for a in x86_64 arm64; do
+            echo "$ARCHS" | grep -qw "$a" || { echo "missing $a slice"; exit 1; }
+          done
 
       - name: Smoke-test the build
         working-directory: packaging
@@ -154,13 +165,13 @@ jobs:
           mkdir -p installer
           hdiutil create -volname "Stitch Hero" -srcfolder "$STAGE" \
             -ov -format UDZO \
-            "installer/Stitch-Hero-${VER}-macOS-${{ matrix.arch }}.dmg"
+            "installer/Stitch-Hero-${VER}-macOS-universal.dmg"
           ls -lh installer
 
       - name: Upload macOS dmg
         uses: actions/upload-artifact@v4
         with:
-          name: macos-dmg-${{ matrix.arch }}
+          name: macos-dmg
           path: packaging/installer/*.dmg
           if-no-files-found: error
 

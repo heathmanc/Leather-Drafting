@@ -81,8 +81,8 @@ page — no Python needed:
 
 * **Windows** — `Stitch-Hero-Setup-<version>.exe` (per-user install, no
   admin prompt).
-* **macOS** — `Stitch-Hero-<version>-macOS-arm64.dmg` for Apple Silicon
-  (M1/M2/M3…) or `-x86_64.dmg` for Intel; open it and drag the app to
+* **macOS** — `Stitch-Hero-<version>-macOS-universal.dmg` (one download; runs
+  natively on both Apple Silicon and Intel). Open it and drag the app to
   Applications. It's unsigned, so the first launch is **right-click → Open**
   (or `xattr -dr com.apple.quarantine "/Applications/Stitch Hero.app"`).
 

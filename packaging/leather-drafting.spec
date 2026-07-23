@@ -17,6 +17,11 @@ ROOT = os.path.dirname(HERE) if os.path.basename(HERE) == "packaging" else HERE
 ICO = os.path.join(ROOT, "packaging", "icons", "StitchHero.ico")
 ICNS = os.path.join(ROOT, "packaging", "icons", "StitchHero.icns")
 
+# macOS build architecture. Left native for local builds; CI sets
+# SH_TARGET_ARCH=universal2 so one Apple-Silicon runner produces a fat app
+# that runs on both Intel and M-series Macs (PySide6 ships universal2 wheels).
+TARGET_ARCH = os.environ.get("SH_TARGET_ARCH") or None
+
 a = Analysis(
     [os.path.join(ROOT, "packaging", "launch.py")],
     pathex=[ROOT],
@@ -51,6 +56,7 @@ exe = EXE(
     upx=False,
     console=False,           # windowed app: no terminal appears
     disable_windowed_traceback=False,
+    target_arch=TARGET_ARCH,
     icon=ICO,
 )
 

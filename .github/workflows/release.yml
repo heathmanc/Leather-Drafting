@@ -1,0 +1,168 @@
+name: Release builds
+
+# Builds downloadable desktop packages and publishes them to a public GitHub
+# Release:
+#   * Windows -> Leather-Drafting-Setup-<ver>.exe   (Inno Setup installer)
+#   * macOS   -> Leather-Drafting-<ver>-macOS.dmg    (drag to Applications)
+#
+# Trigger by pushing a tag like v0.2.0, or Actions -> "Release builds" ->
+# Run workflow (pick a version; leave "publish" checked to make a Release).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version number (no leading v), e.g. 0.2.0"
+        required: true
+        default: "0.2.0"
+      publish:
+        description: "Publish a public GitHub Release (uncheck to only build artifacts)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      publish: ${{ steps.v.outputs.publish }}
+    steps:
+      - id: v
+        shell: bash
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VER="${{ github.ref_name }}"; VER="${VER#v}"
+            PUB=true
+          else
+            VER="${{ github.event.inputs.version }}"
+            PUB="${{ github.event.inputs.publish }}"
+          fi
+          echo "version=$VER"  >> "$GITHUB_OUTPUT"
+          echo "tag=v$VER"     >> "$GITHUB_OUTPUT"
+          echo "publish=$PUB"  >> "$GITHUB_OUTPUT"
+          echo "version=$VER publish=$PUB"
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "PySide6>=6.5" pyinstaller
+          python -m pip install -e .
+
+      - name: Build the app (PyInstaller)
+        working-directory: packaging
+        run: pyinstaller --noconfirm leather-drafting.spec
+
+      - name: Smoke-test the build
+        working-directory: packaging
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $p = Start-Process -FilePath ".\dist\Leather-Drafting\Leather-Drafting.exe" `
+                 -ArgumentList "--smoke" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Error "Smoke test failed ($($p.ExitCode))"; exit 1 }
+          Write-Host "smoke test passed"
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build the installer
+        working-directory: packaging
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+            "/DMyAppVersion=${{ needs.version.outputs.version }}" installer.iss
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: packaging/installer/*.exe
+          if-no-files-found: error
+
+  macos:
+    needs: version
+    # Intel build (x86_64) so it runs on both Intel and Apple-Silicon Macs
+    # (the latter via Rosetta). Unsigned -- no Apple Developer ID.
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "PySide6>=6.5" pyinstaller
+          python -m pip install -e .
+
+      - name: Build the app (PyInstaller)
+        working-directory: packaging
+        run: pyinstaller --noconfirm leather-drafting.spec
+
+      - name: Smoke-test the build
+        working-directory: packaging
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          ./dist/Leather-Drafting.app/Contents/MacOS/Leather-Drafting --smoke
+          echo "smoke test passed"
+
+      - name: Package the .dmg
+        working-directory: packaging
+        run: |
+          VER="${{ needs.version.outputs.version }}"
+          STAGE="$(mktemp -d)"
+          cp -R "dist/Leather-Drafting.app" "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"      # drag-to-install target
+          mkdir -p installer
+          hdiutil create -volname "Leather-Drafting" -srcfolder "$STAGE" \
+            -ov -format UDZO "installer/Leather-Drafting-${VER}-macOS.dmg"
+          ls -lh installer
+
+      - name: Upload macOS dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: packaging/installer/*.dmg
+          if-no-files-found: error
+
+  release:
+    needs: [version, windows, macos]
+    if: ${{ needs.version.outputs.publish == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: Leather-Drafting ${{ needs.version.outputs.version }}
+          files: |
+            dist/*.exe
+            dist/*.dmg
+          generate_release_notes: true
+          fail_on_unmatched_files: true

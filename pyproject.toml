@@ -24,7 +24,8 @@ stitch-hero = "leathercad_app.__main__:main"
 packages = ["leathercad", "leathercad_app"]
 
 [tool.setuptools.package-data]
-leathercad_app = ["resources/*.png"]
+leathercad_app = ["resources/*.png", "resources/fonts/*.ttf",
+                  "resources/fonts/LICENSE-DejaVu.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

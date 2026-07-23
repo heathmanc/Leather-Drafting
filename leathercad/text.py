@@ -20,7 +20,11 @@ class TextShape:
     text: str = "Text"
     contours: List[List[Vec2]] = field(default_factory=list)   # baked, local
     size: float = 8.0                 # cap height in mm
-    font_family: str = "Sans"
+    font_family: str = ""             # "" -> the GUI's bundled default family
+    bold: bool = False
+    italic: bool = False
+    tracking: float = 0.0             # extra letter spacing (percent of em)
+    align: str = "left"               # left / center / right
     transform: Transform = field(default_factory=Transform)
     layer: str = "Engrave"
     opacity: float = 1.0
@@ -45,6 +49,10 @@ class TextShape:
             "contours": [[[p.x, p.y] for p in c] for c in self.contours],
             "size": self.size,
             "font_family": self.font_family,
+            "bold": self.bold,
+            "italic": self.italic,
+            "tracking": self.tracking,
+            "align": self.align,
             "layer": self.layer,
             "opacity": self.opacity,
             "text_id": self.text_id,
@@ -60,7 +68,11 @@ class TextShape:
             text=d.get("text", ""),
             contours=[[Vec2(x, y) for x, y in c] for c in d.get("contours", [])],
             size=d.get("size", 8.0),
-            font_family=d.get("font_family", "Sans"),
+            font_family=d.get("font_family", ""),
+            bold=d.get("bold", False),
+            italic=d.get("italic", False),
+            tracking=d.get("tracking", 0.0),
+            align=d.get("align", "left"),
             layer=d.get("layer", "Engrave"),
             opacity=d.get("opacity", 1.0),
             text_id=d.get("text_id", _next_id("text")),

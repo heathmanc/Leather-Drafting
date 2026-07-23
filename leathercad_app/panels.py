@@ -9,7 +9,7 @@ from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QGroupBox, QDoubleSpinBox, QCheckBox,
     QComboBox, QSlider, QLabel, QPushButton, QListWidget, QListWidgetItem,
-    QHBoxLayout, QColorDialog, QSpinBox, QAbstractSpinBox,
+    QHBoxLayout, QColorDialog, QSpinBox, QAbstractSpinBox, QLineEdit,
 )
 
 from leathercad.stitchsettings import StitchSettings
@@ -128,6 +128,25 @@ class PropertiesPanel(QWidget):
         fl.addRow("Angle", self.line_angle)
         root.addWidget(self.g_line)
 
+        # Text / lettering (editable): applied live, re-bakes the glyph contours
+        self.g_text = QGroupBox("Text")
+        ft = QFormLayout(self.g_text)
+        self.text_str = QLineEdit()
+        self.text_font = NoWheelComboBox()
+        from PySide6.QtGui import QFontDatabase
+        self.text_font.addItems(QFontDatabase.families())
+        self.text_size = _spin(0.5, 1000.0, 1.0, 1)
+        self.text_tracking = _spin(-50.0, 200.0, 1.0, 1, " %")
+        self.text_bold = QCheckBox("Bold")
+        self.text_italic = QCheckBox("Italic")
+        ft.addRow("String", self.text_str)
+        ft.addRow("Font", self.text_font)
+        ft.addRow("Cap height", self.text_size)
+        ft.addRow("Tracking", self.text_tracking)
+        ft.addRow("", self.text_bold)
+        ft.addRow("", self.text_italic)
+        root.addWidget(self.g_text)
+
         # Appearance
         self.g_appear = QGroupBox("Appearance")
         fa = QFormLayout(self.g_appear)
@@ -228,6 +247,16 @@ class PropertiesPanel(QWidget):
         self.punch_style.currentIndexChanged.connect(self._on_punch_style)
         self.pitch_combo.currentIndexChanged.connect(self._on_pitch_combo)
         self.hole_dia_combo.currentIndexChanged.connect(self._on_dia_combo)
+        # Text: live preview on change; commit when the field is done being edited.
+        self.text_str.textEdited.connect(self._apply)
+        self.text_str.editingFinished.connect(self._commit)
+        self.text_size.valueChanged.connect(self._apply)
+        self.text_size.editingFinished.connect(self._commit)
+        self.text_tracking.valueChanged.connect(self._apply)
+        self.text_tracking.editingFinished.connect(self._commit)
+        self.text_font.currentIndexChanged.connect(self._apply_commit)
+        self.text_bold.stateChanged.connect(self._apply_commit)
+        self.text_italic.stateChanged.connect(self._apply_commit)
 
     # -- selection ------------------------------------------------------
     def set_layers(self, layers):
@@ -259,11 +288,14 @@ class PropertiesPanel(QWidget):
         is_shape = isinstance(it, ShapeItem)
         is_hole = isinstance(it, HoleItem)
         is_stitchline = isinstance(it, StitchLineItem)
+        is_text = isinstance(it, TextItem)
         is_baked = is_shape and bool(it.model.baked_holes)
         self.g_rect.setVisible(False)
         self.g_ellipse.setVisible(False)
         self.g_poly.setVisible(False)
         self.g_line.setVisible(False)
+        self.g_text.setVisible(is_text)
+        self.g_stitch.setVisible(not is_text)   # text has no stitch properties
         self.g_appear.setVisible(is_shape)
         self.g_transform.setVisible(is_shape)
         # Auto-spaced shapes AND drawn seams expose the pitch / fit controls.
@@ -280,11 +312,30 @@ class PropertiesPanel(QWidget):
             self._update_readout()
             return
 
-        # annotations (dimension / text) have no stitch/geometry properties
-        if isinstance(it, (DimensionItem, TextItem)):
+        # editable lettering: string / font / size / style / tracking
+        if is_text:
+            m = it.model
+            self.text_str.setText(m.text)
+            # select the model's family, or the bundled default when it is empty
+            # / not installed -- never index 0, which would silently rewrite the
+            # typeface to some unrelated font on the next edit.
+            from .fonts import default_family
+            i = self.text_font.findText(m.font_family or default_family())
+            if i < 0:
+                i = self.text_font.findText(default_family())
+            self.text_font.setCurrentIndex(max(0, i))
+            self.text_size.setValue(m.size)
+            self.text_tracking.setValue(m.tracking)
+            self.text_bold.setChecked(m.bold)
+            self.text_italic.setChecked(m.italic)
+            self._loading = False
+            self._update_readout()
+            return
+
+        # a dimension is a read-only annotation (no stitch/geometry properties)
+        if isinstance(it, DimensionItem):
             self.g_stitch.setCheckable(False)
-            self.g_stitch.setTitle(
-                "Dimension" if isinstance(it, DimensionItem) else "Text")
+            self.g_stitch.setTitle("Dimension")
             self._loading = False
             self._update_readout()
             return
@@ -553,8 +604,20 @@ class PropertiesPanel(QWidget):
             self._item = None
             return
         it = self._item
-        if isinstance(it, (DimensionItem, TextItem)):
-            return                          # annotations have no editable props
+        if isinstance(it, DimensionItem):
+            return                          # a dimension has no editable props
+        if isinstance(it, TextItem):
+            m = it.model
+            m.text = self.text_str.text()
+            m.font_family = self.text_font.currentText() or m.font_family
+            m.size = self.text_size.value()
+            m.tracking = self.text_tracking.value()
+            m.bold = self.text_bold.isChecked()
+            m.italic = self.text_italic.isChecked()
+            self.canvas.rebake_text(m)       # re-bake the glyph contours
+            self.canvas.refresh_item(it)
+            self._update_readout()
+            return
         if isinstance(it, HoleItem):
             self._write_hole_style(it.hole)
             self._sync_hole_vis()

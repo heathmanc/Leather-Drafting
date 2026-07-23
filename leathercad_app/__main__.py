@@ -27,6 +27,8 @@ def main(argv=None) -> int:
     argv = list(sys.argv if argv is None else argv)
     app = QApplication(argv)
     app.setApplicationName("Stitch Hero")
+    from . import fonts                   # register bundled fonts before any bake
+    fonts.register_bundled_fonts()
     from .mainwindow import app_icon
     app.setWindowIcon(app_icon())
     doc = None

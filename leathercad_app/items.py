@@ -357,26 +357,157 @@ class ResizeHandle(QGraphicsItem):
             self.canvas.resize_handle_moved(self)
 
 
-def bake_text_contours(text, family, size_mm):
-    """Convert a string into glyph outline contours (local mm, y-up), scaled so
-    the cap height is ``size_mm``. Done here (Qt layer) so the engine stays
-    Qt-free; the result is stored as plain polylines on the text model."""
-    from PySide6.QtGui import QFont, QPainterPath, QFontMetricsF
-    font = QFont()
-    if family and family != "Sans":
-        font.setFamily(family)          # avoid the missing-"Sans" alias lookup
+def _glyph_path(text, family, size_mm, bold=False, italic=False, tracking=0.0,
+                simplify=True):
+    """Build the glyph outline for ``text`` and return ``(path, scale)``.
+
+    With ``simplify`` (the default) the sub-shapes are unioned via
+    ``QPainterPath.simplified()`` so stroking shows no internal seams -- but that
+    also flattens the curves. Pass ``simplify=False`` to keep the raw cubic
+    beziers (used by the bezier-outline export). ``scale`` converts font-point
+    units to mm so the cap height comes out ``size_mm``. Always uses an explicit
+    BUNDLED family (never a bare ``QFont()``, which on macOS resolves to the
+    system UI font whose glyphs decompose into garbled vectors)."""
+    from PySide6.QtGui import (QFont, QPainterPath, QFontMetricsF,
+                               QFontDatabase)
+    from . import fonts
+    fam = family or fonts.default_family()
+    if fam not in QFontDatabase.families():
+        # a legacy sentinel ("Sans") or a font missing on this machine would
+        # otherwise resolve to the OS system font -> garbled outlines; use the
+        # bundled default instead.
+        fam = fonts.default_family()
+    font = QFont(fam)                    # explicit family: clean outlines
+    # Never let Qt substitute a fallback font for missing glyphs -- on macOS the
+    # fallback is the system UI font whose outlines are the garbled-vector source
+    # this rework exists to avoid. Unsupported characters draw a .notdef box.
+    font.setStyleStrategy(QFont.NoFontMerging)
     font.setStyleHint(QFont.SansSerif)
+    font.setBold(bool(bold))
+    font.setItalic(bool(italic))
+    if tracking:                         # percent of em; 100 == normal
+        font.setLetterSpacing(QFont.PercentageSpacing, 100.0 + float(tracking))
     font.setPointSizeF(100.0)
     fm = QFontMetricsF(font)
     cap = fm.capHeight() or fm.ascent() or 100.0
     scale = size_mm / cap
     path = QPainterPath()
     path.addText(0.0, 0.0, font, text or "")
+    if simplify:
+        # Union overlapping glyph sub-shapes so stroking shows no internal seams.
+        path = path.simplified()
+    return path, scale
+
+
+def _flatten_cubic(out, p0, c1, c2, p3, flat):
+    """Adaptively subdivide a cubic bezier (mm points) to chord flatness ``flat``,
+    appending the intermediate + end points to ``out`` (``p0`` assumed already in
+    ``out``)."""
+    # distance of the control points from the p0->p3 chord
+    ax, ay = p3[0] - p0[0], p3[1] - p0[1]
+    d1 = abs((c1[0] - p3[0]) * ay - (c1[1] - p3[1]) * ax)
+    d2 = abs((c2[0] - p3[0]) * ay - (c2[1] - p3[1]) * ax)
+    if (d1 + d2) ** 2 <= flat * flat * (ax * ax + ay * ay) or flat <= 0:
+        out.append(p3)
+        return
+    # de Casteljau split at t=0.5
+    ab = ((p0[0] + c1[0]) / 2, (p0[1] + c1[1]) / 2)
+    bc = ((c1[0] + c2[0]) / 2, (c1[1] + c2[1]) / 2)
+    cd = ((c2[0] + p3[0]) / 2, (c2[1] + p3[1]) / 2)
+    abc = ((ab[0] + bc[0]) / 2, (ab[1] + bc[1]) / 2)
+    bcd = ((bc[0] + cd[0]) / 2, (bc[1] + cd[1]) / 2)
+    m = ((abc[0] + bcd[0]) / 2, (abc[1] + bcd[1]) / 2)
+    _flatten_cubic(out, p0, ab, abc, m, flat)
+    _flatten_cubic(out, m, bcd, cd, p3, flat)
+
+
+def bake_text_contours(text, family, size_mm, bold=False, italic=False,
+                       tracking=0.0):
+    """Convert a string into glyph outline contours (local mm, y-up), scaled so
+    the cap height is ``size_mm``. Done here (Qt layer) so the engine stays
+    Qt-free; the result is stored as plain polylines on the text model.
+
+    ``_glyph_path`` unions the sub-shapes with ``simplified()``, which already
+    flattens curves to line segments at the 100 pt build resolution (smooth at
+    every practical size). The cubic branch below is a defensive fallback that
+    flattens at ``~size_mm/40`` should any curve survive."""
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QPainterPath
+    path, scale = _glyph_path(text, family, size_mm, bold, italic, tracking)
+    flat = max(1e-3, size_mm / 40.0)     # chord flatness in mm
+
+    def mm(x, y):                        # font units (y-down) -> mm (y-up)
+        return (x * scale, -y * scale)
+
     contours = []
-    for poly in path.toSubpathPolygons():
-        c = [Vec2(pt.x() * scale, -pt.y() * scale) for pt in poly]  # Qt y-down -> y-up
-        if len(c) >= 2:
-            contours.append(c)
+    cur = None
+    i = 0
+    n = path.elementCount()
+    while i < n:
+        el = path.elementAt(i)
+        if el.type == QPainterPath.MoveToElement:
+            if cur and len(cur) >= 2:
+                contours.append([Vec2(x, y) for x, y in cur])
+            cur = [mm(el.x, el.y)]
+            i += 1
+        elif el.type == QPainterPath.LineToElement:
+            cur.append(mm(el.x, el.y))
+            i += 1
+        elif el.type == QPainterPath.CurveToElement:
+            # cubic: this element is control1, next two are control2 + endpoint
+            c1 = mm(el.x, el.y)
+            c2 = mm(path.elementAt(i + 1).x, path.elementAt(i + 1).y)
+            p3 = mm(path.elementAt(i + 2).x, path.elementAt(i + 2).y)
+            _flatten_cubic(cur, cur[-1], c1, c2, p3, flat)
+            i += 3
+        else:
+            i += 1
+    if cur and len(cur) >= 2:
+        contours.append([Vec2(x, y) for x, y in cur])
+    return contours
+
+
+def text_bezier_contours(text, family, size_mm, bold=False, italic=False,
+                         tracking=0.0):
+    """The glyph outline as BEZIER contours (element lists), in local mm y-up.
+
+    Each contour is a list of tuples: ``("M", x, y)``, ``("L", x, y)`` or
+    ``("C", c1x, c1y, c2x, c2y, x, y)``. Used by break-apart to build editable
+    node paths that preserve curves; the flat ``bake_text_contours`` output is
+    what the model stores for export."""
+    from PySide6.QtGui import QPainterPath
+    path, scale = _glyph_path(text, family, size_mm, bold, italic, tracking,
+                              simplify=False)
+
+    def mm(x, y):
+        return (x * scale, -y * scale)
+
+    contours = []
+    cur = None
+    i = 0
+    n = path.elementCount()
+    while i < n:
+        el = path.elementAt(i)
+        if el.type == QPainterPath.MoveToElement:
+            if cur:
+                contours.append(cur)
+            x, y = mm(el.x, el.y)
+            cur = [("M", x, y)]
+            i += 1
+        elif el.type == QPainterPath.LineToElement:
+            x, y = mm(el.x, el.y)
+            cur.append(("L", x, y))
+            i += 1
+        elif el.type == QPainterPath.CurveToElement:
+            c1x, c1y = mm(el.x, el.y)
+            c2x, c2y = mm(path.elementAt(i + 1).x, path.elementAt(i + 1).y)
+            px, py = mm(path.elementAt(i + 2).x, path.elementAt(i + 2).y)
+            cur.append(("C", c1x, c1y, c2x, c2y, px, py))
+            i += 3
+        else:
+            i += 1
+    if cur:
+        contours.append(cur)
     return contours
 
 
@@ -396,19 +527,27 @@ class TextItem(QGraphicsItem):
         self._snap_offsets = [Vec2(0.0, 0.0)]     # snap by the text origin
         self.sync_from_model()
 
-    def sync_from_model(self):
+    def sync_from_model(self, recompute_holes=True):
+        # ``recompute_holes`` is accepted for parity with ShapeItem so the shared
+        # resize-handle system can call it; text has no holes, so it is ignored.
         self.prepareGeometryChange()
+        t = self.model.transform
         self._path = QPainterPath()
         for c in self.model.contours:
             if len(c) < 2:
                 continue
-            self._path.moveTo(c[0].x, c[0].y)
-            for p in c[1:]:
+            # orient through rotation + mirror (pre-translation), exactly like
+            # ShapeItem, so the drawn glyphs compose with setPos() to match
+            # world_contours()/export -- otherwise rotate/mirror do nothing on
+            # screen while still affecting the laser output.
+            o = [t.apply_dir(p) for p in c]
+            self._path.moveTo(o[0].x, o[0].y)
+            for p in o[1:]:
                 self._path.lineTo(p.x, p.y)
             self._path.closeSubpath()
         self._color = QColor(self.canvas.layer_color(self.model.layer)
                              if self.canvas else "#888888")
-        self.setPos(self.model.transform.x, self.model.transform.y)
+        self.setPos(t.x, t.y)
         self.setOpacity(max(0.05, min(1.0, self.model.opacity)))
         r = self._path.boundingRect()
         self._brect = r.adjusted(-2, -2, 2, 2)
@@ -435,6 +574,59 @@ class TextItem(QGraphicsItem):
     @property
     def hole_count(self):
         return 0
+
+    # -- box resize (drag-handle) support ------------------------------
+    # Text plugs into the shared ResizeHandle/RotateHandle system: a corner drag
+    # RE-BAKES the glyphs at the new cap height (crisp), not a cheap path scale.
+    def _local_bbox(self):
+        """(minx, miny, maxx, maxy) of the baked local contours, or None."""
+        pts = [p for c in self.model.contours for p in c]
+        if not pts:
+            return None
+        xs = [p.x for p in pts]
+        ys = [p.y for p in pts]
+        return min(xs), min(ys), max(xs), max(ys)
+
+    def resize_extents(self):
+        """Local half-extents (hx, hy) of the glyph bounding box, or None."""
+        box = self._local_bbox()
+        if box is None:
+            return None
+        minx, miny, maxx, maxy = box
+        return (maxx - minx) / 2.0, (maxy - miny) / 2.0
+
+    def resize_center(self):
+        """The local point the box grips are measured from. Text is baseline/left
+        anchored (NOT origin-centred), so this must be the true bbox centre or the
+        grips float off the glyphs."""
+        box = self._local_bbox()
+        if box is None:
+            return 0.0, 0.0
+        minx, miny, maxx, maxy = box
+        return (minx + maxx) / 2.0, (miny + maxy) / 2.0
+
+    def set_resize_extents(self, hx: float, hy: float) -> None:
+        """Decision D: RE-BAKE the lettering at the new cap height instead of
+        scaling the flat contours. The new size is driven by the VERTICAL grip so
+        the letters keep their aspect ratio (a font scales uniformly); the
+        horizontal grip only rides along."""
+        box = self._local_bbox()
+        if box is None:
+            return
+        _minx, miny, _maxx, maxy = box
+        h = maxy - miny
+        if h < 1e-9:
+            return
+        new_size = self.model.size * (2.0 * hy / h)
+        self.model.size = max(0.5, new_size)
+        self._rebake()
+
+    def _rebake(self) -> None:
+        """Rebuild the model's stored contours from its text/font/size/style."""
+        m = self.model
+        m.contours = bake_text_contours(m.text, m.font_family, m.size,
+                                        bold=m.bold, italic=m.italic,
+                                        tracking=m.tracking)
 
     def mousePressEvent(self, event):
         if self.canvas is not None:

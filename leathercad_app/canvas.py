@@ -1157,10 +1157,12 @@ class Canvas(QGraphicsView):
             self.toolFinished.emit()
             return
         size = getattr(self, "text_size", 8.0)
-        contours = bake_text_contours(text, "Sans", size)
+        from . import fonts
+        family = fonts.default_family()
+        contours = bake_text_contours(text, family, size)
         tx = TextShape(text=text,
                        contours=[[Vec2(p.x, p.y) for p in c] for c in contours],
-                       size=size, font_family="Sans",
+                       size=size, font_family=family,
                        transform=Transform(x=pos.x(), y=pos.y()),
                        layer="Engrave" if self.doc.layer("Engrave") else self._current_layer)
         self.doc.texts.append(tx)
@@ -1170,6 +1172,34 @@ class Canvas(QGraphicsView):
         self.documentChangedSig.emit()
         self._emit_commit()
         self.toolFinished.emit()
+
+    def rebake_text(self, model) -> None:
+        """Re-bake a text model's stored contours from its current string / font /
+        size / style. Kept here so the model stays Qt-free (baking needs Qt)."""
+        model.contours = bake_text_contours(
+            model.text, model.font_family, model.size,
+            bold=model.bold, italic=model.italic, tracking=model.tracking)
+
+    def edit_text_item(self, item) -> None:
+        """Open the text edit dialog on a TextItem and apply the result live
+        (re-bakes the glyph contours), committed to history."""
+        from .textdialog import TextEditDialog
+        m = item.model
+        dlg = TextEditDialog(m, self)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+        v = dlg.values()
+        m.text = v["text"]
+        m.font_family = v["font_family"]
+        m.size = v["size"]
+        m.bold = v["bold"]
+        m.italic = v["italic"]
+        m.tracking = v["tracking"]
+        self.rebake_text(m)
+        item.sync_from_model()
+        self.refresh_item(item)
+        self.selectionChangedSig.emit()
+        self._emit_commit()
 
     def _apply_ortho(self, start: QPointF, pos: QPointF) -> QPointF:
         """Constrain ``pos`` to a 0 / 45 / 90 degree ray from ``start`` (Shift)."""
@@ -1375,6 +1405,14 @@ class Canvas(QGraphicsView):
                 event.accept()
                 return
             it = self.itemAt(event.position().toPoint())
+            # double-click a text -> open its edit dialog (string / font / style)
+            towner = it
+            while towner is not None and not isinstance(towner, TextItem):
+                towner = towner.parentItem()
+            if isinstance(towner, TextItem):
+                self.edit_text_item(towner)
+                event.accept()
+                return
             owner = it
             while owner is not None and not isinstance(owner, (ShapeItem, StitchLineItem)):
                 owner = owner.parentItem()
@@ -1402,7 +1440,7 @@ class Canvas(QGraphicsView):
         it = self.itemAt(event.pos())
         owner = it
         while owner is not None and not isinstance(
-                owner, (ShapeItem, StitchLineItem, HoleItem)):
+                owner, (ShapeItem, StitchLineItem, HoleItem, TextItem)):
             owner = owner.parentItem()
         if owner is not None and not owner.isSelected():
             self.scene_obj.clearSelection()
@@ -1410,6 +1448,7 @@ class Canvas(QGraphicsView):
 
         sel = self.selected_items()
         shapes = [i for i in sel if isinstance(i, ShapeItem)]
+        texts = [i for i in sel if isinstance(i, TextItem)]
         holes = [i for i in sel if isinstance(i, HoleItem)]
         can_group = len(shapes) == 1 and bool(holes)
         can_ungroup = any(
@@ -1437,7 +1476,7 @@ class Canvas(QGraphicsView):
                                  if parametric else "Edit nodes")
         a_nodes.setEnabled(can_nodes)
         a_break = menu.addAction("Break apart into segments")
-        a_break.setEnabled(bool(shapes))
+        a_break.setEnabled(bool(shapes) or bool(texts))
         a_join = menu.addAction("Join / weld segments")
         a_join.setEnabled(len(shapes) >= 2)
         a_offset = menu.addAction("Offset / seam allowance…")
@@ -3471,7 +3510,11 @@ class Canvas(QGraphicsView):
     def selection_changed(self, item=None, selected=None) -> None:
         # Maintain an O(1) tally of selected ShapeItems so a big multi-select
         # doesn't rebuild a filtered Python list per member (the O(N^2) lock).
-        if item is not None and selected is not None and isinstance(item, ShapeItem):
+        # TextItem is tracked too: it plugs into the shared resize/rotate grips
+        # (it exposes resize_extents/resize_center/set_resize_extents), so a lone
+        # selected text gets box handles just like a shape.
+        if item is not None and selected is not None and isinstance(
+                item, (ShapeItem, TextItem)):
             if selected:
                 self._selected_shapes.add(item)
             else:
@@ -3864,8 +3907,10 @@ class Canvas(QGraphicsView):
     def break_apart_selected(self) -> None:
         """Explode selected shapes into one open path per edge (lines and arcs),
         each recentred with its own transform so you can move them separately."""
-        shapes = [it for it in self.selected_items() if isinstance(it, ShapeItem)]
-        if not shapes:
+        sel = self.selected_items()
+        shapes = [it for it in sel if isinstance(it, ShapeItem)]
+        texts = [it for it in sel if isinstance(it, TextItem)]
+        if not shapes and not texts:
             return
         made = []
         self._suppress_commit = True
@@ -3883,6 +3928,23 @@ class Canvas(QGraphicsView):
                 self.doc.add_shape(new)
                 made.append(self._add_item(ShapeItem(new, self)))
             self.doc.remove_shape(it.model)
+            self._remove_item(it)
+        # A text explodes into one editable node path per glyph contour (decision
+        # C): each closed outline becomes a Polygon on the same layer, so the
+        # letters can be node-edited like any other shape.
+        for it in texts:
+            for contour in it.model.world_contours():
+                pts = [Vec2(p.x, p.y) for p in contour]
+                if (len(pts) >= 2
+                        and (pts[0] - pts[-1]).length() < 1e-6):
+                    pts = pts[:-1]           # drop the duplicated closing point
+                if len(pts) < 3:
+                    continue
+                poly = Polygon(points=pts, close_path=True, sharp_corners=True,
+                               transform=Transform(), layer=it.model.layer)
+                self.doc.add_shape(poly)
+                made.append(self._add_item(ShapeItem(poly, self)))
+            self.doc.texts.remove(it.model)
             self._remove_item(it)
         self._suppress_commit = False
         if made:

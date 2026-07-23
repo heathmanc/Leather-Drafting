@@ -26,7 +26,9 @@ def _starter_document() -> Document:
 def main(argv=None) -> int:
     argv = list(sys.argv if argv is None else argv)
     app = QApplication(argv)
-    app.setApplicationName("Leather-Drafting")
+    app.setApplicationName("Stitch Hero")
+    from .mainwindow import app_icon
+    app.setWindowIcon(app_icon())
     doc = None
     if len(argv) > 1 and argv[1].endswith(".json"):
         doc = Document.load(argv[1])

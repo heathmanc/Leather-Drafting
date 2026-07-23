@@ -1,4 +1,4 @@
-# Leather-Drafting
+# Stitch Hero
 
 A Python desktop **CAD program for laser-cut leather patterns**, built around the
 one thing most pattern software gets wrong for hand-stitchers: **stitch hole
@@ -16,6 +16,8 @@ curved key fob, shared seams), shortcuts, and troubleshooting. It's also built
 into the app: **Help → User guide** or press **F1**. The test suite pins the
 manual to the code, so the docs can't silently drift out of date.
 
+**📄 Prefer a printable copy? [Download the manual as a PDF](docs/Stitch-Hero-Manual.pdf).**
+
 ---
 
 ## Two problems this is designed around
@@ -27,7 +29,7 @@ neighbouring holes then comes out **short**, so the holes never match your
 physical iron, whose teeth are rigid and a fixed **straight-line (chord)**
 distance apart.
 
-Leather-Drafting does **chord marching**: from each hole it finds the next point
+Stitch Hero does **chord marching**: from each hole it finds the next point
 forward along the path whose straight-line distance is exactly the iron's pitch.
 Consecutive holes are always `pitch` apart point-to-point — exactly what the iron
 does as you rotate it around a curve.
@@ -50,7 +52,7 @@ happy side effect: a symmetric outline now gets flip-symmetric holes for free.
 
 ### 2. Registration across overlapping pieces
 Two pieces stitched together (front + lining, gusset + panel) must have their
-holes in **identical positions** or they won't line up. Leather-Drafting
+holes in **identical positions** or they won't line up. Stitch Hero
 guarantees this three ways:
 
 - **Deterministic perimeter stitching** — two pieces with the same outline and
@@ -77,12 +79,12 @@ the back. The slanted slits mirror too, so they line up when the piece is flippe
 From the [**Releases**](https://github.com/heathmanc/leather-drafting/releases)
 page — no Python needed:
 
-* **Windows** — `Leather-Drafting-Setup-<version>.exe` (per-user install, no
+* **Windows** — `Stitch-Hero-Setup-<version>.exe` (per-user install, no
   admin prompt).
-* **macOS** — `Leather-Drafting-<version>-macOS-arm64.dmg` for Apple Silicon
+* **macOS** — `Stitch-Hero-<version>-macOS-arm64.dmg` for Apple Silicon
   (M1/M2/M3…) or `-x86_64.dmg` for Intel; open it and drag the app to
   Applications. It's unsigned, so the first launch is **right-click → Open**
-  (or `xattr -dr com.apple.quarantine /Applications/Leather-Drafting.app`).
+  (or `xattr -dr com.apple.quarantine "/Applications/Stitch Hero.app"`).
 
 Both are built by the **Release builds** GitHub Action: push a `v0.2.0`-style
 tag, or run it manually (Actions → *Release builds* → *Run workflow*), and it
@@ -91,10 +93,10 @@ publishes the Windows `.exe` and macOS `.dmg` to a Release automatically.
 ### From source (any OS)
 
 ```bash
-git clone <this repo>
-cd Leather-Drafting
+git clone https://github.com/heathmanc/leather-drafting.git
+cd leather-drafting
 pip install -e ".[gui]"        # installs PySide6; Python 3.9+
-python -m leathercad_app       # or: leather-drafting
+python -m leathercad_app       # or: stitch-hero
 ```
 
 On **Windows/macOS** the PySide6 wheel is self-contained. On headless **Linux**

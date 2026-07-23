@@ -1,10 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec: build a double-clickable Leather-Drafting app.
+"""PyInstaller spec: build a double-clickable Stitch Hero app.
 
 Run from the packaging/ directory:   pyinstaller --noconfirm leather-drafting.spec
-Output: dist/Leather-Drafting/  (and dist/Leather-Drafting.app on macOS)
+Output: dist/Stitch Hero/  (and dist/Stitch Hero.app on macOS)
 
-The user guide (docs/) is bundled so Help -> User guide (F1) works offline.
+The user guide (docs/) and the app icon are bundled so Help -> User guide (F1)
+and the window icon work offline.
 """
 
 import os
@@ -12,6 +13,9 @@ import os
 block_cipher = None
 HERE = os.path.abspath(os.getcwd())
 ROOT = os.path.dirname(HERE) if os.path.basename(HERE) == "packaging" else HERE
+
+ICO = os.path.join(ROOT, "packaging", "icons", "StitchHero.ico")
+ICNS = os.path.join(ROOT, "packaging", "icons", "StitchHero.icns")
 
 a = Analysis(
     [os.path.join(ROOT, "packaging", "launch.py")],
@@ -21,6 +25,8 @@ a = Analysis(
         (os.path.join(ROOT, "docs", "USER_GUIDE.md"), "docs"),
         (os.path.join(ROOT, "docs", "app.png"), "docs"),
         (os.path.join(ROOT, "docs", "individual_holes.png"), "docs"),
+        (os.path.join(ROOT, "leathercad_app", "resources", "appicon.png"),
+         "leathercad_app/resources"),
     ],
     hiddenimports=[],
     hookspath=[],
@@ -38,13 +44,14 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="Leather-Drafting",
+    name="Stitch Hero",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
     console=False,           # windowed app: no terminal appears
     disable_windowed_traceback=False,
+    icon=ICO,
 )
 
 coll = COLLECT(
@@ -54,15 +61,15 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name="Leather-Drafting",
+    name="Stitch Hero",
 )
 
 # macOS: also wrap the folder build into a proper .app bundle
 app = BUNDLE(
     coll,
-    name="Leather-Drafting.app",
-    icon=None,
-    bundle_identifier="com.leatherdrafting.app",
+    name="Stitch Hero.app",
+    icon=ICNS,
+    bundle_identifier="com.stitchhero.app",
     info_plist={
         "NSHighResolutionCapable": True,
         "CFBundleShortVersionString": "0.2.0",

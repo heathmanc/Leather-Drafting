@@ -100,3 +100,21 @@ def test_mainwindow_help_menu(qapp):
     win.show_help()                                   # F1 target
     assert win._help_dialog is not None
     assert len(win._help_dialog.browser.toPlainText()) > 5_000
+
+
+def test_branding_is_stitch_hero(qapp):
+    """The product name and app icon are wired up consistently."""
+    from leathercad_app.mainwindow import MainWindow, app_icon
+    from leathercad.document import Document
+    win = MainWindow(Document())
+    assert win.windowTitle().startswith("Stitch Hero")
+    assert not win.windowIcon().isNull()              # bundled resources/appicon.png
+    assert not app_icon().isNull()
+
+    root = GUIDE.parent.parent
+    assert (root / "leathercad_app" / "resources" / "appicon.png").exists()
+    for f in ("packaging/icons/StitchHero.ico", "packaging/icons/StitchHero.icns"):
+        assert (root / f).exists(), f"missing {f}"
+    spec = (root / "packaging/leather-drafting.spec").read_text()
+    assert "StitchHero.ico" in spec and "StitchHero.icns" in spec
+    assert 'name="Stitch Hero"' in spec               # PyInstaller output name

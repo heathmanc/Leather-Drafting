@@ -27,6 +27,13 @@ from .history import History
 from .icons import tool_icon
 
 
+def app_icon() -> QIcon:
+    """The window/taskbar icon, loaded from the bundled resources (works in
+    both a source checkout and a PyInstaller build)."""
+    png = Path(__file__).resolve().parent / "resources" / "appicon.png"
+    return QIcon(str(png)) if png.exists() else QIcon()
+
+
 TOOLS = [
     ("Select / Move", canvas_mod.SELECT, "S"),
     ("Rectangle", canvas_mod.RECT, "R"),
@@ -104,7 +111,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.doc = document or Document()
         self.path: Optional[str] = None
-        self.setWindowTitle("Leather-Drafting")
+        self.setWindowTitle("Stitch Hero")
+        self.setWindowIcon(app_icon())
         self.resize(1200, 800)
 
         self.canvas = Canvas(self.doc)
@@ -208,7 +216,7 @@ class MainWindow(QMainWindow):
 
     # -- persist toolbar/window layout across sessions ------------------
     def _settings(self) -> QSettings:
-        return QSettings("Leather-Drafting", "Leather-Drafting")
+        return QSettings("Stitch Hero", "Stitch Hero")
 
     def _restore_ui_state(self):
         s = self._settings()
@@ -314,7 +322,7 @@ class MainWindow(QMainWindow):
             name = os.path.basename(source) if source else "an unsaved pattern"
             ans = QMessageBox.question(
                 self, "Recover unsaved work?",
-                f"Leather-Drafting didn't close cleanly last time.\n\n"
+                f"Stitch Hero didn't close cleanly last time.\n\n"
                 f"Restore the auto-saved copy of {name}"
                 f"{f' from {saved_at}' if saved_at else ''}?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -801,8 +809,8 @@ class MainWindow(QMainWindow):
 
     def _about(self):
         QMessageBox.about(
-            self, "Leather-Drafting",
-            "<b>Leather-Drafting</b><br>CAD for laser-cut leather patterns "
+            self, "Stitch Hero",
+            "<b>Stitch Hero</b><br>CAD for laser-cut leather patterns "
             "with pricking-iron-accurate (chord-spaced) stitch holes.<br><br>"
             "Units are millimetres. Press <b>F1</b> for the user guide.")
 
@@ -1462,7 +1470,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard("opening another file"):
             return
         fn, _ = QFileDialog.getOpenFileName(
-            self, "Open", "", "Leather-Drafting (*.json *.leathercad.json)")
+            self, "Open", "", "Stitch Hero (*.json *.leathercad.json)")
         if not fn:
             return
         self.open_path(fn)
@@ -1542,7 +1550,7 @@ class MainWindow(QMainWindow):
     def save_document_as(self):
         fn, _ = QFileDialog.getSaveFileName(
             self, "Save As", "untitled.leathercad.json",
-            "Leather-Drafting (*.json *.leathercad.json)")
+            "Stitch Hero (*.json *.leathercad.json)")
         if not fn:
             return
         self.path = fn
@@ -1656,4 +1664,4 @@ class MainWindow(QMainWindow):
     def _update_title(self):
         name = os.path.basename(self.path) if self.path else "Untitled"
         mark = "• " if getattr(self, "_unsaved_changes", False) else ""
-        self.setWindowTitle(f"Leather-Drafting — {mark}{name}")
+        self.setWindowTitle(f"Stitch Hero — {mark}{name}")

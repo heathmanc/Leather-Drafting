@@ -143,6 +143,6 @@ def export_pdf_tiled(doc, path: str, *, page_w=210.0, page_h=297.0,
     writer.setResolution(dpi)
     writer.setPageSize(QPageSize(QSizeF(page_w, page_h), QPageSize.Unit.Millimeter))
     writer.setPageMargins(QMarginsF(0, 0, 0, 0), QPageLayout.Unit.Millimeter)
-    writer.setTitle("Leather-Drafting pattern (1:1)")
+    writer.setTitle("Stitch Hero pattern (1:1)")
     return render_tiled(writer, doc, page_w=page_w, page_h=page_h,
                         margin=margin, overlap=overlap)

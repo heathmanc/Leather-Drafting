@@ -1,22 +1,22 @@
 ; Inno Setup script -- wraps the PyInstaller folder build into a Windows
-; setup program (Leather-Drafting-Setup-<version>.exe).
+; setup program (Stitch-Hero-Setup-<version>.exe).
 ;
 ; Build locally:
 ;   cd packaging && pyinstaller --noconfirm leather-drafting.spec
 ;   ISCC /DMyAppVersion=0.2.0 installer.iss
 ; CI passes the version + source dir in as /D defines (see the workflow).
 
-#define MyAppName "Leather-Drafting"
+#define MyAppName "Stitch Hero"
 #define MyAppPublisher "heathmanc"
 #define MyAppURL "https://github.com/heathmanc/leather-drafting"
-#define MyAppExeName "Leather-Drafting.exe"
+#define MyAppExeName "Stitch Hero.exe"
 
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"
 #endif
 ; PyInstaller output folder (relative to this script, or absolute from CI)
 #ifndef MySourceDir
-  #define MySourceDir "dist\Leather-Drafting"
+  #define MySourceDir "dist\Stitch Hero"
 #endif
 
 [Setup]
@@ -33,7 +33,8 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 UninstallDisplayIcon={app}\{#MyAppExeName}
 OutputDir=installer
-OutputBaseFilename=Leather-Drafting-Setup-{#MyAppVersion}
+OutputBaseFilename=Stitch-Hero-Setup-{#MyAppVersion}
+SetupIconFile=icons\StitchHero.ico
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

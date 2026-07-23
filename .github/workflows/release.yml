@@ -2,9 +2,10 @@ name: Release builds
 
 # Builds downloadable desktop packages and publishes them to a public GitHub
 # Release:
-#   * Windows        -> Leather-Drafting-Setup-<ver>.exe        (Inno Setup)
-#   * macOS Apple Si -> Leather-Drafting-<ver>-macOS-arm64.dmg  (drag to /Apps)
-#   * macOS Intel    -> Leather-Drafting-<ver>-macOS-x86_64.dmg
+#   * Windows        -> Stitch-Hero-Setup-<ver>.exe        (Inno Setup)
+#   * macOS Apple Si -> Stitch-Hero-<ver>-macOS-arm64.dmg  (drag to /Apps)
+#   * macOS Intel    -> Stitch-Hero-<ver>-macOS-x86_64.dmg
+#   * The user manual (docs/Stitch-Hero-Manual.pdf) is attached too.
 #
 # Trigger by pushing a tag like v0.2.0, or Actions -> "Release builds" ->
 # Run workflow (pick a version; leave "publish" checked to make a Release).
@@ -76,7 +77,7 @@ jobs:
         shell: pwsh
         run: |
           $env:QT_QPA_PLATFORM = "offscreen"
-          $p = Start-Process -FilePath ".\dist\Leather-Drafting\Leather-Drafting.exe" `
+          $p = Start-Process -FilePath ".\dist\Stitch Hero\Stitch Hero.exe" `
                  -ArgumentList "--smoke" -Wait -PassThru
           if ($p.ExitCode -ne 0) { Write-Error "Smoke test failed ($($p.ExitCode))"; exit 1 }
           Write-Host "smoke test passed"
@@ -130,7 +131,7 @@ jobs:
       - name: Check the build architecture
         working-directory: packaging
         run: |
-          BIN="dist/Leather-Drafting.app/Contents/MacOS/Leather-Drafting"
+          BIN="dist/Stitch Hero.app/Contents/MacOS/Stitch Hero"
           file "$BIN"
           lipo -archs "$BIN" | grep -q "${{ matrix.arch }}" \
             || { echo "expected ${{ matrix.arch }}"; exit 1; }
@@ -140,7 +141,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          ./dist/Leather-Drafting.app/Contents/MacOS/Leather-Drafting --smoke
+          "./dist/Stitch Hero.app/Contents/MacOS/Stitch Hero" --smoke
           echo "smoke test passed"
 
       - name: Package the .dmg
@@ -148,12 +149,12 @@ jobs:
         run: |
           VER="${{ needs.version.outputs.version }}"
           STAGE="$(mktemp -d)"
-          cp -R "dist/Leather-Drafting.app" "$STAGE/"
+          cp -R "dist/Stitch Hero.app" "$STAGE/"
           ln -s /Applications "$STAGE/Applications"      # drag-to-install target
           mkdir -p installer
-          hdiutil create -volname "Leather-Drafting" -srcfolder "$STAGE" \
+          hdiutil create -volname "Stitch Hero" -srcfolder "$STAGE" \
             -ov -format UDZO \
-            "installer/Leather-Drafting-${VER}-macOS-${{ matrix.arch }}.dmg"
+            "installer/Stitch-Hero-${VER}-macOS-${{ matrix.arch }}.dmg"
           ls -lh installer
 
       - name: Upload macOS dmg
@@ -168,6 +169,9 @@ jobs:
     if: ${{ needs.version.outputs.publish == 'true' }}
     runs-on: ubuntu-latest
     steps:
+      - name: Check out (for the bundled manual PDF)
+        uses: actions/checkout@v4
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -178,9 +182,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.version.outputs.tag }}
-          name: Leather-Drafting ${{ needs.version.outputs.version }}
+          name: Stitch Hero ${{ needs.version.outputs.version }}
           files: |
             dist/*.exe
             dist/*.dmg
+            docs/Stitch-Hero-Manual.pdf
           generate_release_notes: true
           fail_on_unmatched_files: true

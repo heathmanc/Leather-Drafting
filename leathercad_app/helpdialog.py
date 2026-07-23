@@ -23,7 +23,7 @@ def guide_path() -> Path:
 class HelpDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Leather-Drafting — User Guide")
+        self.setWindowTitle("Stitch Hero — User Guide")
         self.resize(760, 640)
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
 

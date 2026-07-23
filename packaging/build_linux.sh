@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Build a standalone Leather-Drafting binary on Linux.
+# Build a standalone Stitch Hero binary on Linux.
 #
 #   cd packaging && ./build_linux.sh
 #
-# Result: dist/Leather-Drafting/Leather-Drafting
+# Result: dist/Stitch Hero/Stitch Hero
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -13,5 +13,5 @@ python3 -m pip install -e ..
 pyinstaller --noconfirm leather-drafting.spec
 
 # verify the build actually launches and exits cleanly
-QT_QPA_PLATFORM=offscreen "dist/Leather-Drafting/Leather-Drafting" --smoke \
-  && echo "BUILD OK: dist/Leather-Drafting/"
+QT_QPA_PLATFORM=offscreen "dist/Stitch Hero/Stitch Hero" --smoke \
+  && echo "BUILD OK: dist/Stitch Hero/"

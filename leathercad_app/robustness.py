@@ -22,7 +22,7 @@ def app_data_dir() -> Path:
     """Writable per-user data folder (autosave + error log live here)."""
     base = QStandardPaths.writableLocation(
         QStandardPaths.StandardLocation.AppDataLocation)
-    p = Path(base or (Path.home() / ".leather-drafting"))
+    p = Path(base or (Path.home() / ".stitch-hero"))
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -104,7 +104,7 @@ class CrashHandler:
             box = QMessageBox(self.window)
             box.setIcon(QMessageBox.Icon.Warning)
             box.setWindowTitle("Something went wrong")
-            box.setText("Leather-Drafting hit an unexpected error, but it is "
+            box.setText("Stitch Hero hit an unexpected error, but it is "
                         "still running." +
                         ("<br><br><b>Your work was just auto-saved.</b>"
                          if saved else ""))

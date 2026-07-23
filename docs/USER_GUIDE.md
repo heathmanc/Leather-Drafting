@@ -1,4 +1,4 @@
-# Leather-Drafting — User Guide
+# Stitch Hero — User Guide
 
 *A CAD program for laser-cut leather patterns with pricking-iron-accurate stitch holes.*
 
@@ -38,7 +38,7 @@ holes then comes out *shorter* than the spacing you asked for — so the holes
 never line up with a physical pricking iron, whose teeth are a rigid,
 fixed straight-line distance apart.
 
-Leather-Drafting instead does **chord marching**: from each hole it finds the
+Stitch Hero instead does **chord marching**: from each hole it finds the
 next point along the path whose *straight-line* distance is exactly your
 iron's pitch. That reproduces what an iron physically does as you walk it
 around a curve. It also does what leatherworkers do by hand: nudge the
@@ -57,15 +57,15 @@ export.
 You need Python 3.9+ and PySide6.
 
 ```bash
-git clone <this repository>
-cd Leather-Drafting
+git clone https://github.com/heathmanc/leather-drafting.git
+cd leather-drafting
 pip install -e ".[gui]"
 ```
 
 Launch either way:
 
 ```bash
-leather-drafting          # installed command
+stitch-hero               # installed command
 python -m leathercad_app  # or directly from the repo
 ```
 
@@ -78,9 +78,9 @@ Recipients don't need Python. Build a double-clickable app once and send it:
 
 ```bash
 cd packaging
-./build_macos.sh        # macOS  -> dist/Leather-Drafting.app
-build_windows.bat       # Windows -> dist\Leather-Drafting\Leather-Drafting.exe
-./build_linux.sh        # Linux  -> dist/Leather-Drafting/Leather-Drafting
+./build_macos.sh        # macOS  -> dist/Stitch Hero.app
+build_windows.bat       # Windows -> dist\Stitch Hero\Stitch Hero.exe
+./build_linux.sh        # Linux  -> dist/Stitch Hero/Stitch Hero
 ```
 
 Zip the result and send it. Each script finishes by launching the freshly

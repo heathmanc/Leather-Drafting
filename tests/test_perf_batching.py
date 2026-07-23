@@ -351,3 +351,65 @@ def test_resize_skips_stitch_fit_until_release(qapp):
 
     shp.sync_from_model()                            # release -> full recompute
     assert shp._holes and shp._holes.count > 0
+
+
+# -- cached world outline: snap machinery never re-flattens arcs -------------
+def test_world_outline_matches_and_is_cached(qapp):
+    """ShapeItem.world_outline() equals model.world_polyline()[0] but reuses
+    the already-flattened outline, and its cache invalidates on move/edit."""
+    from leathercad_app.canvas import Canvas
+    from leathercad_app.items import ShapeItem
+    doc = Document()
+    doc.add_shape(Rectangle(width=90, height=60, corner_radius=8,
+                            transform=Transform(x=12, y=7), layer="Cut",
+                            stitch=StitchSettings(enabled=True, pitch_mm=3.85,
+                                                  inset=3.5)))
+    c = Canvas(doc); c.rebuild()
+    shp = next(it for it in c.scene_obj.items() if isinstance(it, ShapeItem))
+
+    truth = shp.model.world_polyline()[0]
+    got = shp.world_outline()
+    assert len(got) == len(truth)
+    assert all(abs(a.x - b.x) < 1e-6 and abs(a.y - b.y) < 1e-6
+               for a, b in zip(got, truth))
+
+    assert shp.world_outline() is got            # cache hit -> same object
+    shp.setPos(shp.pos().x() + 25, shp.pos().y())  # a move invalidates it
+    moved = shp.world_outline()
+    assert moved is not got
+    assert abs(moved[0].x - got[0].x - 25) < 1e-6  # tracked the move
+
+
+def test_move_snap_cache_does_not_reflatten(qapp):
+    """Building the drag snap cache over many shapes must not call the
+    expensive model.world_polyline() per shape (it uses the cached outline)."""
+    from leathercad_app.canvas import Canvas
+    from leathercad_app.items import ShapeItem
+    doc = Document()
+    for i in range(12):
+        doc.add_shape(Rectangle(width=90, height=60, corner_radius=8,
+                                transform=Transform(x=(i % 4) * 120, y=(i // 4) * 90),
+                                layer="Cut",
+                                stitch=StitchSettings(enabled=True, pitch_mm=3.85,
+                                                      inset=3.5)))
+    c = Canvas(doc); c.rebuild()
+    shapes = [it for it in c.scene_obj.items() if isinstance(it, ShapeItem)]
+    # prime the outline caches (as a first paint/read would)
+    for s in shapes:
+        s.world_outline()
+
+    calls = {"n": 0}
+    from leathercad.shapes import Shape
+    orig = Shape.world_polyline
+    def counting(self, *a, **k):
+        calls["n"] += 1
+        return orig(self, *a, **k)
+    Shape.world_polyline = counting
+    try:
+        one = shapes[0]
+        one.setSelected(True)
+        c.begin_move_snap(one)
+        c.end_move_snap()
+    finally:
+        Shape.world_polyline = orig
+    assert calls["n"] == 0        # zero re-flattens: the cache carried the drag

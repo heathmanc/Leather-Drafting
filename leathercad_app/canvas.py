@@ -468,7 +468,7 @@ class Canvas(QGraphicsView):
         for it in self.scene_obj.items():
             poly = None
             if isinstance(it, ShapeItem):
-                poly = [Vec2(p.x, p.y) for p in it.model.world_polyline()[0]]
+                poly = it.world_outline()
             elif isinstance(it, StitchLineItem):
                 poly = [Vec2(p.x, p.y) for p in it.line.points]
             if not poly or len(poly) < 2:
@@ -516,7 +516,7 @@ class Canvas(QGraphicsView):
         for it in self.scene_obj.items():
             poly = None
             if isinstance(it, ShapeItem):
-                poly = [Vec2(p.x, p.y) for p in it.model.world_polyline()[0]]
+                poly = it.world_outline()
             elif isinstance(it, StitchLineItem):
                 poly = [Vec2(p.x, p.y) for p in it.line.points]
             if not poly or len(poly) < 2:
@@ -584,7 +584,7 @@ class Canvas(QGraphicsView):
                 continue
             poly = None
             if isinstance(it, ShapeItem):
-                poly = [Vec2(p.x, p.y) for p in it.model.world_polyline()[0]]
+                poly = it.world_outline()
             elif isinstance(it, StitchLineItem):
                 poly = [Vec2(p.x, p.y) for p in it.line.points]
             if not poly or len(poly) < 2:

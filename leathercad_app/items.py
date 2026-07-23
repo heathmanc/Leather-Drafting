@@ -632,6 +632,8 @@ class ShapeItem(QGraphicsItem):
         self._holes_size_mm = 1.0
         self._brect = QRectF()
         self._color = QColor("#ff0000")
+        self._world_outline_cache = None      # cached world-space outline (snap)
+        self._world_outline_key = None
         self.setFlags(
             QGraphicsItem.ItemIsSelectable
             | QGraphicsItem.ItemIsMovable
@@ -955,6 +957,23 @@ class ShapeItem(QGraphicsItem):
             cr = getattr(sh, "corner_radius", 0.0)
             if cr:
                 sh.corner_radius = cr * min(sx, sy)
+
+    def world_outline(self):
+        """World-space outline points for snap/intersection use.
+
+        Reuses the already-flattened ``self._outline`` (oriented, pre-transla-
+        tion) and just adds the item's position -- so the snap machinery never
+        re-flattens a shape's arcs. Cached and auto-invalidated: ``_outline`` is
+        a fresh object after every ``sync_from_model``, and the position is part
+        of the key, so a moved or edited shape rebuilds on next read."""
+        p = self.pos()
+        dx, dy = p.x(), p.y()
+        key = (id(self._outline), round(dx, 6), round(dy, 6))
+        if self._world_outline_key != key:
+            self._world_outline_cache = [
+                Vec2(pt.x() + dx, pt.y() + dy) for pt in self._outline]
+            self._world_outline_key = key
+        return self._world_outline_cache
 
     def world_snap_nodes(self):
         t = self.model.transform

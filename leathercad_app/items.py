@@ -698,9 +698,14 @@ class ShapeItem(QGraphicsItem):
         if self._holes and self._holes.count:
             style = st.hole_style if st else "round"
             if style in ("slit", "diamond"):
+                # a mirrored piece reverses the slant sense, or its slits won't
+                # register with the front (round holes are unaffected)
+                from leathercad.holes import mirrored_slit_angle
+                ang = mirrored_slit_angle(st.slit_angle,
+                                          self.model.transform.mirror_x)
                 self._holes_path = _holes_to_path(
                     self._holes.holes, style, 0.0,
-                    st.slit_length, st.slit_angle)
+                    st.slit_length, ang)
                 self._holes_size_mm = st.slit_length
             else:
                 self._holes_path = _holes_to_path(

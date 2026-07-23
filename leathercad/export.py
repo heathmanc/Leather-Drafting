@@ -58,6 +58,12 @@ def collect(doc: Document, kerf: float = 0.0):
         res = holes_for_shape(sh)
         if res.count:
             style = sh.stitch or StitchSettings()
+            # a mirrored piece reverses the slant sense of slit/diamond holes;
+            # negate the exported angle so the lasered back registers with the
+            # front (round holes are unaffected)
+            if sh.transform.mirror_x and style.hole_style in ("slit", "diamond"):
+                from dataclasses import replace
+                style = replace(style, slit_angle=-style.slit_angle)
             stitches.append((res, style, stitch_color))
 
     for tx in getattr(doc, "texts", []):

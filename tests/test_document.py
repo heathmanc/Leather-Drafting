@@ -49,6 +49,76 @@ def test_mirrored_piece_lines_up():
     assert mirrored == hb
 
 
+def _slit_dirs(shape):
+    """Each hole's centre and the direction its slit is actually drawn in."""
+    from leathercad.stitching import holes_for_shape
+    from leathercad.holes import mirrored_slit_angle
+    res = holes_for_shape(shape)
+    ang = math.radians(mirrored_slit_angle(shape.stitch.slit_angle,
+                                           shape.transform.mirror_x))
+    return [(h.point, h.tangent.rotate(ang).normalized()) for h in res.holes]
+
+
+def test_mirrored_slit_pattern_is_a_true_reflection():
+    """The back piece must mirror the whole stitch *pattern*, not just the hole
+    centres: an oblique / diamond slant has to flip so the slits line up with
+    the front. A reflection across x=0 sends (x,y)->(-x,y) for both the hole
+    positions and the slit directions."""
+    st = StitchSettings(pitch_mm=4.0, inset=3.2, punch_style="oblique",
+                        hole_style="slit", slit_length=2.4, slit_angle=40.0)
+    front = Rectangle(width=84, height=52, corner_radius=7,
+                      transform=Transform(x=0, y=0), stitch=st)
+    back = Rectangle(width=84, height=52, corner_radius=7,
+                     transform=Transform(x=0, y=0, mirror_x=True),
+                     stitch=StitchSettings(pitch_mm=4.0, inset=3.2,
+                                           punch_style="oblique",
+                                           hole_style="slit", slit_length=2.4,
+                                           slit_angle=40.0))
+    fd = _slit_dirs(front)
+    bd = _slit_dirs(back)
+    assert len(fd) == len(bd) > 8
+    # a non-trivial slant, so this is actually testing the flip
+    assert any(abs(d.x) > 0.2 and abs(d.y) > 0.2 for _p, d in fd)
+    for (fp, fdir), (bp, bdir) in zip(fd, bd):
+        assert abs(bp.x - (-fp.x)) < 1e-6 and abs(bp.y - fp.y) < 1e-6
+        assert abs(bdir.x - (-fdir.x)) < 1e-9 and abs(bdir.y - fdir.y) < 1e-9
+
+
+def _svg_slit_dirs(doc, tmp):
+    """Direction vectors of every exported slit <line>, in emission order."""
+    import re
+    path = os.path.join(tmp, "out.svg")
+    export.export_svg(doc, path)
+    body = open(path, encoding="utf-8").read()
+    dirs = []
+    for m in re.finditer(r"<line x1='(-?[\d.]+)' y1='(-?[\d.]+)' "
+                         r"x2='(-?[\d.]+)' y2='(-?[\d.]+)'", body):
+        x1, y1, x2, y2 = (float(g) for g in m.groups())
+        dirs.append((x2 - x1, y2 - y1))
+    return dirs
+
+
+def test_export_mirrors_slit_directions(tmp_path):
+    """The real SVG export of a mirrored piece must flip the slit slant too --
+    otherwise the lasered back piece won't register with the front."""
+    kw = dict(pitch_mm=4.0, inset=3.2, punch_style="oblique",
+              hole_style="slit", slit_length=2.4, slit_angle=40.0)
+    fdoc = Document()
+    fdoc.add_shape(Rectangle(width=84, height=52, corner_radius=7,
+                             transform=Transform(x=0, y=0),
+                             stitch=StitchSettings(**kw)))
+    bdoc = Document()
+    bdoc.add_shape(Rectangle(width=84, height=52, corner_radius=7,
+                             transform=Transform(x=0, y=0, mirror_x=True),
+                             stitch=StitchSettings(**kw)))
+    fd = _svg_slit_dirs(fdoc, str(tmp_path))
+    bd = _svg_slit_dirs(bdoc, str(tmp_path))
+    assert len(fd) == len(bd) > 8
+    # SVG flips Y (screen down); a reflection across x sends dir (dx,dy)->(-dx,dy)
+    for (fdx, fdy), (bdx, bdy) in zip(fd, bd):
+        assert abs(bdx - (-fdx)) < 1e-3 and abs(bdy - fdy) < 1e-3
+
+
 def test_start_offset_keeps_registration():
     st1 = StitchSettings(pitch_mm=4.0, inset=3.0, start_offset=0.0)
     st2 = StitchSettings(pitch_mm=4.0, inset=3.0, start_offset=0.0)

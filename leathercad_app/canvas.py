@@ -3360,6 +3360,8 @@ class Canvas(QGraphicsView):
                 nh.group_id = None
                 nh.point = mt.apply(local)
                 nh.tangent = mt.apply_dir(ltan)
+                # the mirror reverses the slant sense of a slit/diamond hole
+                nh.slit_angle = -nh.slit_angle
                 self.doc.holes.append(nh)
                 new_items.append(self._add_item(HoleItem(nh, self)))
         self._suppress_commit = False

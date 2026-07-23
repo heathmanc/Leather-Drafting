@@ -13,6 +13,18 @@ from dataclasses import dataclass, field
 from .geometry import Vec2
 
 
+def mirrored_slit_angle(slit_angle_deg: float, mirrored: bool) -> float:
+    """The slit/diamond slant angle to draw for a (possibly mirrored) piece.
+
+    A reflection reverses the *sense* of the slant: it maps a slit rotated
+    ``+a`` off the seam to one rotated ``-a``. The tangent alone can't carry
+    this (rotation and reflection don't commute), so a mirrored piece must
+    negate its slit angle, or the slants come out rotated the wrong way and the
+    front / back stitch patterns won't register. Round holes have no angle, so
+    this is a no-op for them."""
+    return -slit_angle_deg if mirrored else slit_angle_deg
+
+
 def diamond_points(point: Vec2, tangent: Vec2, length: float,
                    angle_deg: float, width_ratio: float = 0.4):
     """The 4 corners of a diamond/lozenge hole centred at ``point``: a slim

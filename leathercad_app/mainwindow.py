@@ -726,6 +726,8 @@ class MainWindow(QMainWindow):
         self._add(vm, "Zoom in", "Ctrl++", lambda: self._zoom(1.2))
         self._add(vm, "Zoom out", "Ctrl+-", lambda: self._zoom(1 / 1.2))
         vm.addSeparator()
+        self._add(vm, "3D assembly preview…", "Ctrl+Shift+3", self._assembly_preview)
+        vm.addSeparator()
         # toggles to reopen the docks after they've been closed
         pa = self.properties_dock.toggleViewAction()
         pa.setText("Properties panel")
@@ -987,6 +989,25 @@ class MainWindow(QMainWindow):
     def _check_seam_mates(self):
         QMessageBox.information(self, "Seam mates",
                                 self.canvas.seam_mate_report())
+
+    def _assembly_preview(self):
+        """Fold the flat panels into the finished 3D object (orbit + fold slider).
+        Panels are the closed shapes; hinges are auto-detected from edges two
+        panels share in the flat layout (a paper-net)."""
+        from .preview3d import build_from_document, Preview3DDialog
+        panels, hinges = build_from_document(self.doc)
+        if not panels:
+            QMessageBox.information(
+                self, "3D assembly preview",
+                "Nothing to assemble yet — draw one or more closed panels.\n\n"
+                "Tip: panels that share an edge in the flat layout (a net) fold "
+                "up automatically; use “Make back piece” or draw panels "
+                "edge-to-edge to create seams to fold about.")
+            return
+        dlg = Preview3DDialog(panels, hinges,
+                              dark=getattr(self.canvas, "dark", False), parent=self)
+        dlg.show()
+        self._assembly_dlg = dlg          # keep a ref so it isn't GC'd
 
     def _thread_estimate(self):
         """Ask leather thickness + needle tails (remembered), show the report."""

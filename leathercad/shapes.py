@@ -201,12 +201,24 @@ class Polygon(Shape):
         if self.corner_radius > 1e-9 and len(pts) >= 3:
             return _filleted_polygon(pts, self.corner_radius, self.close_path,
                                      flatness)
+        n = len(pts)
+
+        def is_corner(i: int) -> bool:
+            # Only a genuine turn forces a stitch hole. A collinear vertex
+            # (e.g. a node the user inserted on a straight edge without moving
+            # it) is NOT a corner, so it leaves the stitch pattern unchanged.
+            if not self.sharp_corners:
+                return False
+            if not self.close_path and (i == 0 or i == n - 1):
+                return True          # the ends of an open path always anchor
+            return _is_real_corner(pts[(i - 1) % n], pts[i], pts[(i + 1) % n])
+
         b = PathBuilder()
         b.move_to(pts[0].x, pts[0].y)
-        for p in pts[1:]:
-            b.line_to(p.x, p.y, corner=self.sharp_corners)
+        for i in range(1, n):
+            b.line_to(pts[i].x, pts[i].y, corner=is_corner(i))
         if self.close_path:
-            b.close(corner=self.sharp_corners)
+            b.close(corner=is_corner(0))
         return b.build(flatness)
 
 
@@ -233,6 +245,23 @@ class PathShape(Shape):
 # ---------------------------------------------------------------------------
 # Fillet helper for polygons
 # ---------------------------------------------------------------------------
+def _is_real_corner(a: Vec2, b: Vec2, c: Vec2, tol_deg: float = 1.0) -> bool:
+    """True if the vertex ``b`` is a genuine turn (not collinear with a→b→c).
+
+    A node inserted on a straight edge is (nearly) collinear, so it should not
+    force a stitch hole -- otherwise the stitch pattern shifts even though the
+    outline did not change.
+    """
+    v0 = b - a
+    v1 = c - b
+    l0 = v0.length()
+    l1 = v1.length()
+    if l0 < 1e-9 or l1 < 1e-9:
+        return True
+    cosang = max(-1.0, min(1.0, (v0.x * v1.x + v0.y * v1.y) / (l0 * l1)))
+    return math.degrees(math.acos(cosang)) > tol_deg
+
+
 def _filleted_polygon(pts: Sequence[Vec2], radius: float, closed: bool,
                       flatness: float) -> Path:
     n = len(pts)

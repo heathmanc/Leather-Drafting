@@ -177,3 +177,30 @@ def test_auto_matches_the_winning_strategy_hole_for_hole():
     assert len(a) == len(b)
     for ha, hb in zip(a, b):
         assert (ha.point - hb.point).length() < 1e-6
+
+
+def test_collinear_node_insert_does_not_shift_stitches():
+    """Inserting a node on a straight edge (without moving it) must NOT change
+    the stitch pattern: a collinear vertex is not a real corner, so it forces no
+    extra hole and the whole fit stays put."""
+    from leathercad.shapes import Polygon
+    from leathercad.stitchsettings import StitchSettings
+    from leathercad.stitching import holes_for_shape
+
+    sq = [Vec2(0, 0), Vec2(120, 0), Vec2(120, 80), Vec2(0, 80)]
+    st = StitchSettings(enabled=True, pitch_mm=4.0)
+    a = Polygon(points=list(sq), sharp_corners=True, close_path=True, stitch=st)
+    before = holes_for_shape(a).holes
+
+    # add a node on the bottom edge, exactly collinear (not moved)
+    sq2 = [Vec2(0, 0), Vec2(60, 0), Vec2(120, 0), Vec2(120, 80), Vec2(0, 80)]
+    b = Polygon(points=list(sq2), sharp_corners=True, close_path=True, stitch=st)
+    after = holes_for_shape(b).holes
+
+    assert len(before) == len(after)
+    for ha, hb in zip(before, after):
+        assert (ha.point - hb.point).length() < 1e-6
+
+    # the inserted collinear node did not become a corner -- still 4 corners
+    assert len(a.local_path().corner_points) == 4
+    assert len(b.local_path().corner_points) == 4

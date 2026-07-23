@@ -300,3 +300,63 @@ def test_builtin_coins_devices_and_passports(qapp):
         sh, tx = builtin_parts.build_builtin(key)
         gids = {sh[0].group_id} | {t.group_id for t in tx}
         assert len(gids) == 1 and None not in gids
+
+
+def test_template_labels_stay_inside_every_outline(qapp):
+    """No engraved label may spill outside its outline -- the half-dollar coin
+    (the tightest round case) and all others fit within the border."""
+    import math
+    from leathercad_app import fonts, builtin_parts
+    fonts.register_bundled_fonts()
+    for key, _cat, _name, _short, kind, w, h, _r in builtin_parts._TEMPLATES:
+        shapes, texts = builtin_parts.build_builtin(key)
+        pts = [(p.x + t.transform.x, p.y + t.transform.y)
+               for t in texts for c in t.contours for p in c]
+        assert pts, key
+        if kind == "circle":
+            rmax = max(math.hypot(x, y) for x, y in pts)
+            assert rmax <= (w / 2.0) * 0.99, (key, rmax, w / 2.0)
+        else:
+            assert max(abs(x) for x, y in pts) <= (w / 2.0) * 0.99, key
+            assert max(abs(y) for x, y in pts) <= (h / 2.0) * 0.99, key
+
+
+def test_group_resize_scales_label_with_outline(qapp):
+    """Dragging a template's box-resize grip scales the outline AND its engraved
+    label together, and the label stays inside the enlarged border."""
+    from leathercad.geometry import Vec2
+    from leathercad_app import fonts, builtin_parts
+    from leathercad_app.items import ShapeItem, TextItem
+    fonts.register_bundled_fonts()
+    win = _win()
+    c = win.canvas
+    shapes, texts = builtin_parts.build_builtin("card_id1")
+    c.place_shapes(shapes, texts)
+    shp = next(i for i in c.scene_obj.items() if isinstance(i, ShapeItem))
+    labels = [i for i in c.scene_obj.items() if isinstance(i, TextItem)]
+    c.scene_obj.clearSelection()
+    c.select_group_of(shp)
+    c._refresh_resize_handles()
+    grip = next(h for h in c._resize_handles if getattr(h, "grip", None) == (1, 1))
+    w0, h0 = shp.model.width, shp.model.height
+    sizes0 = [t.model.size for t in labels]
+
+    c._active_resize = grip
+    c._begin_group_resize(shp)
+    t = shp.model.transform
+    anchor = Vec2(t.x - w0 / 2, t.y - h0 / 2)     # opposite corner stays pinned
+    grip._apply_resize(Vec2(anchor.x + w0 * 1.5, anchor.y + h0 * 1.5))
+    c._end_group_resize()
+
+    assert abs(shp.model.width - w0 * 1.5) < 0.5
+    assert abs(shp.model.height - h0 * 1.5) < 0.5
+    for t0, lab in zip(sizes0, labels):
+        assert abs(lab.model.size - t0 * 1.5) < 0.2      # label grew ~1.5x
+    # and it is still inside the enlarged card
+    hw, hh = shp.model.width / 2, shp.model.height / 2
+    cx, cy = shp.model.transform.x, shp.model.transform.y
+    for lab in labels:
+        for cc in lab.model.contours:
+            for p in cc:
+                assert abs(p.x + lab.model.transform.x - cx) <= hw * 1.001
+                assert abs(p.y + lab.model.transform.y - cy) <= hh * 1.001

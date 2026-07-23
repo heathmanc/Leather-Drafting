@@ -266,3 +266,37 @@ def test_text_resize_pins_opposite_corner_to_the_pull():
 
     assert it.model.size > size0                          # it grew
     assert (after - before).length() < 1e-6              # opposite corner pinned
+
+
+def test_text_resize_drag_is_cheap_then_rebakes_on_release():
+    """During a resize drag the glyphs are scaled cheaply (a re-bake is only
+    OWED, not run every frame -- that was the strobing) and one crisp re-bake
+    happens on the release sync. The final contours match a true re-bake."""
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from leathercad_app import fonts
+    from leathercad_app.items import bake_text_contours, TextItem
+    fam = fonts.register_bundled_fonts()
+    contours = bake_text_contours("SIZE", fam, 6.0)
+    m = TextShape(text="SIZE", font_family=fam, size=6.0,
+                  contours=[[Vec2(p.x, p.y) for p in c] for c in contours],
+                  transform=Transform(x=0, y=0), layer="Engrave")
+    it = TextItem(m)
+
+    # a resize frame: half-extents pulled to 2x -> a re-bake is owed, not done
+    hx, hy = it.resize_extents()
+    it.set_resize_extents(hx * 2.0, hy * 2.0)
+    assert it._needs_rebake is True
+    assert abs(m.size - 12.0) < 1e-6
+
+    # the crisp re-bake lands on the release (a full sync) and matches truth
+    it.sync_from_model(recompute_holes=True)
+    assert it._needs_rebake is False
+    truth = bake_text_contours("SIZE", fam, m.size)
+    got = m.contours
+    assert len(got) == len(truth)
+    tp = [p for c in truth for p in c]
+    gp = [p for c in got for p in c]
+    assert len(gp) == len(tp)
+    assert max((a.x - b.x) ** 2 + (a.y - b.y) ** 2
+               for a, b in zip(gp, tp)) < 1e-6

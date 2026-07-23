@@ -195,7 +195,17 @@ class VertexHandle(QGraphicsItem):
             self.canvas.end_node_snap()
         if self._dragged and self.canvas is not None:
             self._dragged = False
+            # During the drag we skipped the (expensive) stitch re-fit; do it
+            # once now that the node has landed so the holes are correct.
+            self._sync_owner(recompute_holes=True)
             self.canvas.commitRequested.emit()
+
+    def _sync_owner(self, recompute_holes: bool) -> None:
+        sync = self.owner.sync_from_model
+        try:
+            sync(recompute_holes=recompute_holes)
+        except TypeError:
+            sync()          # owners without a recompute_holes arg
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange and self.canvas is not None:
@@ -214,7 +224,10 @@ class VertexHandle(QGraphicsItem):
         if change == QGraphicsItem.ItemPositionHasChanged:
             self._dragged = True
             self.node.setter(Vec2(self.pos().x(), self.pos().y()))
-            self.owner.sync_from_model()
+            # Skip the stitch re-fit on every mouse-move -- it is by far the
+            # heaviest work and made node dragging sluggish. We refresh the
+            # outline cheaply now and re-fit the holes once on release.
+            self._sync_owner(recompute_holes=False)
         return super().itemChange(change, value)
 
 
@@ -290,6 +303,8 @@ class ResizeHandle(QGraphicsItem):
         if self.canvas is not None:
             self.canvas._active_resize = self
             self.canvas.begin_node_snap(self)
+            if getattr(self.canvas, "_resize_group", None):
+                self.canvas._begin_group_resize(self.owner)
         event.accept()
 
     def mouseMoveEvent(self, event):
@@ -316,6 +331,8 @@ class ResizeHandle(QGraphicsItem):
             # holes were skipped for a smooth drag -- recompute them now
             self.owner.sync_from_model()
             self.canvas.resize_handle_moved(self)
+            if getattr(self.canvas, "_resize_group", None):
+                self.canvas._end_group_resize()
             self.canvas.commitRequested.emit()
         event.accept()
 
@@ -530,11 +547,20 @@ class TextItem(QGraphicsItem):
         )
         self.setZValue(30)
         self._snap_offsets = [Vec2(0.0, 0.0)]     # snap by the text origin
+        self._resize_base = None    # (baseline contours, baseline size) mid-drag
+        self._needs_rebake = False  # a crisp re-bake is owed on the next full sync
         self.sync_from_model()
 
     def sync_from_model(self, recompute_holes=True):
         # ``recompute_holes`` is accepted for parity with ShapeItem so the shared
         # resize-handle system can call it; text has no holes, so it is ignored.
+        # A full sync (the default, e.g. on resize-drag release) is where we pay
+        # for one crisp re-bake -- during the drag we only cheaply scaled a
+        # captured baseline, which is what stops the outlines strobing.
+        if recompute_holes and self._needs_rebake:
+            self._rebake()
+            self._needs_rebake = False
+            self._resize_base = None
         self.prepareGeometryChange()
         t = self.model.transform
         self._path = QPainterPath()
@@ -627,8 +653,22 @@ class TextItem(QGraphicsItem):
         sx = (2.0 * hx) / w
         sy = (2.0 * hy) / h
         s = sx if abs(sx - 1.0) >= abs(sy - 1.0) else sy   # dominant pulled axis
+        # Capture the glyphs ONCE at drag start; the live preview is then a cheap
+        # linear scale of that fixed baseline instead of a per-frame re-bake
+        # (re-baking every mouse-move is what made the outlines strobe/ghost).
+        if self._resize_base is None:
+            self._resize_base = (
+                [[Vec2(p.x, p.y) for p in c] for c in self.model.contours],
+                self.model.size)
+        base_contours, base_size = self._resize_base
         self.model.size = max(0.5, self.model.size * s)
-        self._rebake()
+        k = self.model.size / base_size if base_size > 1e-9 else 1.0
+        # Scale about the local origin -- exactly how a real re-bake grows the
+        # glyphs from the pen baseline -- so the crisp re-bake owed on release
+        # reproduces the same outline and the box does not jump.
+        self.model.contours = [[Vec2(p.x * k, p.y * k) for p in c]
+                               for c in base_contours]
+        self._needs_rebake = True
 
     def _rebake(self) -> None:
         """Rebuild the model's stored contours from its text/font/size/style."""

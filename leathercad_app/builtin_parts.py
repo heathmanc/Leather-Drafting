@@ -83,6 +83,39 @@ def categories():
     return out
 
 
+def _label_width_per_size(s, family):
+    """Width of ``s`` at a font size of 1 mm (glyph width scales linearly)."""
+    from .items import bake_text_contours
+    ref = 10.0
+    contours = bake_text_contours(s, family, ref)
+    xs = [p.x for c in contours for p in c]
+    return (max(xs) - min(xs)) / ref if xs else 0.0
+
+
+def _fit_label_size(short, dims, family, kind, w, h):
+    """Largest label height (mm) at which BOTH stacked lines stay inside the
+    outline. The two lines are centred at y = ±0.95·size and are ~1·size tall,
+    so the stack reaches ±1.45·size vertically and ±(width/2) horizontally.
+
+    * rect  -- fit within 90 % of the width and height.
+    * circle -- fit within the inscribed disc (every corner inside 0.45·D).
+    """
+    import math
+    wps = max(_label_width_per_size(short, family),
+              _label_width_per_size(dims, family), 1e-6)
+    half_top = 1.45          # outer edge of the stack, in units of ``size``
+    if kind == "circle":
+        r_eff = 0.45 * w                       # w is the diameter
+        # (wps·size/2)² + (1.45·size)² ≤ r_eff²
+        denom = math.sqrt((0.5 * wps) ** 2 + half_top ** 2)
+        size = r_eff / denom if denom > 1e-9 else 5.0
+    else:
+        size_w = (0.9 * w) / wps
+        size_h = (0.9 * h) / (2.0 * half_top)
+        size = min(size_w, size_h)
+    return max(1.4, min(6.0, size))
+
+
 def _centered_text(s, size, cx, cy, family, gid):
     """A TextShape whose glyph bounding box is centred on ``(cx, cy)``."""
     from .items import bake_text_contours
@@ -120,11 +153,10 @@ def build_builtin(key: str):
         shape = Rectangle(name=name, width=w, height=h, corner_radius=r,
                           transform=Transform(x=0.0, y=0.0), layer="Cut",
                           stitch=None, group_id=gid)
-    short_dim = min(w, h)
-    size = max(2.0, min(5.0, short_dim * 0.11))     # fits inside the outline
+    dims = _dims_label(kind, w, h)
+    size = _fit_label_size(short, dims, family, kind, w, h)
     gap = size * 0.95
     texts = [t for t in (_centered_text(short, size, 0.0, gap, family, gid),
-                         _centered_text(_dims_label(kind, w, h), size, 0.0,
-                                        -gap, family, gid))
+                         _centered_text(dims, size, 0.0, -gap, family, gid))
              if t is not None]
     return [shape], texts

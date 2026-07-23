@@ -303,6 +303,8 @@ class Canvas(QGraphicsView):
 
         self._selchg_emit_pending = False
         self._selected_shapes = set()     # live tally for O(1) resize-grip test
+        self._resize_group = []           # sibling items scaled with a group resize
+        self._resize_group_base = None    # baseline snapshot captured on drag start
         self._suspend_move_refresh = False   # set during bulk creates (duplicate)
         self.scene_obj.selectionChanged.connect(self._emit_selection_changed)
 
@@ -1940,34 +1942,144 @@ class Canvas(QGraphicsView):
         self._edit_owner = None
 
     # -- box resize handles --------------------------------------------
-    def show_resize_handles(self, owner) -> None:
-        """Put 8 box-resize grips (4 corners + 4 edge midpoints) on ``owner``."""
+    def show_resize_handles(self, owner, group=None) -> None:
+        """Put 8 box-resize grips (4 corners + 4 edge midpoints) on ``owner``.
+
+        ``group`` is the list of sibling items (e.g. a template's engraved
+        labels) that should scale and reposition together with ``owner`` -- the
+        grips wrap the primary outline and the whole group resizes as one."""
         self.clear_resize_handles()
         if owner is None or owner.resize_extents() is None:
             return
+        self._resize_group = list(group or [])
         grips = [(-1, -1), (0, -1), (1, -1), (1, 0),
                  (1, 1), (0, 1), (-1, 1), (-1, 0)]
         for g in grips:
             h = ResizeHandle(g, owner, self)
             self.scene_obj.addItem(h)
             self._resize_handles.append(h)
-        rot = RotateHandle(owner, self)          # spin grip above the box
-        self.scene_obj.addItem(rot)
-        self._resize_handles.append(rot)
+        if not self._resize_group:
+            rot = RotateHandle(owner, self)      # spin grip above the box
+            self.scene_obj.addItem(rot)
+            self._resize_handles.append(rot)
 
     def clear_resize_handles(self) -> None:
         for h in self._resize_handles:
             self.scene_obj.removeItem(h)
         self._resize_handles = []
         self._active_resize = None
+        self._resize_group = []
+        self._resize_group_base = None
 
     def resize_handle_moved(self, dragged) -> None:
         # the shape geometry changed: move the sibling grips to the new box and
         # keep the Properties fields in step (also refreshes any snap caches).
+        if self._resize_group:
+            self._apply_group_resize(dragged.owner)
         for h in self._resize_handles:
             if h is not dragged:
                 h.reposition()
         self.documentChangedSig.emit()
+
+    # -- group-aware resize (outline + engraved labels move/scale together) --
+    @staticmethod
+    def _primary_box_world(primary):
+        """The primary outline's box centre and half-extents, in world mm
+        (group resize only runs when the outline is un-rotated)."""
+        t = primary.model.transform
+        cx, cy = primary.resize_center()
+        hx, hy = primary.resize_extents()
+        c = t.apply(Vec2(cx, cy))
+        return (c.x, c.y), (hx, hy)
+
+    @staticmethod
+    def _local_center(contours):
+        pts = [p for c in contours for p in c]
+        if not pts:
+            return 0.0, 0.0
+        xs = [p.x for p in pts]
+        ys = [p.y for p in pts]
+        return (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
+
+    def _member_baseline(self, it):
+        """Snapshot the scalable state of one group member for absolute
+        (baseline-relative) rescaling during the drag."""
+        from leathercad.shapes import Rectangle, Ellipse, Polygon
+        m = it.model
+        base = {"x": m.transform.x, "y": m.transform.y}
+        if isinstance(it, TextItem):
+            base["size"] = m.size
+            base["contours"] = [[Vec2(p.x, p.y) for p in c] for c in m.contours]
+            base["lc"] = self._local_center(m.contours)
+        elif isinstance(m, Rectangle):
+            base["width"] = m.width
+            base["height"] = m.height
+            base["corner_radius"] = m.corner_radius
+        elif isinstance(m, Ellipse):        # Circle is an Ellipse subclass
+            base["rx"] = m.rx
+            base["ry"] = m.ry
+        elif isinstance(m, Polygon):
+            base["points"] = [Vec2(p.x, p.y) for p in m.points]
+        return base
+
+    def _begin_group_resize(self, primary) -> None:
+        if not self._resize_group:
+            self._resize_group_base = None
+            return
+        pc, ph = self._primary_box_world(primary)
+        members = [(it, self._member_baseline(it))
+                   for it in self._resize_group if _alive(it)]
+        self._resize_group_base = (pc, ph, members)
+
+    def _end_group_resize(self) -> None:
+        # crisp re-bake of any scaled labels now that the drag has landed
+        for it in self._resize_group:
+            if _alive(it):
+                it.sync_from_model()
+        self._resize_group_base = None
+
+    def _apply_group_resize(self, primary) -> None:
+        import math
+        from leathercad.shapes import Rectangle, Ellipse, Polygon
+        if self._resize_group_base is None:
+            self._begin_group_resize(primary)
+            return
+        (pc0x, pc0y), (phx0, phy0), members = self._resize_group_base
+        (pc1x, pc1y), (phx1, phy1) = self._primary_box_world(primary)
+        sx = phx1 / phx0 if phx0 > 1e-9 else 1.0
+        sy = phy1 / phy0 if phy0 > 1e-9 else 1.0
+        s_uni = math.sqrt(max(sx * sy, 1e-9))
+        for it, base in members:
+            if not _alive(it):
+                continue
+            m = it.model
+            if isinstance(it, TextItem):
+                # map the label's CENTRE through the box scale, keep the glyphs
+                # uniform, and cheaply scale the cached contours (no per-frame
+                # re-bake -> no strobe; the crisp re-bake happens on release).
+                lc0x, lc0y = base["lc"]
+                c0x, c0y = base["x"] + lc0x, base["y"] + lc0y
+                ncx = pc1x + (c0x - pc0x) * sx
+                ncy = pc1y + (c0y - pc0y) * sy
+                m.size = max(0.5, base["size"] * s_uni)
+                m.contours = [[Vec2(p.x * s_uni, p.y * s_uni) for p in c]
+                              for c in base["contours"]]
+                it._needs_rebake = True
+                m.transform.x = ncx - lc0x * s_uni
+                m.transform.y = ncy - lc0y * s_uni
+            else:
+                m.transform.x = pc1x + (base["x"] - pc0x) * sx
+                m.transform.y = pc1y + (base["y"] - pc0y) * sy
+                if isinstance(m, Rectangle):
+                    m.width = base["width"] * sx
+                    m.height = base["height"] * sy
+                    m.corner_radius = base["corner_radius"] * min(sx, sy)
+                elif isinstance(m, Ellipse):
+                    m.rx = base["rx"] * sx
+                    m.ry = base["ry"] * sy
+                elif isinstance(m, Polygon):
+                    m.points = [Vec2(p.x * sx, p.y * sy) for p in base["points"]]
+            it.sync_from_model(recompute_holes=False)
 
     # -- tracked scene item lifetime -----------------------------------
     def _add_item(self, item):
@@ -3568,7 +3680,33 @@ class Canvas(QGraphicsView):
             if it.resize_extents() is not None:
                 self.show_resize_handles(it)
                 return
+        primary, members = self._group_resize_target()
+        if primary is not None:
+            self.show_resize_handles(primary, group=members)
+            return
         self.clear_resize_handles()
+
+    def _group_resize_target(self):
+        """If the selection is exactly one group, return ``(primary, members)``:
+        the outline to hang the grips on plus the siblings that scale with it.
+        Otherwise ``(None, [])``."""
+        sel = {it for it in self._selected_shapes
+               if _alive(it) and it.isSelected()}
+        if len(sel) < 2:
+            return None, []
+        gids = {getattr(self._item_model(it), "group_id", None) for it in sel}
+        if len(gids) != 1 or None in gids:
+            return None, []
+        shapes = [it for it in sel if isinstance(it, ShapeItem)
+                  and it.resize_extents() is not None
+                  and abs(getattr(it.model.transform, "rotation", 0.0)) < 1e-6]
+        if not shapes:
+            return None, []
+        # the largest outline is the frame the user thinks of as "the object"
+        primary = max(shapes, key=lambda it: (lambda e: e[0] * e[1])(
+            it.resize_extents()))
+        members = [it for it in sel if it is not primary]
+        return primary, members
 
     def _reposition_resize_handles(self) -> None:
         # never reposition the handle the user is actively dragging -- that

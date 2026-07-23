@@ -224,3 +224,45 @@ def test_unknown_or_sentinel_family_falls_back_to_bundled(qapp=None):
         assert len(got) == len(ref)                    # same glyphs as the default
         # and the geometry matches the bundled family (not some other font)
         assert abs(got[0][0].x - ref[0][0].x) < 1e-6
+
+
+def test_text_resize_pins_opposite_corner_to_the_pull():
+    """Dragging a corner handle grows the text toward that corner while the
+    OPPOSITE corner stays put -- not scaling about the middle."""
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from leathercad_app import fonts
+    fam = fonts.register_bundled_fonts()
+    from leathercad_app.items import bake_text_contours, TextItem, ResizeHandle
+    from leathercad_app.mainwindow import MainWindow
+
+    contours = bake_text_contours("Size", fam, 10.0)
+    doc = Document()
+    doc.texts.append(TextShape(text="Size", font_family=fam, size=10.0,
+                               contours=[[Vec2(p.x, p.y) for p in c] for c in contours],
+                               transform=Transform(x=20, y=15), layer="Engrave"))
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    it = next(i for i in c.scene_obj.items() if isinstance(i, TextItem))
+    c.scene_obj.clearSelection()
+    it.setSelected(True)
+    c.selection_changed()
+
+    grip = next(g for g in c.scene_obj.items()
+                if isinstance(g, ResizeHandle) and g.grip == (1, 1))
+    gx, gy = grip.grip
+
+    def opposite_corner_world(item):
+        hx, hy = item.resize_extents()
+        cx, cy = item.resize_center()
+        return item.model.transform.apply(Vec2(cx - gx * hx, cy - gy * hy))
+
+    before = opposite_corner_world(it)
+    size0 = it.model.size
+    gw = grip._grip_world()
+    grip._apply_resize(Vec2(gw.x + 25.0, gw.y + 18.0))   # pull the corner out
+    after = opposite_corner_world(it)
+
+    assert it.model.size > size0                          # it grew
+    assert (after - before).length() < 1e-6              # opposite corner pinned

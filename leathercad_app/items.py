@@ -346,10 +346,15 @@ class ResizeHandle(QGraphicsItem):
         hx_new = max(0.5, hx_new)
         hy_new = max(0.5, hy_new)
         owner.set_resize_extents(hx_new, hy_new)
-        # keep the anchor pinned. Scaling preserves the local box centre, so the
-        # opposite corner is (cx,cy) +/- the new half-extents; place the shape so
-        # it still lands on anchor_world.
-        anchor_new = Vec2(cx - gx * hx_new, cy - gy * hy_new)
+        # Keep the anchor (opposite corner) pinned. Pin against the box the
+        # owner ACTUALLY produced -- an owner like text re-bakes uniformly to
+        # different extents and a shifted centre, so using the requested values
+        # would let the anchor drift (text appeared to scale from its middle).
+        # For shapes the realized box equals the request, so this is a no-op.
+        ext2 = owner.resize_extents() or (hx_new, hy_new)
+        hx_a, hy_a = ext2
+        cx2, cy2 = owner.resize_center()
+        anchor_new = Vec2(cx2 - gx * hx_a, cy2 - gy * hy_a)
         o = anchor_world - t.apply_dir(anchor_new)
         t.x, t.y = o.x, o.y
         owner.sync_from_model(recompute_holes=False)   # smooth: holes on release
@@ -607,18 +612,22 @@ class TextItem(QGraphicsItem):
 
     def set_resize_extents(self, hx: float, hy: float) -> None:
         """Decision D: RE-BAKE the lettering at the new cap height instead of
-        scaling the flat contours. The new size is driven by the VERTICAL grip so
-        the letters keep their aspect ratio (a font scales uniformly); the
-        horizontal grip only rides along."""
+        scaling the flat contours. A font scales UNIFORMLY, so pick the uniform
+        factor from whichever grip axis the user actually pulled (the one whose
+        requested half-extent changed most) -- so any corner/edge handle resizes
+        the text and it keeps its aspect. ``_apply_resize`` re-reads the realized
+        box afterwards to keep the opposite corner pinned to the pull."""
         box = self._local_bbox()
         if box is None:
             return
-        _minx, miny, _maxx, maxy = box
-        h = maxy - miny
-        if h < 1e-9:
+        minx, miny, maxx, maxy = box
+        w, h = maxx - minx, maxy - miny
+        if w < 1e-9 or h < 1e-9:
             return
-        new_size = self.model.size * (2.0 * hy / h)
-        self.model.size = max(0.5, new_size)
+        sx = (2.0 * hx) / w
+        sy = (2.0 * hy) / h
+        s = sx if abs(sx - 1.0) >= abs(sy - 1.0) else sy   # dominant pulled axis
+        self.model.size = max(0.5, self.model.size * s)
         self._rebake()
 
     def _rebake(self) -> None:

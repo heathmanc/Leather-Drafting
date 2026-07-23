@@ -27,8 +27,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from PySide6.QtWidgets import QApplication          # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox   # noqa: E402
 from PySide6.QtCore import QPointF                   # noqa: E402
+from PySide6.QtGui import QPainter, QColor, QFontDatabase   # noqa: E402
 
 from leathercad.document import Document             # noqa: E402
 from leathercad.geometry import Vec2                 # noqa: E402
@@ -261,6 +262,61 @@ def shot_stitch_settings():
     _close(app, win)
 
 
+# ---------------------------------------------------------------------------
+# 7. Job / material cost estimator
+# ---------------------------------------------------------------------------
+def shot_estimator():
+    from leathercad.estimate import estimate_project, format_report
+    doc = Document("Bifold wallet")
+    add = doc.add_shape
+    add(Rectangle(width=212, height=95, corner_radius=9,
+                  transform=Transform(x=0, y=120), layer="Cut",
+                  stitch=_st(3.85, "oblique"), name="Outer shell"))
+    add(Rectangle(width=204, height=88, corner_radius=8,
+                  transform=Transform(x=0, y=14), layer="Cut",
+                  stitch=_st(3.85, "oblique"), name="Interior panel"))
+    for i in range(2):
+        add(Rectangle(width=98, height=60, corner_radius=6,
+                      transform=Transform(x=-170, y=92 - i * 74), layer="Cut",
+                      stitch=_st(3.38, "french", inset=3.0),
+                      name=f"Card pocket {i + 1}"))
+    add(Rectangle(width=98, height=70, corner_radius=6,
+                  transform=Transform(x=170, y=88), layer="Cut",
+                  stitch=_st(3.38, "french", inset=3.0), name="T-pocket"))
+    add(Circle(rx=31, ry=31, transform=Transform(x=170, y=-6), layer="Cut",
+               stitch=_st(3.0, "round", inset=3.0), name="Coin pouch"))
+
+    app, win = _open(doc, w=1680, h=1000)
+
+    # real numbers, priced up so the cost block appears
+    est = estimate_project(doc, thickness_mm=3.4, tail_mm=150.0, feed_mm_s=20.0,
+                           usable_pct=75.0, price_per_sqft=9.5,
+                           price_thread_per_m=0.18, price_laser_per_min=1.50)
+    report = format_report(est, usable_pct=75.0)
+
+    # the app's own report dialog, composited over the workspace
+    box = QMessageBox(win)
+    box.setWindowTitle("Job estimate")
+    box.setText(report)
+    box.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+    box.setStandardButtons(QMessageBox.StandardButton.Ok)
+    box.adjustSize()
+    for _ in range(4):
+        app.processEvents()
+
+    win_pm = win.grab()
+    dlg_pm = box.grab()
+    p = QPainter(win_pm)
+    p.fillRect(win_pm.rect(), QColor(15, 20, 30, 90))     # focus scrim
+    x = (win_pm.width() - dlg_pm.width()) // 2
+    y = (win_pm.height() - dlg_pm.height()) // 2
+    p.drawPixmap(x, y, dlg_pm)
+    p.end()
+    win_pm.save(str(OUT / "07_cost_estimator.png"))
+    print(f"  07_cost_estimator.png  {win_pm.width()}x{win_pm.height()}")
+    _close(app, win)
+
+
 if __name__ == "__main__":
     QApplication.instance() or QApplication([])   # fonts need a QGuiApplication
     OUT.mkdir(parents=True, exist_ok=True)
@@ -271,4 +327,5 @@ if __name__ == "__main__":
     shot_dark()
     shot_registration()
     shot_stitch_settings()
+    shot_estimator()
     print("done ->", OUT)

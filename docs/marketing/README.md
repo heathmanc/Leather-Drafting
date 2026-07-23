@@ -84,6 +84,18 @@ handling — and the pattern re-fits live as you change any of them.
 > Set the punch style and pitch to match your iron, and the holes re-space
 > instantly — 3.85 mm oblique here, or type any pitch you own.
 
+## 07_cost_estimator.png — quote a job in one click
+
+The **Job estimate** dialog over a real 6-piece wallet (611 holes). From the
+drawing alone it works out pieces, stitch holes, thread length, cut/score/
+engrave lengths, leather used vs. leather to *buy* (accounting for hide yield),
+layout waste, laser run-time, and — with your prices plugged in — a full cost
+breakdown with a total. Everything a maker needs to quote a job.
+
+**Webpage caption:**
+> Know the number before you cut: thread, leather, waste and laser time turned
+> into a real cost — this wallet, $12.84 in materials.
+
 ---
 
 ### Selling points to repeat on the page

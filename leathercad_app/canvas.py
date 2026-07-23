@@ -4105,13 +4105,15 @@ class Canvas(QGraphicsView):
     # -- move-groups (select & move several items as one) --------------
     @staticmethod
     def _item_model(item):
-        """The model object backing a scene item (shape / hole / seam)."""
+        """The model object backing a scene item (shape / hole / seam / text)."""
         if isinstance(item, ShapeItem):
             return item.model
         if isinstance(item, HoleItem):
             return item.hole
         if isinstance(item, StitchLineItem):
             return item.line
+        if isinstance(item, TextItem):
+            return item.model
         return None
 
     def make_group(self) -> None:

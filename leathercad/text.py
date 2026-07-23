@@ -9,7 +9,7 @@ so the GUI can re-bake the contours when they are edited.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 from .geometry import Vec2
 from .shapes import Transform, _next_id
@@ -29,6 +29,9 @@ class TextShape:
     layer: str = "Engrave"
     opacity: float = 1.0
     text_id: str = field(default_factory=lambda: _next_id("text"))
+    # Move-group membership: items sharing a group_id move together (None -> not
+    # grouped) -- lets a size-label ride with its template shape.
+    group_id: Optional[str] = None
     kind: str = "text"
 
     def world_contours(self) -> List[List[Vec2]]:
@@ -56,6 +59,7 @@ class TextShape:
             "layer": self.layer,
             "opacity": self.opacity,
             "text_id": self.text_id,
+            "group_id": self.group_id,
             "transform": {"x": self.transform.x, "y": self.transform.y,
                           "rotation": self.transform.rotation,
                           "mirror_x": self.transform.mirror_x},
@@ -76,6 +80,7 @@ class TextShape:
             layer=d.get("layer", "Engrave"),
             opacity=d.get("opacity", 1.0),
             text_id=d.get("text_id", _next_id("text")),
+            group_id=d.get("group_id"),
             transform=Transform(x=t.get("x", 0.0), y=t.get("y", 0.0),
                                 rotation=t.get("rotation", 0.0),
                                 mirror_x=t.get("mirror_x", False)),

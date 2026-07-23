@@ -1,14 +1,16 @@
-"""The Parts dock: your personal library of reusable pieces."""
+"""The Parts dock: built-in size templates + your personal library, by category."""
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
-                               QListWidgetItem, QPushButton, QLabel,
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget,
+                               QTreeWidgetItem, QPushButton, QLabel,
                                QInputDialog, QMessageBox)
 
 from . import partslib
 from .items import ShapeItem
+
+MY_PARTS = "My parts"
 
 
 class PartsPanel(QWidget):
@@ -18,10 +20,12 @@ class PartsPanel(QWidget):
         self.base_dir = base_dir            # tests point this at a tmp dir
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
-        root.addWidget(QLabel("Parts library (yours, across all documents)"))
-        self.list = QListWidget()
-        self.list.itemDoubleClicked.connect(lambda _i: self.place_selected())
-        root.addWidget(self.list, 1)
+        root.addWidget(QLabel("Parts library — templates + your saved parts"))
+        self.tree = QTreeWidget()
+        self.tree.setHeaderHidden(True)
+        self.tree.setUniformRowHeights(True)
+        self.tree.itemDoubleClicked.connect(lambda _i, _c: self.place_selected())
+        root.addWidget(self.tree, 1)
         row = QHBoxLayout()
         self.btn_save = QPushButton("Save selection…")
         self.btn_place = QPushButton("Place")
@@ -34,21 +38,43 @@ class PartsPanel(QWidget):
         self.btn_delete.clicked.connect(self.delete_selected)
         self.reload()
 
+    def _category(self, title: str) -> QTreeWidgetItem:
+        cat = QTreeWidgetItem([title])
+        cat.setFlags(Qt.ItemIsEnabled)      # a header: not selectable/placeable
+        f = cat.font(0)
+        f.setBold(True)
+        cat.setFont(0, f)
+        self.tree.addTopLevelItem(cat)
+        cat.setExpanded(True)
+        return cat
+
+    def _leaf(self, parent, label: str, data: str, tip: str) -> QTreeWidgetItem:
+        it = QTreeWidgetItem([label])
+        it.setData(0, Qt.UserRole, data)
+        it.setToolTip(0, tip)
+        parent.addChild(it)
+        return it
+
     def reload(self):
         from . import builtin_parts
-        self.list.clear()
-        # built-in size templates (currency + cards) always come first
-        for name, key in builtin_parts.list_builtins():
-            item = QListWidgetItem("◆ " + name)
-            item.setData(Qt.UserRole, "builtin:" + key)
-            item.setToolTip("Built-in size template — double-click to place")
-            self.list.addItem(item)
-        # then the user's own saved parts
-        for name, path in partslib.list_parts(self.base_dir):
-            item = QListWidgetItem(name)
-            item.setData(Qt.UserRole, str(path))
-            item.setToolTip("Double-click to place at the view centre")
-            self.list.addItem(item)
+        self.tree.clear()
+        # built-in size templates, grouped by category
+        for title, rows in builtin_parts.categories():
+            cat = self._category(title)
+            for name, key in rows:
+                self._leaf(cat, name, "builtin:" + key,
+                           "Built-in size template — double-click to place")
+        # the user's own saved parts
+        my = self._category(MY_PARTS)
+        parts = partslib.list_parts(self.base_dir)
+        for name, path in parts:
+            self._leaf(my, name, str(path),
+                       "Double-click to place at the view centre")
+        if not parts:
+            hint = QTreeWidgetItem(["(select shapes → Save selection…)"])
+            hint.setFlags(Qt.ItemIsEnabled)
+            hint.setDisabled(True)
+            my.addChild(hint)
 
     def save_selection(self, name: str | None = None):
         from .items import TextItem
@@ -69,12 +95,12 @@ class PartsPanel(QWidget):
                            copy.deepcopy(texts), self.base_dir)
         self.reload()
 
-    def _current_path(self):
-        it = self.list.currentItem()
-        return it.data(Qt.UserRole) if it and it.data(Qt.UserRole) else None
+    def _current_data(self):
+        it = self.tree.currentItem()
+        return it.data(0, Qt.UserRole) if it else None
 
     def place_selected(self):
-        p = self._current_path()
+        p = self._current_data()
         if not p:
             return
         if p.startswith("builtin:"):
@@ -85,7 +111,7 @@ class PartsPanel(QWidget):
         self.canvas.place_shapes(shapes, texts)
 
     def delete_selected(self):
-        p = self._current_path()
+        p = self._current_data()
         if not p:
             return
         if p.startswith("builtin:"):

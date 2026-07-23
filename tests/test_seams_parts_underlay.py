@@ -93,6 +93,19 @@ def test_parts_save_list_place_delete(qapp, tmp_path):
     assert partslib.list_parts(base) == []
 
 
+def _find_leaf(tree, substr):
+    """The first placeable tree leaf whose label contains ``substr``."""
+    from PySide6.QtWidgets import QTreeWidgetItemIterator
+    from PySide6.QtCore import Qt
+    it = QTreeWidgetItemIterator(tree)
+    while it.value():
+        node = it.value()
+        if node.data(0, Qt.UserRole) and substr in node.text(0):
+            return node
+        it += 1
+    return None
+
+
 def test_parts_panel_roundtrip(qapp, tmp_path):
     from leathercad_app.partspanel import PartsPanel
     doc = Document()
@@ -102,9 +115,9 @@ def test_parts_panel_roundtrip(qapp, tmp_path):
     panel = PartsPanel(win.canvas, base_dir=str(tmp_path))
     _select_all_shapes(win.canvas)
     panel.save_selection(name="Strap end")            # bypasses the dialog
-    names = [panel.list.item(i).text() for i in range(panel.list.count())]
-    assert "Strap end" in names
-    panel.list.setCurrentRow(names.index("Strap end"))
+    node = _find_leaf(panel.tree, "Strap end")
+    assert node is not None                           # saved under "My parts"
+    panel.tree.setCurrentItem(node)
     panel.place_selected()
     assert len(win.doc.shapes) == 2
 
@@ -164,8 +177,10 @@ def test_fit_to_content_ignores_underlay(qapp, tmp_path):
 def test_builtin_templates_have_currency_and_card_sizes(qapp):
     from leathercad_app import fonts, builtin_parts
     fonts.register_bundled_fonts()
-    keys = {k for _n, k in builtin_parts.list_builtins()}
-    assert {"us_bill", "eur_50", "card_id1", "card_biz"} <= keys
+    cats = dict(builtin_parts.categories())
+    assert {"US currency", "Euro currency", "UK currency", "Cards"} <= set(cats)
+    keys = {k for _cat, rows in builtin_parts.categories() for _n, k in rows}
+    assert {"us_bill", "eur_50", "gbp_20", "card_id1", "card_biz"} <= keys
 
     shapes, texts = builtin_parts.build_builtin("us_bill")
     assert len(shapes) == 1
@@ -177,6 +192,9 @@ def test_builtin_templates_have_currency_and_card_sizes(qapp):
     joined = " ".join(t.text for t in texts)
     assert "156" in joined and "66" in joined and "mm" in joined
     assert all(t.layer == "Engrave" for t in texts)
+    # the label is grouped to its outline (one shared, non-null group_id)
+    gids = {shapes[0].group_id} | {t.group_id for t in texts}
+    assert len(gids) == 1 and None not in gids
 
     # the credit card is ID-1 with rounded corners
     card, _ct = builtin_parts.build_builtin("card_id1")
@@ -215,15 +233,41 @@ def test_parts_panel_lists_builtins_and_blocks_their_delete(qapp, tmp_path,
     monkeypatch.setattr(partspanel.QMessageBox, "information",
                         lambda *a, **k: None)
     panel = PartsPanel(_win().canvas, base_dir=str(tmp_path))
-    labels = [panel.list.item(i).text() for i in range(panel.list.count())]
-    assert any("US bill" in s for s in labels)
-    assert any("Credit / bank card" in s for s in labels)
+    # categories are top-level headers
+    cats = [panel.tree.topLevelItem(i).text(0)
+            for i in range(panel.tree.topLevelItemCount())]
+    assert "US currency" in cats and "UK currency" in cats and "Cards" in cats
+    for want in ("US bill", "£20", "Credit / bank card"):
+        assert _find_leaf(panel.tree, want) is not None, want
+
     # selecting a built-in and hitting delete must not remove it
-    row = next(i for i in range(panel.list.count())
-               if "US bill" in panel.list.item(i).text())
-    panel.list.setCurrentRow(row)
+    node = _find_leaf(panel.tree, "US bill")
+    panel.tree.setCurrentItem(node)
+    n_before = panel.tree.topLevelItem(0).childCount()
     panel.delete_selected()
-    assert panel.list.count() == len(labels)
-    # and placing it drops the outline + label into the doc
+    assert panel.tree.topLevelItem(0).childCount() == n_before
+    # and placing it drops the grouped outline + label into the doc
     panel.place_selected()
     assert len(panel.canvas.doc.shapes) == 1 and len(panel.canvas.doc.texts) == 2
+    gids = {panel.canvas.doc.shapes[0].group_id} | {
+        t.group_id for t in panel.canvas.doc.texts}
+    assert len(gids) == 1 and None not in gids       # label grouped to shape
+
+
+def test_placed_template_selects_as_a_group(qapp):
+    """Pressing a placed template's outline selects its size label too, so they
+    move together (grouping is wired through the canvas, not just the data)."""
+    from leathercad_app import fonts, builtin_parts
+    from leathercad_app.items import ShapeItem, TextItem
+    fonts.register_bundled_fonts()
+    win = _win()
+    c = win.canvas
+    shapes, texts = builtin_parts.build_builtin("us_bill")
+    c.place_shapes(shapes, texts)
+    shp = next(i for i in c.scene_obj.items() if isinstance(i, ShapeItem))
+    labels = [i for i in c.scene_obj.items() if isinstance(i, TextItem)]
+    assert len(labels) == 2
+    c.scene_obj.clearSelection()
+    c.select_group_of(shp)                    # what a mouse-press does
+    assert shp.isSelected()
+    assert all(t.isSelected() for t in labels)

@@ -353,7 +353,7 @@ class Canvas(QGraphicsView):
         for it in self.scene_obj.items():
             if it in excl:
                 continue
-            if isinstance(it, ShapeItem):
+            if isinstance(it, (ShapeItem, TextItem)):
                 pts.extend(it.world_snap_nodes())
             elif isinstance(it, StitchLineItem):
                 pts.extend(it.line.points)
@@ -448,7 +448,7 @@ class Canvas(QGraphicsView):
         of the sub-segments those intersections carve out ('mid')."""
         out = []
         for it in self.scene_obj.items():
-            if isinstance(it, ShapeItem):
+            if isinstance(it, (ShapeItem, TextItem)):
                 out.extend(it.world_snap_nodes_typed())
             elif isinstance(it, StitchLineItem):
                 out.extend((p, "end") for p in it.line.points)

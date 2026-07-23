@@ -340,3 +340,83 @@ def test_standalone_text_resize_is_stable_not_jittery():
         assert (opp_corner() - base).length() < 1e-4   # opposite corner pinned
         prev = it.model.size
     assert it.model.size > 8.0                         # and it actually grew
+
+
+def test_text_box_exposes_bbox_snap_points():
+    """A text box carries 9 snap points -- 4 corners, 4 edge midpoints and the
+    centre -- so it can be grabbed/placed by a meaningful handle, not just the
+    invisible baseline origin."""
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from leathercad_app import fonts
+    from leathercad_app.items import bake_text_contours, TextItem
+    fam = fonts.register_bundled_fonts()
+    contours = bake_text_contours("AB", fam, 10.0)
+    m = TextShape(text="AB", font_family=fam, size=10.0,
+                  contours=[[Vec2(p.x, p.y) for p in c] for c in contours],
+                  transform=Transform(x=20, y=15), layer="Engrave")
+    it = TextItem(m)
+
+    nodes = it.world_snap_nodes()
+    typed = it.world_snap_nodes_typed()
+    assert len(nodes) == 9 and len(typed) == 9
+    kinds = [k for _p, k in typed]
+    assert kinds.count("end") == 4       # corners
+    assert kinds.count("mid") == 4       # edge midpoints
+    assert kinds.count("center") == 1    # centre
+
+    # the corners are the world bbox extremes; the centre is their average
+    minx, miny, maxx, maxy = it._local_bbox()
+    t = m.transform
+    want = {(t.apply(Vec2(minx, miny)).x, t.apply(Vec2(minx, miny)).y),
+            (t.apply(Vec2(maxx, maxy)).x, t.apply(Vec2(maxx, maxy)).y)}
+    got = {(round(n.x, 6), round(n.y, 6)) for n in nodes}
+    for wx, wy in want:
+        assert (round(wx, 6), round(wy, 6)) in got
+    ctr = next(p for p, k in typed if k == "center")
+    assert abs(ctr.x - t.apply(Vec2((minx + maxx) / 2, (miny + maxy) / 2)).x) < 1e-6
+
+
+def test_text_is_a_snap_target_and_snaps_by_its_box():
+    """Other objects can snap TO a text box, and dragging the text snaps one of
+    its box handles onto a nearby node."""
+    from PySide6.QtCore import QPointF
+    from leathercad_app import canvas as cm, fonts
+    from leathercad.shapes import Rectangle
+    from leathercad_app.items import bake_text_contours, TextItem, ShapeItem
+    fam = fonts.register_bundled_fonts()
+    contours = bake_text_contours("AB", fam, 10.0)
+    doc = Document()
+    doc.add_shape(Rectangle(width=40, height=20, transform=Transform(x=100, y=100)))
+    doc.texts.append(TextShape(text="AB", font_family=fam, size=10.0,
+                     contours=[[Vec2(p.x, p.y) for p in c] for c in contours],
+                     transform=Transform(x=20, y=15), layer="Engrave"))
+    c = cm.Canvas(doc)
+    c.rebuild()
+    c.snap_to_nodes = True
+    c.snap_to_grid = False
+    txt = next(i for i in c.scene_obj.items() if isinstance(i, TextItem))
+    rect = next(i for i in c.scene_obj.items() if isinstance(i, ShapeItem))
+
+    # (1) text is a TARGET: its nodes show up as snap candidates for other items
+    def near(a, b):
+        return abs(a.x - b.x) < 1e-6 and abs(a.y - b.y) < 1e-6
+    cands = c._snap_candidates(exclude=rect)
+    tnodes = txt.world_snap_nodes()
+    assert any(any(near(cd, n) for n in tnodes) for cd in cands)
+
+    # (2) dragging the text snaps one of its 9 box handles onto a rect node
+    rect_nodes = rect.world_snap_nodes()
+    corner = rect_nodes[0]
+    c.scene_obj.clearSelection()
+    txt.setSelected(True)
+    c.begin_move_snap(txt)
+    off = txt._snap_offsets[0]                       # bring a box handle ~0.4mm off
+    req = QPointF(corner.x - off.x + 0.3, corner.y - off.y + 0.3)
+    snapped = c.snap_move(txt, req)
+    assert (snapped.x(), snapped.y()) != (req.x(), req.y())   # it snapped
+    landed = [Vec2(snapped.x() + o.x, snapped.y() + o.y)
+              for o in txt._snap_offsets]
+    # a box handle came to rest exactly on one of the rect's nodes
+    assert any(near(p, rn) for p in landed for rn in rect_nodes)
+    c.end_move_snap()

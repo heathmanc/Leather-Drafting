@@ -546,7 +546,7 @@ class TextItem(QGraphicsItem):
             | QGraphicsItem.ItemSendsGeometryChanges
         )
         self.setZValue(30)
-        self._snap_offsets = [Vec2(0.0, 0.0)]     # snap by the text origin
+        self._snap_offsets = [Vec2(0.0, 0.0)]     # replaced by bbox nodes in sync
         self._resize_base = None    # (baseline contours, baseline size) mid-drag
         self._needs_rebake = False  # a crisp re-bake is owed on the next full sync
         self.sync_from_model()
@@ -578,11 +578,46 @@ class TextItem(QGraphicsItem):
             self._path.closeSubpath()
         self._color = QColor(self.canvas.layer_color(self.model.layer)
                              if self.canvas else "#888888")
+        # Bounding-box snap points (4 corners, 4 edge midpoints, centre) so text
+        # snaps BY a meaningful handle and is a snap TARGET for other objects --
+        # not just the invisible baseline origin. Local (pre-orientation) points,
+        # oriented through the transform exactly like ShapeItem's snap nodes.
+        self._snap_typed_local = self._bbox_snap_nodes()
+        node_locals = [p for p, _k in self._snap_typed_local]
+        self._snap_local = node_locals
+        self._snap_offsets = ([t.apply_dir(p) for p in node_locals]
+                              or [Vec2(0.0, 0.0)])
+        self._snap_offset_kinds = [k for _p, k in self._snap_typed_local]
         self.setPos(t.x, t.y)
         self.setOpacity(max(0.05, min(1.0, self.model.opacity)))
         r = self._path.boundingRect()
         self._brect = r.adjusted(-2, -2, 2, 2)
         self.update()
+
+    def _bbox_snap_nodes(self):
+        """``[(local_point, kind), ...]`` for the glyph bounding box: corners
+        ('end'), edge midpoints ('mid') and centre ('center')."""
+        box = self._local_bbox()
+        if box is None:
+            return []
+        minx, miny, maxx, maxy = box
+        cx, cy = (minx + maxx) / 2.0, (miny + maxy) / 2.0
+        return [
+            (Vec2(minx, miny), "end"), (Vec2(maxx, miny), "end"),
+            (Vec2(maxx, maxy), "end"), (Vec2(minx, maxy), "end"),
+            (Vec2(cx, miny), "mid"), (Vec2(maxx, cy), "mid"),
+            (Vec2(cx, maxy), "mid"), (Vec2(minx, cy), "mid"),
+            (Vec2(cx, cy), "center"),
+        ]
+
+    def world_snap_nodes(self):
+        t = self.model.transform
+        return [t.apply(p) for p in getattr(self, "_snap_local", [])]
+
+    def world_snap_nodes_typed(self):
+        t = self.model.transform
+        return [(t.apply(p), kind)
+                for p, kind in getattr(self, "_snap_typed_local", [])]
 
     def boundingRect(self):
         return self._brect

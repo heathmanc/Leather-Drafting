@@ -3546,6 +3546,10 @@ class Canvas(QGraphicsView):
 
     def set_line_width(self, w: float) -> None:
         self.line_width = max(0.2, w)
+        # the width is read in paint(); nothing else marks the items dirty, so
+        # invalidate the scene now or the change wouldn't show until the next
+        # unrelated redraw (a click, a zoom, a move).
+        self.scene_obj.update()
 
     def preview_color(self) -> QColor:
         """Colour for the in-progress drawing preview (user's draw colour, or a

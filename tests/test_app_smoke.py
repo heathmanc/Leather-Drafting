@@ -2488,3 +2488,30 @@ def test_aspect_lock_on_resize(qapp):
     assert c.aspect_lock is True
     win.act_aspect_lock.setChecked(False)
     assert c.aspect_lock is False
+
+
+def test_line_width_change_repaints_live(qapp):
+    """Changing the toolbar line-width must take effect immediately, not only
+    after some later unrelated redraw (the 'have to click on something' bug)."""
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    c = win.canvas
+
+    calls = {"n": 0}
+    orig = c.scene_obj.update
+    def counting(*a, **k):
+        calls["n"] += 1
+        return orig(*a, **k)
+    c.scene_obj.update = counting
+    try:
+        win.line_width_spin.setValue(1.0)          # known start (may be a no-op)
+        calls["n"] = 0
+        win.line_width_spin.setValue(4.5)          # the edit under test -> changes
+    finally:
+        c.scene_obj.update = orig
+
+    assert abs(c.line_width - 4.5) < 1e-9          # value applied
+    assert abs(c.outline_width() - 4.5) < 1e-9     # pens will read the new width
+    assert calls["n"] >= 1                          # ...and it repainted at once

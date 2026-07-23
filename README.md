@@ -79,8 +79,9 @@ page — no Python needed:
 
 * **Windows** — `Leather-Drafting-Setup-<version>.exe` (per-user install, no
   admin prompt).
-* **macOS** — `Leather-Drafting-<version>-macOS.dmg`; open it and drag the app
-  to Applications. It's unsigned, so the first launch is **right-click → Open**
+* **macOS** — `Leather-Drafting-<version>-macOS-arm64.dmg` for Apple Silicon
+  (M1/M2/M3…) or `-x86_64.dmg` for Intel; open it and drag the app to
+  Applications. It's unsigned, so the first launch is **right-click → Open**
   (or `xattr -dr com.apple.quarantine /Applications/Leather-Drafting.app`).
 
 Both are built by the **Release builds** GitHub Action: push a `v0.2.0`-style

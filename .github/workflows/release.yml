@@ -2,8 +2,9 @@ name: Release builds
 
 # Builds downloadable desktop packages and publishes them to a public GitHub
 # Release:
-#   * Windows -> Leather-Drafting-Setup-<ver>.exe   (Inno Setup installer)
-#   * macOS   -> Leather-Drafting-<ver>-macOS.dmg    (drag to Applications)
+#   * Windows        -> Leather-Drafting-Setup-<ver>.exe        (Inno Setup)
+#   * macOS Apple Si -> Leather-Drafting-<ver>-macOS-arm64.dmg  (drag to /Apps)
+#   * macOS Intel    -> Leather-Drafting-<ver>-macOS-x86_64.dmg
 #
 # Trigger by pushing a tag like v0.2.0, or Actions -> "Release builds" ->
 # Run workflow (pick a version; leave "publish" checked to make a Release).
@@ -99,9 +100,17 @@ jobs:
 
   macos:
     needs: version
-    # Intel build (x86_64) so it runs on both Intel and Apple-Silicon Macs
-    # (the latter via Rosetta). Unsigned -- no Apple Developer ID.
-    runs-on: macos-13
+    # Two native builds: arm64 on the Apple-Silicon runner (macos-14) for
+    # M-series Macs, and x86_64 on the Intel runner (macos-13). Both unsigned.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            arch: arm64
+          - runner: macos-13
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -117,6 +126,14 @@ jobs:
       - name: Build the app (PyInstaller)
         working-directory: packaging
         run: pyinstaller --noconfirm leather-drafting.spec
+
+      - name: Check the build architecture
+        working-directory: packaging
+        run: |
+          BIN="dist/Leather-Drafting.app/Contents/MacOS/Leather-Drafting"
+          file "$BIN"
+          lipo -archs "$BIN" | grep -q "${{ matrix.arch }}" \
+            || { echo "expected ${{ matrix.arch }}"; exit 1; }
 
       - name: Smoke-test the build
         working-directory: packaging
@@ -135,13 +152,14 @@ jobs:
           ln -s /Applications "$STAGE/Applications"      # drag-to-install target
           mkdir -p installer
           hdiutil create -volname "Leather-Drafting" -srcfolder "$STAGE" \
-            -ov -format UDZO "installer/Leather-Drafting-${VER}-macOS.dmg"
+            -ov -format UDZO \
+            "installer/Leather-Drafting-${VER}-macOS-${{ matrix.arch }}.dmg"
           ls -lh installer
 
       - name: Upload macOS dmg
         uses: actions/upload-artifact@v4
         with:
-          name: macos-dmg
+          name: macos-dmg-${{ matrix.arch }}
           path: packaging/installer/*.dmg
           if-no-files-found: error
 

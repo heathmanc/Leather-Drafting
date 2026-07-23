@@ -115,20 +115,16 @@ def test_loose_holes_count_and_expand_footprint():
     assert est.footprint_mm2 > 40.0 * 40.0
 
 
-def test_laser_time_and_cost_only_when_asked():
+def test_cost_only_when_asked():
     doc = Document()
     doc.add_shape(_stitched_rect())
     base = estimate_project(doc)
-    assert base.laser_seconds is None and base.cost == {}
+    assert base.cost == {}
 
-    priced = estimate_project(doc, feed_mm_s=20.0, pierce_s=0.05,
-                              price_per_sqft=8.0, price_thread_per_m=0.5,
-                              price_laser_per_min=1.0)
-    assert priced.laser_seconds is not None and priced.laser_seconds > 0.0
-    assert set(priced.cost) == {"leather", "thread", "laser", "total"}
+    priced = estimate_project(doc, price_per_sqft=8.0, price_thread_per_m=0.5)
+    assert set(priced.cost) == {"leather", "thread", "total"}
     assert abs(priced.cost["total"]
-               - (priced.cost["leather"] + priced.cost["thread"]
-                  + priced.cost["laser"])) < 1e-9
+               - (priced.cost["leather"] + priced.cost["thread"])) < 1e-9
 
 
 def test_waste_pct_between_zero_and_hundred():

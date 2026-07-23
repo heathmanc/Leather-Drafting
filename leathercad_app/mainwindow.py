@@ -1311,7 +1311,7 @@ class MainWindow(QMainWindow):
 
     def _job_estimate(self):
         """One dialog for the numbers a maker quotes a job with: pieces, holes,
-        thread, cut/score/engrave lengths, leather + waste, laser time, cost.
+        thread, cut/score/engrave lengths, leather + waste, cost.
         Prices default to 0 and their cost lines simply don't show until set."""
         from PySide6.QtWidgets import (QDialog, QFormLayout, QDialogButtonBox,
                                        QVBoxLayout, QLabel)
@@ -1338,20 +1338,15 @@ class MainWindow(QMainWindow):
                       "TOTAL leather stack at the seam (all layers)")
         tail = _spin("threadTail", 150.0, 0.0, 1000.0, " mm", 0,
                      "Needle-grip allowance at EACH end of a run")
-        feed = _spin("laserFeed", 20.0, 0.0, 500.0, " mm/s", 0,
-                     "Cutting feed rate; 0 to skip the run-time estimate")
         usable = _spin("leatherUsable", 75.0, 10.0, 100.0, " %", 0,
                        "Usable portion of the hide — the rest is waste")
         price_l = _spin("priceLeather", 0.0, 0.0, 999.0, " $/sq ft", 2)
         price_t = _spin("priceThread", 0.0, 0.0, 99.0, " $/m", 2)
-        price_j = _spin("priceLaser", 0.0, 0.0, 999.0, " $/min", 2)
         form.addRow("Leather stack", thick)
         form.addRow("Needle tail", tail)
-        form.addRow("Laser feed", feed)
         form.addRow("Hide yield", usable)
         form.addRow("Leather price", price_l)
         form.addRow("Thread price", price_t)
-        form.addRow("Laser price", price_j)
         lay.addLayout(form)
         hint = QLabel("Prices are optional — leave at 0 to skip a cost line.")
         hint.setWordWrap(True)
@@ -1364,15 +1359,13 @@ class MainWindow(QMainWindow):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         for key, w in (("threadThickness", thick), ("threadTail", tail),
-                       ("laserFeed", feed), ("leatherUsable", usable),
-                       ("priceLeather", price_l), ("priceThread", price_t),
-                       ("priceLaser", price_j)):
+                       ("leatherUsable", usable),
+                       ("priceLeather", price_l), ("priceThread", price_t)):
             s.setValue(key, w.value())
         est = estimate_project(
             self.doc, thickness_mm=thick.value(), tail_mm=tail.value(),
-            feed_mm_s=feed.value(), usable_pct=usable.value(),
-            price_per_sqft=price_l.value(), price_thread_per_m=price_t.value(),
-            price_laser_per_min=price_j.value())
+            usable_pct=usable.value(),
+            price_per_sqft=price_l.value(), price_thread_per_m=price_t.value())
         box = QMessageBox(self)
         box.setWindowTitle("Job estimate")
         box.setText(format_report(est, usable_pct=usable.value()))

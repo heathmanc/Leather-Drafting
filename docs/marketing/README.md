@@ -89,12 +89,12 @@ handling — and the pattern re-fits live as you change any of them.
 The **Job estimate** dialog over a real 6-piece wallet (611 holes). From the
 drawing alone it works out pieces, stitch holes, thread length, cut/score/
 engrave lengths, leather used vs. leather to *buy* (accounting for hide yield),
-layout waste, laser run-time, and — with your prices plugged in — a full cost
-breakdown with a total. Everything a maker needs to quote a job.
+layout waste, and — with your prices plugged in — a full cost breakdown with a
+total. Everything a maker needs to quote a job.
 
 **Webpage caption:**
-> Know the number before you cut: thread, leather, waste and laser time turned
-> into a real cost — this wallet, $12.84 in materials.
+> Know the number before you cut: thread, leather and waste turned into a real
+> cost — this wallet, $9.96 in materials.
 
 ---
 

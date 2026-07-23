@@ -3,7 +3,7 @@
 Rolls a document up into the numbers a maker actually needs to quote and cut a
 job: how many pieces and holes, how much thread, how far the laser travels
 (cut / score / engrave), how much leather the parts use versus their footprint
-(waste), a rough laser run-time, and -- when you feed it prices -- a cost.
+(waste), and -- when you feed it prices -- a cost.
 
 Everything here is pure geometry + arithmetic so it is unit-testable without
 the GUI. The canvas layer formats it for display.
@@ -12,7 +12,7 @@ the GUI. The canvas layer formats it for display.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from .geometry import Vec2
 from .layers import CUT, SCORE, ENGRAVE
@@ -50,8 +50,7 @@ class JobEstimate:
     engrave_mm: float = 0.0
     parts_area_mm2: float = 0.0     # summed area of the cut pieces
     footprint_mm2: float = 0.0      # bounding box of all laser geometry
-    # optional, only when the caller supplies a laser feed / prices
-    laser_seconds: Optional[float] = None
+    # optional, only when the caller supplies prices
     cost: Dict[str, float] = field(default_factory=dict)
 
     @property
@@ -66,12 +65,11 @@ class JobEstimate:
 
 
 def estimate_project(doc, *, thickness_mm: float = 3.0, tail_mm: float = 150.0,
-                     feed_mm_s: Optional[float] = None, pierce_s: float = 0.0,
                      usable_pct: float = 75.0,
-                     price_per_sqft: float = 0.0, price_thread_per_m: float = 0.0,
-                     price_laser_per_min: float = 0.0) -> JobEstimate:
-    """Summarise ``doc``. Laser time is included only when ``feed_mm_s`` is set;
-    a cost block is added only for the prices that are non-zero."""
+                     price_per_sqft: float = 0.0,
+                     price_thread_per_m: float = 0.0) -> JobEstimate:
+    """Summarise ``doc``. A cost block is added only for the prices that are
+    non-zero."""
     est = JobEstimate()
     xs: List[float] = []
     ys: List[float] = []
@@ -127,9 +125,6 @@ def estimate_project(doc, *, thickness_mm: float = 3.0, tail_mm: float = 150.0,
     if xs and ys:
         est.footprint_mm2 = (max(xs) - min(xs)) * (max(ys) - min(ys))
 
-    if feed_mm_s and feed_mm_s > 0.0:
-        est.laser_seconds = est.vector_mm / feed_mm_s + est.holes * pierce_s
-
     usable = max(usable_pct, 1.0) / 100.0
     buy_mm2 = est.parts_area_mm2 / usable
     cost: Dict[str, float] = {}
@@ -137,8 +132,6 @@ def estimate_project(doc, *, thickness_mm: float = 3.0, tail_mm: float = 150.0,
         cost["leather"] = buy_mm2 / MM2_PER_SQFT * price_per_sqft
     if price_thread_per_m > 0.0:
         cost["thread"] = est.thread_mm / 1000.0 * price_thread_per_m
-    if price_laser_per_min > 0.0 and est.laser_seconds is not None:
-        cost["laser"] = est.laser_seconds / 60.0 * price_laser_per_min
     if cost:
         cost["total"] = sum(cost.values())
     est.cost = cost
@@ -149,11 +142,6 @@ def _fmt_len(mm: float) -> str:
     if mm >= 1000.0:
         return f"{mm / 1000.0:.2f} m"
     return f"{mm / 10.0:.1f} cm"
-
-
-def _fmt_time(seconds: float) -> str:
-    m, s = divmod(int(round(seconds)), 60)
-    return f"{m}m {s:02d}s" if m else f"{s}s"
 
 
 def format_report(est: JobEstimate, *, usable_pct: float = 75.0) -> str:
@@ -181,12 +169,9 @@ def format_report(est: JobEstimate, *, usable_pct: float = 75.0) -> str:
     if est.footprint_mm2 > 0.0:
         lines.append(f"Layout waste:          {est.waste_pct:.0f}% "
                      f"(parts vs. their footprint)")
-    if est.laser_seconds is not None:
-        lines += ["", f"Laser run-time:        ≈ {_fmt_time(est.laser_seconds)} "
-                  f"(vector only)"]
     if est.cost:
         lines.append("")
-        for key in ("leather", "thread", "laser"):
+        for key in ("leather", "thread"):
             if key in est.cost:
                 lines.append(f"{key.capitalize() + ' cost:':22} "
                              f"${est.cost[key]:.2f}")

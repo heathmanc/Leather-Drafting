@@ -289,12 +289,12 @@ def shot_estimator():
     app, win = _open(doc, w=1680, h=1000)
 
     # real numbers, priced up so the cost block appears
-    est = estimate_project(doc, thickness_mm=3.4, tail_mm=150.0, feed_mm_s=20.0,
+    est = estimate_project(doc, thickness_mm=3.4, tail_mm=150.0,
                            usable_pct=75.0, price_per_sqft=9.5,
-                           price_thread_per_m=0.18, price_laser_per_min=1.50)
+                           price_thread_per_m=0.18)
     report = format_report(est, usable_pct=75.0)
 
-    # the app's own report dialog, composited over the workspace
+    # the app's own report dialog, exactly as _job_estimate builds it
     box = QMessageBox(win)
     box.setWindowTitle("Job estimate")
     box.setText(report)
@@ -304,12 +304,16 @@ def shot_estimator():
     for _ in range(4):
         app.processEvents()
 
+    # lay the real dialog over the workspace with a soft drop shadow (no scrim
+    # -- a modal box doesn't dim the window), so it reads like it's just open
     win_pm = win.grab()
     dlg_pm = box.grab()
-    p = QPainter(win_pm)
-    p.fillRect(win_pm.rect(), QColor(15, 20, 30, 90))     # focus scrim
     x = (win_pm.width() - dlg_pm.width()) // 2
     y = (win_pm.height() - dlg_pm.height()) // 2
+    p = QPainter(win_pm)
+    for i, alpha in ((10, 22), (6, 34), (3, 48)):        # layered shadow
+        p.fillRect(x - i, y - i + 4, dlg_pm.width() + 2 * i,
+                   dlg_pm.height() + 2 * i, QColor(20, 24, 32, alpha))
     p.drawPixmap(x, y, dlg_pm)
     p.end()
     win_pm.save(str(OUT / "07_cost_estimator.png"))

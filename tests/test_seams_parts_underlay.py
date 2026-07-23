@@ -73,7 +73,7 @@ def test_parts_save_list_place_delete(qapp, tmp_path):
     base = str(tmp_path)
 
     shapes = [win.doc.shapes[0]]
-    partslib.save_part("My pocket", shapes, base)
+    partslib.save_part("My pocket", shapes, base=base)
     parts = partslib.list_parts(base)
     assert [n for n, _p in parts] == ["My pocket"]
 
@@ -158,3 +158,72 @@ def test_fit_to_content_ignores_underlay(qapp, tmp_path):
     r = c.mapToScene(c.viewport().rect()).boundingRect()
     # the view fits the 60 mm rect, not the 200 mm photo
     assert r.width() < 150
+
+
+# -- built-in library templates (currency + card sizes) ---------------------
+def test_builtin_templates_have_currency_and_card_sizes(qapp):
+    from leathercad_app import fonts, builtin_parts
+    fonts.register_bundled_fonts()
+    keys = {k for _n, k in builtin_parts.list_builtins()}
+    assert {"us_bill", "eur_50", "card_id1", "card_biz"} <= keys
+
+    shapes, texts = builtin_parts.build_builtin("us_bill")
+    assert len(shapes) == 1
+    assert abs(shapes[0].width - 156.0) < 1e-6
+    assert abs(shapes[0].height - 66.0) < 1e-6
+    assert shapes[0].layer == "Cut"
+    # a size label is baked inside: name line + "W x H mm" line
+    assert len(texts) == 2
+    joined = " ".join(t.text for t in texts)
+    assert "156" in joined and "66" in joined and "mm" in joined
+    assert all(t.layer == "Engrave" for t in texts)
+
+    # the credit card is ID-1 with rounded corners
+    card, _ct = builtin_parts.build_builtin("card_id1")
+    assert abs(card[0].width - 85.6) < 1e-6 and abs(card[0].height - 54.0) < 1e-6
+    assert card[0].corner_radius > 0.0
+
+
+def test_placing_a_template_adds_shape_and_label(qapp):
+    from leathercad_app import fonts, builtin_parts
+    fonts.register_bundled_fonts()
+    win = _win()
+    shapes, texts = builtin_parts.build_builtin("card_id1")
+    win.canvas.place_shapes(shapes, texts)
+    assert len(win.doc.shapes) == 1
+    assert len(win.doc.texts) == 2          # the size label rode along
+
+
+def test_saved_part_round_trips_text(qapp, tmp_path):
+    from leathercad_app import partslib, fonts, builtin_parts
+    fonts.register_bundled_fonts()
+    shapes, texts = builtin_parts.build_builtin("card_id1")
+    partslib.save_part("Card w/ label", shapes, texts, str(tmp_path))
+    (name, path), = partslib.list_parts(str(tmp_path))
+    sh, tx = partslib.load_part_full(path)
+    assert len(sh) == 1 and len(tx) == 2
+    assert "85.6" in " ".join(t.text for t in tx)
+
+
+def test_parts_panel_lists_builtins_and_blocks_their_delete(qapp, tmp_path,
+                                                           monkeypatch):
+    from leathercad_app import partspanel
+    from leathercad_app.partspanel import PartsPanel
+    from leathercad_app import fonts
+    fonts.register_bundled_fonts()
+    # the "can't delete a built-in" guard pops a modal box; don't block on it
+    monkeypatch.setattr(partspanel.QMessageBox, "information",
+                        lambda *a, **k: None)
+    panel = PartsPanel(_win().canvas, base_dir=str(tmp_path))
+    labels = [panel.list.item(i).text() for i in range(panel.list.count())]
+    assert any("US bill" in s for s in labels)
+    assert any("Credit / bank card" in s for s in labels)
+    # selecting a built-in and hitting delete must not remove it
+    row = next(i for i in range(panel.list.count())
+               if "US bill" in panel.list.item(i).text())
+    panel.list.setCurrentRow(row)
+    panel.delete_selected()
+    assert panel.list.count() == len(labels)
+    # and placing it drops the outline + label into the doc
+    panel.place_selected()
+    assert len(panel.canvas.doc.shapes) == 1 and len(panel.canvas.doc.texts) == 2

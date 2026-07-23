@@ -2374,12 +2374,15 @@ class Canvas(QGraphicsView):
         self._emit_commit()
         return True
 
-    def place_shapes(self, shapes) -> list:
-        """Add shapes (e.g. a library part) centred in the current view, as one
-        undoable step, and select them."""
-        if not shapes:
+    def place_shapes(self, shapes, texts=()) -> list:
+        """Add shapes (+ optional texts, e.g. a library template with a size
+        label) centred in the current view, as one undoable step, and select
+        them."""
+        shapes = list(shapes)
+        texts = list(texts)
+        if not shapes and not texts:
             return []
-        bs = [sh.bounds() for sh in shapes]
+        bs = [sh.bounds() for sh in shapes] or [t.bounds() for t in texts]
         cx = (min(b[0] for b in bs) + max(b[2] for b in bs)) / 2.0
         cy = (min(b[1] for b in bs) + max(b[3] for b in bs)) / 2.0
         target = self.mapToScene(self.viewport().rect().center())
@@ -2391,6 +2394,11 @@ class Canvas(QGraphicsView):
             sh.transform.y += dy
             self.doc.add_shape(sh)
             items.append(self._add_item(ShapeItem(sh, self)))
+        for tx in texts:
+            tx.transform.x += dx
+            tx.transform.y += dy
+            self.doc.texts.append(tx)
+            items.append(self._add_item(TextItem(tx, self)))
         self._suppress_commit = False
         self.scene_obj.clearSelection()
         for it in items:

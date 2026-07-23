@@ -35,21 +35,27 @@ class PartsPanel(QWidget):
         self.reload()
 
     def reload(self):
+        from . import builtin_parts
         self.list.clear()
+        # built-in size templates (currency + cards) always come first
+        for name, key in builtin_parts.list_builtins():
+            item = QListWidgetItem("◆ " + name)
+            item.setData(Qt.UserRole, "builtin:" + key)
+            item.setToolTip("Built-in size template — double-click to place")
+            self.list.addItem(item)
+        # then the user's own saved parts
         for name, path in partslib.list_parts(self.base_dir):
             item = QListWidgetItem(name)
             item.setData(Qt.UserRole, str(path))
             item.setToolTip("Double-click to place at the view centre")
             self.list.addItem(item)
-        if not self.list.count():
-            hint = QListWidgetItem("(select shapes → Save selection…)")
-            hint.setFlags(Qt.NoItemFlags)
-            self.list.addItem(hint)
 
     def save_selection(self, name: str | None = None):
-        shapes = [it.model for it in self.canvas.selected_items()
-                  if isinstance(it, ShapeItem)]
-        if not shapes:
+        from .items import TextItem
+        sel = self.canvas.selected_items()
+        shapes = [it.model for it in sel if isinstance(it, ShapeItem)]
+        texts = [it.model for it in sel if isinstance(it, TextItem)]
+        if not shapes and not texts:
             QMessageBox.information(self, "Parts library",
                                     "Select one or more shapes first.")
             return
@@ -59,7 +65,8 @@ class PartsPanel(QWidget):
             if not ok or not name.strip():
                 return
         import copy
-        partslib.save_part(name.strip(), copy.deepcopy(shapes), self.base_dir)
+        partslib.save_part(name.strip(), copy.deepcopy(shapes),
+                           copy.deepcopy(texts), self.base_dir)
         self.reload()
 
     def _current_path(self):
@@ -70,11 +77,20 @@ class PartsPanel(QWidget):
         p = self._current_path()
         if not p:
             return
-        self.canvas.place_shapes(partslib.load_part(p))
+        if p.startswith("builtin:"):
+            from . import builtin_parts
+            shapes, texts = builtin_parts.build_builtin(p[len("builtin:"):])
+        else:
+            shapes, texts = partslib.load_part_full(p)
+        self.canvas.place_shapes(shapes, texts)
 
     def delete_selected(self):
         p = self._current_path()
         if not p:
+            return
+        if p.startswith("builtin:"):
+            QMessageBox.information(self, "Parts library",
+                                    "Built-in size templates can't be deleted.")
             return
         partslib.delete_part(p)
         self.reload()

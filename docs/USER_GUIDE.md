@@ -120,8 +120,13 @@ The user guide travels inside the app (Help → User guide still works).
 * **Layers panel** (right, `Ctrl+2`) — colour → laser-job mapping, visibility
   checkboxes, layer roles.
 * **Parts library** (right, `Ctrl+3`) — *your* reusable pieces, kept across
-  all documents: select shapes → **Save selection…**, then double-click a part
-  in any project to place it at the view centre (fresh copies every time).
+  all documents: select shapes (and any lettering) → **Save selection…**, then
+  double-click a part in any project to place it at the view centre (fresh
+  copies every time). It also comes preloaded with **◆ built-in size
+  templates** — US and Euro banknotes and ID-1 credit / bank + business cards —
+  each an exact-size outline with its dimensions engraved inside, so you can
+  build a wallet slot or card pocket around a real reference. Built-ins can't be
+  deleted.
 * **Status bar** (bottom) — cursor position in mm, live measurements and tool
   hints, and the total hole count.
 * **Dark theme** — View → **Dark theme** switches the whole app (panels,

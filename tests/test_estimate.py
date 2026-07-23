@@ -324,3 +324,33 @@ def test_set_tool_always_refreshes_the_status_hint():
     win._set_tool(cm.LINE)
     win._set_tool(cm.SELECT)
     assert seen[-1] != win._tool_hint(cm.LINE)
+
+
+def test_estimate_dialog_lays_out_without_wrapping():
+    """The reworked estimate dialog uses a self-sizing grid (not a fixed-width
+    message box), so the columns never word-wrap. It has the labelled sections
+    and a bold total, and no leftover laser row."""
+    import os
+    import pytest
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication, QGroupBox, QLabel
+    from leathercad_app.mainwindow import MainWindow
+    QApplication.instance() or QApplication([])
+    doc = Document()
+    doc.add_shape(Rectangle(width=120, height=80, corner_radius=8,
+                            transform=Transform(x=0, y=0),
+                            stitch=StitchSettings(enabled=True, pitch_mm=3.85,
+                                                  inset=3.5)))
+    win = MainWindow(doc)
+    est = estimate_project(doc, price_per_sqft=9.5, price_thread_per_m=0.18)
+    dlg = win._build_estimate_dialog(est, 75.0)
+    dlg.adjustSize()
+
+    titles = [g.title() for g in dlg.findChildren(QGroupBox)]
+    assert titles == ["Job", "Cutting", "Material", "Cost"]
+    labels = [w.text() for w in dlg.findChildren(QLabel)]
+    assert "Stitch holes" in labels and "Estimated total" in labels
+    assert not any("Laser" in t for t in labels)      # laser row is gone
+    # no QLabel wraps its text (the whole point of the rework)
+    assert all(not w.wordWrap() for w in dlg.findChildren(QLabel))

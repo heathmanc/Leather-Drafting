@@ -27,9 +27,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from PySide6.QtWidgets import QApplication, QMessageBox   # noqa: E402
+from PySide6.QtWidgets import QApplication            # noqa: E402
 from PySide6.QtCore import QPointF                   # noqa: E402
-from PySide6.QtGui import QPainter, QColor, QFontDatabase   # noqa: E402
+from PySide6.QtGui import QPainter, QColor           # noqa: E402
 
 from leathercad.document import Document             # noqa: E402
 from leathercad.geometry import Vec2                 # noqa: E402
@@ -266,7 +266,7 @@ def shot_stitch_settings():
 # 7. Job / material cost estimator
 # ---------------------------------------------------------------------------
 def shot_estimator():
-    from leathercad.estimate import estimate_project, format_report
+    from leathercad.estimate import estimate_project
     doc = Document("Bifold wallet")
     add = doc.add_shape
     add(Rectangle(width=212, height=95, corner_radius=9,
@@ -292,22 +292,17 @@ def shot_estimator():
     est = estimate_project(doc, thickness_mm=3.4, tail_mm=150.0,
                            usable_pct=75.0, price_per_sqft=9.5,
                            price_thread_per_m=0.18)
-    report = format_report(est, usable_pct=75.0)
 
-    # the app's own report dialog, exactly as _job_estimate builds it
-    box = QMessageBox(win)
-    box.setWindowTitle("Job estimate")
-    box.setText(report)
-    box.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
-    box.setStandardButtons(QMessageBox.StandardButton.Ok)
-    box.adjustSize()
+    # the app's own reworked estimate dialog, exactly as _job_estimate shows it
+    dlg = win._build_estimate_dialog(est, 75.0)
+    dlg.adjustSize()
     for _ in range(4):
         app.processEvents()
 
     # lay the real dialog over the workspace with a soft drop shadow (no scrim
     # -- a modal box doesn't dim the window), so it reads like it's just open
     win_pm = win.grab()
-    dlg_pm = box.grab()
+    dlg_pm = dlg.grab()
     x = (win_pm.width() - dlg_pm.width()) // 2
     y = (win_pm.height() - dlg_pm.height()) // 2
     p = QPainter(win_pm)

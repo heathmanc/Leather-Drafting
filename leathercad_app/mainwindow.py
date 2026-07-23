@@ -1315,9 +1315,8 @@ class MainWindow(QMainWindow):
         Prices default to 0 and their cost lines simply don't show until set."""
         from PySide6.QtWidgets import (QDialog, QFormLayout, QDialogButtonBox,
                                        QVBoxLayout, QLabel)
-        from PySide6.QtGui import QFontDatabase
         from .mathspin import MathSpinBox
-        from leathercad.estimate import estimate_project, format_report
+        from leathercad.estimate import estimate_project
         s = self._settings()
 
         def _spin(key, default, lo, hi, suffix, dec, tip=""):
@@ -1366,11 +1365,87 @@ class MainWindow(QMainWindow):
             self.doc, thickness_mm=thick.value(), tail_mm=tail.value(),
             usable_pct=usable.value(),
             price_per_sqft=price_l.value(), price_thread_per_m=price_t.value())
-        box = QMessageBox(self)
-        box.setWindowTitle("Job estimate")
-        box.setText(format_report(est, usable_pct=usable.value()))
-        box.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
-        box.exec()
+        self._show_estimate_result(est, usable.value())
+
+    def _show_estimate_result(self, est, usable_pct: float):
+        self._build_estimate_dialog(est, usable_pct).exec()
+
+    def _build_estimate_dialog(self, est, usable_pct: float):
+        """Render the estimate as a self-sizing two-column dialog (a plain
+        message box forces a narrow width and word-wraps the aligned columns)."""
+        from PySide6.QtWidgets import (QDialog, QVBoxLayout, QGridLayout,
+                                       QGroupBox, QLabel, QDialogButtonBox)
+        from PySide6.QtGui import QFontDatabase
+        from leathercad.estimate import _fmt_len, MM2_PER_SQFT
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Job estimate")
+        root = QVBoxLayout(dlg)
+        mono = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+
+        def section(title, rows):
+            g = QGroupBox(title)
+            grid = QGridLayout(g)
+            grid.setColumnStretch(0, 1)
+            grid.setColumnMinimumWidth(1, 90)
+            grid.setHorizontalSpacing(24)
+            for r, (label, value, strong) in enumerate(rows):
+                lab = QLabel(label)
+                val = QLabel(value)
+                val.setFont(mono)
+                val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                for w in (lab, val):
+                    w.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                if strong:
+                    for w in (lab, val):
+                        f = w.font(); f.setBold(True); w.setFont(f)
+                grid.addWidget(lab, r, 0)
+                grid.addWidget(val, r, 1)
+            root.addWidget(g)
+
+        if est.pieces == 0 and est.holes == 0 and est.cut_mm == 0.0:
+            root.addWidget(QLabel("Nothing to estimate yet — draw a cut piece "
+                                  "or a seam first."))
+        else:
+            section("Job", [
+                ("Pieces (closed cut)", str(est.pieces), False),
+                ("Stitch holes", str(est.holes), False),
+                ("Thread needed", "≈ " + _fmt_len(est.thread_mm), False),
+            ])
+            cutting = [("Cut length", _fmt_len(est.cut_mm), False)]
+            if est.score_mm:
+                cutting.append(("Score length", _fmt_len(est.score_mm), False))
+            if est.engrave_mm:
+                cutting.append(("Engrave outline",
+                                _fmt_len(est.engrave_mm), False))
+            section("Cutting", cutting)
+            sqft = est.parts_area_mm2 / MM2_PER_SQFT
+            buy = sqft / (max(usable_pct, 1.0) / 100.0)
+            material = [
+                ("Leather in parts",
+                 f"{est.parts_area_mm2 / 100.0:.1f} cm²  ·  {sqft:.2f} sq ft",
+                 False),
+                (f"Buy (at {usable_pct:g}% hide yield)",
+                 f"{buy:.2f} sq ft", False),
+            ]
+            if est.footprint_mm2 > 0.0:
+                material.append(("Layout waste", f"{est.waste_pct:.0f}%", False))
+            section("Material", material)
+            if est.cost:
+                cost = []
+                if "leather" in est.cost:
+                    cost.append(("Leather", f"${est.cost['leather']:.2f}", False))
+                if "thread" in est.cost:
+                    cost.append(("Thread", f"${est.cost['thread']:.2f}", False))
+                cost.append(("Estimated total",
+                             f"${est.cost['total']:.2f}", True))
+                section("Cost", cost)
+
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        bb.rejected.connect(dlg.reject)
+        bb.accepted.connect(dlg.accept)
+        root.addWidget(bb)
+        return dlg
 
     def _area_report(self):
         """Ask the usable-hide percentage (remembered), show material usage."""

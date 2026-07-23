@@ -321,6 +321,61 @@ def test_template_labels_stay_inside_every_outline(qapp):
             assert max(abs(y) for x, y in pts) <= (h / 2.0) * 0.99, key
 
 
+def test_group_move_never_leaves_a_member_behind(qapp):
+    """Pressing + dragging any group member moves the WHOLE template together,
+    even when Qt's selection timing would otherwise leave a label behind."""
+    from leathercad_app import fonts, builtin_parts
+    from leathercad_app.items import ShapeItem, TextItem
+    fonts.register_bundled_fonts()
+    win = _win()
+    c = win.canvas
+    c.snap_to_nodes = False
+    shapes, texts = builtin_parts.build_builtin("coin_half")
+    c.place_shapes(shapes, texts)
+    coin = next(i for i in c.scene_obj.items() if isinstance(i, ShapeItem))
+    labels = [i for i in c.scene_obj.items() if isinstance(i, TextItem)]
+
+    c.scene_obj.clearSelection()
+    c.press_select(coin, None)
+    c.begin_move_snap(coin)                 # group is captured by group_id
+    assert coin.isSelected() and all(l.isSelected() for l in labels)
+    before = [(l.model.transform.x - coin.model.transform.x,
+               l.model.transform.y - coin.model.transform.y) for l in labels]
+
+    # Qt drags every selected + movable item by the same delta
+    for it in [coin] + labels:
+        if it.isSelected() and (it.flags()
+                                & it.GraphicsItemFlag.ItemIsMovable):
+            it.setPos(it.pos().x() + 30.0, it.pos().y() + 20.0)
+    after = [(l.model.transform.x - coin.model.transform.x,
+              l.model.transform.y - coin.model.transform.y) for l in labels]
+    assert all(abs(b[0] - a[0]) < 1e-6 and abs(b[1] - a[1]) < 1e-6
+               for b, a in zip(before, after))
+
+
+def test_clicking_a_label_selects_the_whole_template(qapp):
+    """A plain click on a label leaves the whole group highlighted -- Qt's
+    release-time 'select only the pressed item' is undone by reassert."""
+    from leathercad_app import fonts, builtin_parts
+    from leathercad_app.items import ShapeItem, TextItem
+    fonts.register_bundled_fonts()
+    win = _win()
+    c = win.canvas
+    shapes, texts = builtin_parts.build_builtin("coin_half")
+    c.place_shapes(shapes, texts)
+    coin = next(i for i in c.scene_obj.items() if isinstance(i, ShapeItem))
+    labels = [i for i in c.scene_obj.items() if isinstance(i, TextItem)]
+
+    c.scene_obj.clearSelection()
+    c.press_select(labels[0], None)
+    # Qt's release keeps only the pressed item selected...
+    for it in [coin] + labels:
+        it.setSelected(it is labels[0])
+    c._moved_during_press = False
+    c.reassert_group_selection(labels[0])       # ...which we restore
+    assert coin.isSelected() and all(l.isSelected() for l in labels)
+
+
 def test_group_resize_scales_label_with_outline(qapp):
     """Dragging a template's box-resize grip scales the outline AND its engraved
     label together, and the label stays inside the enlarged border."""

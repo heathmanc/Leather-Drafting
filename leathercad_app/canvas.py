@@ -770,10 +770,26 @@ class Canvas(QGraphicsView):
         self._group_drag = None
         if _alive(item):
             item.setFlag(QGraphicsItem.ItemIsMovable, True)   # leader always moves
+        # Always move the WHOLE group, driven by group_id -- never by the live
+        # selection, which Qt's press/release timing can leave partial (that was
+        # the "moved the coin and left the label behind" bug). Pull in every
+        # scene item sharing the leader's group and keep them highlighted.
+        sel = list(self.selected_items())
+        gid = getattr(self._item_model(item), "group_id", None)
+        if gid:
+            have = set(sel)
+            for it in self.scene_obj.items():
+                mm = self._item_model(it)
+                if (mm is not None and getattr(mm, "group_id", None) == gid
+                        and it not in have):
+                    it.setSelected(True)
+                    sel.append(it)
+                    have.add(it)
         if not self.snap_to_nodes:
+            # Qt drags every selected+movable item by the same delta, so a rigid
+            # group moves together natively once all members are selected (above).
             self._snap_cache = None
             return
-        sel = self.selected_items()
         if len(sel) <= 1:
             self._snap_cache = (self._snap_candidates(exclude=item)
                                 + self._all_intersections(exclude=item))
@@ -4300,6 +4316,7 @@ class Canvas(QGraphicsView):
         without this the stale selection is still live when the group-drag setup
         (begin_move_snap) samples it.
         """
+        self._moved_during_press = False
         mods = event.modifiers() if event is not None else Qt.NoModifier
         multi = bool(mods & (Qt.ControlModifier | Qt.ShiftModifier))
         if not multi and not item.isSelected():
@@ -4307,6 +4324,21 @@ class Canvas(QGraphicsView):
             if _alive(item):
                 item.setSelected(True)
         self.select_group_of(item)
+
+    def reassert_group_selection(self, item) -> None:
+        """After a plain click (no drag), Qt re-selects ONLY the pressed item on
+        release, dropping the rest of its group from the highlight. Restore the
+        whole group so a template always reads (and behaves) as one object."""
+        if self._moved_during_press or not _alive(item) or not item.isSelected():
+            return
+        gid = getattr(self._item_model(item), "group_id", None)
+        if not gid:
+            return
+        for it in self.scene_obj.items():
+            mm = self._item_model(it)
+            if (mm is not None and getattr(mm, "group_id", None) == gid
+                    and not it.isSelected()):
+                it.setSelected(True)
 
     def select_group_of(self, item) -> None:
         """On pressing a grouped item, select the whole group (itself included)

@@ -300,3 +300,43 @@ def test_text_resize_drag_is_cheap_then_rebakes_on_release():
     assert len(gp) == len(tp)
     assert max((a.x - b.x) ** 2 + (a.y - b.y) ** 2
                for a, b in zip(gp, tp)) < 1e-6
+
+
+def test_standalone_text_resize_is_stable_not_jittery():
+    """A monotonic corner drag on a plain (ungrouped) text grows the size
+    smoothly -- the scale is measured against the FIXED baseline box, so the
+    dominant axis can't flip frame to frame (the old jitter/double-vision)."""
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from leathercad_app import canvas as cm, fonts
+    from leathercad_app.items import bake_text_contours, TextItem, ResizeHandle
+    fam = fonts.register_bundled_fonts()
+    contours = bake_text_contours("SIZE", fam, 8.0)
+    doc = Document()
+    doc.texts.append(TextShape(text="SIZE", font_family=fam, size=8.0,
+                     contours=[[Vec2(p.x, p.y) for p in c] for c in contours],
+                     transform=Transform(x=20, y=15), layer="Engrave"))
+    c = cm.Canvas(doc)
+    c.rebuild()
+    it = next(i for i in c.scene_obj.items() if isinstance(i, TextItem))
+    c.scene_obj.clearSelection()
+    it.setSelected(True)
+    c.selection_changed()
+    grip = next(g for g in c.scene_obj.items()
+                if isinstance(g, ResizeHandle) and g.grip == (1, 1))
+    gx, gy = grip.grip
+
+    def opp_corner():
+        hx, hy = it.resize_extents()
+        cx, cy = it.resize_center()
+        return it.model.transform.apply(Vec2(cx - gx * hx, cy - gy * hy))
+
+    gw = grip._grip_world()
+    base = opp_corner()
+    prev = it.model.size
+    for i in range(1, 9):
+        grip._apply_resize(Vec2(gw.x + i * 3.0, gw.y + i * 2.0))
+        assert it.model.size >= prev - 1e-6            # never shrinks mid-pull
+        assert (opp_corner() - base).length() < 1e-4   # opposite corner pinned
+        prev = it.model.size
+    assert it.model.size > 8.0                         # and it actually grew

@@ -650,18 +650,21 @@ class TextItem(QGraphicsItem):
         w, h = maxx - minx, maxy - miny
         if w < 1e-9 or h < 1e-9:
             return
-        sx = (2.0 * hx) / w
-        sy = (2.0 * hy) / h
-        s = sx if abs(sx - 1.0) >= abs(sy - 1.0) else sy   # dominant pulled axis
-        # Capture the glyphs ONCE at drag start; the live preview is then a cheap
-        # linear scale of that fixed baseline instead of a per-frame re-bake
-        # (re-baking every mouse-move is what made the outlines strobe/ghost).
+        # Capture the glyphs AND their box ONCE at drag start; the live preview is
+        # then a cheap linear scale of that fixed baseline instead of a per-frame
+        # re-bake (re-baking every mouse-move is what made the outlines strobe).
         if self._resize_base is None:
             self._resize_base = (
                 [[Vec2(p.x, p.y) for p in c] for c in self.model.contours],
-                self.model.size)
-        base_contours, base_size = self._resize_base
-        self.model.size = max(0.5, self.model.size * s)
+                self.model.size, w, h)
+        base_contours, base_size, base_w, base_h = self._resize_base
+        # Pick the scale against the FIXED baseline box, never the current
+        # (already-scaled) one -- otherwise the dominant axis flips every frame
+        # and the size oscillates (the jitter/double-vision on a plain text drag).
+        sx = (2.0 * hx) / base_w
+        sy = (2.0 * hy) / base_h
+        s = sx if abs(sx - 1.0) >= abs(sy - 1.0) else sy   # dominant pulled axis
+        self.model.size = max(0.5, base_size * s)
         k = self.model.size / base_size if base_size > 1e-9 else 1.0
         # Scale about the local origin -- exactly how a real re-bake grows the
         # glyphs from the pen baseline -- so the crisp re-bake owed on release
@@ -687,6 +690,7 @@ class TextItem(QGraphicsItem):
         super().mouseReleaseEvent(event)
         if self.canvas is not None:
             self.canvas.end_move_snap()
+            self.canvas.reassert_group_selection(self)
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange and self.canvas is not None:
@@ -840,6 +844,7 @@ class HoleItem(QGraphicsItem):
         super().mouseReleaseEvent(event)
         if self.canvas is not None:
             self.canvas.end_move_snap()
+            self.canvas.reassert_group_selection(self)
 
     def itemChange(self, change, value):
         # Magnetic centre snapping while dragging; free otherwise.
@@ -1058,6 +1063,7 @@ class ShapeItem(QGraphicsItem):
         super().mouseReleaseEvent(event)
         if self.canvas is not None:
             self.canvas.end_move_snap()
+            self.canvas.reassert_group_selection(self)
 
     def itemChange(self, change, value):
         # Magnetic node snapping while dragging; free otherwise.

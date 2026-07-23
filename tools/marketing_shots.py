@@ -224,6 +224,43 @@ def shot_registration():
     _close(app, win)
 
 
+# ---------------------------------------------------------------------------
+# 6. Properties panel: choosing punch style + stitch pitch on a live pattern
+# ---------------------------------------------------------------------------
+def shot_stitch_settings():
+    doc = Document("Card holder")
+    # a couple of real pattern pieces on the sheet
+    front = Rectangle(width=104, height=66, corner_radius=7,
+                      transform=Transform(x=-8, y=44), layer="Cut",
+                      stitch=_st(3.85, "oblique"), name="Front panel")
+    doc.add_shape(front)
+    doc.add_shape(Rectangle(width=98, height=60, corner_radius=6,
+                            transform=Transform(x=-8, y=-40), layer="Cut",
+                            stitch=_st(3.38, "french", inset=3.0),
+                            name="Card pocket"))
+    app, win = _open(doc, w=1680, h=1000)
+    c = win.canvas
+
+    # give the Properties dock room, then select a piece so its stitch settings
+    # populate the panel
+    win.parts_dock.hide()
+    it = next(i for i in c.scene_obj.items()
+              if getattr(getattr(i, "model", None), "name", "") == "Front panel")
+    c.scene_obj.clearSelection()
+    it.setSelected(True)
+    win.properties.show_selection(c.selected_items())
+    for _ in range(6):
+        app.processEvents()
+
+    # scroll the panel to the Stitching group (Punch style + Pitch dropdowns)
+    scroll = win.properties_dock.widget()
+    scroll.ensureWidgetVisible(win.properties.g_stitch, 0, 0)
+    for _ in range(6):
+        app.processEvents()
+    _save_window(win, "06_stitch_settings.png")
+    _close(app, win)
+
+
 if __name__ == "__main__":
     QApplication.instance() or QApplication([])   # fonts need a QGuiApplication
     OUT.mkdir(parents=True, exist_ok=True)
@@ -233,4 +270,5 @@ if __name__ == "__main__":
     shot_punches()
     shot_dark()
     shot_registration()
+    shot_stitch_settings()
     print("done ->", OUT)

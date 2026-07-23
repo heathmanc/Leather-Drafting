@@ -71,6 +71,19 @@ pieces with the same outline always get byte-identical hole layouts.
 > Mirror a piece and the holes come with it — front and back register
 > perfectly, no matter which side you laser.
 
+## 06_stitch_settings.png — pick your iron on a live pattern
+
+The full workspace with two pieces loaded (front panel + card pocket) and one
+selected, the **Properties** panel scrolled to the **Stitching** group. This is
+where you dial the job in: **Punch style** (round / oblique / French / diamond),
+**Pitch** shown in both mm and SPI (here 3.85 mm ≈ 6.6 SPI), inset from the
+edge, slit length and angle, saddle-stitch rows, backstitch, symmetry and corner
+handling — and the pattern re-fits live as you change any of them.
+
+**Webpage caption:**
+> Set the punch style and pitch to match your iron, and the holes re-space
+> instantly — 3.85 mm oblique here, or type any pitch you own.
+
 ---
 
 ### Selling points to repeat on the page

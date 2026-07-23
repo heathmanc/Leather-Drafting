@@ -7,8 +7,12 @@ across overlapping pieces** no matter which side you laser.
 
 ![the app](docs/app.png)
 
-> Status: v0.2. The desktop app (draw / radius / move-overlay / per-iron holes /
-> layers / registration / SVG+DXF export) is working and tested. Roadmap below.
+> Status: v0.2, working and tested. Draw with a full CAD toolset (rectangles,
+> circles, polygons, bezier pen, arcs, trim, fillet / chamfer, boolean ops), get
+> chord-accurate stitch holes that register hole-for-hole across pieces, and put
+> laser-ready **SVG / DXF / 1:1 PDF** on the bed — with kerf compensation, sheet
+> nesting, a parts library, starter templates, job & thread estimates, autosave
+> and a dark theme. Roadmap below.
 
 **📖 New here? Read the [User Guide](docs/USER_GUIDE.md)** — a full manual with
 tool reference, a stitching deep-dive, three worked tutorials (card holder,
@@ -217,6 +221,27 @@ Right-click anywhere for the context menu (Group / Ungroup / Duplicate / Delete)
 
 ![ungroup to individual selectable holes](docs/individual_holes.png)
 
+## More in the app
+
+Beyond drawing and stitching, Stitch Hero covers the rest of a real bench workflow:
+
+| | |
+|---|---|
+| **Fillet / chamfer corners** | Per corner, a **round** (fillet arc) or a **bevel** (straight chamfer) — set the radius or setback in Properties |
+| **Boolean ops** | **Union**, **difference** and **intersect** on closed shapes — cut windows and card slots straight out of a panel |
+| **Offset / seam allowance** | Grow or shrink an outline by a fixed amount for a true seam allowance |
+| **Import SVG / DXF** | Bring existing vector drawings in as fully editable shapes — paths, arcs and colours map onto layers |
+| **Tracing image** | *View → Tracing image*: drop a photo or scan behind the canvas, **calibrate it to real millimetres** (two clicks + a known distance), fade it, and trace over it with the normal tools |
+| **Nest on sheet** | Shape-aware nesting packs your pieces onto a leather sheet; each piece's slots, holes and seams travel with it |
+| **Kerf compensation** | On export, closed **cut** outlines are compensated for the beam — outer edges grow by kerf/2 and inner cut-outs shrink — so parts come out drawn-size |
+| **Job estimate** | Leather area used (with waste), a rough laser run-time, and — when you feed it prices — a leather / thread / laser **cost** breakdown |
+| **Thread estimate** | Saddle-stitch thread length for a piece, from its holes, stack thickness and tail allowance |
+| **Seam-mate check** | Verify that pieces sharing a seam actually line up hole-for-hole before you cut |
+| **Parts library** | Save any selection to a personal parts library and drop it into any document |
+| **Templates & generators** | Open a ready-made card holder, belt, key fob or fold-over wallet, or generate parametric **card-pocket stacks** and **zipper openings** |
+| **Dark theme** | A full dark UI for late-night bench sessions (*View → Dark theme*) |
+| **Autosave & recovery** | Work is autosaved and offered back after an unexpected quit |
+
 ## Scripting API (no GUI needed)
 
 The whole model is usable headless — handy for parametric patterns:
@@ -270,11 +295,25 @@ leathercad/            pure-Python model + engine (no dependencies)
   stitchline.py        shared seam for cross-piece registration
   document.py          the CAD document + JSON save/load
   irons.py             pricking-iron pitch / SPI presets
-  export.py            SVG + DXF exporters
+  export.py            SVG + DXF exporters (with kerf compensation)
+  trim.py              trim an edge back to its intersections
+  modify.py            per-corner fillet (round) / chamfer (bevel)
+  boolean.py           union / difference / intersection on polygons
+  importers.py         import SVG & DXF as editable shapes
+  nesting.py           pack pattern pieces onto a sheet
+  estimate.py          leather-area / run-time / cost job estimate
+  thread.py            saddle-stitch thread-length estimate
+  templates.py         starter documents (card holder / belt / wallet …)
+  generators.py        parametric part generators (card pockets, zippers)
+  text.py              engrave lettering baked to paths
+  dimension.py         dimension annotations that track shapes
 leathercad_app/        PySide6 desktop app
-  canvas.py            mm-accurate Y-up QGraphicsView, tools, grid, zoom/pan
+  canvas.py            mm-accurate Y-up QGraphicsView, tools, grid, zoom/pan, tracing underlay
   items.py             shape/seam graphics items with live hole rendering
   panels.py            properties + layers docks
+  partspanel.py        parts-library dock
+  theme.py             light / dark themes
+  robustness.py        autosave + crash recovery
   mainwindow.py        window, toolbar, menus, export wiring
   __main__.py          python -m leathercad_app
 examples/  tests/  docs/
@@ -305,9 +344,17 @@ examples/  tests/  docs/
 - [x] Symmetric rounded-corner holes (apex / straddle) + make-back-piece (mirror)
 - [x] Trim to intersections (Fusion / LightBurn style), arcs preserved
 - [x] Alignment guides (smart snapping) + Line and construction-line tools
-- [ ] Boolean ops (windows, cut-outs) and true seam-allowance offset
-- [ ] Import reference images / trace an existing pattern
-- [ ] Print-to-scale PDF tiling for hand cutting
+- [x] Fillet & chamfer (round / bevel) corners
+- [x] Boolean ops (union / difference / intersect) + offset / seam allowance
+- [x] Import SVG & DXF drawings as editable shapes
+- [x] Place, calibrate and trace over a raster reference image
+- [x] Kerf compensation on cut outlines
+- [x] Nest pattern pieces onto a leather sheet
+- [x] Job estimate (leather area + waste, laser run-time, optional cost)
+- [x] Thread-length estimate + seam-mate check
+- [x] Parts library, starter templates, and parametric generators
+- [x] Dark theme, autosave & crash recovery
+- [x] Print-to-scale PDF tiling for hand cutting
 
 ## License
 

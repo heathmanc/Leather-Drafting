@@ -130,10 +130,10 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
     if not placed:
         return
 
-    # view-space drawables, depth-sorted together: panel faces AND the fold
-    # "spines" -- the strip of leather that wraps each bend, joining the two
-    # stacked layers at the fold line so a fold reads as a fold (with real
-    # thickness), not a panel floating above the crease.
+    # view-space drawables, depth-sorted together: panel faces, slab side walls
+    # (so stacked layers show their edges), and a rounded BEND at each fold --
+    # a half-pipe of leather that curves from one layer up to the next at the
+    # real bend radius, so a fold reads as a fold, not a hard vertical wall.
     draw = []                                     # (depth, kind, payload)
     allx, ally = [], []
     for pl in placed:
@@ -166,14 +166,42 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
             a, b = hg.parent_edge
             zp = levels.get(hg.parent, 0) * thickness * fraction
             zc = levels.get(hg.child, 0) * thickness * fraction
-            if abs(zp - zc) < 1e-6:
+            dz = zc - zp
+            if abs(dz) < 1e-6:
                 continue
-            corners = [Vec3(a.x, a.y, zp), Vec3(b.x, b.y, zp),
-                       Vec3(b.x, b.y, zc), Vec3(a.x, a.y, zc)]
-            rc = [rotate_view(v, yaw, pitch) for v in corners]
-            draw.append((sum(v.z for v in rc) / 4.0, "spine", rc))
-            allx += [v.x for v in rc]
-            ally += [v.y for v in rc]
+            # outboard bulge direction: unit perpendicular to the fold line,
+            # pointing the way the child panel extended before it folded back
+            ex, ey = b.x - a.x, b.y - a.y
+            el = math.hypot(ex, ey) or 1.0
+            px, py = -ey / el, ex / el
+            child = panels.get(hg.child)
+            if child and child.outline:
+                mx, my = (a.x + b.x) / 2.0, (a.y + b.y) / 2.0
+                ccx = sum(p.x for p in child.outline) / len(child.outline)
+                ccy = sum(p.y for p in child.outline) / len(child.outline)
+                if (ccx - mx) * px + (ccy - my) * py < 0.0:
+                    px, py = -px, -py
+            # the layers sit |dz| apart, so a 180 degree U-turn between them is a
+            # semicircle of radius |dz|/2 -- exactly the bend radius the nesting
+            # produced (more wrapped layers -> wider bend).
+            R = abs(dz) / 2.0
+            midz = (zp + zc) / 2.0
+            steps = 12
+
+            def bend_pt(edge_pt, theta):
+                off = R * math.sin(theta)
+                return Vec3(edge_pt.x + px * off, edge_pt.y + py * off,
+                            midz - (dz / 2.0) * math.cos(theta))
+
+            for k in range(1, steps + 1):
+                t0 = math.pi * (k - 1) / steps
+                t1 = math.pi * k / steps
+                quad = (bend_pt(a, t0), bend_pt(b, t0),
+                        bend_pt(b, t1), bend_pt(a, t1))
+                rc = [rotate_view(v, yaw, pitch) for v in quad]
+                draw.append((sum(v.z for v in rc) / 4.0, "bend", rc))
+                allx += [v.x for v in rc]
+                ally += [v.y for v in rc]
     if not allx:
         return
     draw.sort(key=lambda t: t[0])                 # painter's algorithm, far first
@@ -191,36 +219,37 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
                        h / 2.0 - (v.y - cy) * scale)
 
     base = QColor(181, 121, 58) if not dark else QColor(158, 104, 48)  # leather
-    spine = QColor(120, 78, 34)                   # the cut/bend edge, a bit darker
     edge = QColor(60, 40, 20)                     # dark line between layers
+
+    def leather(nview, lo, hi):
+        # TWO-SIDED lighting: a folded-over panel shows its back, but leather is
+        # the same colour both sides -- shading by |n.L| keeps every layer the
+        # same warm tone so front/back facing doesn't read as extra layers.
+        s = lo + (hi - lo) * abs(nview.dot(_LIGHT))
+        return QColor(int(base.red() * s), int(base.green() * s),
+                      int(base.blue() * s))
+
     for _d, kind, payload in draw:
-        if kind == "spine":
-            painter.setBrush(QBrush(spine))
-            painter.setPen(QPen(edge, 1.0))
+        if kind == "bend":
+            # the rounded fold surface -- same leather, gently shaded, no hard
+            # outline so the curve reads as continuous material
+            painter.setBrush(QBrush(leather(_panel_normal_view(payload),
+                                            0.5, 0.92)))
+            painter.setPen(Qt.NoPen)
             painter.drawPolygon(QPolygonF([to_screen(v) for v in payload]))
             continue
         if kind == "wall":
-            # side of the leather slab: shade by facing, outline it so the top
-            # and bottom edges draw a crisp line at every layer boundary
-            n = _panel_normal_view(payload)
-            lam = max(0.0, n.dot(_LIGHT))
-            shade = 0.32 + 0.4 * lam              # darker than the top face
-            painter.setBrush(QBrush(QColor(int(base.red() * shade),
-                                           int(base.green() * shade),
-                                           int(base.blue() * shade))))
+            # side of the leather slab: a touch darker, outlined so each layer
+            # boundary draws a crisp edge line
+            painter.setBrush(QBrush(leather(_panel_normal_view(payload),
+                                            0.42, 0.6)))
             painter.setPen(QPen(edge, 1.0))
             painter.drawPolygon(QPolygonF([to_screen(v) for v in payload]))
             continue
         pl, ov, hv = payload
-        n = _panel_normal_view(ov)
-        lam = max(0.0, n.dot(_LIGHT))
-        shade = 0.45 + 0.55 * lam                 # ambient + diffuse
-        col = QColor(int(base.red() * shade),
-                     int(base.green() * shade),
-                     int(base.blue() * shade))
         poly = QPolygonF([to_screen(v) for v in ov])
-        painter.setBrush(QBrush(col))
-        painter.setPen(QPen(QColor(60, 40, 20), 1.2))
+        painter.setBrush(QBrush(leather(_panel_normal_view(ov), 0.6, 1.0)))
+        painter.setPen(QPen(edge, 1.2))
         painter.drawPolygon(poly)
         # stitch holes as small dots on the face; holes that don't register
         # (misaligned or short of the edge) are drawn red so problems stand out

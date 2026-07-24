@@ -102,6 +102,20 @@ def _panel_normal_view(outline_view: List[Vec3]) -> Vec3:
     return n.normalized() if n.length() > 1e-9 else Vec3(0.0, 0.0, 1.0)
 
 
+def _model_normal(verts: List[Vec3]) -> Vec3:
+    """Area-weighted face normal (Newell's method) in model space, so a panel
+    can be extruded into a slab along its own orientation at any fold angle."""
+    nx = ny = nz = 0.0
+    n = len(verts)
+    for i in range(n):
+        a, b = verts[i], verts[(i + 1) % n]
+        nx += (a.y - b.y) * (a.z + b.z)
+        ny += (a.z - b.z) * (a.x + b.x)
+        nz += (a.x - b.x) * (a.y + b.y)
+    v = Vec3(nx, ny, nz)
+    return v.normalized() if v.length() > 1e-9 else Vec3(0.0, 0.0, 1.0)
+
+
 def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
                    *, root=None, fraction=1.0, yaw=0.6, pitch=1.0,
                    zoom=1.0, dark=False, thickness=0.0, numbers=False,
@@ -129,6 +143,24 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
         draw.append((depth, "panel", (pl, ov, hv)))
         allx += [v.x for v in ov]
         ally += [v.y for v in ov]
+        # give the leather real thickness: extrude the panel into a slab along
+        # its own normal so the exposed side edges of each stacked layer read as
+        # distinct bands (you can see where one layer ends and the next begins),
+        # instead of the stack looking like one solid block.
+        if thickness > 1e-6 and len(pl.outline) >= 3:
+            nrm = _model_normal(pl.outline)
+            if nrm.z < 0:                          # orient the slab downward
+                nrm = nrm * -1.0
+            bottom = [v - nrm * thickness for v in pl.outline]
+            top = pl.outline
+            m = len(top)
+            for i in range(m):
+                a0, b0 = top[i], top[(i + 1) % m]
+                a1, b1 = bottom[i], bottom[(i + 1) % m]
+                wv = [rotate_view(v, yaw, pitch) for v in (a0, b0, b1, a1)]
+                draw.append((sum(v.z for v in wv) / 4.0, "wall", wv))
+                allx += [v.x for v in wv]
+                ally += [v.y for v in wv]
     if levels is not None and thickness > 1e-6:
         for hg in hinges:
             a, b = hg.parent_edge
@@ -160,10 +192,23 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
 
     base = QColor(181, 121, 58) if not dark else QColor(158, 104, 48)  # leather
     spine = QColor(120, 78, 34)                   # the cut/bend edge, a bit darker
+    edge = QColor(60, 40, 20)                     # dark line between layers
     for _d, kind, payload in draw:
         if kind == "spine":
             painter.setBrush(QBrush(spine))
-            painter.setPen(QPen(QColor(60, 40, 20), 1.0))
+            painter.setPen(QPen(edge, 1.0))
+            painter.drawPolygon(QPolygonF([to_screen(v) for v in payload]))
+            continue
+        if kind == "wall":
+            # side of the leather slab: shade by facing, outline it so the top
+            # and bottom edges draw a crisp line at every layer boundary
+            n = _panel_normal_view(payload)
+            lam = max(0.0, n.dot(_LIGHT))
+            shade = 0.32 + 0.4 * lam              # darker than the top face
+            painter.setBrush(QBrush(QColor(int(base.red() * shade),
+                                           int(base.green() * shade),
+                                           int(base.blue() * shade))))
+            painter.setPen(QPen(edge, 1.0))
             painter.drawPolygon(QPolygonF([to_screen(v) for v in payload]))
             continue
         pl, ov, hv = payload

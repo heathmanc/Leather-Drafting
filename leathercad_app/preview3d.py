@@ -105,14 +105,14 @@ def _panel_normal_view(outline_view: List[Vec3]) -> Vec3:
 def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
                    *, root=None, fraction=1.0, yaw=0.6, pitch=1.0,
                    zoom=1.0, dark=False, thickness=0.0, numbers=False,
-                   bad_holes=None) -> None:
+                   bad_holes=None, levels=None) -> None:
     """Render the folded assembly into a ``w x h`` area with a painter."""
     bg = QColor(28, 30, 34) if dark else QColor(244, 244, 246)
     painter.fillRect(0, 0, w, h, bg)
     painter.setRenderHint(QPainter.Antialiasing, True)
 
     placed = assemble(panels, hinges, root=root, fraction=fraction,
-                      thickness=thickness)
+                      thickness=thickness, levels=levels)
     if not placed:
         return
 
@@ -196,6 +196,7 @@ class Preview3DWidget(QWidget):
         self.thickness = thickness
         self.numbers = numbers
         self.bad_holes = None
+        self.levels = None
         self.fraction = 1.0
         self.yaw = 0.6
         self.pitch = 1.0
@@ -208,13 +209,15 @@ class Preview3DWidget(QWidget):
         self.fraction = max(0.0, min(1.0, f))
         self.update()
 
-    def set_model(self, panels, hinges, root=None, thickness=None) -> None:
+    def set_model(self, panels, hinges, root=None, thickness=None,
+                  levels=None) -> None:
         self.panels = panels
         self.hinges = hinges
         if root is not None:
             self.root = root
         if thickness is not None:
             self.thickness = thickness
+        self.levels = levels
         self.update()
 
     def paintEvent(self, _e):
@@ -223,7 +226,7 @@ class Preview3DWidget(QWidget):
                        root=self.root, fraction=self.fraction, yaw=self.yaw,
                        pitch=self.pitch, zoom=self.zoom, dark=self.dark,
                        thickness=self.thickness, numbers=self.numbers,
-                       bad_holes=self.bad_holes)
+                       bad_holes=self.bad_holes, levels=self.levels)
         p.end()
 
     def mousePressEvent(self, e):
@@ -379,6 +382,9 @@ class ScoredFoldDialog(QDialog):
         self.piece = piece or self._auto_piece()
         self.holes = _piece_holes(self.piece, doc) if self.piece else []
         self._seq = list(range(len(self.fold_shapes)))     # fold order (indices)
+        self._enabled = {i: True for i in range(len(self.fold_shapes))}
+        # which panel each fold MOVES, and which panel is the fixed base
+        self._mover, self._base_name = self._compute_movers()
 
         lay = QVBoxLayout(self)
         panels, hinges, order, root = scored_panels(self.outline,
@@ -419,9 +425,10 @@ class ScoredFoldDialog(QDialog):
         lay.addLayout(row)
 
         lay.addWidget(QLabel(
-            "<b>Fold sequence</b> — order folds top→bottom (folded first = "
-            "innermost). Set each fold's direction &amp; angle; the bend "
-            "allowance is shown, never applied."))
+            f"<b>Panels to fold</b> (base = <b>Panel {self._base_name}</b>, "
+            "stays flat; everything wraps around it). Tick a panel to fold it, "
+            "order top→bottom = folded first (innermost). Bend allowance is "
+            "shown, never applied."))
         self._grid = QGridLayout()
         gw = QWidget()
         gw.setLayout(self._grid)
@@ -446,40 +453,64 @@ class ScoredFoldDialog(QDialog):
     def _fold_name(self, i):
         return getattr(self.fold_shapes[i], "name", "") or f"Fold {i + 1}"
 
+    def _compute_movers(self):
+        """Map each fold to the PANEL it moves, and find the fixed base panel."""
+        from leathercad.fold3d import fold_movers
+        panels, hinges, order, root = scored_panels(self.outline, self.folds, [])
+        movers = fold_movers(panels, hinges, self.folds, root)
+        name = {pid: panels[pid].name for pid in panels}
+        mover_name = {i: name.get(m, "?") for i, m in enumerate(movers)}
+        return mover_name, name.get(root, "1")
+
     def _ordered_folds(self):
-        return [self.folds[i] for i in self._seq]
+        """Folds in sequence; a disabled panel's fold is flattened to 0° so the
+        panel stays attached but unfolded."""
+        from leathercad.fold3d import Fold
+        out = []
+        for i in self._seq:
+            f = self.folds[i]
+            if not self._enabled.get(i, True):
+                f = Fold(f.a, f.b, 0.0, f.direction)
+            out.append(f)
+        return out
 
     def _populate_rows(self):
-        """(Re)build the per-fold rows in the current sequence order."""
+        """(Re)build the per-panel rows in the current fold order."""
         from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QPushButton,
-                                       QLabel as QL, QWidget, QHBoxLayout)
+                                       QCheckBox, QLabel as QL, QWidget,
+                                       QHBoxLayout)
         while self._grid.count():
             it = self._grid.takeAt(0)
             w = it.widget()
             if w is not None:
                 w.setParent(None)
-        for c, h in enumerate(("#", "Fold", "Direction", "Angle",
+        for c, h in enumerate(("Fold?", "#", "Panel", "Direction", "Angle",
                                "Bend allowance", "Order")):
             self._grid.addWidget(QL(f"<b>{h}</b>"), 0, c)
-        self._combos, self._angles, self._ba_labels = {}, {}, {}
+        self._checks, self._combos, self._angles, self._ba_labels = {}, {}, {}, {}
         for pos, fi in enumerate(self._seq):
             r = pos + 1
             fs = self.fold_shapes[fi]
-            self._grid.addWidget(QL(str(pos + 1)), r, 0)
-            self._grid.addWidget(QL(self._fold_name(fi)), r, 1)
+            ck = QCheckBox()
+            ck.setChecked(self._enabled.get(fi, True))
+            ck.toggled.connect(self._on_change)
+            self._grid.addWidget(ck, r, 0)
+            self._grid.addWidget(QL(str(pos + 1)), r, 1)
+            self._grid.addWidget(QL(f"Panel {self._mover.get(fi, '?')} "
+                                    f"<i>({self._fold_name(fi)})</i>"), r, 2)
             cb = QComboBox()
             cb.addItems(["front", "back"])
             cb.setCurrentText(fs.fold_dir or "front")
             cb.currentTextChanged.connect(self._on_change)
-            self._grid.addWidget(cb, r, 2)
+            self._grid.addWidget(cb, r, 3)
             sp = QDoubleSpinBox()
             sp.setRange(0.0, 180.0)
             sp.setValue(fs.fold_angle)
             sp.setSuffix("°")
             sp.valueChanged.connect(self._on_change)
-            self._grid.addWidget(sp, r, 3)
+            self._grid.addWidget(sp, r, 4)
             bl = QL("—")
-            self._grid.addWidget(bl, r, 4)
+            self._grid.addWidget(bl, r, 5)
             cell = QWidget()
             hb = QHBoxLayout(cell)
             hb.setContentsMargins(0, 0, 0, 0)
@@ -491,7 +522,8 @@ class ScoredFoldDialog(QDialog):
             dn.clicked.connect(lambda _c, k=pos: self._move(k, 1))
             hb.addWidget(up)
             hb.addWidget(dn)
-            self._grid.addWidget(cell, r, 5)
+            self._grid.addWidget(cell, r, 6)
+            self._checks[fi] = ck
             self._combos[fi] = cb
             self._angles[fi] = sp
             self._ba_labels[fi] = bl
@@ -504,6 +536,8 @@ class ScoredFoldDialog(QDialog):
             self._populate_rows()
 
     def _on_change(self, *_):
+        for fi, ck in self._checks.items():
+            self._enabled[fi] = ck.isChecked()
         for fi, cb in self._combos.items():
             self.fold_shapes[fi].fold_dir = cb.currentText()
         for fi, sp in self._angles.items():
@@ -511,39 +545,51 @@ class ScoredFoldDialog(QDialog):
         self._rebuild()
 
     def _rebuild(self, *_):
-        import math
-        from leathercad.fold3d import (assemble, registration_report,
-                                       fold_bend_allowance, sequence_bend_radii)
+        from leathercad.fold3d import (registration_report, fold_bend_allowance,
+                                       sequence_bend_radii, fold_stack_levels)
         for fold, fs in zip(self.folds, self.fold_shapes):
             fold.direction = fs.fold_dir or "front"
             fold.angle_deg = fs.fold_angle
         t, r = self.thick.value(), self.radius.value()
-        of = self._ordered_folds()
+        of = self._ordered_folds()                    # disabled -> 0° (stays flat)
         panels, hinges, order, root = scored_panels(self.outline, of, self.holes)
-        placed = assemble(panels, hinges, root=root, fraction=1.0, thickness=t)
+        # only the ENABLED, folding creases build the layer stack
+        folding = [f for f, i in zip(of, self._seq)
+                   if self._enabled.get(i, True) and f.angle_deg > 1e-6]
+        levels = fold_stack_levels(panels, hinges, folding, root)
+        # exaggerate the gap a little so the layers read clearly in the view
+        view_gap = max(t, 2.0) * 1.6
+        from leathercad.fold3d import assemble
+        placed = assemble(panels, hinges, root=root, fraction=1.0, thickness=t,
+                          levels=levels)
         reg_lines, bad = registration_report(placed, thickness=t, tol=1.0)
         self.view.bad_holes = bad
-        self.view.set_model(panels, hinges, root=root, thickness=t)
-        # per-fold inside radius derived from the layers each crease wraps IN THE
-        # CURRENT SEQUENCE (reorder -> different wraps -> different material).
-        radii = sequence_bend_radii(panels, hinges, of, root, t, r)
+        self.view.set_model(panels, hinges, root=root, thickness=view_gap,
+                            levels=levels)
+        # per-fold inside radius from the layers each crease wraps in the CURRENT
+        # sequence of ENABLED folds (reorder / toggle -> different wraps).
+        radii = sequence_bend_radii(panels, hinges, folding, root, t, r)
+        rad_of = {id(f): rad for f, rad in zip(folding, radii)}
         add_w = add_h = 0.0
-        for rad, fold, fi in zip(radii, of, self._seq):
+        for fold, fi in zip(of, self._seq):
+            if fi not in self._ba_labels:
+                continue
+            if not (self._enabled.get(fi, True) and fold.angle_deg > 1e-6):
+                self._ba_labels[fi].setText("(not folded)")
+                continue
+            rad = rad_of.get(id(fold), r)
             ba1 = fold_bend_allowance(fold, t, rad)
             d = fold.b - fold.a
             if abs(d.y) >= abs(d.x):
                 add_w += ba1
             else:
                 add_h += ba1
-            if fi in self._ba_labels:
-                lay = int(round((rad - r) / t)) if t > 1e-9 else 0
-                txt = f"+{ba1:.1f} mm"
-                if lay:
-                    txt += f"  (wraps {lay})"
-                self._ba_labels[fi].setText(txt)
+            lay = int(round((rad - r) / t)) if t > 1e-9 else 0
+            txt = f"+{ba1:.1f} mm" + (f"  (wraps {lay})" if lay else "")
+            self._ba_labels[fi].setText(txt)
         reg = "<br>".join(reg_lines)
         self.readout.setText(
-            f"<b>{len(order)} panels · {len(self.fold_shapes)} folds.</b> "
+            f"<b>{len(order)} panels, base Panel {self._base_name}.</b> "
             f"Grow the flat blank by <b>{add_w:.1f} mm</b> in width and "
             f"<b>{add_h:.1f} mm</b> in height (leather {t:g} mm) — do it by "
             f"hand. Outer folds need more (they wrap the layers inside).<br>"
@@ -554,12 +600,13 @@ class ScoredFoldDialog(QDialog):
 
 def render_png(path: str, panels, hinges, *, root=None, fraction=1.0, yaw=0.6,
                pitch=1.0, zoom=1.0, size=(900, 720), dark=False, thickness=0.0,
-               numbers=False, bad_holes=None) -> None:
+               numbers=False, bad_holes=None, levels=None) -> None:
     """Render an assembled view straight to a PNG file (no window needed)."""
     w, h = size
     img = QImage(w, h, QImage.Format_ARGB32)
     p = QPainter(img)
     paint_assembly(p, w, h, panels, hinges, root=root, fraction=fraction,
+                   levels=levels,
                    yaw=yaw, pitch=pitch, zoom=zoom, dark=dark,
                    thickness=thickness, numbers=numbers, bad_holes=bad_holes)
     p.end()

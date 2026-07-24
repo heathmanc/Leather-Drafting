@@ -185,15 +185,19 @@ def _build_tree(hinges: List[Hinge], root: str) -> List[Tuple[str, Hinge]]:
 
 def assemble(panels: Dict[str, Panel], hinges: List[Hinge],
              root: Optional[str] = None, fraction: float = 1.0,
-             thickness: float = 0.0) -> List[PlacedPanel]:
+             thickness: float = 0.0,
+             levels: Optional[Dict[str, int]] = None) -> List[PlacedPanel]:
     """Fold ``panels`` about ``hinges`` and return them as 3D ``PlacedPanel``s.
 
     ``root`` (default: the first panel) stays in the z = 0 plane; every other
     panel reachable through the hinge graph is folded into place. ``fraction``
     scales all dihedral angles together (0 = flat net, 1 = fully assembled).
-    ``thickness`` lifts each panel off the root plane by ``depth * thickness`` so
-    layers that fold flat onto each other stack with a visible gap instead of
-    z-fighting. Panels not reachable from the root are returned flat beside it."""
+    ``thickness`` lifts each panel off the root plane so layers stack with a
+    visible gap instead of z-fighting. Pass ``levels`` (from
+    ``fold_stack_levels``) to separate them by their TRUE stack order — so a
+    fully-folded piece reads as clear layers and you can see which is on top;
+    without it, panels are stacked by hinge-tree depth. The stack gap scales
+    from 0 (flat) to full at ``fraction`` = 1. Unreachable panels lie flat."""
     if not panels:
         return []
     if root is None or root not in panels:
@@ -219,7 +223,8 @@ def assemble(panels: Dict[str, Panel], hinges: List[Hinge],
     placed: List[PlacedPanel] = []
     for pid, panel in panels.items():
         place, _n = frames.get(pid, _root_frame())
-        dz = depth.get(pid, 0) * thickness      # stack folded layers by thickness
+        lvl = levels.get(pid, 0) if levels is not None else depth.get(pid, 0)
+        dz = lvl * thickness * fraction          # separate stacked layers
 
         def lift(v: Vec2, _p=place, _dz=dz) -> Vec3:
             w = _p(v)
@@ -628,9 +633,7 @@ def sequence_bend_radii(panels: Dict[str, Panel], hinges: List[Hinge],
     ``folds_in_order``."""
     if not hinges or not panels:
         return [base_radius] * len(folds_in_order)
-    # folded-flat footprints (2D bounding boxes) for the overlap tests
-    placed = assemble(panels, hinges, root=root, fraction=1.0, thickness=0.0)
-    fp = {p.id: _bbox(p.outline) for p in placed if p.outline}
+    level, fp = _simulate_stack(panels, hinges, folds_in_order, root)
 
     def hinge_for(fold: Fold):
         mid = (fold.a + fold.b) * 0.5
@@ -640,6 +643,44 @@ def sequence_bend_radii(panels: Dict[str, Panel], hinges: List[Hinge],
             d = (Vec2(hm.x - mid.x, hm.y - mid.y)).length()
             if d < bd:
                 bd, best = d, i
+        return best
+
+    radii = []
+    for fold in folds_in_order:
+        hi = hinge_for(fold)
+        if hi is None:
+            radii.append(base_radius)
+            continue
+        a, b = hinges[hi].parent, hinges[hi].child
+        lo, hi2 = sorted((level.get(a, 0), level.get(b, 0)))
+        wrap = 0
+        for x in panels:
+            if x in (a, b):
+                continue
+            if lo < level.get(x, 0) < hi2 and x in fp and (
+                    (a in fp and _bbox_overlap(fp[x], fp[a]))
+                    or (b in fp and _bbox_overlap(fp[x], fp[b]))):
+                wrap += 1
+        radii.append(base_radius + wrap * thickness)
+    return radii
+
+
+def _simulate_stack(panels: Dict[str, Panel], hinges: List[Hinge],
+                    folds_in_order: List[Fold], root: str):
+    """Flat-fold stack simulation: fold each crease in sequence, tracking every
+    panel's stack LEVEL (higher = nearer the top) and orientation. Returns
+    ``(level_dict, footprint_dict)``. This is the shared core of both the nesting
+    radii and the layered 3D rendering."""
+    placed = assemble(panels, hinges, root=root, fraction=1.0, thickness=0.0)
+    fp = {p.id: _bbox(p.outline) for p in placed if p.outline}
+
+    def hinge_for(fold: Fold):
+        mid = (fold.a + fold.b) * 0.5
+        best, bd = None, 1.0
+        for i, h in enumerate(hinges):
+            hm = (h.parent_edge[0] + h.parent_edge[1]) * 0.5
+            if (Vec2(hm.x - mid.x, hm.y - mid.y)).length() < bd:
+                bd, best = (Vec2(hm.x - mid.x, hm.y - mid.y)).length(), i
         return best
 
     subs = _child_subtrees(list(panels), hinges, root)
@@ -669,25 +710,43 @@ def sequence_bend_radii(panels: Dict[str, Panel], hinges: List[Hinge],
         for c in child:
             flip[c] *= -1
         placed_ids |= set(child)
+    return level, fp
 
-    radii = []
-    for fold in folds_in_order:
-        hi = hinge_for(fold)
+
+def fold_movers(panels: Dict[str, Panel], hinges: List[Hinge],
+                folds: List[Fold], root: str) -> List[Optional[str]]:
+    """The panel that MOVES for each fold (the crease's child-side endpoint, away
+    from the fixed base). Aligned to ``folds``; None if a fold has no hinge."""
+    subs = _child_subtrees(list(panels), hinges, root)
+    out: List[Optional[str]] = []
+    for fold in folds:
+        mid = (fold.a + fold.b) * 0.5
+        hi, bd = None, 1.0
+        for i, h in enumerate(hinges):
+            hm = (h.parent_edge[0] + h.parent_edge[1]) * 0.5
+            d = (Vec2(hm.x - mid.x, hm.y - mid.y)).length()
+            if d < bd:
+                bd, hi = d, i
         if hi is None:
-            radii.append(base_radius)
+            out.append(None)
             continue
-        a, b = hinges[hi].parent, hinges[hi].child
-        lo, hi2 = sorted((level.get(a, 0), level.get(b, 0)))
-        wrap = 0
-        for x in panels:
-            if x in (a, b):
-                continue
-            if lo < level.get(x, 0) < hi2 and x in fp and (
-                    (a in fp and _bbox_overlap(fp[x], fp[a]))
-                    or (b in fp and _bbox_overlap(fp[x], fp[b]))):
-                wrap += 1
-        radii.append(base_radius + wrap * thickness)
-    return radii
+        _parent, child = subs[hi]
+        h = hinges[hi]
+        out.append(h.child if h.child in child else h.parent)
+    return out
+
+
+def fold_stack_levels(panels: Dict[str, Panel], hinges: List[Hinge],
+                      folds_in_order: List[Fold], root: str) -> Dict[str, int]:
+    """Each panel's stack level when folded flat in the given sequence (0 = the
+    base plane; higher = stacked further toward the top). Feed to ``assemble``'s
+    ``levels`` so folded layers separate cleanly instead of z-fighting."""
+    if not hinges or not panels:
+        return {p: 0 for p in panels}
+    level, _fp = _simulate_stack(panels, hinges, folds_in_order, root)
+    # shift so the base plane is 0 and everything stacks above it
+    lo = min(level.values())
+    return {p: v - lo for p, v in level.items()}
 
 
 def bend_allowance(folds: List[Fold], thickness: float, radius: float = 0.0,

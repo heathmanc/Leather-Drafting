@@ -272,3 +272,40 @@ def test_wallet_folds_into_four_panels_with_seam_holes(qapp):
     panels, hinges, order, root = scored_panels(outline, folds, holes)
     assert len(order) == 4                            # not 6 with sliver ghosts
     assert holes and sum(len(panels[o].holes) for o in order) > 0
+
+
+def test_dialog_is_per_panel_with_base_and_toggles(qapp):
+    """Rows are per PANEL (labelled by the panel they move), the big piece is the
+    fixed base and excluded, and a panel can be toggled off."""
+    from leathercad.templates import fold_over_wallet
+    from leathercad_app.preview3d import ScoredFoldDialog
+    doc = fold_over_wallet()
+    for s in [s for s in doc.shapes if getattr(s, "layer", "") == "Score"]:
+        s.fold_dir = "front"
+        s.fold_angle = 180.0
+    dlg = ScoredFoldDialog(doc)
+    assert dlg._base_name == "2"                       # big middle piece is base
+    movers = set(dlg._mover.values())
+    assert movers == {"1", "3", "4"} and "2" not in movers   # base not a mover
+    # toggling a panel off marks it "(not folded)"
+    fi = next(i for i in range(len(dlg.fold_shapes))
+              if dlg._fold_name(i) == "Flap fold")
+    dlg._checks[fi].setChecked(False)
+    assert dlg._ba_labels[fi].text() == "(not folded)"
+
+
+def test_fold_stack_levels_layer_the_wallet(qapp):
+    """Fully folded, panels get distinct stack levels (clear layers), base = 0."""
+    from leathercad.templates import fold_over_wallet
+    from leathercad.fold3d import fold_stack_levels
+    from leathercad_app.preview3d import build_scored_from_document, scored_panels
+    doc = fold_over_wallet()
+    for s in [s for s in doc.shapes if getattr(s, "layer", "") == "Score"]:
+        s.fold_dir = "front"
+        s.fold_angle = 180.0
+    outline, folds, fs = build_scored_from_document(doc)
+    panels, hinges, order, root = scored_panels(outline, folds)
+    levels = fold_stack_levels(panels, hinges, folds, root)
+    assert levels[root] == 0                            # base plane
+    # four panels end up on four distinct layers (nothing smashed together)
+    assert len(set(levels.values())) == 4

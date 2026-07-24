@@ -389,6 +389,16 @@ class ScoredFoldDialog(QDialog):
         self.thick.setSuffix(" mm")
         self.thick.valueChanged.connect(self._rebuild)
         row.addWidget(self.thick)
+        row.addWidget(QLabel("Bend radius"))
+        self.radius = QDoubleSpinBox()
+        self.radius.setRange(0.0, 12.0)
+        self.radius.setSingleStep(0.5)
+        self.radius.setValue(0.0)                 # a scored crease folds ~sharp
+        self.radius.setSuffix(" mm")
+        self.radius.setToolTip("Inside radius of the fold. 0 = a sharp scored "
+                               "crease; raise it for a rolled / padded edge.")
+        self.radius.valueChanged.connect(self._rebuild)
+        row.addWidget(self.radius)
         row.addSpacing(16)
         row.addWidget(QLabel("Fold"))
         self.slider = QSlider(Qt.Horizontal)
@@ -466,15 +476,16 @@ class ScoredFoldDialog(QDialog):
         reg_lines, bad = registration_report(placed, thickness=t, tol=1.0)
         self.view.bad_holes = bad
         self.view.set_model(panels, hinges, root=root, thickness=t)
-        ba = bend_allowance(self.folds, t)
+        r = self.radius.value()
+        ba = bend_allowance(self.folds, t, r)
         # label each Grow button with that fold's allowance
         from leathercad.fold3d import fold_bend_allowance
         for fold, btn in zip(self.folds, self._grow_btns):
-            btn.setText(f"Grow +{fold_bend_allowance(fold, t):.1f} mm")
+            btn.setText(f"Grow +{fold_bend_allowance(fold, t, r):.1f} mm")
         reg = "<br>".join(reg_lines)
         self.readout.setText(
             f"<b>{len(order)} panels · {len(self.fold_shapes)} folds.</b> "
-            f"Bend allowance (leather {t:g} mm): add "
+            f"Bend allowance (leather {t:g} mm, bend radius {r:g} mm): add "
             f"<b>{ba['width']:.1f} mm</b> to width, "
             f"<b>{ba['height']:.1f} mm</b> to height of the flat blank.<br>"
             f"<b>Lineup check</b> (red = won't register):<br>{reg}")
@@ -496,7 +507,7 @@ class ScoredFoldDialog(QDialog):
         if i >= len(self.folds):
             return
         fold = self.folds[i]
-        ba = fold_bend_allowance(fold, self.thick.value())
+        ba = fold_bend_allowance(fold, self.thick.value(), self.radius.value())
         if ba <= 1e-6:
             return
         n = (fold.b - fold.a).perp().normalized()      # world fold normal

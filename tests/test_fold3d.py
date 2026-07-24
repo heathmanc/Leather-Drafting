@@ -240,11 +240,13 @@ def test_bend_allowance_adds_to_the_folded_axis():
     ba = bend_allowance(folds, thickness=3.0)
     assert ba["height"] == 0.0
     assert ba["width"] > 0.0
-    # each 90 deg fold: arc = (pi/2)*(r + 0.5t) with r=t=3 -> ~7.07mm, x2
+    # each 90 deg fold: arc = (pi/2)*(r + 0.5t), sharp crease r=0 -> ~2.36mm, x2
     import math
-    one = math.radians(90) * (3.0 + 0.5 * 3.0)
+    one = math.radians(90) * (0.0 + 0.5 * 3.0)
     assert abs(ba["width"] - 2 * one) < 1e-6
     assert abs(ba["total"] - 2 * one) < 1e-6
+    # a real bend radius adds more material
+    assert bend_allowance(folds, 3.0, radius=2.0)["width"] > ba["width"]
 
 
 def test_horizontal_score_grows_height():
@@ -319,8 +321,11 @@ def test_registration_needs_a_fold_to_stack():
 def test_fold_bend_allowance_single():
     from leathercad.fold3d import Fold, fold_bend_allowance
     f = Fold(Vec2(0, 0), Vec2(0, 100), 90, "back")
-    # (pi/2)*(r + 0.5t) with r=t=3
-    assert abs(fold_bend_allowance(f, 3.0) - math.radians(90) * (3.0 + 1.5)) < 1e-9
+    # (pi/2)*(r + 0.5t); a sharp crease (r=0) of 3mm leather -> only ~2.36mm
+    assert abs(fold_bend_allowance(f, 3.0) - math.radians(90) * (0.0 + 1.5)) < 1e-9
+    # 180 deg flat fold of 2mm leather: pi * 0.5*2 = pi (~3.14mm), not 5x that
+    f180 = Fold(Vec2(0, 0), Vec2(0, 100), 180, "back")
+    assert abs(fold_bend_allowance(f180, 2.0) - math.pi) < 1e-9
 
 
 def test_grow_polygon_at_fold_widens_by_allowance():

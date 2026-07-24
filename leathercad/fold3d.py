@@ -419,23 +419,31 @@ def _poly_centroid(poly: List[Vec2]) -> Vec2:
     return Vec2(sum(p.x for p in poly) / n, sum(p.y for p in poly) / n)
 
 
-def bend_allowance(folds: List[Fold], thickness: float,
-                   radius: Optional[float] = None, k: float = 0.5
-                   ) -> Dict[str, float]:
-    """How much longer the FLAT blank must be to survive folding around a real
-    (non-zero) bend radius, versus an ideal zero-thickness crease.
+def fold_bend_allowance(fold: Fold, thickness: float,
+                        radius: float = 0.0, k: float = 0.5) -> float:
+    """Extra flat material (mm) consumed by a SINGLE fold.
 
-    Each fold's neutral fibre travels an arc of ``angle * (radius + k*thickness)``
-    while the crease line itself contributes ``0``; the difference is extra
-    material you must add. Leather bends tight, so ``radius`` defaults to one
-    thickness. Returns per-axis additions: a near-vertical score grows WIDTH,
-    a near-horizontal score grows HEIGHT (plus the total)."""
-    r = thickness if radius is None else radius
+    Only the curved bend uses more length than an ideal zero-thickness crease:
+    the neutral fibre (at ``k*thickness`` in from the inside face) travels an arc
+    of ``angle * (radius + k*thickness)``. A drawn crease line contributes 0, so
+    that arc IS the amount to add.
+
+    ``radius`` is the INSIDE bend radius and defaults to 0 -- a leather score/
+    crease folds essentially sharp, so a 180° fold of ``t`` mm leather adds only
+    ``pi * k * t`` (~1.6·t), not several times the thickness. Dial ``radius`` up
+    for a rolled / padded edge."""
+    return math.radians(abs(fold.angle_deg)) * (radius + k * thickness)
+
+
+def bend_allowance(folds: List[Fold], thickness: float, radius: float = 0.0,
+                   k: float = 0.5) -> Dict[str, float]:
+    """Per-axis flat-blank additions for a set of folds (see
+    ``fold_bend_allowance``): a near-vertical score grows WIDTH, a near-
+    horizontal one grows HEIGHT."""
     add_w = add_h = 0.0
     per: List[float] = []
     for f in folds:
-        ang = math.radians(abs(f.angle_deg))
-        ba = ang * (r + k * thickness)          # arc length of the neutral fibre
+        ba = fold_bend_allowance(f, thickness, radius, k)
         per.append(ba)
         d = f.b - f.a
         if abs(d.y) >= abs(d.x):                # vertical-ish score: folds in x
@@ -444,13 +452,6 @@ def bend_allowance(folds: List[Fold], thickness: float,
             add_h += ba
     return {"width": add_w, "height": add_h, "total": add_w + add_h,
             "per_fold": per}
-
-
-def fold_bend_allowance(fold: Fold, thickness: float,
-                        radius: Optional[float] = None, k: float = 0.5) -> float:
-    """Bend allowance (mm of extra flat material) for a SINGLE fold."""
-    r = thickness if radius is None else radius
-    return math.radians(abs(fold.angle_deg)) * (r + k * thickness)
 
 
 def grow_polygon_at_fold(outline: List[Vec2], fold: Fold, ba: float

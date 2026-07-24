@@ -303,7 +303,7 @@ leathercad/            pure-Python model + engine (no dependencies)
   nesting.py           pack pattern pieces onto a sheet
   estimate.py          leather-area / run-time / cost job estimate
   thread.py            saddle-stitch thread-length estimate
-  templates.py         starter documents (card holder / belt / wallet …)
+  templates.py         starter documents (card holder / belt / key fob …)
   generators.py        parametric part generators (card pockets, zippers)
   text.py              engrave lettering baked to paths
   dimension.py         dimension annotations that track shapes

@@ -116,19 +116,35 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
     if not placed:
         return
 
-    # view-space geometry for every panel (for shading + a shared fit box)
-    view = []
+    # view-space drawables, depth-sorted together: panel faces AND the fold
+    # "spines" -- the strip of leather that wraps each bend, joining the two
+    # stacked layers at the fold line so a fold reads as a fold (with real
+    # thickness), not a panel floating above the crease.
+    draw = []                                     # (depth, kind, payload)
     allx, ally = [], []
     for pl in placed:
         ov = [rotate_view(v, yaw, pitch) for v in pl.outline]
         hv = [rotate_view(v, yaw, pitch) for v in pl.holes]
         depth = sum(v.z for v in ov) / len(ov) if ov else 0.0
-        view.append((pl, ov, hv, depth))
+        draw.append((depth, "panel", (pl, ov, hv)))
         allx += [v.x for v in ov]
         ally += [v.y for v in ov]
+    if levels is not None and thickness > 1e-6:
+        for hg in hinges:
+            a, b = hg.parent_edge
+            zp = levels.get(hg.parent, 0) * thickness * fraction
+            zc = levels.get(hg.child, 0) * thickness * fraction
+            if abs(zp - zc) < 1e-6:
+                continue
+            corners = [Vec3(a.x, a.y, zp), Vec3(b.x, b.y, zp),
+                       Vec3(b.x, b.y, zc), Vec3(a.x, a.y, zc)]
+            rc = [rotate_view(v, yaw, pitch) for v in corners]
+            draw.append((sum(v.z for v in rc) / 4.0, "spine", rc))
+            allx += [v.x for v in rc]
+            ally += [v.y for v in rc]
     if not allx:
         return
-    view.sort(key=lambda t: t[3])                 # painter's algorithm, far first
+    draw.sort(key=lambda t: t[0])                 # painter's algorithm, far first
 
     minx, maxx = min(allx), max(allx)
     miny, maxy = min(ally), max(ally)
@@ -143,7 +159,14 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
                        h / 2.0 - (v.y - cy) * scale)
 
     base = QColor(181, 121, 58) if not dark else QColor(158, 104, 48)  # leather
-    for pl, ov, hv, _d in view:
+    spine = QColor(120, 78, 34)                   # the cut/bend edge, a bit darker
+    for _d, kind, payload in draw:
+        if kind == "spine":
+            painter.setBrush(QBrush(spine))
+            painter.setPen(QPen(QColor(60, 40, 20), 1.0))
+            painter.drawPolygon(QPolygonF([to_screen(v) for v in payload]))
+            continue
+        pl, ov, hv = payload
         n = _panel_normal_view(ov)
         lam = max(0.0, n.dot(_LIGHT))
         shade = 0.45 + 0.55 * lam                 # ambient + diffuse

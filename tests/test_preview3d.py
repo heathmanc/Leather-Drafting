@@ -309,3 +309,32 @@ def test_fold_stack_levels_layer_the_wallet(qapp):
     assert levels[root] == 0                            # base plane
     # four panels end up on four distinct layers (nothing smashed together)
     assert len(set(levels.values())) == 4
+
+
+def test_stacked_fold_draws_bend_spines(qapp, tmp_path):
+    """With levels + thickness, a fully-folded piece renders the fold "spine"
+    (the bent leather that bridges two stacked layers at the fold line) so a
+    fold reads as a connected fold, not a panel floating above the crease."""
+    from PySide6.QtGui import QImage
+    from leathercad.templates import fold_over_wallet
+    from leathercad.fold3d import fold_stack_levels
+    from leathercad_app.preview3d import (build_scored_from_document,
+                                          scored_panels, render_png)
+    doc = fold_over_wallet()
+    for s in [s for s in doc.shapes if getattr(s, "layer", "") == "Score"]:
+        s.fold_dir = "front"
+        s.fold_angle = 180.0
+    outline, folds, fs = build_scored_from_document(doc)
+    panels, hinges, order, root = scored_panels(outline, folds)
+    levels = fold_stack_levels(panels, hinges, folds, root)
+    # the spine only shows up when neighbouring layers actually differ in z,
+    # which they do once thickness > 0 and the piece is folded flat
+    assert any(levels[hg.parent] != levels[hg.child] for hg in hinges)
+    out = tmp_path / "stacked.png"
+    render_png(str(out), panels, hinges, root=root, fraction=1.0,
+               thickness=2.0, levels=levels, size=(320, 260))
+    img = QImage(str(out))
+    assert not img.isNull()
+    bg = img.pixel(1, 1)
+    assert any(img.pixel(x, y) != bg
+               for x in range(0, 320, 4) for y in range(0, 260, 4))

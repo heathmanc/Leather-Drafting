@@ -496,8 +496,7 @@ class ScoredFoldDialog(QDialog):
             ck.toggled.connect(self._on_change)
             self._grid.addWidget(ck, r, 0)
             self._grid.addWidget(QL(str(pos + 1)), r, 1)
-            self._grid.addWidget(QL(f"Panel {self._mover.get(fi, '?')} "
-                                    f"<i>({self._fold_name(fi)})</i>"), r, 2)
+            self._grid.addWidget(QL(f"Panel {self._mover.get(fi, '?')}"), r, 2)
             cb = QComboBox()
             cb.addItems(["front", "back"])
             cb.setCurrentText(fs.fold_dir or "front")
@@ -557,8 +556,9 @@ class ScoredFoldDialog(QDialog):
         folding = [f for f, i in zip(of, self._seq)
                    if self._enabled.get(i, True) and f.angle_deg > 1e-6]
         levels = fold_stack_levels(panels, hinges, folding, root)
-        # exaggerate the gap a little so the layers read clearly in the view
-        view_gap = max(t, 2.0) * 1.6
+        # separate the layers by the ACTUAL leather thickness (a compact stack,
+        # not an exploded one) so the top piece reads without floating away
+        view_gap = t if t > 1e-6 else 1.0
         from leathercad.fold3d import assemble
         placed = assemble(panels, hinges, root=root, fraction=1.0, thickness=t,
                           levels=levels)

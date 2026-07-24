@@ -620,6 +620,29 @@ def _bbox_overlap(a, b, eps: float = 0.5) -> bool:
                 or a[1] > b[3] - eps or b[1] > a[3] - eps)
 
 
+def _bbox_area(b) -> float:
+    return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+
+
+def _bbox_overlap_area(a, b) -> float:
+    ix = min(a[2], b[2]) - max(a[0], b[0])
+    iy = min(a[3], b[3]) - max(a[1], b[1])
+    return ix * iy if ix > 0 and iy > 0 else 0.0
+
+
+def _significant_overlap(a, b, frac: float = 0.2) -> bool:
+    """True when two footprints overlap over a MEANINGFUL fraction of the
+    smaller one -- not just a thin clipped sliver. Used so a panel that merely
+    grazes another when folded (e.g. a wallet flap whose tip nicks the pouch
+    mouth) does not get counted as stacked on top of it and lifted a whole
+    extra layer."""
+    ov = _bbox_overlap_area(a, b)
+    if ov <= 0.0:
+        return False
+    smaller = min(_bbox_area(a), _bbox_area(b))
+    return smaller <= 1e-9 or ov >= frac * smaller
+
+
 def sequence_bend_radii(panels: Dict[str, Panel], hinges: List[Hinge],
                         folds_in_order: List[Fold], root: str,
                         thickness: float, base_radius: float = 0.0
@@ -695,7 +718,7 @@ def _simulate_stack(panels: Dict[str, Panel], hinges: List[Hinge],
         dirn = 1 if hinges[hi].angle_deg >= 0 else -1
         eff = dirn * flip[parent]
         ov = [level[p] for p in placed_ids
-              if any(p in fp and c in fp and _bbox_overlap(fp[p], fp[c])
+              if any(p in fp and c in fp and _significant_overlap(fp[p], fp[c])
                      for c in child)]
         base = (max(ov) if eff > 0 else min(ov)) if ov else 0
         cl = [level[c] for c in child]

@@ -295,7 +295,10 @@ def test_dialog_is_per_panel_with_base_and_toggles(qapp):
 
 
 def test_fold_stack_levels_layer_the_wallet(qapp):
-    """Fully folded, panels get distinct stack levels (clear layers), base = 0."""
+    """Fully folded, panels stack by where they actually land: the flap lies
+    directly on the back panel (2 layers), while the two wings fold in and
+    overlap so the pouch stacks 3 layers. A panel that only grazes another
+    (the flap tip nicking the pouch mouth) must NOT be lifted an extra layer."""
     from leathercad.templates import fold_over_wallet
     from leathercad.fold3d import fold_stack_levels
     from leathercad_app.preview3d import build_scored_from_document, scored_panels
@@ -307,8 +310,21 @@ def test_fold_stack_levels_layer_the_wallet(qapp):
     panels, hinges, order, root = scored_panels(outline, folds)
     levels = fold_stack_levels(panels, hinges, folds, root)
     assert levels[root] == 0                            # base plane
-    # four panels end up on four distinct layers (nothing smashed together)
-    assert len(set(levels.values())) == 4
+
+    def centroid_y(pid):
+        ys = [p.y for p in panels[pid].outline]
+        return sum(ys) / len(ys)
+
+    # the flap is the panel highest up the pattern (above the flap fold, y=185)
+    flap = max(panels, key=centroid_y)
+    assert centroid_y(flap) > 185.0
+    # it folds straight onto the back panel: one layer up, i.e. 2 layers total,
+    # NOT lifted over the wings
+    assert levels[flap] == 1
+    # the two wings fold in and overlap -> they stack on distinct levels, so the
+    # pouch is 3 layers deep (base + two wings)
+    wings = [p for p in panels if p != root and p != flap]
+    assert sorted(levels[w] for w in wings) == [1, 2]
 
 
 def test_stacked_fold_draws_bend_spines(qapp, tmp_path):

@@ -183,6 +183,64 @@ def _build_tree(hinges: List[Hinge], root: str) -> List[Tuple[str, Hinge]]:
     return order
 
 
+def _build_frames(panels: Dict[str, Panel], hinges: List[Hinge], root: str,
+                  frac) -> Tuple[Dict[str, _Frame], Dict[str, int]]:
+    """Place every panel's flat->3D frame by folding down the hinge tree from
+    ``root``. ``frac`` maps a panel id to its own 0..1 fold progress. Returns
+    ``(frames, depth)``."""
+    def _centroid(pts: List[Vec2]) -> Optional[Vec2]:
+        if not pts:
+            return None
+        n = len(pts)
+        return Vec2(sum(p.x for p in pts) / n, sum(p.y for p in pts) / n)
+
+    frames: Dict[str, _Frame] = {root: _root_frame()}
+    depth: Dict[str, int] = {root: 0}
+    for child_id, hinge in _build_tree(hinges, root):
+        if child_id not in panels or hinge.parent not in frames:
+            continue
+        fr = _child_frame(frames[hinge.parent], hinge, frac(child_id),
+                          body_ref=_centroid(panels[child_id].outline))
+        if fr is not None:
+            frames[child_id] = fr
+            depth[child_id] = depth.get(hinge.parent, 0) + 1
+    return frames, depth
+
+
+def folded_hinge_edges(panels: Dict[str, Panel], hinges: List[Hinge],
+                       root: Optional[str] = None, fraction: float = 1.0,
+                       fractions: Optional[Dict[str, float]] = None
+                       ) -> List[Optional[Tuple[Vec3, Vec3]]]:
+    """World-space endpoints of each hinge's fold line AFTER folding, aligned to
+    ``hinges``. A crease drawn at its flat pattern position would float free once
+    an inner fold has carried it elsewhere; this gives the moved location so the
+    bend is drawn where the leather actually creases. ``None`` if unplaceable."""
+    if not panels:
+        return [None] * len(hinges)
+    if root is None or root not in panels:
+        root = next(iter(panels))
+
+    def _frac(pid: str) -> float:
+        if fractions is not None and pid in fractions:
+            return fractions[pid]
+        return fraction
+
+    frames, _depth = _build_frames(panels, hinges, root, _frac)
+    out: List[Optional[Tuple[Vec3, Vec3]]] = []
+    for h in hinges:
+        # parent and child frames both map their shared edge to the SAME world
+        # segment; use whichever panel is actually placed
+        if h.parent in frames:
+            place, _n = frames[h.parent]
+            out.append((place(h.parent_edge[0]), place(h.parent_edge[1])))
+        elif h.child in frames:
+            place, _n = frames[h.child]
+            out.append((place(h.child_edge[0]), place(h.child_edge[1])))
+        else:
+            out.append(None)
+    return out
+
+
 def assemble(panels: Dict[str, Panel], hinges: List[Hinge],
              root: Optional[str] = None, fraction: float = 1.0,
              thickness: float = 0.0,
@@ -221,16 +279,7 @@ def assemble(panels: Dict[str, Panel], hinges: List[Hinge],
             return fractions[pid]
         return fraction
 
-    frames: Dict[str, _Frame] = {root: _root_frame()}
-    depth: Dict[str, int] = {root: 0}
-    for child_id, hinge in _build_tree(hinges, root):
-        if child_id not in panels or hinge.parent not in frames:
-            continue
-        fr = _child_frame(frames[hinge.parent], hinge, _frac(child_id),
-                          body_ref=_centroid(panels[child_id].outline))
-        if fr is not None:
-            frames[child_id] = fr
-            depth[child_id] = depth.get(hinge.parent, 0) + 1
+    frames, depth = _build_frames(panels, hinges, root, _frac)
 
     placed: List[PlacedPanel] = []
     for pid, panel in panels.items():

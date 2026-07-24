@@ -122,7 +122,7 @@ def test_scored_dialog_folds_and_reports_bend_allowance(qapp):
     assert "Grow the flat blank" in dlg.readout.text()
     assert "panels" in dlg.readout.text()
     # changing a fold direction writes back to the shape and re-renders
-    dlg._combos[0].setCurrentText("back")
+    dlg._combos[dlg._order[0]].setCurrentText("back")
     dlg._rebuild()
     fold_shapes = [s for s in dlg.doc.shapes if s.is_fold_line]
     assert any(s.fold_dir == "back" for s in fold_shapes)
@@ -233,25 +233,13 @@ def test_starts_flat(qapp):
 
 
 def test_fold_sequence_is_reorderable(qapp):
-    """The ↑/↓ order controls the fold sequence used for nesting."""
+    """The ↑/↓ order controls the fold sequence (of the moving panels)."""
     from leathercad_app.preview3d import ScoredFoldDialog
-    dlg = ScoredFoldDialog(_scored_doc())            # two folds
-    assert dlg._seq == [0, 1]
-    dlg._move(1, -1)                                  # move 2nd fold up
-    assert dlg._seq == [1, 0]
-
-
-def test_uses_fold_line_names(qapp):
-    """Rows are labelled with the fold lines' names, not generic numbers."""
-    from leathercad.templates import fold_over_wallet
-    from leathercad_app.preview3d import ScoredFoldDialog
-    doc = fold_over_wallet()
-    for s in [s for s in doc.shapes if getattr(s, "layer", "") == "Score"]:
-        s.fold_dir = "front"
-        s.fold_angle = 90.0
-    dlg = ScoredFoldDialog(doc)
-    names = {dlg._fold_name(i) for i in range(len(dlg.fold_shapes))}
-    assert "Flap fold" in names and "Left wing fold" in names
+    dlg = ScoredFoldDialog(_scored_doc())            # two folds -> two movers
+    assert len(dlg._order) == 2
+    first = list(dlg._order)
+    dlg._move(1, -1)                                  # move 2nd panel up
+    assert dlg._order == first[::-1]
 
 
 def test_wallet_folds_into_four_panels_with_seam_holes(qapp):
@@ -274,9 +262,9 @@ def test_wallet_folds_into_four_panels_with_seam_holes(qapp):
     assert holes and sum(len(panels[o].holes) for o in order) > 0
 
 
-def test_dialog_is_per_panel_with_base_and_toggles(qapp):
-    """Rows are per PANEL (labelled by the panel they move), the big piece is the
-    fixed base and excluded, and a panel can be toggled off."""
+def test_dialog_lists_all_panels_and_lets_you_pick_the_fixed_one(qapp):
+    """Every panel is listed; the largest defaults to the fixed base, the rest
+    fold; a panel can be toggled off; and the user can choose a different base."""
     from leathercad.templates import fold_over_wallet
     from leathercad_app.preview3d import ScoredFoldDialog
     doc = fold_over_wallet()
@@ -284,14 +272,23 @@ def test_dialog_is_per_panel_with_base_and_toggles(qapp):
         s.fold_dir = "front"
         s.fold_angle = 180.0
     dlg = ScoredFoldDialog(doc)
-    assert dlg._base_name == "2"                       # big middle piece is base
-    movers = set(dlg._mover.values())
-    assert movers == {"1", "3", "4"} and "2" not in movers   # base not a mover
-    # toggling a panel off marks it "(not folded)"
-    fi = next(i for i in range(len(dlg.fold_shapes))
-              if dlg._fold_name(i) == "Flap fold")
-    dlg._checks[fi].setChecked(False)
-    assert dlg._ba_labels[fi].text() == "(not folded)"
+    name = dlg._panel_name
+    # all four panels are present (base + the movers)
+    assert set(name.values()) == {"1", "2", "3", "4"}
+    assert name[dlg._fixed] == "2"                    # big middle piece is base
+    assert {name[p] for p in dlg._order} == {"1", "3", "4"}   # the rest fold
+
+    # toggling a moving panel off marks it "(not folded)"
+    pid1 = next(p for p in dlg._order if name[p] == "1")
+    dlg._checks[pid1].setChecked(False)
+    assert dlg._ba_labels[pid1].text() == "(not folded)"
+
+    # the user can pick a different fixed panel; every panel is still listed
+    new_base = next(p for p in dlg._order if name[p] == "3")
+    dlg._set_fixed(new_base)
+    assert name[dlg._fixed] == "3"
+    assert {name[dlg._fixed], *(name[p] for p in dlg._order)} == {"1", "2", "3", "4"}
+    assert "2" in {name[p] for p in dlg._order}       # old base now folds
 
 
 def test_fold_stack_levels_layer_the_wallet(qapp):

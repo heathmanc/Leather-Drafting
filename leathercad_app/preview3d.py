@@ -19,7 +19,8 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QSlider, QDialog)
 
 from leathercad.geometry import Vec2
-from leathercad.fold3d import Panel, Hinge, assemble, project, rotate_view, Vec3
+from leathercad.fold3d import (Panel, Hinge, assemble, project, rotate_view,
+                               Vec3, folded_hinge_edges)
 
 _LIGHT = Vec3(0.35, -0.5, 0.78).normalized()      # a soft top-right key light
 
@@ -172,8 +173,16 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
                 ally += [v.y for v in wv]
     if levels is not None and thickness > 1e-6:
         t = thickness
-        for hg in hinges:
-            a, b = hg.parent_edge
+        # where each crease actually sits AFTER folding (an inner fold carries
+        # its outer creases along, so the flat pattern position would float free)
+        hedges = folded_hinge_edges(panels, hinges, root=root,
+                                    fraction=fraction, fractions=fractions)
+        placed_by_id = {p.id: p for p in placed}
+        for hi, hg in enumerate(hinges):
+            fe = hedges[hi]
+            if fe is None:
+                continue
+            a, b = fe                       # folded fold-line endpoints (world)
             lp = levels.get(hg.parent, 0)
             lc = levels.get(hg.child, 0)
             if lp == lc:
@@ -199,7 +208,8 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
             ex, ey = b.x - a.x, b.y - a.y
             el = math.hypot(ex, ey) or 1.0
             px, py = -ey / el, ex / el
-            child = panels.get(hg.child)
+            # bulge toward where the moving panel's body actually ended up
+            child = placed_by_id.get(hg.child)
             if child and child.outline:
                 mx, my = (a.x + b.x) / 2.0, (a.y + b.y) / 2.0
                 ccx = sum(p.x for p in child.outline) / len(child.outline)
@@ -258,7 +268,9 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
     def leather(nview, lo, hi):
         # TWO-SIDED lighting: a folded-over panel shows its back, but leather is
         # the same colour both sides -- shading by |n.L| keeps every layer the
-        # same warm tone so front/back facing doesn't read as extra layers.
+        # same warm tone so front/back facing doesn't read as extra layers. The
+        # range is kept narrow so a face-on panel never blows out to a pale,
+        # washed-looking (almost see-through) tint against the light backdrop.
         s = lo + (hi - lo) * abs(nview.dot(_LIGHT))
         return QColor(int(base.red() * s), int(base.green() * s),
                       int(base.blue() * s))
@@ -268,7 +280,7 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
             # the rounded fold surface -- same leather, gently shaded, no hard
             # outline so the curve reads as continuous material
             painter.setBrush(QBrush(leather(_panel_normal_view(payload),
-                                            0.5, 0.92)))
+                                            0.55, 0.86)))
             painter.setPen(Qt.NoPen)
             painter.drawPolygon(QPolygonF([to_screen(v) for v in payload]))
             continue
@@ -290,7 +302,7 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
             continue
         pl, ov, hv = payload
         poly = QPolygonF([to_screen(v) for v in ov])
-        painter.setBrush(QBrush(leather(_panel_normal_view(ov), 0.6, 1.0)))
+        painter.setBrush(QBrush(leather(_panel_normal_view(ov), 0.62, 0.9)))
         painter.setPen(QPen(edge, 1.2))
         painter.drawPolygon(poly)
         # stitch holes as small dots on the face; holes that don't register
@@ -507,8 +519,10 @@ def _piece_holes(piece, doc=None):
     return holes
 
 
-def scored_panels(outline, folds, holes=None):
-    """``panels_from_scored_piece`` + distribute ``holes`` into their facets."""
+def scored_panels(outline, folds, holes=None, root=None):
+    """``panels_from_scored_piece`` + distribute ``holes`` into their facets.
+    ``root`` (the fixed panel) may be given; otherwise it defaults to the
+    largest facet (the piece "stays put" on its biggest panel)."""
     from leathercad.fold3d import panels_from_scored_piece
     panels, hinges, order = panels_from_scored_piece(outline, folds)
     if holes:
@@ -517,9 +531,9 @@ def scored_panels(outline, folds, holes=None):
                 if _point_in_poly(hp, panels[pid].outline):
                     panels[pid].holes.append(hp)
                     break
-    # root = the largest facet (the piece "stays put" on its biggest panel)
-    root = max(order, key=lambda pid: _poly_area(panels[pid].outline)) \
-        if order else None
+    if root is None or root not in panels:
+        root = max(order, key=lambda pid: _poly_area(panels[pid].outline)) \
+            if order else None
     return panels, hinges, order, root
 
 
@@ -539,14 +553,19 @@ class ScoredFoldDialog(QDialog):
             build_scored_from_document(doc, piece)
         self.piece = piece or self._auto_piece()
         self.holes = _piece_holes(self.piece, doc) if self.piece else []
-        self._seq = list(range(len(self.fold_shapes)))     # fold order (indices)
-        self._enabled = {i: True for i in range(len(self.fold_shapes))}
-        # which panel each fold MOVES, and which panel is the fixed base
-        self._mover, self._base_name = self._compute_movers()
+        # every panel is listed; the user picks which one is FIXED (the base).
+        # default: the largest facet. ``_order`` is the fold sequence of the
+        # OTHER (moving) panels; ``_enabled`` is per moving panel.
+        p0, _h0, order0, root0 = scored_panels(self.outline, self.folds)
+        self._panels_order = order0                    # all panel ids, numbered
+        self._panel_name = {pid: p0[pid].name for pid in order0}
+        self._fixed = root0
+        self._order = [pid for pid in order0 if pid != self._fixed]
+        self._enabled = {pid: True for pid in self._order}
 
         lay = QVBoxLayout(self)
-        panels, hinges, order, root = scored_panels(self.outline,
-                                                    self._ordered_folds(), self.holes)
+        panels, hinges, order, root = scored_panels(
+            self.outline, self.folds, self.holes, root=self._fixed)
         self.view = Preview3DWidget(panels, hinges, root, dark, self,
                                     thickness=0.0, numbers=True)
         self.view.fraction = 0.0                   # OPEN FLAT
@@ -583,10 +602,10 @@ class ScoredFoldDialog(QDialog):
         lay.addLayout(row)
 
         lay.addWidget(QLabel(
-            f"<b>Panels to fold</b> (base = <b>Panel {self._base_name}</b>, "
-            "stays flat; everything wraps around it). Tick a panel to fold it, "
-            "order top→bottom = folded first (innermost). Bend allowance is "
-            "shown, never applied."))
+            "<b>Panels</b> — pick the <b>Fixed</b> panel (the base that stays "
+            "flat; everything wraps around it). Every other panel folds: tick "
+            "it, set direction/angle, and order top→bottom = folded first "
+            "(innermost). Bend allowance is shown, never applied."))
         self._grid = QGridLayout()
         gw = QWidget()
         gw.setLayout(self._grid)
@@ -609,69 +628,80 @@ class ScoredFoldDialog(QDialog):
         return max(cands, key=lambda s: _poly_area(
             [Vec2(p.x, p.y) for p in s.world_polyline()[0]]), default=None)
 
-    def _fold_name(self, i):
-        return getattr(self.fold_shapes[i], "name", "") or f"Fold {i + 1}"
+    def _fold_of_panel(self):
+        """For the CURRENT fixed panel, map each moving panel id -> the index of
+        the fold (into ``self.folds`` / ``self.fold_shapes``) that moves it."""
+        from leathercad.fold3d import fold_movers, panels_from_scored_piece
+        panels, hinges, _order = panels_from_scored_piece(self.outline, self.folds)
+        movers = fold_movers(panels, hinges, self.folds, self._fixed)
+        return {pid: fi for fi, pid in enumerate(movers) if pid}
 
-    def _compute_movers(self):
-        """Map each fold to the PANEL it moves, and find the fixed base panel."""
-        from leathercad.fold3d import fold_movers
-        panels, hinges, order, root = scored_panels(self.outline, self.folds, [])
-        movers = fold_movers(panels, hinges, self.folds, root)
-        name = {pid: panels[pid].name for pid in panels}
-        mover_name = {i: name.get(m, "?") for i, m in enumerate(movers)}
-        return mover_name, name.get(root, "1")
-
-    def _ordered_folds(self):
-        """Folds in sequence; a disabled panel's fold is flattened to 0° so the
-        panel stays attached but unfolded."""
-        from leathercad.fold3d import Fold
-        out = []
-        for i in self._seq:
-            f = self.folds[i]
-            if not self._enabled.get(i, True):
-                f = Fold(f.a, f.b, 0.0, f.direction)
-            out.append(f)
-        return out
+    def _set_fixed(self, pid):
+        """Make ``pid`` the base panel; the previous base joins the folding list."""
+        if pid == self._fixed:
+            return
+        old = self._fixed
+        self._fixed = pid
+        self._order = [p for p in self._order if p != pid]
+        if old not in self._order:
+            self._order.append(old)
+        self._enabled.setdefault(old, True)
+        self._enabled.pop(pid, None)
+        self._populate_rows()
 
     def _populate_rows(self):
-        """(Re)build the per-panel rows in the current fold order."""
+        """(Re)build the per-PANEL rows: every panel is listed with a Fixed radio;
+        the fixed one is the flat base, the rest fold in the shown order."""
         from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QPushButton,
-                                       QCheckBox, QLabel as QL, QWidget,
-                                       QHBoxLayout)
+                                       QCheckBox, QRadioButton, QButtonGroup,
+                                       QLabel as QL, QWidget, QHBoxLayout)
         while self._grid.count():
             it = self._grid.takeAt(0)
             w = it.widget()
             if w is not None:
                 w.setParent(None)
-        for c, h in enumerate(("Fold?", "#", "Panel", "Direction", "Angle",
-                               "Bend allowance", "Order")):
+        for c, h in enumerate(("Fixed", "Fold?", "#", "Panel", "Direction",
+                               "Angle", "Bend allowance", "Order")):
             self._grid.addWidget(QL(f"<b>{h}</b>"), 0, c)
+        fop = self._fold_of_panel()
+        self._fixed_group = QButtonGroup(self)
         self._checks, self._combos, self._angles, self._ba_labels = {}, {}, {}, {}
-        for pos, fi in enumerate(self._seq):
-            r = pos + 1
-            fs = self.fold_shapes[fi]
+        for row, pid in enumerate([self._fixed] + list(self._order), start=1):
+            is_fixed = (pid == self._fixed)
+            rb = QRadioButton()
+            rb.setChecked(is_fixed)
+            rb.toggled.connect(lambda on, p=pid: on and self._set_fixed(p))
+            self._fixed_group.addButton(rb)
+            self._grid.addWidget(rb, row, 0)
+            self._grid.addWidget(QL(f"Panel {self._panel_name.get(pid, '?')}"),
+                                 row, 3)
+            if is_fixed:
+                self._grid.addWidget(QL("<i>base — stays flat</i>"), row, 4, 1, 3)
+                continue
+            fi = fop.get(pid)
+            fs = self.fold_shapes[fi] if fi is not None else None
             ck = QCheckBox()
-            ck.setChecked(self._enabled.get(fi, True))
+            ck.setChecked(self._enabled.get(pid, True))
             ck.toggled.connect(self._on_change)
-            self._grid.addWidget(ck, r, 0)
-            self._grid.addWidget(QL(str(pos + 1)), r, 1)
-            self._grid.addWidget(QL(f"Panel {self._mover.get(fi, '?')}"), r, 2)
+            self._grid.addWidget(ck, row, 1)
+            self._grid.addWidget(QL(str(self._order.index(pid) + 1)), row, 2)
             cb = QComboBox()
             cb.addItems(["front", "back"])
-            cb.setCurrentText(fs.fold_dir or "front")
+            cb.setCurrentText((fs.fold_dir or "front") if fs else "front")
             cb.currentTextChanged.connect(self._on_change)
-            self._grid.addWidget(cb, r, 3)
+            self._grid.addWidget(cb, row, 4)
             sp = QDoubleSpinBox()
             sp.setRange(0.0, 180.0)
-            sp.setValue(fs.fold_angle)
+            sp.setValue(fs.fold_angle if fs else 180.0)
             sp.setSuffix("°")
             sp.valueChanged.connect(self._on_change)
-            self._grid.addWidget(sp, r, 4)
+            self._grid.addWidget(sp, row, 5)
             bl = QL("—")
-            self._grid.addWidget(bl, r, 5)
+            self._grid.addWidget(bl, row, 6)
             cell = QWidget()
             hb = QHBoxLayout(cell)
             hb.setContentsMargins(0, 0, 0, 0)
+            pos = self._order.index(pid)
             up = QPushButton("↑")
             up.setFixedWidth(30)
             up.clicked.connect(lambda _c, k=pos: self._move(k, -1))
@@ -680,83 +710,97 @@ class ScoredFoldDialog(QDialog):
             dn.clicked.connect(lambda _c, k=pos: self._move(k, 1))
             hb.addWidget(up)
             hb.addWidget(dn)
-            self._grid.addWidget(cell, r, 6)
-            self._checks[fi] = ck
-            self._combos[fi] = cb
-            self._angles[fi] = sp
-            self._ba_labels[fi] = bl
+            self._grid.addWidget(cell, row, 7)
+            self._checks[pid] = ck
+            self._combos[pid] = cb
+            self._angles[pid] = sp
+            self._ba_labels[pid] = bl
         self._rebuild()
 
     def _move(self, pos, delta):
         j = pos + delta
-        if 0 <= j < len(self._seq):
-            self._seq[pos], self._seq[j] = self._seq[j], self._seq[pos]
+        if 0 <= j < len(self._order):
+            self._order[pos], self._order[j] = self._order[j], self._order[pos]
             self._populate_rows()
 
     def _on_change(self, *_):
-        for fi, ck in self._checks.items():
-            self._enabled[fi] = ck.isChecked()
-        for fi, cb in self._combos.items():
-            self.fold_shapes[fi].fold_dir = cb.currentText()
-        for fi, sp in self._angles.items():
-            self.fold_shapes[fi].fold_angle = sp.value()
+        fop = self._fold_of_panel()
+        for pid, ck in self._checks.items():
+            self._enabled[pid] = ck.isChecked()
+        for pid, cb in self._combos.items():
+            fi = fop.get(pid)
+            if fi is not None:
+                self.fold_shapes[fi].fold_dir = cb.currentText()
+        for pid, sp in self._angles.items():
+            fi = fop.get(pid)
+            if fi is not None:
+                self.fold_shapes[fi].fold_angle = sp.value()
         self._rebuild()
 
     def _rebuild(self, *_):
         from leathercad.fold3d import (registration_report, fold_bend_allowance,
                                        sequence_bend_radii, fold_stack_levels,
-                                       fold_movers)
+                                       assemble, Fold)
         for fold, fs in zip(self.folds, self.fold_shapes):
             fold.direction = fs.fold_dir or "front"
             fold.angle_deg = fs.fold_angle
         t, r = self.thick.value(), self.radius.value()
-        of = self._ordered_folds()                    # disabled -> 0° (stays flat)
-        panels, hinges, order, root = scored_panels(self.outline, of, self.holes)
-        # only the ENABLED, folding creases build the layer stack
-        folding = [f for f, i in zip(of, self._seq)
-                   if self._enabled.get(i, True) and f.angle_deg > 1e-6]
+        root = self._fixed
+        fop = self._fold_of_panel()
+        panel_of_fold = {fi: pid for pid, fi in fop.items()}
+        # geometry folds: a disabled panel's crease is flattened to 0 so it stays
+        # attached but unfolded
+        build = []
+        for i, f in enumerate(self.folds):
+            pid = panel_of_fold.get(i)
+            if pid is not None and not self._enabled.get(pid, True):
+                build.append(Fold(f.a, f.b, 0.0, f.direction))
+            else:
+                build.append(f)
+        panels, hinges, order, root = scored_panels(self.outline, build,
+                                                    self.holes, root=root)
+        # the moving panels, in the chosen sequence -> folded ONE AT A TIME
+        seq = [pid for pid in self._order
+               if self._enabled.get(pid, True) and pid in fop
+               and build[fop[pid]].angle_deg > 1e-6]
+        folding = [build[fop[pid]] for pid in seq]
         levels = fold_stack_levels(panels, hinges, folding, root)
-        # the ordered panels each crease moves -> the slider folds them ONE AT A
-        # TIME, in this sequence (top row first), each closing fully before the
-        # next starts.
-        movers_of = fold_movers(panels, hinges, of, root)
-        sequence = [m for pos, (f, i) in enumerate(zip(of, self._seq))
-                    if self._enabled.get(i, True) and f.angle_deg > 1e-6
-                    and (m := movers_of[pos])]
         # separate the layers by the ACTUAL leather thickness (a compact stack,
         # not an exploded one) so the top piece reads without floating away
         view_gap = t if t > 1e-6 else 1.0
-        from leathercad.fold3d import assemble
         placed = assemble(panels, hinges, root=root, fraction=1.0, thickness=t,
                           levels=levels)
         reg_lines, bad = registration_report(placed, thickness=t, tol=1.0)
         self.view.bad_holes = bad
         self.view.set_model(panels, hinges, root=root, thickness=view_gap,
-                            levels=levels, sequence=sequence)
+                            levels=levels, sequence=seq)
         # per-fold inside radius from the layers each crease wraps in the CURRENT
         # sequence of ENABLED folds (reorder / toggle -> different wraps).
         radii = sequence_bend_radii(panels, hinges, folding, root, t, r)
         rad_of = {id(f): rad for f, rad in zip(folding, radii)}
         add_w = add_h = 0.0
-        for fold, fi in zip(of, self._seq):
-            if fi not in self._ba_labels:
+        for pid in self._order:
+            bl = self._ba_labels.get(pid)
+            if bl is None:
                 continue
-            if not (self._enabled.get(fi, True) and fold.angle_deg > 1e-6):
-                self._ba_labels[fi].setText("(not folded)")
+            fi = fop.get(pid)
+            f = build[fi] if fi is not None else None
+            if f is None or not self._enabled.get(pid, True) or f.angle_deg <= 1e-6:
+                bl.setText("(not folded)")
                 continue
-            rad = rad_of.get(id(fold), r)
-            ba1 = fold_bend_allowance(fold, t, rad)
-            d = fold.b - fold.a
+            rad = rad_of.get(id(f), r)
+            ba1 = fold_bend_allowance(f, t, rad)
+            d = f.b - f.a
             if abs(d.y) >= abs(d.x):
                 add_w += ba1
             else:
                 add_h += ba1
-            lay = int(round((rad - r) / t)) if t > 1e-9 else 0
-            txt = f"+{ba1:.1f} mm" + (f"  (wraps {lay})" if lay else "")
-            self._ba_labels[fi].setText(txt)
+            lyr = int(round((rad - r) / t)) if t > 1e-9 else 0
+            bl.setText(f"+{ba1:.1f} mm" + (f"  (wraps {lyr})" if lyr else ""))
         reg = "<br>".join(reg_lines)
         self.readout.setText(
-            f"<b>{len(order)} panels, base Panel {self._base_name}.</b> "
+            f"<b>{len(order)} panels, base Panel "
+            f"{self._panel_name.get(self._fixed, '?')}.</b> "
             f"Grow the flat blank by <b>{add_w:.1f} mm</b> in width and "
             f"<b>{add_h:.1f} mm</b> in height (leather {t:g} mm) — do it by "
             f"hand. Outer folds need more (they wrap the layers inside).<br>"

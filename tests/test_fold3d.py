@@ -232,6 +232,28 @@ def test_thickness_stacks_folded_flat_layers():
     assert abs(z_stack - 3.0) < 1e-6
 
 
+def test_folded_hinge_edges_track_the_moved_crease():
+    from leathercad.fold3d import (Fold, panels_from_scored_piece,
+                                   fold_movers, folded_hinge_edges)
+    # A|B|C chain, root A: folding B carries C's crease away from its flat spot
+    outline = _rect(150, 50)
+    folds = [Fold(Vec2(50, 0), Vec2(50, 50), 180, "front"),
+             Fold(Vec2(100, 0), Vec2(100, 50), 180, "front")]
+    panels, hinges, order = panels_from_scored_piece(outline, folds)
+    root = order[0]
+    # match each hinge to its pattern fold-line x (50 = inner, 100 = outer)
+    def hinge_x(h):
+        return (h.parent_edge[0].x + h.parent_edge[1].x) / 2.0
+    edges = folded_hinge_edges(panels, hinges, root=root, fraction=1.0)
+    for h, e in zip(hinges, edges):
+        assert e is not None
+        moved_x = (e[0].x + e[1].x) / 2.0
+        if abs(hinge_x(h) - 50.0) < 1.0:
+            assert abs(moved_x - 50.0) < 1.0          # inner crease stays put
+        else:                                          # outer crease (x=100)...
+            assert abs(moved_x - 100.0) > 5.0          # ...folded to a new spot
+
+
 def test_per_fold_fractions_fold_one_crease_at_a_time():
     from leathercad.fold3d import Fold, panels_from_scored_piece, fold_movers
     # A|B|C strip, root A, two creases

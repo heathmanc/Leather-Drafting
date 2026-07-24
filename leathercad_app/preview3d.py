@@ -327,15 +327,23 @@ def build_scored_from_document(doc, piece=None):
     return outline, folds, fold_shapes
 
 
-def _piece_holes(piece):
-    """World stitch holes for the piece, or []. ``holes_for_shape`` already
-    returns them in world space, so we do NOT re-apply the transform."""
+def _piece_holes(piece, doc=None):
+    """World stitch holes to show on the folded model: the piece's own stitching
+    PLUS every drawn seam (StitchLine) in the document -- many patterns (e.g. the
+    fold-over wallet) carry their stitching as separate seams, not on the body.
+    ``holes_for_shape`` already returns world coords, so no extra transform."""
     from leathercad.stitching import holes_for_shape
+    holes = []
     try:
-        res = holes_for_shape(piece)
-        return [Vec2(h.point.x, h.point.y) for h in res.holes]
+        holes += [Vec2(h.point.x, h.point.y) for h in holes_for_shape(piece).holes]
     except Exception:
-        return []
+        pass
+    for sl in getattr(doc, "stitch_lines", []) or []:
+        try:
+            holes += [Vec2(h.point.x, h.point.y) for h in sl.result().holes]
+        except Exception:
+            pass
+    return holes
 
 
 def scored_panels(outline, folds, holes=None):
@@ -360,26 +368,28 @@ class ScoredFoldDialog(QDialog):
     for the bend radius."""
 
     def __init__(self, doc, piece=None, dark=False, parent=None, canvas=None):
-        from PySide6.QtWidgets import (QDoubleSpinBox, QComboBox, QGridLayout,
-                                       QScrollArea)
+        from PySide6.QtWidgets import (QDoubleSpinBox, QGridLayout, QWidget)
         super().__init__(parent)
         self.setWindowTitle("Fold single piece (3D)")
-        self.resize(680, 640)
+        self.resize(720, 700)
         self.doc = doc
         self.canvas = canvas
         self.outline, self.folds, self.fold_shapes = \
             build_scored_from_document(doc, piece)
         self.piece = piece or self._auto_piece()
-        self.holes = _piece_holes(self.piece) if self.piece else []
+        self.holes = _piece_holes(self.piece, doc) if self.piece else []
+        self._seq = list(range(len(self.fold_shapes)))     # fold order (indices)
 
         lay = QVBoxLayout(self)
-        panels, hinges, order, root = scored_panels(self.outline, self.folds,
-                                                    self.holes)
+        panels, hinges, order, root = scored_panels(self.outline,
+                                                    self._ordered_folds(), self.holes)
         self.view = Preview3DWidget(panels, hinges, root, dark, self,
                                     thickness=0.0, numbers=True)
+        self.view.fraction = 0.0                   # OPEN FLAT
         lay.addWidget(self.view, 1)
 
-        # thickness + fold-amount
+        # thickness / bend-radius / fold slider -- the slider starts FLAT so
+        # nothing auto-folds; you drive it (and set each fold below)
         row = QHBoxLayout()
         row.addWidget(QLabel("Leather thickness"))
         self.thick = QDoubleSpinBox()
@@ -395,52 +405,27 @@ class ScoredFoldDialog(QDialog):
         self.radius.setSingleStep(0.5)
         self.radius.setValue(0.0)                 # a scored crease folds ~sharp
         self.radius.setSuffix(" mm")
-        self.radius.setToolTip("Inside radius of the fold. 0 = a sharp scored "
-                               "crease; raise it for a rolled / padded edge.")
+        self.radius.setToolTip("Base inside radius. 0 = a sharp scored crease; "
+                               "wrapped layers add to it automatically.")
         self.radius.valueChanged.connect(self._rebuild)
         row.addWidget(self.radius)
         row.addSpacing(16)
         row.addWidget(QLabel("Fold"))
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setRange(0, 100)
-        self.slider.setValue(100)
+        self.slider.setValue(0)                   # OPEN FLAT -- no surprise fold
         self.slider.valueChanged.connect(lambda v: self.view.set_fraction(v / 100.0))
         row.addWidget(self.slider, 1)
         lay.addLayout(row)
 
-        # per-fold controls: which way each score folds, how far, and a manual
-        # "grow the blank by this bend's allowance" button (never automatic)
-        from PySide6.QtWidgets import QPushButton
-        self._combos = []
-        self._angles = []
-        self._grow_btns = []
-        grid = QGridLayout()
-        grid.addWidget(QLabel("<b>Score</b>"), 0, 0)
-        grid.addWidget(QLabel("<b>Direction</b>"), 0, 1)
-        grid.addWidget(QLabel("<b>Angle</b>"), 0, 2)
-        grid.addWidget(QLabel("<b>Bend allowance</b>"), 0, 3)
-        for i, fs in enumerate(self.fold_shapes):
-            grid.addWidget(QLabel(f"Fold {i + 1}"), i + 1, 0)
-            cb = QComboBox()
-            cb.addItems(["front", "back"])
-            cb.setCurrentText(fs.fold_dir or "front")
-            cb.currentTextChanged.connect(self._rebuild)
-            grid.addWidget(cb, i + 1, 1)
-            sp = QDoubleSpinBox()
-            sp.setRange(0.0, 180.0)
-            sp.setValue(fs.fold_angle)
-            sp.setSuffix("°")
-            sp.valueChanged.connect(self._rebuild)
-            grid.addWidget(sp, i + 1, 2)
-            btn = QPushButton("Grow blank")
-            btn.setToolTip("Add this bend's allowance to the flat blank "
-                           "(manual — nothing resizes on its own)")
-            btn.clicked.connect(lambda _c, k=i: self._grow_blank(k))
-            grid.addWidget(btn, i + 1, 3)
-            self._combos.append(cb)
-            self._angles.append(sp)
-            self._grow_btns.append(btn)
-        lay.addLayout(grid)
+        lay.addWidget(QLabel(
+            "<b>Fold sequence</b> — order folds top→bottom (folded first = "
+            "innermost). Set each fold's direction &amp; angle; the bend "
+            "allowance is shown, never applied."))
+        self._grid = QGridLayout()
+        gw = QWidget()
+        gw.setLayout(self._grid)
+        lay.addWidget(gw)
 
         self.readout = QLabel()
         self.readout.setWordWrap(True)
@@ -448,7 +433,7 @@ class ScoredFoldDialog(QDialog):
         hint = QLabel("Drag to orbit · wheel to zoom · slider folds flat → assembled")
         hint.setAlignment(Qt.AlignCenter)
         lay.addWidget(hint)
-        self._rebuild()
+        self._populate_rows()
 
     def _auto_piece(self):
         cands = [s for s in self.doc.shapes
@@ -458,108 +443,105 @@ class ScoredFoldDialog(QDialog):
         return max(cands, key=lambda s: _poly_area(
             [Vec2(p.x, p.y) for p in s.world_polyline()[0]]), default=None)
 
+    def _fold_name(self, i):
+        return getattr(self.fold_shapes[i], "name", "") or f"Fold {i + 1}"
+
+    def _ordered_folds(self):
+        return [self.folds[i] for i in self._seq]
+
+    def _populate_rows(self):
+        """(Re)build the per-fold rows in the current sequence order."""
+        from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QPushButton,
+                                       QLabel as QL, QWidget, QHBoxLayout)
+        while self._grid.count():
+            it = self._grid.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.setParent(None)
+        for c, h in enumerate(("#", "Fold", "Direction", "Angle",
+                               "Bend allowance", "Order")):
+            self._grid.addWidget(QL(f"<b>{h}</b>"), 0, c)
+        self._combos, self._angles, self._ba_labels = {}, {}, {}
+        for pos, fi in enumerate(self._seq):
+            r = pos + 1
+            fs = self.fold_shapes[fi]
+            self._grid.addWidget(QL(str(pos + 1)), r, 0)
+            self._grid.addWidget(QL(self._fold_name(fi)), r, 1)
+            cb = QComboBox()
+            cb.addItems(["front", "back"])
+            cb.setCurrentText(fs.fold_dir or "front")
+            cb.currentTextChanged.connect(self._on_change)
+            self._grid.addWidget(cb, r, 2)
+            sp = QDoubleSpinBox()
+            sp.setRange(0.0, 180.0)
+            sp.setValue(fs.fold_angle)
+            sp.setSuffix("°")
+            sp.valueChanged.connect(self._on_change)
+            self._grid.addWidget(sp, r, 3)
+            bl = QL("—")
+            self._grid.addWidget(bl, r, 4)
+            cell = QWidget()
+            hb = QHBoxLayout(cell)
+            hb.setContentsMargins(0, 0, 0, 0)
+            up = QPushButton("↑")
+            up.setFixedWidth(30)
+            up.clicked.connect(lambda _c, k=pos: self._move(k, -1))
+            dn = QPushButton("↓")
+            dn.setFixedWidth(30)
+            dn.clicked.connect(lambda _c, k=pos: self._move(k, 1))
+            hb.addWidget(up)
+            hb.addWidget(dn)
+            self._grid.addWidget(cell, r, 5)
+            self._combos[fi] = cb
+            self._angles[fi] = sp
+            self._ba_labels[fi] = bl
+        self._rebuild()
+
+    def _move(self, pos, delta):
+        j = pos + delta
+        if 0 <= j < len(self._seq):
+            self._seq[pos], self._seq[j] = self._seq[j], self._seq[pos]
+            self._populate_rows()
+
+    def _on_change(self, *_):
+        for fi, cb in self._combos.items():
+            self.fold_shapes[fi].fold_dir = cb.currentText()
+        for fi, sp in self._angles.items():
+            self.fold_shapes[fi].fold_angle = sp.value()
+        self._rebuild()
+
     def _rebuild(self, *_):
-        from leathercad.fold3d import bend_allowance, assemble, registration_report
-        # push control values back onto the fold lines + rebuild the fold list
-        for fs, cb, sp in zip(self.fold_shapes, self._combos, self._angles):
-            fs.fold_dir = cb.currentText()
-            fs.fold_angle = sp.value()
+        from leathercad.fold3d import (bend_allowance, assemble,
+                                       registration_report, fold_bend_allowance,
+                                       nested_bend_radii)
         for fold, fs in zip(self.folds, self.fold_shapes):
-            fold.direction = fs.fold_dir
+            fold.direction = fs.fold_dir or "front"
             fold.angle_deg = fs.fold_angle
-        t = self.thick.value()
-        panels, hinges, order, root = scored_panels(self.outline, self.folds,
-                                                    self.holes)
-        # registration is judged on the FULLY folded piece (indices are the same
-        # at any fold amount, so the red flags hold as the slider animates)
+        t, r = self.thick.value(), self.radius.value()
+        of = self._ordered_folds()
+        panels, hinges, order, root = scored_panels(self.outline, of, self.holes)
         placed = assemble(panels, hinges, root=root, fraction=1.0, thickness=t)
         reg_lines, bad = registration_report(placed, thickness=t, tol=1.0)
         self.view.bad_holes = bad
         self.view.set_model(panels, hinges, root=root, thickness=t)
-        r = self.radius.value()
-        ba = bend_allowance(self.folds, t, r)
-        # each crease's inside radius is auto-derived from the layers it wraps
-        from leathercad.fold3d import fold_bend_allowance, nested_bend_radii
-        radii = nested_bend_radii(self.folds, t, r)
-        self._radii = radii
-        for fold, btn, rad in zip(self.folds, self._grow_btns, radii):
-            btn.setText(f"Grow +{fold_bend_allowance(fold, t, rad):.1f} mm")
-            layers = int(round((rad - r) / t)) if t > 1e-9 else 0
-            btn.setToolTip(f"Inside radius {rad:.1f} mm "
-                           f"(wraps {layers} inner layer(s)). "
-                           "Adds this bend's allowance to the flat blank — manual.")
+        # per-fold bend allowance -- SHOWN ONLY (never resizes anything). Radii
+        # follow the sequence order, so reordering changes what each crease wraps.
+        radii = nested_bend_radii(of, t, r)
+        for rad, fi in zip(radii, self._seq):
+            if fi in self._ba_labels:
+                lay = int(round((rad - r) / t)) if t > 1e-9 else 0
+                txt = f"+{fold_bend_allowance(self.folds[fi], t, rad):.1f} mm"
+                if lay:
+                    txt += f"  (wraps {lay})"
+                self._ba_labels[fi].setText(txt)
+        ba = bend_allowance(of, t, r)
         reg = "<br>".join(reg_lines)
         self.readout.setText(
             f"<b>{len(order)} panels · {len(self.fold_shapes)} folds.</b> "
-            f"Bend allowance (leather {t:g} mm, bend radius {r:g} mm): add "
-            f"<b>{ba['width']:.1f} mm</b> to width, "
-            f"<b>{ba['height']:.1f} mm</b> to height of the flat blank.<br>"
+            f"Grow the flat blank by <b>{ba['width']:.1f} mm</b> in width and "
+            f"<b>{ba['height']:.1f} mm</b> in height (leather {t:g} mm) — "
+            f"do it by hand.<br>"
             f"<b>Lineup check</b> (red = won't register):<br>{reg}")
-
-    def _reload_from_doc(self):
-        """Re-read the piece + folds after the document changed (e.g. a grow)."""
-        self.outline, self.folds, self.fold_shapes = \
-            build_scored_from_document(self.doc, self.piece)
-        self.holes = _piece_holes(self.piece) if self.piece else []
-        self._rebuild()
-
-    def _grow_blank(self, i: int):
-        """MANUAL: add fold ``i``'s bend allowance to the flat blank. Grows the
-        piece across that fold and slides everything on the far side out to make
-        room for the bend radius; nothing resizes on its own."""
-        from leathercad.fold3d import (fold_bend_allowance,
-                                        grow_polygon_at_fold)
-        from leathercad.shapes import Rectangle
-        if i >= len(self.folds):
-            return
-        fold = self.folds[i]
-        # use this crease's auto-derived inside radius (accounts for wrapped layers)
-        rad = self._radii[i] if getattr(self, "_radii", None) else self.radius.value()
-        ba = fold_bend_allowance(fold, self.thick.value(), rad)
-        if ba <= 1e-6:
-            return
-        n = (fold.b - fold.a).perp().normalized()      # world fold normal
-        a = fold.a
-        piece = self.piece
-        # grow the piece itself
-        if isinstance(piece, Rectangle) and (abs(n.x) < 1e-6 or abs(n.y) < 1e-6):
-            if abs(n.x) > abs(n.y):                     # vertical score -> width
-                piece.width += ba
-                piece.transform.x += (ba / 2.0) * (1 if n.x > 0 else -1)
-            else:                                       # horizontal score -> height
-                piece.height += ba
-                piece.transform.y += (ba / 2.0) * (1 if n.y > 0 else -1)
-        else:
-            self._grow_generic_piece(piece, fold, ba)
-        # slide every OTHER shape whose body is on the far side out by ba
-        for s in self.doc.shapes:
-            if s is piece:
-                continue
-            pts = s.world_polyline()[0]
-            if not pts:
-                continue
-            cx = sum(p.x for p in pts) / len(pts)
-            cy = sum(p.y for p in pts) / len(pts)
-            if (Vec2(cx, cy) - a).dot(n) > 1e-6:
-                s.transform.x += n.x * ba
-                s.transform.y += n.y * ba
-        if self.canvas is not None:
-            self.canvas.rebuild()
-            self.canvas.commitRequested.emit()         # one undo step
-        self._reload_from_doc()
-
-    @staticmethod
-    def _grow_generic_piece(piece, fold, ba):
-        """Grow a non-rectangular piece: translate its far-side local nodes."""
-        from leathercad.fold3d import grow_polygon_at_fold
-        pts_attr = "points" if hasattr(piece, "points") else (
-            "nodes" if hasattr(piece, "nodes") else None)
-        if pts_attr is None:
-            return
-        t = piece.transform
-        world = [t.apply(p) for p in getattr(piece, pts_attr)]
-        grown = grow_polygon_at_fold(world, fold, ba)
-        setattr(piece, pts_attr, [t.inverse_apply(p) for p in grown])
 
 
 # -- headless PNG (docs / marketing) -----------------------------------------

@@ -119,7 +119,7 @@ def test_build_scored_finds_piece_and_folds(qapp):
 def test_scored_dialog_folds_and_reports_bend_allowance(qapp):
     from leathercad_app.preview3d import ScoredFoldDialog
     dlg = ScoredFoldDialog(_scored_doc())
-    assert "Bend allowance" in dlg.readout.text()
+    assert "Grow the flat blank" in dlg.readout.text()
     assert "panels" in dlg.readout.text()
     # changing a fold direction writes back to the shape and re-renders
     dlg._combos[0].setCurrentText("back")
@@ -201,37 +201,9 @@ def test_scored_dialog_clean_fold_has_few_flags(qapp):
     assert flagged <= 2
 
 
-def test_grow_blank_button_adds_bend_allowance_to_width(qapp):
-    from leathercad.shapes import PathShape, Rectangle
-    from leathercad.geometry import Vec2
-    from leathercad.stitchsettings import StitchSettings
-    from leathercad.fold3d import fold_bend_allowance
-    from leathercad_app import canvas as cm
-    from leathercad_app.preview3d import ScoredFoldDialog
-    doc = Document()
-    piece = Rectangle(width=180, height=100, transform=Transform(x=90, y=50),
-                      layer="Cut",
-                      stitch=StitchSettings(enabled=True, pitch_mm=5.0, inset=5.0))
-    doc.add_shape(piece)
-    fl = PathShape(points=[Vec2(0, 0), Vec2(0, 100)], close_path=False,
-                   transform=Transform(x=90, y=0))
-    fl.fold_dir = "back"
-    fl.fold_angle = 180.0
-    doc.add_shape(fl)
-    c = cm.Canvas(doc)
-    c.rebuild()
-    dlg = ScoredFoldDialog(doc, canvas=c)
-    w0 = piece.width
-    ba = fold_bend_allowance(dlg.folds[0], dlg.thick.value())
-    assert ba > 0
-    dlg._grow_blank(0)
-    assert abs(piece.width - (w0 + ba)) < 1e-6         # blank grew by exactly ba
-    # the Grow button is labelled with the (recomputed) allowance
-    assert "Grow" in dlg._grow_btns[0].text()
-
-
-def test_grow_blank_is_manual_only(qapp):
-    """Opening the dialog must NOT resize anything on its own."""
+def test_bend_allowance_is_shown_not_applied(qapp):
+    """The dialog only REPORTS how much to grow the blank -- it never resizes
+    the piece (the user grows it by hand)."""
     from leathercad.shapes import PathShape, Rectangle
     from leathercad.geometry import Vec2
     from leathercad_app.preview3d import ScoredFoldDialog
@@ -244,5 +216,59 @@ def test_grow_blank_is_manual_only(qapp):
     fl.fold_dir = "back"
     fl.fold_angle = 180.0
     doc.add_shape(fl)
-    ScoredFoldDialog(doc)
-    assert piece.width == 200 and piece.height == 90   # untouched until you click
+    dlg = ScoredFoldDialog(doc)
+    dlg.thick.setValue(3.0)
+    # the readout tells you how much to add, and a per-fold allowance is shown
+    assert "Grow the flat blank" in dlg.readout.text()
+    assert any("mm" in lbl.text() for lbl in dlg._ba_labels.values())
+    # ...and nothing was resized
+    assert piece.width == 200 and piece.height == 90
+
+
+def test_starts_flat(qapp):
+    """The preview opens flat (nothing auto-folds); the slider drives it."""
+    from leathercad_app.preview3d import ScoredFoldDialog
+    dlg = ScoredFoldDialog(_scored_doc())
+    assert dlg.slider.value() == 0 and dlg.view.fraction == 0.0
+
+
+def test_fold_sequence_is_reorderable(qapp):
+    """The ↑/↓ order controls the fold sequence used for nesting."""
+    from leathercad_app.preview3d import ScoredFoldDialog
+    dlg = ScoredFoldDialog(_scored_doc())            # two folds
+    assert dlg._seq == [0, 1]
+    dlg._move(1, -1)                                  # move 2nd fold up
+    assert dlg._seq == [1, 0]
+
+
+def test_uses_fold_line_names(qapp):
+    """Rows are labelled with the fold lines' names, not generic numbers."""
+    from leathercad.templates import fold_over_wallet
+    from leathercad_app.preview3d import ScoredFoldDialog
+    doc = fold_over_wallet()
+    for s in [s for s in doc.shapes if getattr(s, "layer", "") == "Score"]:
+        s.fold_dir = "front"
+        s.fold_angle = 90.0
+    dlg = ScoredFoldDialog(doc)
+    names = {dlg._fold_name(i) for i in range(len(dlg.fold_shapes))}
+    assert "Flap fold" in names and "Left wing fold" in names
+
+
+def test_wallet_folds_into_four_panels_with_seam_holes(qapp):
+    """The concave fold-over wallet yields 4 clean panels (no slivers) and the
+    stitch holes from its SEAMS show on the model."""
+    from leathercad.templates import fold_over_wallet
+    from leathercad_app.preview3d import (build_scored_from_document,
+                                          scored_panels, _piece_holes)
+    doc = fold_over_wallet()
+    for s in [s for s in doc.shapes if getattr(s, "layer", "") == "Score"]:
+        s.fold_dir = "front"
+        s.fold_angle = 90.0
+    outline, folds, fs = build_scored_from_document(doc)
+    piece = max((s for s in doc.shapes if not s.is_fold_line
+                 and s.local_path().closed),
+                key=lambda s: (s.bounds()[2] - s.bounds()[0]))
+    holes = _piece_holes(piece, doc)
+    panels, hinges, order, root = scored_panels(outline, folds, holes)
+    assert len(order) == 4                            # not 6 with sliver ghosts
+    assert holes and sum(len(panels[o].holes) for o in order) > 0

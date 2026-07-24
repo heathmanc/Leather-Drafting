@@ -332,6 +332,93 @@ def _cut_segment(poly: List[Vec2], a: Vec2, b: Vec2
     return hits[0], hits[1]
 
 
+def _point_on_boundary(poly: List[Vec2], p: Vec2, tol: float = 1e-3
+                       ) -> bool:
+    """True if ``p`` lies on the polygon boundary (a vertex or on an edge)."""
+    n = len(poly)
+    for i in range(n):
+        s0, s1 = poly[i], poly[(i + 1) % n]
+        d = s1 - s0
+        L2 = d.length_sq()
+        if L2 < 1e-12:
+            continue
+        t = max(0.0, min(1.0, (p - s0).dot(d) / L2))
+        proj = Vec2(s0.x + d.x * t, s0.y + d.y * t)
+        if (p - proj).length() < tol:
+            return True
+    return False
+
+
+def _insert_boundary_point(poly: List[Vec2], p: Vec2, tol: float = 1e-3
+                           ) -> Optional[List[Vec2]]:
+    """Return a copy of ``poly`` with ``p`` present as a vertex (inserted on the
+    edge it lies on), or None if ``p`` is not on the boundary."""
+    n = len(poly)
+    for i in range(n):
+        if (poly[i] - p).length() < tol:
+            return list(poly)                       # already a vertex
+    for i in range(n):
+        s0, s1 = poly[i], poly[(i + 1) % n]
+        d = s1 - s0
+        L2 = d.length_sq()
+        if L2 < 1e-12:
+            continue
+        t = (p - s0).dot(d) / L2
+        if tol / (L2 ** 0.5) < t < 1.0 - tol / (L2 ** 0.5):
+            proj = Vec2(s0.x + d.x * t, s0.y + d.y * t)
+            if (p - proj).length() < tol:
+                return poly[:i + 1] + [Vec2(p.x, p.y)] + poly[i + 1:]
+    return None
+
+
+def split_polygon_by_chord(poly: List[Vec2], a: Vec2, b: Vec2,
+                           tol: float = 1e-3
+                           ) -> Optional[Tuple[List[Vec2], List[Vec2]]]:
+    """Split a simple (possibly CONCAVE) polygon by the chord from ``a`` to
+    ``b`` -- both must lie on the boundary. Returns the two sub-polygons that
+    share edge ``a``-``b``, or None if the chord isn't a boundary-to-boundary
+    diagonal. Unlike the half-plane clip this respects the fold's EXTENT, so a
+    partial score (e.g. a wallet wing fold that stops at the column) only cuts
+    the region it actually crosses -- no spurious slivers on a concave outline."""
+    ring = _insert_boundary_point(list(poly), a, tol)
+    if ring is None:
+        return None
+    ring = _insert_boundary_point(ring, b, tol)
+    if ring is None:
+        return None
+    n = len(ring)
+    ia = min(range(n), key=lambda i: (ring[i] - a).length())
+    ib = min(range(n), key=lambda i: (ring[i] - b).length())
+    if (ring[ia] - a).length() > tol or (ring[ib] - b).length() > tol or ia == ib:
+        return None
+    chain_a: List[Vec2] = []
+    i = ia
+    while True:
+        chain_a.append(ring[i])
+        if i == ib:
+            break
+        i = (i + 1) % n
+    chain_b: List[Vec2] = []
+    i = ib
+    while True:
+        chain_b.append(ring[i])
+        if i == ia:
+            break
+        i = (i + 1) % n
+    if len(chain_a) < 2 or len(chain_b) < 2:
+        return None
+    return chain_a, chain_b
+
+
+def _poly_area(poly: List[Vec2]) -> float:
+    s = 0.0
+    n = len(poly)
+    for i in range(n):
+        p, q = poly[i], poly[(i + 1) % n]
+        s += p.x * q.y - q.x * p.y
+    return abs(s) / 2.0
+
+
 def _edge_span_on_line(poly: List[Vec2], fold: Fold, tol: float = 1e-4
                        ) -> Optional[Tuple[float, float]]:
     """If ``poly`` has an edge lying along the fold's line, return that edge's
@@ -363,17 +450,25 @@ def panels_from_scored_piece(outline: List[Vec2], folds: List[Fold]
     every fold line into final facets; (2) hinge any two facets that share an
     edge lying on a fold line. Handles parallel scores (a wallet strip) and
     crossing scores."""
-    # -- phase 1: split by every fold line -------------------------------
+    # -- phase 1: split by every fold CHORD (respects each score's extent, and
+    # works on concave outlines -- a wing fold only cuts the block, not the
+    # whole column, so no spurious slivers) -----------------------------------
+    tol = 0.5
     polys: List[List[Vec2]] = [list(outline)]
     for fold in folds:
         nxt: List[List[Vec2]] = []
+        done = False
         for poly in polys:
-            left, right = split_polygon_by_line(poly, fold.a, fold.b)
-            if left and right:
-                nxt += [left, right]
-            else:
-                nxt.append(poly)
+            if (not done and _point_on_boundary(poly, fold.a, tol)
+                    and _point_on_boundary(poly, fold.b, tol)):
+                res = split_polygon_by_chord(poly, fold.a, fold.b, tol)
+                if res and _poly_area(res[0]) > 1.0 and _poly_area(res[1]) > 1.0:
+                    nxt.extend(res)
+                    done = True
+                    continue
+            nxt.append(poly)
         polys = nxt
+    polys = [p for p in polys if _poly_area(p) > 1.0 and len(p) >= 3]
 
     # number panels left-to-right, then bottom-to-top, for a stable reading order
     def key(poly: List[Vec2]):

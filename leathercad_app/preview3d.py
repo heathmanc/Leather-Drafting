@@ -162,15 +162,28 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
                 allx += [v.x for v in wv]
                 ally += [v.y for v in wv]
     if levels is not None and thickness > 1e-6:
+        t = thickness
         for hg in hinges:
             a, b = hg.parent_edge
-            zp = levels.get(hg.parent, 0) * thickness * fraction
-            zc = levels.get(hg.child, 0) * thickness * fraction
-            dz = zc - zp
-            if abs(dz) < 1e-6:
+            lp = levels.get(hg.parent, 0)
+            lc = levels.get(hg.child, 0)
+            if lp == lc:
                 continue
+            # the leather is a SLAB with thickness, so a 180 degree fold is a
+            # thick curved wrap -- an outer arc (bottom of the lower layer up
+            # and over to the top of the upper layer) and an inner arc, a full
+            # thickness apart. Both surfaces show a radius, and the leather's
+            # cross-section reads as a "C" at each end of the crease.
+            ll, lu = (lp, lc) if lc > lp else (lc, lp)
+            z_lt = ll * t * fraction            # lower layer: top / bottom face
+            z_lb = z_lt - t
+            z_ut = lu * t * fraction            # upper layer: top / bottom face
+            z_ub = z_ut - t
+            center = (z_lt + z_ub) / 2.0        # shared arc centre
+            r_in = abs(z_ub - z_lt) / 2.0       # inside bend radius (0 = sharp)
+            r_out = abs(z_ut - z_lb) / 2.0      # outside = inside + thickness
             # outboard bulge direction: unit perpendicular to the fold line,
-            # pointing the way the child panel extended before it folded back
+            # pointing the way the moving panel extended before it folded back
             ex, ey = b.x - a.x, b.y - a.y
             el = math.hypot(ex, ey) or 1.0
             px, py = -ey / el, ex / el
@@ -181,25 +194,34 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
                 ccy = sum(p.y for p in child.outline) / len(child.outline)
                 if (ccx - mx) * px + (ccy - my) * py < 0.0:
                     px, py = -px, -py
-            # the layers sit |dz| apart, so a 180 degree U-turn between them is a
-            # semicircle of radius |dz|/2 -- exactly the bend radius the nesting
-            # produced (more wrapped layers -> wider bend).
-            R = abs(dz) / 2.0
-            midz = (zp + zc) / 2.0
-            steps = 12
+            steps = 14
 
-            def bend_pt(edge_pt, theta):
-                off = R * math.sin(theta)
+            def arc_pt(edge_pt, radius, theta):
+                off = radius * math.sin(theta)
                 return Vec3(edge_pt.x + px * off, edge_pt.y + py * off,
-                            midz - (dz / 2.0) * math.cos(theta))
+                            center - radius * math.cos(theta))
 
-            for k in range(1, steps + 1):
-                t0 = math.pi * (k - 1) / steps
-                t1 = math.pi * k / steps
-                quad = (bend_pt(a, t0), bend_pt(b, t0),
-                        bend_pt(b, t1), bend_pt(a, t1))
-                rc = [rotate_view(v, yaw, pitch) for v in quad]
-                draw.append((sum(v.z for v in rc) / 4.0, "bend", rc))
+            # the two curved surfaces (outer visible, inner tucked underneath)
+            for radius in (r_out, r_in):
+                if radius < 1e-6:
+                    continue
+                for k in range(1, steps + 1):
+                    t0 = math.pi * (k - 1) / steps
+                    t1 = math.pi * k / steps
+                    quad = (arc_pt(a, radius, t0), arc_pt(b, radius, t0),
+                            arc_pt(b, radius, t1), arc_pt(a, radius, t1))
+                    rc = [rotate_view(v, yaw, pitch) for v in quad]
+                    draw.append((sum(v.z for v in rc) / 4.0, "bend", rc))
+                    allx += [v.x for v in rc]
+                    ally += [v.y for v in rc]
+            # the leather's cross-section (the "C") at each end of the crease
+            for edge_pt in (a, b):
+                ring = [arc_pt(edge_pt, r_out, math.pi * k / steps)
+                        for k in range(steps + 1)]
+                ring += [arc_pt(edge_pt, r_in, math.pi * k / steps)
+                         for k in range(steps, -1, -1)]
+                rc = [rotate_view(v, yaw, pitch) for v in ring]
+                draw.append((sum(v.z for v in rc) / len(rc), "bendcap", rc))
                 allx += [v.x for v in rc]
                 ally += [v.y for v in rc]
     if not allx:
@@ -241,6 +263,14 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
         if kind == "wall":
             # side of the leather slab: a touch darker, outlined so each layer
             # boundary draws a crisp edge line
+            painter.setBrush(QBrush(leather(_panel_normal_view(payload),
+                                            0.42, 0.6)))
+            painter.setPen(QPen(edge, 1.0))
+            painter.drawPolygon(QPolygonF([to_screen(v) for v in payload]))
+            continue
+        if kind == "bendcap":
+            # the leather's cross-section at the end of a crease -- the "C" that
+            # shows the fold has real thickness (a radius top AND bottom)
             painter.setBrush(QBrush(leather(_panel_normal_view(payload),
                                             0.42, 0.6)))
             painter.setPen(QPen(edge, 1.0))

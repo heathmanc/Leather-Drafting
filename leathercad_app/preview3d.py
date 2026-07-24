@@ -203,19 +203,20 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
             center = (z_lt + z_ub) / 2.0        # shared arc centre
             r_in = abs(z_ub - z_lt) / 2.0       # inside bend radius (0 = sharp)
             r_out = abs(z_ut - z_lb) / 2.0      # outside = inside + thickness
-            # outboard bulge direction: unit perpendicular to the fold line,
-            # pointing the way the moving panel extended before it folded back
+            # the rounded OUTSIDE of a 180 degree fold bulges OUTBOARD -- past the
+            # crease edge, away from the stacked body. The moving panel folded
+            # back on top of its parent, so its folded body sits inboard; the
+            # bulge must point the opposite way.
             ex, ey = b.x - a.x, b.y - a.y
             el = math.hypot(ex, ey) or 1.0
             px, py = -ey / el, ex / el
-            # bulge toward where the moving panel's body actually ended up
             child = placed_by_id.get(hg.child)
             if child and child.outline:
                 mx, my = (a.x + b.x) / 2.0, (a.y + b.y) / 2.0
                 ccx = sum(p.x for p in child.outline) / len(child.outline)
                 ccy = sum(p.y for p in child.outline) / len(child.outline)
-                if (ccx - mx) * px + (ccy - my) * py < 0.0:
-                    px, py = -px, -py
+                if (ccx - mx) * px + (ccy - my) * py > 0.0:   # points at body
+                    px, py = -px, -py                          # -> flip outboard
             steps = 14
 
             def arc_pt(edge_pt, radius, theta):

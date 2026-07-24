@@ -238,7 +238,7 @@ Beyond drawing and stitching, Stitch Hero covers the rest of a real bench workfl
 | **Thread estimate** | Saddle-stitch thread length for a piece, from its holes, stack thickness and tail allowance |
 | **Seam-mate check** | Verify that pieces sharing a seam actually line up hole-for-hole before you cut |
 | **Parts library** | Save any selection to a personal parts library and drop it into any document |
-| **Templates & generators** | Open a ready-made card holder, belt, key fob or fold-over wallet, or generate parametric **card-pocket stacks** and **zipper openings** |
+| **Templates & generators** | Open a ready-made card holder, belt, key fob or slim card holder, or generate parametric **card-pocket stacks** and **zipper openings** |
 | **Dark theme** | A full dark UI for late-night bench sessions (*View → Dark theme*) |
 | **Autosave & recovery** | Work is autosaved and offered back after an unexpected quit |
 

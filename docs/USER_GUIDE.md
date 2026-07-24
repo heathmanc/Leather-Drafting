@@ -141,9 +141,8 @@ The user guide travels inside the app (Help → User guide still works).
 
 Don't want to start from nothing? **File → New from template** opens a
 complete starter pattern — **Card holder**, **Belt** (with buckle slot, fold
-line and sizing holes), **Key fob**, the **Slim card holder**, or the
-**Fold-over wallet** — matching the tutorials in this guide. Adapt and
-Save As.
+line and sizing holes), **Key fob**, or the **Slim card holder** — matching
+the tutorials in this guide. Adapt and Save As.
 
 The **Slim card holder** is a practical, flat, front-pocket card wallet
 (~70 × 92 mm — barely bigger than a card, with a flat top so it doesn't snag
@@ -156,31 +155,6 @@ One saddle-stitch seam runs down both sides and across the bottom (a **U**,
 not a closed loop), leaving the top **open** so cards slide in; because the
 pockets share the back's width, that single seam passes through every layer
 and holds the whole stack together.
-
-The **Fold-over wallet** is a one-piece pouch wallet in the style of the
-Oldis One (originally *The Lucais* by JJ Leathersmith): a **T-shaped** flat
-pattern, 219 × 290 mm, folding to a ~70 × 100 mm vertical flap wallet. The
-full-width block along the bottom is the pouch — both wings fold inward
-along the column edges (score lines) to form the internal card and cash
-compartments. The right wing's **sloped top edge** is the pouch entrance,
-and its **diagonal quick-access slot** (with a round relief hole punched at
-each end so the cut can't tear) lets you slide a card out one-handed. The
-70 mm column is the back panel and, above the flap fold, the long closing
-**flap**: its symmetric round-tipped gable folds over the entrance and tucks down
-the front, and the smooth **arched thumb notch** in the block's bottom edge
-is where you lift it back out. Seams are **5 mm pitch**, and every row
-sits 4 mm inside its own panel so no hole lands on a fold: the left wing
-carries **top, outer-edge and bottom** rows, the right wing a **bottom**
-row, and the middle section its **own top row and a vertical row just
-inside the right wing fold**. The rows that get sewn together when the
-wallet folds **register hole-for-hole** — all 13 holes at a true 5 mm
-pitch, placed as mirror partners about their fold: the **bottom seam** (left
-and right wing bottoms land on each other to close the pouch) and the **top
-seam** (the left wing top folds down onto the middle top row to form the
-pouch mouth). The middle section's bottom (the fold zone with the thumb
-scoop) stays unstitched. The entrance and slot stay open too. Everything is
-right-handed as drawn — select all and **Make back piece** (`Ctrl+M`) for
-a left-handed mirror.
 
 ### Tracing a real object
 

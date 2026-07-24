@@ -123,6 +123,10 @@ def fold_over_wallet() -> Document:
     (originally "The Lucais" by JJ Leathersmith): a T-shaped flat pattern,
     219 x 290 mm, that folds into a ~70 x 100 mm vertical flap wallet.
 
+    NOTE: kept only as a multi-fold TEST FIXTURE (a scored single piece with
+    non-parallel creases) -- it is deliberately NOT in ``TEMPLATES``, so it does
+    not appear in File → New from template.
+
     The T, drawn flat:
 
       * a full-width BLOCK along the bottom (219 x 90) -- the pouch. The two
@@ -255,10 +259,11 @@ def fold_over_wallet() -> Document:
 
 
 #: (menu label, builder) — the File → New from template entries.
+#: ``fold_over_wallet`` is intentionally omitted: it is kept only as a
+#: multi-fold test fixture (see tests/), not shipped as a starter template.
 TEMPLATES = [
     ("Card holder", card_holder),
     ("Belt", belt),
     ("Key fob", key_fob),
     ("Slim card holder", slim_card_holder),
-    ("Fold-over wallet", fold_over_wallet),
 ]

@@ -478,10 +478,16 @@ class ScoredFoldDialog(QDialog):
         self.view.set_model(panels, hinges, root=root, thickness=t)
         r = self.radius.value()
         ba = bend_allowance(self.folds, t, r)
-        # label each Grow button with that fold's allowance
-        from leathercad.fold3d import fold_bend_allowance
-        for fold, btn in zip(self.folds, self._grow_btns):
-            btn.setText(f"Grow +{fold_bend_allowance(fold, t, r):.1f} mm")
+        # each crease's inside radius is auto-derived from the layers it wraps
+        from leathercad.fold3d import fold_bend_allowance, nested_bend_radii
+        radii = nested_bend_radii(self.folds, t, r)
+        self._radii = radii
+        for fold, btn, rad in zip(self.folds, self._grow_btns, radii):
+            btn.setText(f"Grow +{fold_bend_allowance(fold, t, rad):.1f} mm")
+            layers = int(round((rad - r) / t)) if t > 1e-9 else 0
+            btn.setToolTip(f"Inside radius {rad:.1f} mm "
+                           f"(wraps {layers} inner layer(s)). "
+                           "Adds this bend's allowance to the flat blank — manual.")
         reg = "<br>".join(reg_lines)
         self.readout.setText(
             f"<b>{len(order)} panels · {len(self.fold_shapes)} folds.</b> "
@@ -507,7 +513,9 @@ class ScoredFoldDialog(QDialog):
         if i >= len(self.folds):
             return
         fold = self.folds[i]
-        ba = fold_bend_allowance(fold, self.thick.value(), self.radius.value())
+        # use this crease's auto-derived inside radius (accounts for wrapped layers)
+        rad = self._radii[i] if getattr(self, "_radii", None) else self.radius.value()
+        ba = fold_bend_allowance(fold, self.thick.value(), rad)
         if ba <= 1e-6:
             return
         n = (fold.b - fold.a).perp().normalized()      # world fold normal

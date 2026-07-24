@@ -435,15 +435,68 @@ def fold_bend_allowance(fold: Fold, thickness: float,
     return math.radians(abs(fold.angle_deg)) * (radius + k * thickness)
 
 
+def _fold_stack_order(n: int, dirs: List[int]) -> List[int]:
+    """Bottom-to-top stacking order of ``n`` panels on a strip whose ``n-1``
+    creases have signs ``dirs`` (+1 = valley/front, -1 = mountain/back). Each
+    fold flips the running chain, so the next panel lands on top (valley) or
+    underneath (mountain)."""
+    stack = [0]
+    orient = 1
+    for i in range(n - 1):
+        if dirs[i] * orient > 0:
+            stack.append(i + 1)
+        else:
+            stack.insert(0, i + 1)
+        orient = -orient
+    return stack
+
+
+def nested_bend_radii(folds: List[Fold], thickness: float,
+                      base_radius: float = 0.0) -> List[float]:
+    """Effective INSIDE radius of each fold, accounting for the layers it wraps.
+
+    An outer crease closes around the panels already folded inside it, so its
+    inside radius is ``base_radius + enclosed_layers * thickness``. The enclosed
+    count comes from simulating the flat fold (fold directions + order): an
+    accordion wraps nothing, a C-fold's outer crease wraps one layer, a roll
+    wraps 0, 1, 2, ... Works for parallel scores (a wallet/case strip); for
+    non-parallel folds it can't simulate the stack and falls back to
+    ``base_radius`` for every fold. Returns radii aligned to ``folds``."""
+    n = len(folds)
+    if n == 0:
+        return []
+    if n == 1:
+        return [base_radius]
+    axis = (folds[0].b - folds[0].a).normalized()
+    for f in folds[1:]:
+        d = (f.b - f.a).normalized()
+        if abs(abs(d.x * axis.x + d.y * axis.y) - 1.0) > 1e-3:
+            return [base_radius] * n            # not parallel -> can't nest
+    nrm = axis.perp()
+    order = sorted(range(n), key=lambda i: folds[i].a.dot(nrm))
+    dirs = [1 if folds[i].direction == "front" else -1 for i in order]
+    stack = _fold_stack_order(n + 1, dirs)      # n creases -> n+1 panels
+    idx = {p: k for k, p in enumerate(stack)}
+    radii = [base_radius] * n
+    for c, fold_i in enumerate(order):          # crease c joins panels c, c+1
+        lo, hi = sorted((idx[c], idx[c + 1]))
+        enclosed = sum(1 for p in range(n + 1) if lo < idx[p] < hi)
+        radii[fold_i] = base_radius + enclosed * thickness
+    return radii
+
+
 def bend_allowance(folds: List[Fold], thickness: float, radius: float = 0.0,
                    k: float = 0.5) -> Dict[str, float]:
     """Per-axis flat-blank additions for a set of folds (see
-    ``fold_bend_allowance``): a near-vertical score grows WIDTH, a near-
-    horizontal one grows HEIGHT."""
+    ``fold_bend_allowance``), with each crease's inside radius auto-derived from
+    the layers it wraps (``nested_bend_radii``): a near-vertical score grows
+    WIDTH, a near-horizontal one grows HEIGHT. ``radius`` is the base/minimum
+    inside radius added on top of the nesting."""
+    radii = nested_bend_radii(folds, thickness, radius)
     add_w = add_h = 0.0
     per: List[float] = []
-    for f in folds:
-        ba = fold_bend_allowance(f, thickness, radius, k)
+    for f, r in zip(folds, radii):
+        ba = fold_bend_allowance(f, thickness, r, k)
         per.append(ba)
         d = f.b - f.a
         if abs(d.y) >= abs(d.x):                # vertical-ish score: folds in x
@@ -451,7 +504,7 @@ def bend_allowance(folds: List[Fold], thickness: float, radius: float = 0.0,
         else:
             add_h += ba
     return {"width": add_w, "height": add_h, "total": add_w + add_h,
-            "per_fold": per}
+            "per_fold": per, "radii": radii}
 
 
 def grow_polygon_at_fold(outline: List[Vec2], fold: Fold, ba: float

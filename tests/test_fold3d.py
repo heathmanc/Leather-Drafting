@@ -339,3 +339,42 @@ def test_grow_polygon_at_fold_widens_by_allowance():
     assert abs((max(ys) - min(ys)) - 100.0) < 1e-6      # height unchanged
     # only the far side moved: the near edge (x=90..180 side) stays put
     assert abs(min(xs) - (-10.0)) < 1e-6 or abs(max(xs) - 190.0) < 1e-6
+
+
+def test_nested_radii_accordion_wraps_nothing():
+    from leathercad.fold3d import Fold, nested_bend_radii
+    folds = [Fold(Vec2(80, 0), Vec2(80, 100), 180, "front"),
+             Fold(Vec2(160, 0), Vec2(160, 100), 180, "back")]   # Z / accordion
+    assert nested_bend_radii(folds, 2.0) == [0.0, 0.0]
+
+
+def test_nested_radii_cfold_outer_crease_wraps_one_layer():
+    from leathercad.fold3d import Fold, nested_bend_radii
+    folds = [Fold(Vec2(80, 0), Vec2(80, 100), 180, "front"),
+             Fold(Vec2(160, 0), Vec2(160, 100), 180, "front")]  # C-fold
+    radii = nested_bend_radii(folds, 2.0)
+    assert sorted(radii) == [0.0, 2.0]        # one crease wraps a 2mm layer
+
+
+def test_nested_radii_roll_increments_per_wrap():
+    from leathercad.fold3d import Fold, nested_bend_radii
+    xs = (60, 120, 180)
+    folds = [Fold(Vec2(x, 0), Vec2(x, 100), 180, "front") for x in xs]  # roll
+    radii = sorted(nested_bend_radii(folds, 3.0))
+    assert radii == [0.0, 3.0, 6.0]           # 0, t, 2t
+
+
+def test_cfold_needs_more_material_than_accordion():
+    from leathercad.fold3d import Fold, bend_allowance
+    z = [Fold(Vec2(80, 0), Vec2(80, 100), 180, "front"),
+         Fold(Vec2(160, 0), Vec2(160, 100), 180, "back")]
+    c = [Fold(Vec2(80, 0), Vec2(80, 100), 180, "front"),
+         Fold(Vec2(160, 0), Vec2(160, 100), 180, "front")]
+    assert bend_allowance(c, 2.0)["width"] > bend_allowance(z, 2.0)["width"]
+
+
+def test_non_parallel_folds_fall_back_to_base_radius():
+    from leathercad.fold3d import Fold, nested_bend_radii
+    folds = [Fold(Vec2(80, 0), Vec2(80, 100), 180, "front"),   # vertical
+             Fold(Vec2(0, 50), Vec2(120, 50), 180, "front")]   # horizontal
+    assert nested_bend_radii(folds, 2.0, base_radius=1.0) == [1.0, 1.0]

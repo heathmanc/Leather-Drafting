@@ -89,3 +89,79 @@ def test_dialog_constructs_and_slider_drives_fold(qapp):
     assert dlg.view.fraction == 0.0
     dlg.slider.setValue(50)
     assert abs(dlg.view.fraction - 0.5) < 1e-9
+
+
+def _scored_doc():
+    """A single wallet blank with two vertical fold lines across it."""
+    from leathercad.shapes import PathShape
+    from leathercad.geometry import Vec2
+    doc = Document()
+    doc.add_shape(Rectangle(width=240, height=100,
+                            transform=Transform(x=120, y=50), layer="Cut"))
+    for x in (80.0, 160.0):
+        fl = PathShape(points=[Vec2(0, 0), Vec2(0, 100)], close_path=False,
+                       transform=Transform(x=x, y=0))
+        fl.fold_dir = "front"
+        fl.fold_angle = 150.0
+        doc.add_shape(fl)
+    return doc
+
+
+def test_build_scored_finds_piece_and_folds(qapp):
+    from leathercad_app.preview3d import build_scored_from_document, scored_panels
+    outline, folds, fold_shapes = build_scored_from_document(_scored_doc())
+    assert outline and len(folds) == 2 and len(fold_shapes) == 2
+    panels, hinges, order, root = scored_panels(outline, folds)
+    assert [panels[o].name for o in order] == ["1", "2", "3"]
+    assert root in panels
+
+
+def test_scored_dialog_folds_and_reports_bend_allowance(qapp):
+    from leathercad_app.preview3d import ScoredFoldDialog
+    dlg = ScoredFoldDialog(_scored_doc())
+    assert "Bend allowance" in dlg.readout.text()
+    assert "panels" in dlg.readout.text()
+    # changing a fold direction writes back to the shape and re-renders
+    dlg._combos[0].setCurrentText("back")
+    dlg._rebuild()
+    fold_shapes = [s for s in dlg.doc.shapes if s.is_fold_line]
+    assert any(s.fold_dir == "back" for s in fold_shapes)
+    # thicker leather => larger bend allowance
+    dlg.thick.setValue(1.0)
+    t1 = dlg.readout.text()
+    dlg.thick.setValue(6.0)
+    t6 = dlg.readout.text()
+    assert t1 != t6
+
+
+def test_toggle_fold_line_marks_open_line(qapp):
+    from leathercad.shapes import PathShape
+    from leathercad.geometry import Vec2
+    from leathercad_app.items import ShapeItem
+    from leathercad_app import canvas as cm
+    doc = Document()
+    doc.add_shape(PathShape(points=[Vec2(0, 0), Vec2(0, 50)], close_path=False,
+                            transform=Transform(x=10, y=0)))
+    c = cm.Canvas(doc)
+    c.rebuild()
+    item = next(i for i in c.scene_obj.items() if isinstance(i, ShapeItem))
+    assert not item.model.is_fold_line
+    c.toggle_fold_line(item)
+    assert item.model.is_fold_line and item.model.fold_dir == "front"
+    c.toggle_fold_line(item)
+    assert not item.model.is_fold_line
+
+
+def test_fold_line_survives_save_load(qapp):
+    from leathercad.shapes import PathShape
+    from leathercad.geometry import Vec2
+    doc = Document()
+    fl = PathShape(points=[Vec2(0, 0), Vec2(0, 50)], close_path=False,
+                   transform=Transform(x=10, y=0))
+    fl.fold_dir = "back"
+    fl.fold_angle = 178.0
+    doc.add_shape(fl)
+    doc2 = Document.from_dict(doc.to_dict())
+    folds = [s for s in doc2.shapes if s.is_fold_line]
+    assert len(folds) == 1
+    assert folds[0].fold_dir == "back" and folds[0].fold_angle == 178.0

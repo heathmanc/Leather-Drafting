@@ -1038,7 +1038,12 @@ class ShapeItem(QGraphicsItem):
         holes_vis = self.canvas.stitch_layer_visible() if self.canvas else True
         # outline -- when selected, the outline itself recolours to the selection
         # blue (so a highlighted arc/line reads clearly, not just a bounding box)
-        if getattr(self.model, "construction", False):
+        if getattr(self.model, "is_fold_line", False):
+            # a score / fold line: dash-dot magenta so it reads as a crease, not
+            # a cut edge (it drives the 3D single-piece fold)
+            pen = QPen(QColor(30, 140, 255) if selected else QColor(200, 60, 170))
+            pen.setStyle(Qt.DashDotLine)
+        elif getattr(self.model, "construction", False):
             pen = QPen(QColor(30, 140, 255) if selected else QColor(150, 150, 160))
             pen.setStyle(Qt.DashLine)
         elif selected:

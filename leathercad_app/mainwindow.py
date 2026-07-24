@@ -991,21 +991,28 @@ class MainWindow(QMainWindow):
                                 self.canvas.seam_mate_report())
 
     def _assembly_preview(self):
-        """Fold the flat panels into the finished 3D object (orbit + fold slider).
-        Panels are the closed shapes; hinges are auto-detected from edges two
-        panels share in the flat layout (a paper-net)."""
-        from .preview3d import build_from_document, Preview3DDialog
+        """3D preview. If the piece has fold/score lines, fold that SINGLE piece
+        about them (numbered panels, front/back, leather thickness + bend
+        allowance). Otherwise fold separate panels that share edges (a net)."""
+        from .preview3d import (build_from_document, Preview3DDialog,
+                                build_scored_from_document, ScoredFoldDialog)
+        dark = getattr(self.canvas, "dark", False)
+        outline, folds, fold_shapes = build_scored_from_document(self.doc)
+        if fold_shapes and outline:
+            self._assembly_dlg = ScoredFoldDialog(self.doc, dark=dark, parent=self)
+            self._assembly_dlg.show()
+            return
         panels, hinges = build_from_document(self.doc)
         if not panels:
             QMessageBox.information(
                 self, "3D assembly preview",
-                "Nothing to assemble yet — draw one or more closed panels.\n\n"
-                "Tip: panels that share an edge in the flat layout (a net) fold "
-                "up automatically; use “Make back piece” or draw panels "
-                "edge-to-edge to create seams to fold about.")
+                "Nothing to fold yet.\n\n"
+                "• Single piece: draw a closed outline, add a line across it, "
+                "right-click the line → “Mark as fold line”, then reopen this.\n"
+                "• Multiple panels: panels that share an edge in the flat layout "
+                "fold up automatically.")
             return
-        dlg = Preview3DDialog(panels, hinges,
-                              dark=getattr(self.canvas, "dark", False), parent=self)
+        dlg = Preview3DDialog(panels, hinges, dark=dark, parent=self)
         dlg.show()
         self._assembly_dlg = dlg          # keep a ref so it isn't GC'd
 

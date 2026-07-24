@@ -1499,6 +1499,13 @@ class Canvas(QGraphicsView):
         a_join.setEnabled(len(shapes) >= 2)
         a_offset = menu.addAction("Offset / seam allowance…")
         a_offset.setEnabled(bool(shapes))
+        # mark an open line as a fold/score line for the 3D single-piece fold
+        line_like = (len(shapes) == 1
+                     and not shapes[0].model.local_path().closed)
+        is_fold = line_like and shapes[0].model.is_fold_line
+        a_fold = menu.addAction("Unmark fold line" if is_fold
+                                else "Mark as fold line")
+        a_fold.setEnabled(line_like)
         menu.addSeparator()
         a_union = menu.addAction("Union (merge shapes)")
         a_union.setEnabled(len(shapes) >= 2)
@@ -1532,6 +1539,8 @@ class Canvas(QGraphicsView):
             dist, ok = self._ask_offset_distance()
             if ok:
                 self.offset_selected(dist)
+        elif chosen is a_fold:
+            self.toggle_fold_line(shapes[0])
         elif chosen is a_union:
             self.boolean_selected("union")
         elif chosen is a_subtract:
@@ -2577,6 +2586,22 @@ class Canvas(QGraphicsView):
                  f"(assumes {thickness_mm:g} mm total leather stack and "
                  f"{tail_mm:g} mm needle tails per run — cut generously)"]
         return "\n".join(rows)
+
+    def toggle_fold_line(self, item) -> None:
+        """Mark / unmark an open line as a fold (score) line for the 3D
+        single-piece fold. A fold line defaults to a 90° front fold."""
+        m = item.model
+        if m.is_fold_line:
+            m.fold_dir = ""
+        else:
+            m.fold_dir = "front"
+            if not m.fold_angle:
+                m.fold_angle = 90.0
+        self.refresh_item(item)
+        self.statusMessage.emit(
+            "Marked as fold line — open the 3D single-piece fold to fold it"
+            if m.is_fold_line else "Fold line unmarked")
+        self.commitRequested.emit()
 
     def seam_mate_report(self) -> str:
         """Compare the two selected stitched items (shapes or seams): pieces

@@ -184,14 +184,16 @@ def _build_tree(hinges: List[Hinge], root: str) -> List[Tuple[str, Hinge]]:
 
 
 def assemble(panels: Dict[str, Panel], hinges: List[Hinge],
-             root: Optional[str] = None, fraction: float = 1.0
-             ) -> List[PlacedPanel]:
+             root: Optional[str] = None, fraction: float = 1.0,
+             thickness: float = 0.0) -> List[PlacedPanel]:
     """Fold ``panels`` about ``hinges`` and return them as 3D ``PlacedPanel``s.
 
     ``root`` (default: the first panel) stays in the z = 0 plane; every other
     panel reachable through the hinge graph is folded into place. ``fraction``
     scales all dihedral angles together (0 = flat net, 1 = fully assembled).
-    Panels not reachable from the root are returned flat, laid beside it."""
+    ``thickness`` lifts each panel off the root plane by ``depth * thickness`` so
+    layers that fold flat onto each other stack with a visible gap instead of
+    z-fighting. Panels not reachable from the root are returned flat beside it."""
     if not panels:
         return []
     if root is None or root not in panels:
@@ -204,6 +206,7 @@ def assemble(panels: Dict[str, Panel], hinges: List[Hinge],
         return Vec2(sum(p.x for p in pts) / n, sum(p.y for p in pts) / n)
 
     frames: Dict[str, _Frame] = {root: _root_frame()}
+    depth: Dict[str, int] = {root: 0}
     for child_id, hinge in _build_tree(hinges, root):
         if child_id not in panels or hinge.parent not in frames:
             continue
@@ -211,14 +214,21 @@ def assemble(panels: Dict[str, Panel], hinges: List[Hinge],
                           body_ref=_centroid(panels[child_id].outline))
         if fr is not None:
             frames[child_id] = fr
+            depth[child_id] = depth.get(hinge.parent, 0) + 1
 
     placed: List[PlacedPanel] = []
     for pid, panel in panels.items():
         place, _n = frames.get(pid, _root_frame())
+        dz = depth.get(pid, 0) * thickness      # stack folded layers by thickness
+
+        def lift(v: Vec2, _p=place, _dz=dz) -> Vec3:
+            w = _p(v)
+            return Vec3(w.x, w.y, w.z + _dz)
+
         placed.append(PlacedPanel(
             id=pid, name=panel.name,
-            outline=[place(v) for v in panel.outline],
-            holes=[place(v) for v in panel.holes]))
+            outline=[lift(v) for v in panel.outline],
+            holes=[lift(v) for v in panel.holes]))
     return placed
 
 
@@ -256,3 +266,182 @@ def project(placed: List[PlacedPanel], yaw: float, pitch: float
                     depth))
     out.sort(key=lambda t: t[3])           # far (smaller z) first
     return out
+
+
+# -- single-piece scored folding --------------------------------------------
+# A wallet is often ONE piece of leather scored along fold lines. These helpers
+# split that single outline along its score lines into numbered panels, hinge
+# adjacent panels at each score, and fold each one (front or back) -- reusing the
+# same fold maths as multi-panel assembly.
+
+@dataclass
+class Fold:
+    """A score line across a single piece: the segment ``a``->``b``, how far it
+    folds (``angle_deg``; 180 = folded flat onto its neighbour) and which way
+    (``direction`` = 'front' or 'back')."""
+
+    a: Vec2
+    b: Vec2
+    angle_deg: float = 90.0
+    direction: str = "front"
+
+    def signed_angle(self) -> float:
+        return -self.angle_deg if self.direction == "back" else self.angle_deg
+
+
+def split_polygon_by_line(poly: List[Vec2], a: Vec2, b: Vec2
+                          ) -> Tuple[List[Vec2], List[Vec2]]:
+    """Split a convex-ish simple polygon by the infinite line through ``a``,``b``
+    into ``(left, right)`` half-polygons (Sutherland-Hodgman clip on each side).
+    Either side is ``[]`` if the polygon lies wholly on the other side."""
+    nrm = (b - a).perp()                    # points to the "left" half
+
+    def clip(keep_sign: float) -> List[Vec2]:
+        out: List[Vec2] = []
+        n = len(poly)
+        for i in range(n):
+            p, q = poly[i], poly[(i + 1) % n]
+            dp = (p - a).dot(nrm) * keep_sign
+            dq = (q - a).dot(nrm) * keep_sign
+            if dp >= -1e-9:
+                out.append(p)
+            if (dp > 0) != (dq > 0):        # edge crosses the line -> add cut pt
+                t = dp / (dp - dq)
+                out.append(Vec2(p.x + (q.x - p.x) * t, p.y + (q.y - p.y) * t))
+        return out if len(out) >= 3 else []
+
+    return clip(1.0), clip(-1.0)
+
+
+def _cut_segment(poly: List[Vec2], a: Vec2, b: Vec2
+                 ) -> Optional[Tuple[Vec2, Vec2]]:
+    """Where the infinite line a->b enters and exits ``poly`` -- the shared hinge
+    edge between the two halves. Returns the two boundary-crossing points."""
+    nrm = (b - a).perp()
+    hits: List[Vec2] = []
+    n = len(poly)
+    for i in range(n):
+        p, q = poly[i], poly[(i + 1) % n]
+        dp = (p - a).dot(nrm)
+        dq = (q - a).dot(nrm)
+        if (dp > 0) != (dq > 0) and abs(dp - dq) > 1e-12:
+            t = dp / (dp - dq)
+            hits.append(Vec2(p.x + (q.x - p.x) * t, p.y + (q.y - p.y) * t))
+    if len(hits) < 2:
+        return None
+    return hits[0], hits[1]
+
+
+def _edge_span_on_line(poly: List[Vec2], fold: Fold, tol: float = 1e-4
+                       ) -> Optional[Tuple[float, float]]:
+    """If ``poly`` has an edge lying along the fold's line, return that edge's
+    ``(t0, t1)`` extent projected onto the line direction, else None."""
+    a, b = fold.a, fold.b
+    d = (b - a).normalized()
+    nrm = (b - a).perp()
+    best = None
+    n = len(poly)
+    for i in range(n):
+        p, q = poly[i], poly[(i + 1) % n]
+        if abs((p - a).dot(nrm)) < tol and abs((q - a).dot(nrm)) < tol:
+            tp, tq = (p - a).dot(d), (q - a).dot(d)
+            lo, hi = min(tp, tq), max(tp, tq)
+            if best is None:
+                best = (lo, hi)
+            else:
+                best = (min(best[0], lo), max(best[1], hi))
+    return best
+
+
+def panels_from_scored_piece(outline: List[Vec2], folds: List[Fold]
+                             ) -> Tuple[Dict[str, Panel], List[Hinge], List[str]]:
+    """Split a single ``outline`` along its ``folds`` into numbered panels and
+    the hinges between them. Returns ``(panels, hinges, order)`` where ``order``
+    lists the panel ids in numbering order (their ``name`` is the 1-based label).
+
+    Two phases so cuts never lose track of each other: (1) split the outline by
+    every fold line into final facets; (2) hinge any two facets that share an
+    edge lying on a fold line. Handles parallel scores (a wallet strip) and
+    crossing scores."""
+    # -- phase 1: split by every fold line -------------------------------
+    polys: List[List[Vec2]] = [list(outline)]
+    for fold in folds:
+        nxt: List[List[Vec2]] = []
+        for poly in polys:
+            left, right = split_polygon_by_line(poly, fold.a, fold.b)
+            if left and right:
+                nxt += [left, right]
+            else:
+                nxt.append(poly)
+        polys = nxt
+
+    # number panels left-to-right, then bottom-to-top, for a stable reading order
+    def key(poly: List[Vec2]):
+        cx = sum(p.x for p in poly) / len(poly)
+        cy = sum(p.y for p in poly) / len(poly)
+        return (round(cx, 3), round(cy, 3))
+
+    polys.sort(key=key)
+    panels: Dict[str, Panel] = {}
+    order: List[str] = []
+    for i, poly in enumerate(polys):
+        pid = f"f{i}"
+        panels[pid] = Panel(id=pid, outline=poly, name=str(i + 1))
+        order.append(pid)
+
+    # -- phase 2: hinge facets that share an on-fold-line edge -----------
+    hinges: List[Hinge] = []
+    for fold in folds:
+        spans = [(pid, _edge_span_on_line(panels[pid].outline, fold))
+                 for pid in order]
+        spans = [(pid, s) for pid, s in spans if s is not None]
+        d = (fold.b - fold.a).normalized()
+        for i in range(len(spans)):
+            for j in range(i + 1, len(spans)):
+                pid_i, (lo_i, hi_i) = spans[i]
+                pid_j, (lo_j, hi_j) = spans[j]
+                lo, hi = max(lo_i, lo_j), min(hi_i, hi_j)
+                if hi - lo <= 1e-4:
+                    continue                    # edges don't overlap -> not adjacent
+                # opposite sides of the line?
+                nrm = (fold.b - fold.a).perp()
+                ci = _poly_centroid(panels[pid_i].outline)
+                cj = _poly_centroid(panels[pid_j].outline)
+                if ((ci - fold.a).dot(nrm) > 0) == ((cj - fold.a).dot(nrm) > 0):
+                    continue
+                seg = (fold.a + d * lo, fold.a + d * hi)
+                hinges.append(Hinge(pid_i, pid_j, seg, seg, fold.signed_angle()))
+    return panels, hinges, order
+
+
+def _poly_centroid(poly: List[Vec2]) -> Vec2:
+    n = len(poly)
+    return Vec2(sum(p.x for p in poly) / n, sum(p.y for p in poly) / n)
+
+
+def bend_allowance(folds: List[Fold], thickness: float,
+                   radius: Optional[float] = None, k: float = 0.5
+                   ) -> Dict[str, float]:
+    """How much longer the FLAT blank must be to survive folding around a real
+    (non-zero) bend radius, versus an ideal zero-thickness crease.
+
+    Each fold's neutral fibre travels an arc of ``angle * (radius + k*thickness)``
+    while the crease line itself contributes ``0``; the difference is extra
+    material you must add. Leather bends tight, so ``radius`` defaults to one
+    thickness. Returns per-axis additions: a near-vertical score grows WIDTH,
+    a near-horizontal score grows HEIGHT (plus the total)."""
+    r = thickness if radius is None else radius
+    add_w = add_h = 0.0
+    per: List[float] = []
+    for f in folds:
+        ang = math.radians(abs(f.angle_deg))
+        ba = ang * (r + k * thickness)          # arc length of the neutral fibre
+        per.append(ba)
+        d = f.b - f.a
+        if abs(d.y) >= abs(d.x):                # vertical-ish score: folds in x
+            add_w += ba
+        else:
+            add_h += ba
+    return {"width": add_w, "height": add_h, "total": add_w + add_h,
+            "per_fold": per}
+

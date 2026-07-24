@@ -104,13 +104,14 @@ def _panel_normal_view(outline_view: List[Vec3]) -> Vec3:
 
 def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
                    *, root=None, fraction=1.0, yaw=0.6, pitch=1.0,
-                   zoom=1.0, dark=False) -> None:
+                   zoom=1.0, dark=False, thickness=0.0, numbers=False) -> None:
     """Render the folded assembly into a ``w x h`` area with a painter."""
     bg = QColor(28, 30, 34) if dark else QColor(244, 244, 246)
     painter.fillRect(0, 0, w, h, bg)
     painter.setRenderHint(QPainter.Antialiasing, True)
 
-    placed = assemble(panels, hinges, root=root, fraction=fraction)
+    placed = assemble(panels, hinges, root=root, fraction=fraction,
+                      thickness=thickness)
     if not placed:
         return
 
@@ -159,6 +160,18 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
             r = max(1.0, 0.7 * scale)
             for v in hv:
                 painter.drawEllipse(to_screen(v), r, r)
+        # panel number at the facet centre
+        if numbers and pl.name:
+            c3 = Vec3(sum(v.x for v in ov) / len(ov),
+                      sum(v.y for v in ov) / len(ov),
+                      sum(v.z for v in ov) / len(ov))
+            painter.setPen(QPen(QColor(255, 255, 255)))
+            f = painter.font()
+            f.setBold(True)
+            f.setPointSize(max(9, int(0.12 * min(w, h) / max(len(placed), 3))))
+            painter.setFont(f)
+            sp = to_screen(c3)
+            painter.drawText(QPointF(sp.x() - 6, sp.y() + 6), pl.name)
 
 
 # -- interactive orbit widget ------------------------------------------------
@@ -166,12 +179,15 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
 class Preview3DWidget(QWidget):
     """Orbit + fold view. Drag to rotate, wheel to zoom."""
 
-    def __init__(self, panels, hinges, root=None, dark=False, parent=None):
+    def __init__(self, panels, hinges, root=None, dark=False, parent=None,
+                 thickness=0.0, numbers=False):
         super().__init__(parent)
         self.panels = panels
         self.hinges = hinges
         self.root = root
         self.dark = dark
+        self.thickness = thickness
+        self.numbers = numbers
         self.fraction = 1.0
         self.yaw = 0.6
         self.pitch = 1.0
@@ -184,11 +200,21 @@ class Preview3DWidget(QWidget):
         self.fraction = max(0.0, min(1.0, f))
         self.update()
 
+    def set_model(self, panels, hinges, root=None, thickness=None) -> None:
+        self.panels = panels
+        self.hinges = hinges
+        if root is not None:
+            self.root = root
+        if thickness is not None:
+            self.thickness = thickness
+        self.update()
+
     def paintEvent(self, _e):
         p = QPainter(self)
         paint_assembly(p, self.width(), self.height(), self.panels, self.hinges,
                        root=self.root, fraction=self.fraction, yaw=self.yaw,
-                       pitch=self.pitch, zoom=self.zoom, dark=self.dark)
+                       pitch=self.pitch, zoom=self.zoom, dark=self.dark,
+                       thickness=self.thickness, numbers=self.numbers)
         p.end()
 
     def mousePressEvent(self, e):
@@ -236,15 +262,205 @@ class Preview3DDialog(QDialog):
         lay.addWidget(hint)
 
 
+# -- single-piece scored folding (the wallet case) ---------------------------
+
+def _poly_area(pts) -> float:
+    s = 0.0
+    n = len(pts)
+    for i in range(n):
+        a, b = pts[i], pts[(i + 1) % n]
+        s += a.x * b.y - b.x * a.y
+    return abs(s) / 2.0
+
+
+def _point_in_poly(p: Vec2, poly) -> bool:
+    inside = False
+    n = len(poly)
+    j = n - 1
+    for i in range(n):
+        a, b = poly[i], poly[j]
+        if (a.y > p.y) != (b.y > p.y):
+            xint = (b.x - a.x) * (p.y - a.y) / (b.y - a.y + 1e-30) + a.x
+            if p.x < xint:
+                inside = not inside
+        j = i
+    return inside
+
+
+def build_scored_from_document(doc, piece=None):
+    """Find the single piece to fold (the largest closed shape, or ``piece``)
+    plus its fold lines, and return ``(outline, folds, fold_shapes)``:
+    the world outline, the ``Fold`` list, and the fold-line shapes behind them
+    (so the dialog can write edits back). Returns ``(None, [], [])`` if there is
+    no piece with at least one fold line across it."""
+    from leathercad.fold3d import Fold
+    fold_shapes = [s for s in doc.shapes if getattr(s, "is_fold_line", False)]
+    if not fold_shapes:
+        return None, [], []
+    candidates = [s for s in doc.shapes
+                  if not getattr(s, "is_fold_line", False)
+                  and not getattr(s, "construction", False)
+                  and s.local_path().closed]
+    if piece is None:
+        if not candidates:
+            return None, [], []
+        piece = max(candidates, key=lambda s: _poly_area(
+            [Vec2(p.x, p.y) for p in s.world_polyline()[0]]))
+    outline = [Vec2(p.x, p.y) for p in piece.world_polyline()[0]]
+
+    folds = []
+    for fs in fold_shapes:
+        pts = fs.world_polyline()[0]
+        if len(pts) < 2:
+            continue
+        a, b = Vec2(pts[0].x, pts[0].y), Vec2(pts[-1].x, pts[-1].y)
+        folds.append(Fold(a, b, fs.fold_angle, fs.fold_dir or "front"))
+    return outline, folds, fold_shapes
+
+
+def _piece_holes(piece):
+    """World stitch holes for the piece, or []."""
+    from leathercad.stitching import holes_for_shape
+    try:
+        res = holes_for_shape(piece)
+        t = piece.transform
+        return [t.apply(Vec2(h.point.x, h.point.y)) for h in res.holes]
+    except Exception:
+        return []
+
+
+def scored_panels(outline, folds, holes=None):
+    """``panels_from_scored_piece`` + distribute ``holes`` into their facets."""
+    from leathercad.fold3d import panels_from_scored_piece
+    panels, hinges, order = panels_from_scored_piece(outline, folds)
+    if holes:
+        for hp in holes:
+            for pid in order:
+                if _point_in_poly(hp, panels[pid].outline):
+                    panels[pid].holes.append(hp)
+                    break
+    # root = the largest facet (the piece "stays put" on its biggest panel)
+    root = max(order, key=lambda pid: _poly_area(panels[pid].outline)) \
+        if order else None
+    return panels, hinges, order, root
+
+
+class ScoredFoldDialog(QDialog):
+    """Fold a SINGLE scored piece: numbered panels, per-panel front/back + angle,
+    a leather-thickness layer stack, and the bend-allowance the flat blank needs
+    for the bend radius."""
+
+    def __init__(self, doc, piece=None, dark=False, parent=None):
+        from PySide6.QtWidgets import (QDoubleSpinBox, QComboBox, QGridLayout,
+                                       QScrollArea)
+        super().__init__(parent)
+        self.setWindowTitle("Fold single piece (3D)")
+        self.resize(680, 620)
+        self.doc = doc
+        self.outline, self.folds, self.fold_shapes = \
+            build_scored_from_document(doc, piece)
+        self.piece = piece or self._auto_piece()
+        self.holes = _piece_holes(self.piece) if self.piece else []
+
+        lay = QVBoxLayout(self)
+        panels, hinges, order, root = scored_panels(self.outline, self.folds,
+                                                    self.holes)
+        self.view = Preview3DWidget(panels, hinges, root, dark, self,
+                                    thickness=0.0, numbers=True)
+        lay.addWidget(self.view, 1)
+
+        # thickness + fold-amount
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Leather thickness"))
+        self.thick = QDoubleSpinBox()
+        self.thick.setRange(0.0, 12.0)
+        self.thick.setSingleStep(0.5)
+        self.thick.setValue(2.0)
+        self.thick.setSuffix(" mm")
+        self.thick.valueChanged.connect(self._rebuild)
+        row.addWidget(self.thick)
+        row.addSpacing(16)
+        row.addWidget(QLabel("Fold"))
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setRange(0, 100)
+        self.slider.setValue(100)
+        self.slider.valueChanged.connect(lambda v: self.view.set_fraction(v / 100.0))
+        row.addWidget(self.slider, 1)
+        lay.addLayout(row)
+
+        # per-fold controls: which way each score folds + how far
+        self._combos = []
+        self._angles = []
+        grid = QGridLayout()
+        grid.addWidget(QLabel("<b>Score</b>"), 0, 0)
+        grid.addWidget(QLabel("<b>Direction</b>"), 0, 1)
+        grid.addWidget(QLabel("<b>Angle</b>"), 0, 2)
+        for i, fs in enumerate(self.fold_shapes):
+            grid.addWidget(QLabel(f"Fold {i + 1}"), i + 1, 0)
+            cb = QComboBox()
+            cb.addItems(["front", "back"])
+            cb.setCurrentText(fs.fold_dir or "front")
+            cb.currentTextChanged.connect(self._rebuild)
+            grid.addWidget(cb, i + 1, 1)
+            sp = QDoubleSpinBox()
+            sp.setRange(0.0, 180.0)
+            sp.setValue(fs.fold_angle)
+            sp.setSuffix("°")
+            sp.valueChanged.connect(self._rebuild)
+            grid.addWidget(sp, i + 1, 2)
+            self._combos.append(cb)
+            self._angles.append(sp)
+        lay.addLayout(grid)
+
+        self.readout = QLabel()
+        self.readout.setWordWrap(True)
+        lay.addWidget(self.readout)
+        hint = QLabel("Drag to orbit · wheel to zoom · slider folds flat → assembled")
+        hint.setAlignment(Qt.AlignCenter)
+        lay.addWidget(hint)
+        self._rebuild()
+
+    def _auto_piece(self):
+        cands = [s for s in self.doc.shapes
+                 if not getattr(s, "is_fold_line", False)
+                 and not getattr(s, "construction", False)
+                 and s.local_path().closed]
+        return max(cands, key=lambda s: _poly_area(
+            [Vec2(p.x, p.y) for p in s.world_polyline()[0]]), default=None)
+
+    def _rebuild(self, *_):
+        from leathercad.fold3d import bend_allowance
+        # push control values back onto the fold lines + rebuild the fold list
+        for fs, cb, sp in zip(self.fold_shapes, self._combos, self._angles):
+            fs.fold_dir = cb.currentText()
+            fs.fold_angle = sp.value()
+        for fold, fs in zip(self.folds, self.fold_shapes):
+            fold.direction = fs.fold_dir
+            fold.angle_deg = fs.fold_angle
+        t = self.thick.value()
+        panels, hinges, order, root = scored_panels(self.outline, self.folds,
+                                                    self.holes)
+        self.view.set_model(panels, hinges, root=root, thickness=t)
+        ba = bend_allowance(self.folds, t)
+        self.readout.setText(
+            f"<b>{len(order)} panels · {len(self.fold_shapes)} folds.</b> "
+            f"Bend allowance (leather {t:g} mm): add "
+            f"<b>{ba['width']:.1f} mm</b> to width and "
+            f"<b>{ba['height']:.1f} mm</b> to the height of the flat blank so it "
+            f"still fits after folding around the bend radius.")
+
+
 # -- headless PNG (docs / marketing) -----------------------------------------
 
-def render_png(path: str, panels, hinges, *, root=None, fraction=1.0,
-               yaw=0.6, pitch=1.0, zoom=1.0, size=(900, 720), dark=False) -> None:
+def render_png(path: str, panels, hinges, *, root=None, fraction=1.0, yaw=0.6,
+               pitch=1.0, zoom=1.0, size=(900, 720), dark=False, thickness=0.0,
+               numbers=False) -> None:
     """Render an assembled view straight to a PNG file (no window needed)."""
     w, h = size
     img = QImage(w, h, QImage.Format_ARGB32)
     p = QPainter(img)
     paint_assembly(p, w, h, panels, hinges, root=root, fraction=fraction,
-                   yaw=yaw, pitch=pitch, zoom=zoom, dark=dark)
+                   yaw=yaw, pitch=pitch, zoom=zoom, dark=dark,
+                   thickness=thickness, numbers=numbers)
     p.end()
     img.save(path)

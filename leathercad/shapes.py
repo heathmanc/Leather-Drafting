@@ -86,6 +86,15 @@ class Shape:
     # Move-group membership: items sharing a group_id move together. None -> not
     # grouped.
     group_id: Optional[str] = None
+    # Fold line: when ``fold_dir`` is set ('front' or 'back'), this line is a
+    # score/crease the 3D preview folds a single piece about, by ``fold_angle``
+    # degrees (180 = folded flat). Empty ``fold_dir`` -> an ordinary line.
+    fold_dir: str = ""
+    fold_angle: float = 90.0
+
+    @property
+    def is_fold_line(self) -> bool:
+        return self.fold_dir in ("front", "back")
 
     # -- geometry (subclasses implement local_path) ---------------------
     def local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:  # pragma: no cover

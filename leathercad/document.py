@@ -60,6 +60,8 @@ def _shape_to_dict(sh: Shape) -> dict:
         "stitch": _stitch_to_dict(sh.stitch),
         "construction": sh.construction,
         "group_id": sh.group_id,
+        "fold_dir": sh.fold_dir,
+        "fold_angle": sh.fold_angle,
     }
     if isinstance(sh, Rectangle):
         base.update(width=sh.width, height=sh.height,
@@ -108,6 +110,8 @@ def _shape_from_dict(d: dict) -> Shape:
         stitch=_stitch_from_dict(d.get("stitch")),
         construction=d.get("construction", False),
         group_id=d.get("group_id"),
+        fold_dir=d.get("fold_dir", ""),
+        fold_angle=d.get("fold_angle", 90.0),
     )
     if "shape_id" in d:
         common["shape_id"] = d["shape_id"]

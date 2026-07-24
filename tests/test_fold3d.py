@@ -162,3 +162,93 @@ def test_rotate_view_is_isometry():
     p = Vec3(3, 4, 5)
     r = rotate_view(p, yaw=0.7, pitch=-0.4)
     assert abs(r.length() - p.length()) < 1e-9
+
+
+# -- single-piece scored folding --------------------------------------------
+
+def _rect(w, h):
+    return [Vec2(0, 0), Vec2(w, 0), Vec2(w, h), Vec2(0, h)]
+
+
+def test_split_polygon_by_line_halves_a_rectangle():
+    from leathercad.fold3d import split_polygon_by_line
+    left, right = split_polygon_by_line(_rect(100, 40), Vec2(60, 0), Vec2(60, 40))
+    # the cut is at x = 60: left area is 60x40, right is 40x40
+    def area(poly):
+        s = 0.0
+        n = len(poly)
+        for i in range(n):
+            a, b = poly[i], poly[(i + 1) % n]
+            s += a.x * b.y - b.x * a.y
+        return abs(s) / 2.0
+    assert abs(area(left) - 60 * 40) < 1e-6
+    assert abs(area(right) - 40 * 40) < 1e-6
+
+
+def test_scored_piece_numbers_panels_and_hinges_them():
+    from leathercad.fold3d import Fold, panels_from_scored_piece
+    outline = _rect(240, 100)
+    folds = [Fold(Vec2(80, 0), Vec2(80, 100), 150, "front"),
+             Fold(Vec2(160, 0), Vec2(160, 100), 150, "back")]
+    panels, hinges, order = panels_from_scored_piece(outline, folds)
+    assert [panels[o].name for o in order] == ["1", "2", "3"]
+    assert len(hinges) == 2                       # 1-2 and 2-3, a connected chain
+    # every panel is reachable from the middle -> one connected fold graph
+    placed = {p.id: p for p in assemble(panels, hinges, root=order[1],
+                                        fraction=1.0)}
+    assert max(abs(v.z) for v in placed[order[1]].outline) < 1e-9   # root flat
+    assert max(abs(v.z) for v in placed[order[0]].outline) > 1.0    # 1 folded
+    assert max(abs(v.z) for v in placed[order[2]].outline) > 1.0    # 3 folded
+
+
+def test_front_and_back_fold_opposite_ways():
+    from leathercad.fold3d import Fold, panels_from_scored_piece
+    outline = _rect(240, 100)
+    folds = [Fold(Vec2(80, 0), Vec2(80, 100), 150, "front"),
+             Fold(Vec2(160, 0), Vec2(160, 100), 150, "back")]
+    panels, hinges, order = panels_from_scored_piece(outline, folds)
+    placed = {p.id: p for p in assemble(panels, hinges, root=order[1],
+                                        fraction=1.0)}
+    z1 = sum(v.z for v in placed[order[0]].outline) / 4
+    z3 = sum(v.z for v in placed[order[2]].outline) / 4
+    assert z1 * z3 < 0                             # one up, one down (front vs back)
+
+
+def test_thickness_stacks_folded_flat_layers():
+    from leathercad.fold3d import Fold, panels_from_scored_piece
+    outline = _rect(200, 90)
+    folds = [Fold(Vec2(100, 0), Vec2(100, 90), 180, "back")]   # fold in half, flat
+    panels, hinges, order = panels_from_scored_piece(outline, folds)
+    flat = {p.id: p for p in assemble(panels, hinges, root=order[0],
+                                      fraction=1.0, thickness=0.0)}
+    stacked = {p.id: p for p in assemble(panels, hinges, root=order[0],
+                                         fraction=1.0, thickness=3.0)}
+    # with zero thickness the folded panel lands in the root plane (z ~ 0);
+    # thickness lifts it one layer up so it doesn't z-fight
+    child = order[1]
+    z_flat = sum(v.z for v in flat[child].outline) / 4
+    z_stack = sum(v.z for v in stacked[child].outline) / 4
+    assert abs(z_flat) < 1e-6
+    assert abs(z_stack - 3.0) < 1e-6
+
+
+def test_bend_allowance_adds_to_the_folded_axis():
+    from leathercad.fold3d import Fold, bend_allowance
+    # two vertical scores fold in X -> they grow WIDTH, not height
+    folds = [Fold(Vec2(80, 0), Vec2(80, 100), 90, "front"),
+             Fold(Vec2(160, 0), Vec2(160, 100), 90, "back")]
+    ba = bend_allowance(folds, thickness=3.0)
+    assert ba["height"] == 0.0
+    assert ba["width"] > 0.0
+    # each 90 deg fold: arc = (pi/2)*(r + 0.5t) with r=t=3 -> ~7.07mm, x2
+    import math
+    one = math.radians(90) * (3.0 + 0.5 * 3.0)
+    assert abs(ba["width"] - 2 * one) < 1e-6
+    assert abs(ba["total"] - 2 * one) < 1e-6
+
+
+def test_horizontal_score_grows_height():
+    from leathercad.fold3d import Fold, bend_allowance
+    folds = [Fold(Vec2(0, 50), Vec2(120, 50), 90, "front")]   # horizontal score
+    ba = bend_allowance(folds, thickness=2.0)
+    assert ba["width"] == 0.0 and ba["height"] > 0.0

@@ -314,3 +314,23 @@ def test_registration_needs_a_fold_to_stack():
     lines, bad = registration_report(placed, thickness=3.0)
     assert "No layers are stacked" in lines[0]
     assert not bad
+
+
+def test_fold_bend_allowance_single():
+    from leathercad.fold3d import Fold, fold_bend_allowance
+    f = Fold(Vec2(0, 0), Vec2(0, 100), 90, "back")
+    # (pi/2)*(r + 0.5t) with r=t=3
+    assert abs(fold_bend_allowance(f, 3.0) - math.radians(90) * (3.0 + 1.5)) < 1e-9
+
+
+def test_grow_polygon_at_fold_widens_by_allowance():
+    from leathercad.fold3d import Fold, grow_polygon_at_fold
+    outline = _rect(180, 100)
+    f = Fold(Vec2(90, 0), Vec2(90, 100), 180, "back")
+    grown = grow_polygon_at_fold(outline, f, 10.0)
+    xs = [p.x for p in grown]
+    assert abs((max(xs) - min(xs)) - 190.0) < 1e-6      # blank got 10mm wider
+    ys = [p.y for p in grown]
+    assert abs((max(ys) - min(ys)) - 100.0) < 1e-6      # height unchanged
+    # only the far side moved: the near edge (x=90..180 side) stays put
+    assert abs(min(xs) - (-10.0)) < 1e-6 or abs(max(xs) - 190.0) < 1e-6

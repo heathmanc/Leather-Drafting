@@ -999,7 +999,8 @@ class MainWindow(QMainWindow):
         dark = getattr(self.canvas, "dark", False)
         outline, folds, fold_shapes = build_scored_from_document(self.doc)
         if fold_shapes and outline:
-            self._assembly_dlg = ScoredFoldDialog(self.doc, dark=dark, parent=self)
+            self._assembly_dlg = ScoredFoldDialog(self.doc, dark=dark, parent=self,
+                                                  canvas=self.canvas)
             self._assembly_dlg.show()
             return
         panels, hinges = build_from_document(self.doc)

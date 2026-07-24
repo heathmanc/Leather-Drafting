@@ -446,6 +446,28 @@ def bend_allowance(folds: List[Fold], thickness: float,
             "per_fold": per}
 
 
+def fold_bend_allowance(fold: Fold, thickness: float,
+                        radius: Optional[float] = None, k: float = 0.5) -> float:
+    """Bend allowance (mm of extra flat material) for a SINGLE fold."""
+    r = thickness if radius is None else radius
+    return math.radians(abs(fold.angle_deg)) * (r + k * thickness)
+
+
+def grow_polygon_at_fold(outline: List[Vec2], fold: Fold, ba: float
+                         ) -> List[Vec2]:
+    """Insert ``ba`` mm of material at a fold: translate every outline vertex on
+    the FAR side of the fold line out along the fold normal, leaving the near
+    side fixed. The blank grows by ``ba`` across the fold (the near panel keeps
+    its size; the far panel slides out to make room for the bend radius)."""
+    if ba <= 0:
+        return [Vec2(p.x, p.y) for p in outline]
+    n = (fold.b - fold.a).perp().normalized()
+    shift = n * ba
+    a = fold.a
+    return [p + shift if (p - a).dot(n) > 1e-9 else Vec2(p.x, p.y)
+            for p in outline]
+
+
 # -- registration: do stacked layers line up for stitching? ------------------
 # After folding, panels that come to rest face-to-face must register: enough
 # material to reach, and stitch holes that coincide so the awl passes through

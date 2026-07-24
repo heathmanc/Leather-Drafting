@@ -199,3 +199,50 @@ def test_scored_dialog_clean_fold_has_few_flags(qapp):
     dlg = ScoredFoldDialog(_scored_doc_closed(fold_x=90.0))   # symmetric bifold
     flagged = sum(len(s) for s in (dlg.view.bad_holes or {}).values())
     assert flagged <= 2
+
+
+def test_grow_blank_button_adds_bend_allowance_to_width(qapp):
+    from leathercad.shapes import PathShape, Rectangle
+    from leathercad.geometry import Vec2
+    from leathercad.stitchsettings import StitchSettings
+    from leathercad.fold3d import fold_bend_allowance
+    from leathercad_app import canvas as cm
+    from leathercad_app.preview3d import ScoredFoldDialog
+    doc = Document()
+    piece = Rectangle(width=180, height=100, transform=Transform(x=90, y=50),
+                      layer="Cut",
+                      stitch=StitchSettings(enabled=True, pitch_mm=5.0, inset=5.0))
+    doc.add_shape(piece)
+    fl = PathShape(points=[Vec2(0, 0), Vec2(0, 100)], close_path=False,
+                   transform=Transform(x=90, y=0))
+    fl.fold_dir = "back"
+    fl.fold_angle = 180.0
+    doc.add_shape(fl)
+    c = cm.Canvas(doc)
+    c.rebuild()
+    dlg = ScoredFoldDialog(doc, canvas=c)
+    w0 = piece.width
+    ba = fold_bend_allowance(dlg.folds[0], dlg.thick.value())
+    assert ba > 0
+    dlg._grow_blank(0)
+    assert abs(piece.width - (w0 + ba)) < 1e-6         # blank grew by exactly ba
+    # the Grow button is labelled with the (recomputed) allowance
+    assert "Grow" in dlg._grow_btns[0].text()
+
+
+def test_grow_blank_is_manual_only(qapp):
+    """Opening the dialog must NOT resize anything on its own."""
+    from leathercad.shapes import PathShape, Rectangle
+    from leathercad.geometry import Vec2
+    from leathercad_app.preview3d import ScoredFoldDialog
+    doc = Document()
+    piece = Rectangle(width=200, height=90, transform=Transform(x=100, y=45),
+                      layer="Cut")
+    doc.add_shape(piece)
+    fl = PathShape(points=[Vec2(0, 0), Vec2(0, 90)], close_path=False,
+                   transform=Transform(x=100, y=0))
+    fl.fold_dir = "back"
+    fl.fold_angle = 180.0
+    doc.add_shape(fl)
+    ScoredFoldDialog(doc)
+    assert piece.width == 200 and piece.height == 90   # untouched until you click

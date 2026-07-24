@@ -359,13 +359,14 @@ class ScoredFoldDialog(QDialog):
     a leather-thickness layer stack, and the bend-allowance the flat blank needs
     for the bend radius."""
 
-    def __init__(self, doc, piece=None, dark=False, parent=None):
+    def __init__(self, doc, piece=None, dark=False, parent=None, canvas=None):
         from PySide6.QtWidgets import (QDoubleSpinBox, QComboBox, QGridLayout,
                                        QScrollArea)
         super().__init__(parent)
         self.setWindowTitle("Fold single piece (3D)")
-        self.resize(680, 620)
+        self.resize(680, 640)
         self.doc = doc
+        self.canvas = canvas
         self.outline, self.folds, self.fold_shapes = \
             build_scored_from_document(doc, piece)
         self.piece = piece or self._auto_piece()
@@ -397,13 +398,17 @@ class ScoredFoldDialog(QDialog):
         row.addWidget(self.slider, 1)
         lay.addLayout(row)
 
-        # per-fold controls: which way each score folds + how far
+        # per-fold controls: which way each score folds, how far, and a manual
+        # "grow the blank by this bend's allowance" button (never automatic)
+        from PySide6.QtWidgets import QPushButton
         self._combos = []
         self._angles = []
+        self._grow_btns = []
         grid = QGridLayout()
         grid.addWidget(QLabel("<b>Score</b>"), 0, 0)
         grid.addWidget(QLabel("<b>Direction</b>"), 0, 1)
         grid.addWidget(QLabel("<b>Angle</b>"), 0, 2)
+        grid.addWidget(QLabel("<b>Bend allowance</b>"), 0, 3)
         for i, fs in enumerate(self.fold_shapes):
             grid.addWidget(QLabel(f"Fold {i + 1}"), i + 1, 0)
             cb = QComboBox()
@@ -417,8 +422,14 @@ class ScoredFoldDialog(QDialog):
             sp.setSuffix("°")
             sp.valueChanged.connect(self._rebuild)
             grid.addWidget(sp, i + 1, 2)
+            btn = QPushButton("Grow blank")
+            btn.setToolTip("Add this bend's allowance to the flat blank "
+                           "(manual — nothing resizes on its own)")
+            btn.clicked.connect(lambda _c, k=i: self._grow_blank(k))
+            grid.addWidget(btn, i + 1, 3)
             self._combos.append(cb)
             self._angles.append(sp)
+            self._grow_btns.append(btn)
         lay.addLayout(grid)
 
         self.readout = QLabel()
@@ -456,6 +467,10 @@ class ScoredFoldDialog(QDialog):
         self.view.bad_holes = bad
         self.view.set_model(panels, hinges, root=root, thickness=t)
         ba = bend_allowance(self.folds, t)
+        # label each Grow button with that fold's allowance
+        from leathercad.fold3d import fold_bend_allowance
+        for fold, btn in zip(self.folds, self._grow_btns):
+            btn.setText(f"Grow +{fold_bend_allowance(fold, t):.1f} mm")
         reg = "<br>".join(reg_lines)
         self.readout.setText(
             f"<b>{len(order)} panels · {len(self.fold_shapes)} folds.</b> "
@@ -463,6 +478,69 @@ class ScoredFoldDialog(QDialog):
             f"<b>{ba['width']:.1f} mm</b> to width, "
             f"<b>{ba['height']:.1f} mm</b> to height of the flat blank.<br>"
             f"<b>Lineup check</b> (red = won't register):<br>{reg}")
+
+    def _reload_from_doc(self):
+        """Re-read the piece + folds after the document changed (e.g. a grow)."""
+        self.outline, self.folds, self.fold_shapes = \
+            build_scored_from_document(self.doc, self.piece)
+        self.holes = _piece_holes(self.piece) if self.piece else []
+        self._rebuild()
+
+    def _grow_blank(self, i: int):
+        """MANUAL: add fold ``i``'s bend allowance to the flat blank. Grows the
+        piece across that fold and slides everything on the far side out to make
+        room for the bend radius; nothing resizes on its own."""
+        from leathercad.fold3d import (fold_bend_allowance,
+                                        grow_polygon_at_fold)
+        from leathercad.shapes import Rectangle
+        if i >= len(self.folds):
+            return
+        fold = self.folds[i]
+        ba = fold_bend_allowance(fold, self.thick.value())
+        if ba <= 1e-6:
+            return
+        n = (fold.b - fold.a).perp().normalized()      # world fold normal
+        a = fold.a
+        piece = self.piece
+        # grow the piece itself
+        if isinstance(piece, Rectangle) and (abs(n.x) < 1e-6 or abs(n.y) < 1e-6):
+            if abs(n.x) > abs(n.y):                     # vertical score -> width
+                piece.width += ba
+                piece.transform.x += (ba / 2.0) * (1 if n.x > 0 else -1)
+            else:                                       # horizontal score -> height
+                piece.height += ba
+                piece.transform.y += (ba / 2.0) * (1 if n.y > 0 else -1)
+        else:
+            self._grow_generic_piece(piece, fold, ba)
+        # slide every OTHER shape whose body is on the far side out by ba
+        for s in self.doc.shapes:
+            if s is piece:
+                continue
+            pts = s.world_polyline()[0]
+            if not pts:
+                continue
+            cx = sum(p.x for p in pts) / len(pts)
+            cy = sum(p.y for p in pts) / len(pts)
+            if (Vec2(cx, cy) - a).dot(n) > 1e-6:
+                s.transform.x += n.x * ba
+                s.transform.y += n.y * ba
+        if self.canvas is not None:
+            self.canvas.rebuild()
+            self.canvas.commitRequested.emit()         # one undo step
+        self._reload_from_doc()
+
+    @staticmethod
+    def _grow_generic_piece(piece, fold, ba):
+        """Grow a non-rectangular piece: translate its far-side local nodes."""
+        from leathercad.fold3d import grow_polygon_at_fold
+        pts_attr = "points" if hasattr(piece, "points") else (
+            "nodes" if hasattr(piece, "nodes") else None)
+        if pts_attr is None:
+            return
+        t = piece.transform
+        world = [t.apply(p) for p in getattr(piece, pts_attr)]
+        grown = grow_polygon_at_fold(world, fold, ba)
+        setattr(piece, pts_attr, [t.inverse_apply(p) for p in grown])
 
 
 # -- headless PNG (docs / marketing) -----------------------------------------

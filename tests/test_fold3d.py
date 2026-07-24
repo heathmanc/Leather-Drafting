@@ -232,6 +232,33 @@ def test_thickness_stacks_folded_flat_layers():
     assert abs(z_stack - 3.0) < 1e-6
 
 
+def test_per_fold_fractions_fold_one_crease_at_a_time():
+    from leathercad.fold3d import Fold, panels_from_scored_piece, fold_movers
+    # A|B|C strip, root A, two creases
+    outline = _rect(150, 50)
+    folds = [Fold(Vec2(50, 0), Vec2(50, 50), 180, "front"),
+             Fold(Vec2(100, 0), Vec2(100, 50), 180, "front")]
+    panels, hinges, order = panels_from_scored_piece(outline, folds)
+    root = order[0]
+    movers = fold_movers(panels, hinges, folds, root)
+    b, c = movers[0], movers[1]           # the panels each crease moves
+
+    def zmean(placed, pid):
+        p = {q.id: q for q in placed}[pid]
+        return sum(v.z for v in p.outline) / len(p.outline)
+
+    # first crease fully folded, second not yet: B lifts a layer, C rides flat
+    step1 = assemble(panels, hinges, root=root, thickness=2.0,
+                     fractions={b: 1.0, c: 0.0})
+    assert zmean(step1, b) > 1.0          # B has folded up onto the stack
+    assert abs(zmean(step1, c)) < 1e-6    # C still lies in the base plane
+
+    # now close the second crease too -> C stacks above B
+    step2 = assemble(panels, hinges, root=root, thickness=2.0,
+                     fractions={b: 1.0, c: 1.0})
+    assert zmean(step2, c) > zmean(step2, b)
+
+
 def test_bend_allowance_adds_to_the_folded_axis():
     from leathercad.fold3d import Fold, bend_allowance
     # two vertical scores fold in X -> they grow WIDTH, not height

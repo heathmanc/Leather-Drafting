@@ -119,14 +119,23 @@ def _model_normal(verts: List[Vec3]) -> Vec3:
 def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
                    *, root=None, fraction=1.0, yaw=0.6, pitch=1.0,
                    zoom=1.0, dark=False, thickness=0.0, numbers=False,
-                   bad_holes=None, levels=None) -> None:
-    """Render the folded assembly into a ``w x h`` area with a painter."""
+                   bad_holes=None, levels=None, fractions=None) -> None:
+    """Render the folded assembly into a ``w x h`` area with a painter.
+
+    ``fractions`` (a ``{moving-panel-id: 0..1}`` map) folds each crease on its
+    own schedule -- pass it for sequential folding; otherwise ``fraction``
+    drives every fold together."""
     bg = QColor(28, 30, 34) if dark else QColor(244, 244, 246)
     painter.fillRect(0, 0, w, h, bg)
     painter.setRenderHint(QPainter.Antialiasing, True)
 
+    def _frac(pid):
+        if fractions is not None and pid in fractions:
+            return fractions[pid]
+        return fraction
+
     placed = assemble(panels, hinges, root=root, fraction=fraction,
-                      thickness=thickness, levels=levels)
+                      thickness=thickness, levels=levels, fractions=fractions)
     if not placed:
         return
 
@@ -174,10 +183,13 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
             # and over to the top of the upper layer) and an inner arc, a full
             # thickness apart. Both surfaces show a radius, and the leather's
             # cross-section reads as a "C" at each end of the crease.
+            bf = _frac(hg.child)                # this crease's own fold progress
+            if bf < 0.98:                       # the wrap only exists once the
+                continue                        # crease is folded flat, not mid-V
             ll, lu = (lp, lc) if lc > lp else (lc, lp)
-            z_lt = ll * t * fraction            # lower layer: top / bottom face
+            z_lt = ll * t * bf                  # lower layer: top / bottom face
             z_lb = z_lt - t
-            z_ut = lu * t * fraction            # upper layer: top / bottom face
+            z_ut = lu * t * bf                  # upper layer: top / bottom face
             z_ub = z_ut - t
             center = (z_lt + z_ub) / 2.0        # shared arc centre
             r_in = abs(z_ub - z_lt) / 2.0       # inside bend radius (0 = sharp)
@@ -325,6 +337,8 @@ class Preview3DWidget(QWidget):
         self.bad_holes = None
         self.levels = None
         self.fraction = 1.0
+        self.sequence = None          # ordered moving-panel ids: fold one by one
+        self.fractions = None         # per-fold progress derived from .fraction
         self.yaw = 0.6
         self.pitch = 1.0
         self.zoom = 1.0
@@ -332,12 +346,26 @@ class Preview3DWidget(QWidget):
         self.setMinimumSize(360, 300)
         self.setMouseTracking(True)
 
+    def _recompute_fractions(self) -> None:
+        """Turn the single slider value into per-fold progress: with a sequence
+        set, one crease closes completely before the next starts; the slider
+        walks the whole sequence from flat (0) to fully assembled (1)."""
+        seq = self.sequence
+        if not seq:
+            self.fractions = None
+            return
+        n = len(seq)
+        s = self.fraction * n
+        self.fractions = {pid: max(0.0, min(1.0, s - k))
+                          for k, pid in enumerate(seq)}
+
     def set_fraction(self, f: float) -> None:
         self.fraction = max(0.0, min(1.0, f))
+        self._recompute_fractions()
         self.update()
 
     def set_model(self, panels, hinges, root=None, thickness=None,
-                  levels=None) -> None:
+                  levels=None, sequence=None) -> None:
         self.panels = panels
         self.hinges = hinges
         if root is not None:
@@ -345,6 +373,8 @@ class Preview3DWidget(QWidget):
         if thickness is not None:
             self.thickness = thickness
         self.levels = levels
+        self.sequence = sequence
+        self._recompute_fractions()
         self.update()
 
     def paintEvent(self, _e):
@@ -353,7 +383,8 @@ class Preview3DWidget(QWidget):
                        root=self.root, fraction=self.fraction, yaw=self.yaw,
                        pitch=self.pitch, zoom=self.zoom, dark=self.dark,
                        thickness=self.thickness, numbers=self.numbers,
-                       bad_holes=self.bad_holes, levels=self.levels)
+                       bad_holes=self.bad_holes, levels=self.levels,
+                       fractions=self.fractions)
         p.end()
 
     def mousePressEvent(self, e):
@@ -564,7 +595,8 @@ class ScoredFoldDialog(QDialog):
         self.readout = QLabel()
         self.readout.setWordWrap(True)
         lay.addWidget(self.readout)
-        hint = QLabel("Drag to orbit · wheel to zoom · slider folds flat → assembled")
+        hint = QLabel("Drag to orbit · wheel to zoom · slider folds one crease "
+                      "at a time, in order")
         hint.setAlignment(Qt.AlignCenter)
         lay.addWidget(hint)
         self._populate_rows()
@@ -672,7 +704,8 @@ class ScoredFoldDialog(QDialog):
 
     def _rebuild(self, *_):
         from leathercad.fold3d import (registration_report, fold_bend_allowance,
-                                       sequence_bend_radii, fold_stack_levels)
+                                       sequence_bend_radii, fold_stack_levels,
+                                       fold_movers)
         for fold, fs in zip(self.folds, self.fold_shapes):
             fold.direction = fs.fold_dir or "front"
             fold.angle_deg = fs.fold_angle
@@ -683,6 +716,13 @@ class ScoredFoldDialog(QDialog):
         folding = [f for f, i in zip(of, self._seq)
                    if self._enabled.get(i, True) and f.angle_deg > 1e-6]
         levels = fold_stack_levels(panels, hinges, folding, root)
+        # the ordered panels each crease moves -> the slider folds them ONE AT A
+        # TIME, in this sequence (top row first), each closing fully before the
+        # next starts.
+        movers_of = fold_movers(panels, hinges, of, root)
+        sequence = [m for pos, (f, i) in enumerate(zip(of, self._seq))
+                    if self._enabled.get(i, True) and f.angle_deg > 1e-6
+                    and (m := movers_of[pos])]
         # separate the layers by the ACTUAL leather thickness (a compact stack,
         # not an exploded one) so the top piece reads without floating away
         view_gap = t if t > 1e-6 else 1.0
@@ -692,7 +732,7 @@ class ScoredFoldDialog(QDialog):
         reg_lines, bad = registration_report(placed, thickness=t, tol=1.0)
         self.view.bad_holes = bad
         self.view.set_model(panels, hinges, root=root, thickness=view_gap,
-                            levels=levels)
+                            levels=levels, sequence=sequence)
         # per-fold inside radius from the layers each crease wraps in the CURRENT
         # sequence of ENABLED folds (reorder / toggle -> different wraps).
         radii = sequence_bend_radii(panels, hinges, folding, root, t, r)

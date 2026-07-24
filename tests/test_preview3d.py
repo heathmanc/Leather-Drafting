@@ -354,3 +354,34 @@ def test_stacked_fold_draws_rounded_bends(qapp, tmp_path):
     bg = img.pixel(1, 1)
     assert any(img.pixel(x, y) != bg
                for x in range(0, 320, 4) for y in range(0, 260, 4))
+
+
+def test_widget_slider_walks_the_fold_sequence(qapp):
+    """The single fold slider drives creases ONE AT A TIME: with a sequence set,
+    the slider position maps to per-fold progress so crease k finishes before
+    crease k+1 begins."""
+    from leathercad_app.preview3d import Preview3DWidget
+    w = Preview3DWidget({}, [])
+    w.sequence = ["b", "c", "d"]            # three creases, folded in this order
+
+    w.set_fraction(0.0)
+    assert w.fractions == {"b": 0.0, "c": 0.0, "d": 0.0}
+
+    # one third of the way: first crease fully closed, the rest untouched
+    w.set_fraction(1.0 / 3.0)
+    assert w.fractions["b"] == 1.0
+    assert w.fractions["c"] == 0.0 and w.fractions["d"] == 0.0
+
+    # halfway: first done, second mid-fold, third still flat
+    w.set_fraction(0.5)
+    assert w.fractions["b"] == 1.0
+    assert 0.0 < w.fractions["c"] < 1.0
+    assert w.fractions["d"] == 0.0
+
+    w.set_fraction(1.0)
+    assert w.fractions == {"b": 1.0, "c": 1.0, "d": 1.0}
+
+    # no sequence -> fall back to a single shared fraction (None)
+    w.sequence = None
+    w.set_fraction(0.5)
+    assert w.fractions is None

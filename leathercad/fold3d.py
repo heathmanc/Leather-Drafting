@@ -186,18 +186,25 @@ def _build_tree(hinges: List[Hinge], root: str) -> List[Tuple[str, Hinge]]:
 def assemble(panels: Dict[str, Panel], hinges: List[Hinge],
              root: Optional[str] = None, fraction: float = 1.0,
              thickness: float = 0.0,
-             levels: Optional[Dict[str, int]] = None) -> List[PlacedPanel]:
+             levels: Optional[Dict[str, int]] = None,
+             fractions: Optional[Dict[str, float]] = None) -> List[PlacedPanel]:
     """Fold ``panels`` about ``hinges`` and return them as 3D ``PlacedPanel``s.
 
     ``root`` (default: the first panel) stays in the z = 0 plane; every other
     panel reachable through the hinge graph is folded into place. ``fraction``
     scales all dihedral angles together (0 = flat net, 1 = fully assembled).
+    Pass ``fractions`` (a ``{moving-panel-id: 0..1}`` map) to give each fold its
+    OWN progress instead -- this is what drives SEQUENTIAL folding, where one
+    crease closes completely before the next begins. A panel not in the map
+    falls back to ``fraction``. Because a child is placed relative to its
+    parent's already-folded frame, an unfolded child rides along with its
+    parent, so folding in order carries later panels correctly.
     ``thickness`` lifts each panel off the root plane so layers stack with a
     visible gap instead of z-fighting. Pass ``levels`` (from
     ``fold_stack_levels``) to separate them by their TRUE stack order — so a
     fully-folded piece reads as clear layers and you can see which is on top;
-    without it, panels are stacked by hinge-tree depth. The stack gap scales
-    from 0 (flat) to full at ``fraction`` = 1. Unreachable panels lie flat."""
+    without it, panels are stacked by hinge-tree depth. Each layer's stack gap
+    scales in with that panel's own fold progress. Unreachable panels lie flat."""
     if not panels:
         return []
     if root is None or root not in panels:
@@ -209,12 +216,17 @@ def assemble(panels: Dict[str, Panel], hinges: List[Hinge],
         n = len(pts)
         return Vec2(sum(p.x for p in pts) / n, sum(p.y for p in pts) / n)
 
+    def _frac(pid: str) -> float:
+        if fractions is not None and pid in fractions:
+            return fractions[pid]
+        return fraction
+
     frames: Dict[str, _Frame] = {root: _root_frame()}
     depth: Dict[str, int] = {root: 0}
     for child_id, hinge in _build_tree(hinges, root):
         if child_id not in panels or hinge.parent not in frames:
             continue
-        fr = _child_frame(frames[hinge.parent], hinge, fraction,
+        fr = _child_frame(frames[hinge.parent], hinge, _frac(child_id),
                           body_ref=_centroid(panels[child_id].outline))
         if fr is not None:
             frames[child_id] = fr
@@ -224,7 +236,7 @@ def assemble(panels: Dict[str, Panel], hinges: List[Hinge],
     for pid, panel in panels.items():
         place, _n = frames.get(pid, _root_frame())
         lvl = levels.get(pid, 0) if levels is not None else depth.get(pid, 0)
-        dz = lvl * thickness * fraction          # separate stacked layers
+        dz = lvl * thickness * _frac(pid)        # separate stacked layers
 
         def lift(v: Vec2, _p=place, _dz=dz) -> Vec3:
             w = _p(v)

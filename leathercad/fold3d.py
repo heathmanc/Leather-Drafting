@@ -445,3 +445,143 @@ def bend_allowance(folds: List[Fold], thickness: float,
     return {"width": add_w, "height": add_h, "total": add_w + add_h,
             "per_fold": per}
 
+
+# -- registration: do stacked layers line up for stitching? ------------------
+# After folding, panels that come to rest face-to-face must register: enough
+# material to reach, and stitch holes that coincide so the awl passes through
+# both layers. This runs on the final 3D geometry, so folds-on-folds are handled
+# for free.
+
+def _panel_plane(pl: PlacedPanel) -> Tuple[Vec3, Vec3]:
+    """Centroid + unit normal of a placed panel."""
+    c = pl.centroid()
+    o = pl.outline
+    n = Vec3(0.0, 0.0, 1.0)
+    for i in range(1, len(o) - 1):
+        cand = (o[i] - o[0]).cross(o[i + 1] - o[0])
+        if cand.length() > 1e-9:
+            n = cand.normalized()
+            break
+    return c, n
+
+
+def _plane_basis(n: Vec3) -> Tuple[Vec3, Vec3]:
+    """Two orthonormal in-plane axes for a normal ``n``."""
+    ref = Vec3(1.0, 0.0, 0.0) if abs(n.x) < 0.9 else Vec3(0.0, 1.0, 0.0)
+    u = (ref - n * ref.dot(n)).normalized()
+    v = n.cross(u)
+    return u, v
+
+
+def _project2d(pts, origin: Vec3, u: Vec3, v: Vec3):
+    return [Vec2((p - origin).dot(u), (p - origin).dot(v)) for p in pts]
+
+
+def stacked_pairs(placed: List[PlacedPanel], thickness: float = 0.0
+                  ) -> List[Tuple[PlacedPanel, PlacedPanel]]:
+    """Panel pairs that come to rest face-to-face: near-parallel, within a couple
+    of thicknesses of each other, and overlapping when projected together."""
+    pairs = []
+    gap_max = max(3.0, 2.5 * max(thickness, 0.0)) + 1e-6
+    planes = {id(p): _panel_plane(p) for p in placed}
+    for i in range(len(placed)):
+        for j in range(i + 1, len(placed)):
+            A, B = placed[i], placed[j]
+            cA, nA = planes[id(A)]
+            cB, nB = planes[id(B)]
+            if abs(nA.dot(nB)) < math.cos(math.radians(25)):
+                continue                              # not parallel -> not stacked
+            if abs((cB - cA).dot(nA)) > gap_max:
+                continue                              # too far apart in depth
+            u, v = _plane_basis(nA)
+            pa = _project2d(A.outline, cA, u, v)
+            pb = _project2d(B.outline, cA, u, v)
+            axa = [p.x for p in pa]
+            aya = [p.y for p in pa]
+            axb = [p.x for p in pb]
+            ayb = [p.y for p in pb]
+            if (min(axa) > max(axb) or min(axb) > max(axa)
+                    or min(aya) > max(ayb) or min(ayb) > max(aya)):
+                continue                              # projections don't overlap
+            pairs.append((A, B))
+    return pairs
+
+
+def registration_report(placed: List[PlacedPanel], thickness: float = 0.0,
+                        tol: float = 1.0):
+    """For every stacked pair of layers, pair their stitch holes by stitch order
+    (the k-th hole on one layer meets the k-th on the other) and check they
+    coincide. Returns ``(lines, bad)``:
+
+    * ``lines`` -- human-readable findings per layer pair (counts, worst offset,
+      whether the flap reaches).
+    * ``bad`` -- ``{id(panel): set(hole_index)}`` of holes that don't register
+      (unmatched, or offset beyond ``tol``) so the viewer can flag them red.
+    """
+    lines: List[str] = []
+    bad: Dict[str, set] = {}
+    pairs = stacked_pairs(placed, thickness)
+    if not pairs:
+        return ["No layers are stacked yet — fold the piece to check registration."], bad
+    for A, B in pairs:
+        cA, nA = _panel_plane(A)
+        u, v = _plane_basis(nA)
+        # only the holes that actually overlap the other layer can stitch through
+        pbA = _project2d(A.outline, cA, u, v)
+        pbB = _project2d(B.outline, cA, u, v)
+        ha = [(i, Vec2((h - cA).dot(u), (h - cA).dot(v)))
+              for i, h in enumerate(A.holes)]
+        hb = [(i, Vec2((h - cA).dot(u), (h - cA).dot(v)))
+              for i, h in enumerate(B.holes)]
+        # split each layer's holes into those over the other layer (can stitch
+        # through both) and those that miss it entirely (not reached)
+        ov_a = [(i, p) for i, p in ha if _pt_in_poly2d(p, pbB)]
+        ov_b = [(i, p) for i, p in hb if _pt_in_poly2d(p, pbA)]
+        na, nb = len(ov_a), len(ov_b)
+        # alignment quality: nearest hole on the other layer (a fold is a
+        # reflection, so mating holes are nearest, not same-indexed)
+        worst = 0.0
+        aligned = 0
+        for ia, pa in ov_a:
+            if not ov_b:
+                break
+            d = min(math.hypot(pa.x - pb.x, pa.y - pb.y) for _ib, pb in ov_b)
+            if d <= tol:
+                aligned += 1
+            else:
+                worst = max(worst, d)
+                bad.setdefault(A.id, set()).add(ia)
+        # holes that don't reach the other layer at all -> flag red
+        reach = 0
+        for lst, poly_other, panel in ((ha, pbB, A), (hb, pbA, B)):
+            for i, p in lst:
+                if not _pt_in_poly2d(p, poly_other):
+                    bad.setdefault(panel.id, set()).add(i)
+                    reach += 1
+
+        msg = f"Panels {A.name}↔{B.name}: {na} vs {nb} holes stitch through both"
+        if na != nb:
+            msg += f" — COUNT MISMATCH ({abs(na - nb)} extra)"
+        elif worst > tol:
+            msg += f" — {aligned}/{na} align, worst off {worst:.1f} mm"
+        elif na:
+            msg += " — ✓ holes line up"
+        if reach:
+            msg += f"; {reach} hole(s) short of the edge (not enough material)"
+        lines.append(msg)
+    return lines, bad
+
+
+def _pt_in_poly2d(p: Vec2, poly: List[Vec2]) -> bool:
+    inside = False
+    n = len(poly)
+    j = n - 1
+    for i in range(n):
+        a, b = poly[i], poly[j]
+        if (a.y > p.y) != (b.y > p.y):
+            xint = (b.x - a.x) * (p.y - a.y) / (b.y - a.y + 1e-30) + a.x
+            if p.x < xint:
+                inside = not inside
+        j = i
+    return inside
+

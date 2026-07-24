@@ -252,3 +252,65 @@ def test_horizontal_score_grows_height():
     folds = [Fold(Vec2(0, 50), Vec2(120, 50), 90, "front")]   # horizontal score
     ba = bend_allowance(folds, thickness=2.0)
     assert ba["width"] == 0.0 and ba["height"] > 0.0
+
+
+# -- registration: do stacked layers line up? -------------------------------
+
+def _wallet(total_w, fold_x, pitch=5.0):
+    """Return placed panels for a single-piece wallet folded flat, with a
+    stitched perimeter distributed onto the panels."""
+    from leathercad.fold3d import Fold, panels_from_scored_piece
+    from leathercad.stitchsettings import StitchSettings
+    from leathercad.stitching import holes_for_shape
+    from leathercad.shapes import Rectangle, Transform
+    piece = Rectangle(width=total_w, height=100,
+                      transform=Transform(x=total_w / 2, y=50),
+                      stitch=StitchSettings(enabled=True, pitch_mm=pitch, inset=5.0))
+    holes_world = [Vec2(h.point.x, h.point.y) for h in holes_for_shape(piece).holes]
+    outline = [Vec2(0, 0), Vec2(total_w, 0), Vec2(total_w, 100), Vec2(0, 100)]
+    folds = [Fold(Vec2(fold_x, 0), Vec2(fold_x, 100), 180, "back")]
+    panels, hinges, order = panels_from_scored_piece(outline, folds)
+    for hp in holes_world:
+        for pid in order:
+            from leathercad.fold3d import _pt_in_poly2d
+            if _pt_in_poly2d(hp, panels[pid].outline):
+                panels[pid].holes.append(hp)
+                break
+    root = max(order, key=lambda p: len(panels[p].outline))
+    return assemble(panels, hinges, root=order[0], fraction=1.0, thickness=3.0)
+
+
+def test_stacked_pairs_finds_the_folded_layers():
+    from leathercad.fold3d import stacked_pairs
+    placed = _wallet(180, 90)
+    pairs = stacked_pairs(placed, thickness=3.0)
+    assert len(pairs) == 1              # the two halves stack
+
+
+def test_registration_symmetric_fold_mostly_aligns():
+    from leathercad.fold3d import registration_report
+    placed = _wallet(180, 90)
+    lines, bad = registration_report(placed, thickness=3.0, tol=1.0)
+    assert lines and "COUNT MISMATCH" not in lines[0]
+    # a symmetric bifold: nearly every hole registers, few (if any) flagged red
+    total_flagged = sum(len(s) for s in bad.values())
+    assert total_flagged <= 2
+
+
+def test_registration_short_flap_flags_unreached_holes():
+    from leathercad.fold3d import registration_report
+    placed = _wallet(180, 120)          # fold off-centre -> flap too short
+    lines, bad = registration_report(placed, thickness=3.0, tol=1.0)
+    assert "short of the edge" in lines[0] or "COUNT MISMATCH" in lines[0]
+    assert sum(len(s) for s in bad.values()) > 10   # many holes flagged red
+
+
+def test_registration_needs_a_fold_to_stack():
+    from leathercad.fold3d import registration_report, Fold, panels_from_scored_piece
+    outline = _rect(180, 100)
+    folds = [Fold(Vec2(90, 0), Vec2(90, 100), 90, "back")]   # 90 deg: a wall, not stacked
+    panels, hinges, order = panels_from_scored_piece(outline, folds)
+    placed = assemble(panels, hinges, root=order[0], fraction=1.0)
+    lines, bad = registration_report(placed, thickness=3.0)
+    assert "No layers are stacked" in lines[0]
+    assert not bad

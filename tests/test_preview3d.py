@@ -165,3 +165,37 @@ def test_fold_line_survives_save_load(qapp):
     folds = [s for s in doc2.shapes if s.is_fold_line]
     assert len(folds) == 1
     assert folds[0].fold_dir == "back" and folds[0].fold_angle == 178.0
+
+
+def _scored_doc_closed(fold_x=90.0):
+    """A wallet blank with a stitched perimeter and a fold folded flat (180)."""
+    from leathercad.shapes import PathShape
+    from leathercad.geometry import Vec2
+    from leathercad.stitchsettings import StitchSettings
+    doc = Document()
+    doc.add_shape(Rectangle(width=180, height=100,
+                            transform=Transform(x=90, y=50), layer="Cut",
+                            stitch=StitchSettings(enabled=True, pitch_mm=5.0, inset=5.0)))
+    fl = PathShape(points=[Vec2(0, 0), Vec2(0, 100)], close_path=False,
+                   transform=Transform(x=fold_x, y=0))
+    fl.fold_dir = "back"
+    fl.fold_angle = 180.0
+    doc.add_shape(fl)
+    return doc
+
+
+def test_scored_dialog_reports_lineup_and_flags_holes(qapp):
+    from leathercad_app.preview3d import ScoredFoldDialog
+    # off-centre fold => flap too short => holes flagged + a lineup warning
+    dlg = ScoredFoldDialog(_scored_doc_closed(fold_x=120.0))
+    assert "Lineup check" in dlg.readout.text()
+    assert dlg.view.bad_holes                     # some holes flagged red
+    txt = dlg.readout.text()
+    assert ("short of the edge" in txt) or ("COUNT MISMATCH" in txt)
+
+
+def test_scored_dialog_clean_fold_has_few_flags(qapp):
+    from leathercad_app.preview3d import ScoredFoldDialog
+    dlg = ScoredFoldDialog(_scored_doc_closed(fold_x=90.0))   # symmetric bifold
+    flagged = sum(len(s) for s in (dlg.view.bad_holes or {}).values())
+    assert flagged <= 2

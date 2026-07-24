@@ -104,7 +104,8 @@ def _panel_normal_view(outline_view: List[Vec3]) -> Vec3:
 
 def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
                    *, root=None, fraction=1.0, yaw=0.6, pitch=1.0,
-                   zoom=1.0, dark=False, thickness=0.0, numbers=False) -> None:
+                   zoom=1.0, dark=False, thickness=0.0, numbers=False,
+                   bad_holes=None) -> None:
     """Render the folded assembly into a ``w x h`` area with a painter."""
     bg = QColor(28, 30, 34) if dark else QColor(244, 244, 246)
     painter.fillRect(0, 0, w, h, bg)
@@ -153,13 +154,19 @@ def paint_assembly(painter: QPainter, w: int, h: int, panels, hinges,
         painter.setBrush(QBrush(col))
         painter.setPen(QPen(QColor(60, 40, 20), 1.2))
         painter.drawPolygon(poly)
-        # stitch holes as small dots on the face
+        # stitch holes as small dots on the face; holes that don't register
+        # (misaligned or short of the edge) are drawn red so problems stand out
         if hv:
-            painter.setBrush(QBrush(QColor(35, 24, 12)))
             painter.setPen(Qt.NoPen)
             r = max(1.0, 0.7 * scale)
-            for v in hv:
-                painter.drawEllipse(to_screen(v), r, r)
+            flagged = (bad_holes or {}).get(pl.id, set())
+            for i, v in enumerate(hv):
+                if i in flagged:
+                    painter.setBrush(QBrush(QColor(230, 40, 40)))
+                    painter.drawEllipse(to_screen(v), r * 1.6, r * 1.6)
+                else:
+                    painter.setBrush(QBrush(QColor(35, 24, 12)))
+                    painter.drawEllipse(to_screen(v), r, r)
         # panel number at the facet centre
         if numbers and pl.name:
             c3 = Vec3(sum(v.x for v in ov) / len(ov),
@@ -188,6 +195,7 @@ class Preview3DWidget(QWidget):
         self.dark = dark
         self.thickness = thickness
         self.numbers = numbers
+        self.bad_holes = None
         self.fraction = 1.0
         self.yaw = 0.6
         self.pitch = 1.0
@@ -214,7 +222,8 @@ class Preview3DWidget(QWidget):
         paint_assembly(p, self.width(), self.height(), self.panels, self.hinges,
                        root=self.root, fraction=self.fraction, yaw=self.yaw,
                        pitch=self.pitch, zoom=self.zoom, dark=self.dark,
-                       thickness=self.thickness, numbers=self.numbers)
+                       thickness=self.thickness, numbers=self.numbers,
+                       bad_holes=self.bad_holes)
         p.end()
 
     def mousePressEvent(self, e):
@@ -319,12 +328,12 @@ def build_scored_from_document(doc, piece=None):
 
 
 def _piece_holes(piece):
-    """World stitch holes for the piece, or []."""
+    """World stitch holes for the piece, or []. ``holes_for_shape`` already
+    returns them in world space, so we do NOT re-apply the transform."""
     from leathercad.stitching import holes_for_shape
     try:
         res = holes_for_shape(piece)
-        t = piece.transform
-        return [t.apply(Vec2(h.point.x, h.point.y)) for h in res.holes]
+        return [Vec2(h.point.x, h.point.y) for h in res.holes]
     except Exception:
         return []
 
@@ -429,7 +438,7 @@ class ScoredFoldDialog(QDialog):
             [Vec2(p.x, p.y) for p in s.world_polyline()[0]]), default=None)
 
     def _rebuild(self, *_):
-        from leathercad.fold3d import bend_allowance
+        from leathercad.fold3d import bend_allowance, assemble, registration_report
         # push control values back onto the fold lines + rebuild the fold list
         for fs, cb, sp in zip(self.fold_shapes, self._combos, self._angles):
             fs.fold_dir = cb.currentText()
@@ -440,27 +449,33 @@ class ScoredFoldDialog(QDialog):
         t = self.thick.value()
         panels, hinges, order, root = scored_panels(self.outline, self.folds,
                                                     self.holes)
+        # registration is judged on the FULLY folded piece (indices are the same
+        # at any fold amount, so the red flags hold as the slider animates)
+        placed = assemble(panels, hinges, root=root, fraction=1.0, thickness=t)
+        reg_lines, bad = registration_report(placed, thickness=t, tol=1.0)
+        self.view.bad_holes = bad
         self.view.set_model(panels, hinges, root=root, thickness=t)
         ba = bend_allowance(self.folds, t)
+        reg = "<br>".join(reg_lines)
         self.readout.setText(
             f"<b>{len(order)} panels · {len(self.fold_shapes)} folds.</b> "
             f"Bend allowance (leather {t:g} mm): add "
-            f"<b>{ba['width']:.1f} mm</b> to width and "
-            f"<b>{ba['height']:.1f} mm</b> to the height of the flat blank so it "
-            f"still fits after folding around the bend radius.")
+            f"<b>{ba['width']:.1f} mm</b> to width, "
+            f"<b>{ba['height']:.1f} mm</b> to height of the flat blank.<br>"
+            f"<b>Lineup check</b> (red = won't register):<br>{reg}")
 
 
 # -- headless PNG (docs / marketing) -----------------------------------------
 
 def render_png(path: str, panels, hinges, *, root=None, fraction=1.0, yaw=0.6,
                pitch=1.0, zoom=1.0, size=(900, 720), dark=False, thickness=0.0,
-               numbers=False) -> None:
+               numbers=False, bad_holes=None) -> None:
     """Render an assembled view straight to a PNG file (no window needed)."""
     w, h = size
     img = QImage(w, h, QImage.Format_ARGB32)
     p = QPainter(img)
     paint_assembly(p, w, h, panels, hinges, root=root, fraction=fraction,
                    yaw=yaw, pitch=pitch, zoom=zoom, dark=dark,
-                   thickness=thickness, numbers=numbers)
+                   thickness=thickness, numbers=numbers, bad_holes=bad_holes)
     p.end()
     img.save(path)

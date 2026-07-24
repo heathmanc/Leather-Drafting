@@ -580,6 +580,116 @@ def nested_bend_radii(folds: List[Fold], thickness: float,
     return radii
 
 
+def _child_subtrees(panel_ids, hinges: List[Hinge], root: str):
+    """For each hinge, ``(parent_panel, {child-side panel ids})`` -- the side of
+    the hinge NOT containing the root (the material that moves when it folds)."""
+    adj: Dict[str, list] = {}
+    for i, h in enumerate(hinges):
+        adj.setdefault(h.parent, []).append((h.child, i))
+        adj.setdefault(h.child, []).append((h.parent, i))
+    out = {}
+    allp = set(panel_ids)
+    for i, h in enumerate(hinges):
+        seen = {root}
+        stack = [root]
+        while stack:
+            cur = stack.pop()
+            for nb, hi in adj.get(cur, []):
+                if hi == i or nb in seen:
+                    continue
+                seen.add(nb)
+                stack.append(nb)
+        parent = h.parent if h.parent in seen else h.child
+        out[i] = (parent, allp - seen)
+    return out
+
+
+def _bbox(pts):
+    xs = [p.x for p in pts]
+    ys = [p.y for p in pts]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _bbox_overlap(a, b, eps: float = 0.5) -> bool:
+    return not (a[0] > b[2] - eps or b[0] > a[2] - eps
+                or a[1] > b[3] - eps or b[1] > a[3] - eps)
+
+
+def sequence_bend_radii(panels: Dict[str, Panel], hinges: List[Hinge],
+                        folds_in_order: List[Fold], root: str,
+                        thickness: float, base_radius: float = 0.0
+                        ) -> List[float]:
+    """Inside radius of each fold, derived from the layers it wraps when the
+    piece is folded flat in the given SEQUENCE (``folds_in_order`` = fold order,
+    innermost first). Simulates the flat-fold stack over the hinge tree -- each
+    fold flips its subtree, which flips the effective direction of later folds
+    nested inside it -- so it is correct for accordions, C-folds/rolls AND mixed
+    (non-parallel) folds like a wallet's wings + flap. Returns radii aligned to
+    ``folds_in_order``."""
+    if not hinges or not panels:
+        return [base_radius] * len(folds_in_order)
+    # folded-flat footprints (2D bounding boxes) for the overlap tests
+    placed = assemble(panels, hinges, root=root, fraction=1.0, thickness=0.0)
+    fp = {p.id: _bbox(p.outline) for p in placed if p.outline}
+
+    def hinge_for(fold: Fold):
+        mid = (fold.a + fold.b) * 0.5
+        best, bd = None, 1.0
+        for i, h in enumerate(hinges):
+            hm = (h.parent_edge[0] + h.parent_edge[1]) * 0.5
+            d = (Vec2(hm.x - mid.x, hm.y - mid.y)).length()
+            if d < bd:
+                bd, best = d, i
+        return best
+
+    subs = _child_subtrees(list(panels), hinges, root)
+    level = {p: 0 for p in panels}
+    flip = {p: 1 for p in panels}
+    placed_ids = {root}
+    for fold in folds_in_order:
+        hi = hinge_for(fold)
+        if hi is None:
+            continue
+        parent, child = subs[hi]
+        dirn = 1 if hinges[hi].angle_deg >= 0 else -1
+        eff = dirn * flip[parent]
+        ov = [level[p] for p in placed_ids
+              if any(p in fp and c in fp and _bbox_overlap(fp[p], fp[c])
+                     for c in child)]
+        base = (max(ov) if eff > 0 else min(ov)) if ov else 0
+        cl = [level[c] for c in child]
+        if eff > 0:
+            m = max(cl)
+            for c in child:
+                level[c] = base + 1 + (m - level[c])
+        else:
+            m = min(cl)
+            for c in child:
+                level[c] = base - 1 - (level[c] - m)
+        for c in child:
+            flip[c] *= -1
+        placed_ids |= set(child)
+
+    radii = []
+    for fold in folds_in_order:
+        hi = hinge_for(fold)
+        if hi is None:
+            radii.append(base_radius)
+            continue
+        a, b = hinges[hi].parent, hinges[hi].child
+        lo, hi2 = sorted((level.get(a, 0), level.get(b, 0)))
+        wrap = 0
+        for x in panels:
+            if x in (a, b):
+                continue
+            if lo < level.get(x, 0) < hi2 and x in fp and (
+                    (a in fp and _bbox_overlap(fp[x], fp[a]))
+                    or (b in fp and _bbox_overlap(fp[x], fp[b]))):
+                wrap += 1
+        radii.append(base_radius + wrap * thickness)
+    return radii
+
+
 def bend_allowance(folds: List[Fold], thickness: float, radius: float = 0.0,
                    k: float = 0.5) -> Dict[str, float]:
     """Per-axis flat-blank additions for a set of folds (see

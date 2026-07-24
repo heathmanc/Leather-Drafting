@@ -511,9 +511,9 @@ class ScoredFoldDialog(QDialog):
         self._rebuild()
 
     def _rebuild(self, *_):
-        from leathercad.fold3d import (bend_allowance, assemble,
-                                       registration_report, fold_bend_allowance,
-                                       nested_bend_radii)
+        import math
+        from leathercad.fold3d import (assemble, registration_report,
+                                       fold_bend_allowance, sequence_bend_radii)
         for fold, fs in zip(self.folds, self.fold_shapes):
             fold.direction = fs.fold_dir or "front"
             fold.angle_deg = fs.fold_angle
@@ -524,23 +524,29 @@ class ScoredFoldDialog(QDialog):
         reg_lines, bad = registration_report(placed, thickness=t, tol=1.0)
         self.view.bad_holes = bad
         self.view.set_model(panels, hinges, root=root, thickness=t)
-        # per-fold bend allowance -- SHOWN ONLY (never resizes anything). Radii
-        # follow the sequence order, so reordering changes what each crease wraps.
-        radii = nested_bend_radii(of, t, r)
-        for rad, fi in zip(radii, self._seq):
+        # per-fold inside radius derived from the layers each crease wraps IN THE
+        # CURRENT SEQUENCE (reorder -> different wraps -> different material).
+        radii = sequence_bend_radii(panels, hinges, of, root, t, r)
+        add_w = add_h = 0.0
+        for rad, fold, fi in zip(radii, of, self._seq):
+            ba1 = fold_bend_allowance(fold, t, rad)
+            d = fold.b - fold.a
+            if abs(d.y) >= abs(d.x):
+                add_w += ba1
+            else:
+                add_h += ba1
             if fi in self._ba_labels:
                 lay = int(round((rad - r) / t)) if t > 1e-9 else 0
-                txt = f"+{fold_bend_allowance(self.folds[fi], t, rad):.1f} mm"
+                txt = f"+{ba1:.1f} mm"
                 if lay:
                     txt += f"  (wraps {lay})"
                 self._ba_labels[fi].setText(txt)
-        ba = bend_allowance(of, t, r)
         reg = "<br>".join(reg_lines)
         self.readout.setText(
             f"<b>{len(order)} panels · {len(self.fold_shapes)} folds.</b> "
-            f"Grow the flat blank by <b>{ba['width']:.1f} mm</b> in width and "
-            f"<b>{ba['height']:.1f} mm</b> in height (leather {t:g} mm) — "
-            f"do it by hand.<br>"
+            f"Grow the flat blank by <b>{add_w:.1f} mm</b> in width and "
+            f"<b>{add_h:.1f} mm</b> in height (leather {t:g} mm) — do it by "
+            f"hand. Outer folds need more (they wrap the layers inside).<br>"
             f"<b>Lineup check</b> (red = won't register):<br>{reg}")
 
 

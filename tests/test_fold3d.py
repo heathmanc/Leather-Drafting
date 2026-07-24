@@ -378,3 +378,61 @@ def test_non_parallel_folds_fall_back_to_base_radius():
     folds = [Fold(Vec2(80, 0), Vec2(80, 100), 180, "front"),   # vertical
              Fold(Vec2(0, 50), Vec2(120, 50), 180, "front")]   # horizontal
     assert nested_bend_radii(folds, 2.0, base_radius=1.0) == [1.0, 1.0]
+
+
+# -- sequence-aware nesting (mixed / non-parallel folds) --------------------
+
+def _strip_scored(dirs, thickness=2.0):
+    from leathercad.fold3d import Fold, panels_from_scored_piece, sequence_bend_radii
+    n = len(dirs)
+    outline = _rect(80 * (n + 1), 100)
+    folds = [Fold(Vec2(80 * (i + 1), 0), Vec2(80 * (i + 1), 100), 180, d)
+             for i, d in enumerate(dirs)]
+    panels, hinges, order = panels_from_scored_piece(outline, folds)
+    root = max(order, key=lambda p: len(panels[p].outline))
+    return sequence_bend_radii(panels, hinges, folds, root, thickness, 0.0)
+
+
+def test_sequence_nesting_matches_canonical_strips():
+    # accordion wraps nothing; a roll wraps one more layer each fold
+    assert _strip_scored(["front", "back"]) == [0.0, 0.0]
+    assert sorted(_strip_scored(["front", "front"])) == [0.0, 2.0]        # C-fold
+    assert sorted(_strip_scored(["front", "front", "front"])) == [0.0, 2.0, 4.0]
+
+
+def test_sequence_order_changes_wrapped_material():
+    """Folding the flap first vs last changes which crease wraps layers."""
+    from leathercad.fold3d import (Fold, panels_from_scored_piece,
+                                   sequence_bend_radii)
+    # a strip of 3 panels; fold the two creases in either order
+    outline = _rect(240, 100)
+    f1 = Fold(Vec2(80, 0), Vec2(80, 100), 180, "front")
+    f2 = Fold(Vec2(160, 0), Vec2(160, 100), 180, "front")
+    panels, hinges, order = panels_from_scored_piece(outline, [f1, f2])
+    root = max(order, key=lambda p: len(panels[p].outline))
+    inner_first = sequence_bend_radii(panels, hinges, [f1, f2], root, 2.0, 0.0)
+    outer_first = sequence_bend_radii(panels, hinges, [f2, f1], root, 2.0, 0.0)
+    # returned lists follow input order, so both read [0, 2] -- but the SAME
+    # fold (f1) gets a different radius: it's the inner one (0) when folded first,
+    # the wrapping one (2 mm) when folded last.
+    r_f1_when_first = inner_first[0]          # f1 is input index 0 here
+    r_f1_when_last = outer_first[1]           # f1 is input index 1 here
+    assert r_f1_when_first == 0.0 and r_f1_when_last == 2.0
+
+
+def test_sequence_nesting_handles_mixed_wallet_folds():
+    """The fold-over wallet (2 parallel wings + 1 perpendicular flap) no longer
+    falls back to a flat radius -- outer folds wrap the inner layers."""
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from leathercad.templates import fold_over_wallet
+    from leathercad.fold3d import sequence_bend_radii
+    from leathercad_app.preview3d import build_scored_from_document, scored_panels
+    doc = fold_over_wallet()
+    for s in [s for s in doc.shapes if getattr(s, "layer", "") == "Score"]:
+        s.fold_dir = "front"
+        s.fold_angle = 180.0
+    outline, folds, fs = build_scored_from_document(doc)
+    panels, hinges, order, root = scored_panels(outline, folds)
+    radii = sequence_bend_radii(panels, hinges, folds, root, 2.0, 0.0)
+    assert max(radii) > 0.0        # at least one crease wraps inner layers

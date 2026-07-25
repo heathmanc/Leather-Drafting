@@ -382,3 +382,76 @@ def test_widget_slider_walks_the_fold_sequence(qapp):
     w.sequence = None
     w.set_fraction(0.5)
     assert w.fractions is None
+
+
+def test_switching_fixed_panel_via_a_real_click_keeps_the_table_populated(qapp):
+    """Clicking a "Fixed" radio button is NOT a plain function call -- it's a
+    real Qt signal, and the handler used to tear down and rebuild the whole
+    grid (a fresh QButtonGroup + all its radio buttons) SYNCHRONOUSLY from
+    inside that very button's own toggled signal. Rebuilding is now deferred,
+    so the grid must survive several real clicks (processed through the actual
+    event loop, not just a direct method call) without ever collapsing."""
+    from PySide6.QtWidgets import QRadioButton
+    from leathercad.templates import fold_over_wallet
+    from leathercad_app.preview3d import ScoredFoldDialog
+    doc = fold_over_wallet()
+    for s in [s for s in doc.shapes if getattr(s, "layer", "") == "Score"]:
+        s.fold_dir = "front"
+        s.fold_angle = 180.0
+    dlg = ScoredFoldDialog(doc)
+    dlg.show()
+    qapp.processEvents()
+
+    def radios():
+        out = []
+        for r in range(dlg._grid.rowCount()):
+            it = dlg._grid.itemAtPosition(r, 0)
+            if it and isinstance(it.widget(), QRadioButton):
+                out.append(it.widget())
+        return out
+
+    for _ in range(6):
+        target = next(w for w in radios() if not w.isChecked())
+        target.click()
+        for _ in range(5):                     # let the deferred rebuild run
+            qapp.processEvents()
+        assert dlg._grid.rowCount() >= 2, "the panel table collapsed"
+        assert len(radios()) == 4               # all 4 panels always listed
+
+
+def test_populate_rows_reports_failure_instead_of_going_blank(qapp):
+    """If building the panel rows ever throws (a geometry edge case), the
+    dialog must say so inline -- never silently leave the table empty with no
+    explanation, which would look like the fold controls vanished."""
+    from leathercad_app.preview3d import ScoredFoldDialog
+    dlg = ScoredFoldDialog(_scored_doc())
+
+    def boom():
+        raise RuntimeError("synthetic failure")
+    dlg._fold_of_panel = boom
+    dlg._populate_rows()                        # must not raise
+
+    found = False
+    for r in range(dlg._grid.rowCount()):
+        for c in range(dlg._grid.columnCount()):
+            it = dlg._grid.itemAtPosition(r, c)
+            if it and it.widget() and "Couldn't build the panel list" in \
+                    getattr(it.widget(), "text", lambda: "")():
+                found = True
+    assert found
+    # the rest of the dialog stays usable
+    assert dlg.readout is not None and dlg.view is not None
+
+
+def test_rebuild_reports_failure_instead_of_raising(qapp):
+    """If the fold computation itself throws, the readout says so instead of
+    the exception escaping (which, on the very first call from __init__,
+    would stop the dialog from ever finishing construction / being shown)."""
+    from leathercad_app.preview3d import ScoredFoldDialog
+    dlg = ScoredFoldDialog(_scored_doc())
+
+    def boom():
+        raise RuntimeError("synthetic rebuild failure")
+    dlg._rebuild_impl = boom
+    dlg._rebuild()                               # must not raise
+    assert "synthetic rebuild failure" in dlg.readout.text()

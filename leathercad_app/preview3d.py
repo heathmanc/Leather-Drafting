@@ -13,10 +13,10 @@ from __future__ import annotations
 import math
 from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QPointF
+from PySide6.QtCore import Qt, QPointF, QTimer
 from PySide6.QtGui import (QPainter, QColor, QPen, QBrush, QPolygonF, QImage)
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                               QSlider, QDialog)
+                               QSlider, QDialog, QScrollArea)
 
 from leathercad.geometry import Vec2
 from leathercad.fold3d import (Panel, Hinge, assemble, project, rotate_view,
@@ -547,7 +547,7 @@ class ScoredFoldDialog(QDialog):
         from PySide6.QtWidgets import (QDoubleSpinBox, QGridLayout, QWidget)
         super().__init__(parent)
         self.setWindowTitle("Fold single piece (3D)")
-        self.resize(720, 700)
+        self.resize(820, 780)
         self.doc = doc
         self.canvas = canvas
         self.outline, self.folds, self.fold_shapes = \
@@ -570,7 +570,8 @@ class ScoredFoldDialog(QDialog):
         self.view = Preview3DWidget(panels, hinges, root, dark, self,
                                     thickness=0.0, numbers=True)
         self.view.fraction = 0.0                   # OPEN FLAT
-        lay.addWidget(self.view, 1)
+        self.view.setMinimumHeight(240)
+        lay.addWidget(self.view, 3)
 
         # thickness / bend-radius / fold slider -- the slider starts FLAT so
         # nothing auto-folds; you drive it (and set each fold below)
@@ -610,7 +611,16 @@ class ScoredFoldDialog(QDialog):
         self._grid = QGridLayout()
         gw = QWidget()
         gw.setLayout(self._grid)
-        lay.addWidget(gw)
+        # the panel table scrolls on its own -- so on a small window/screen, or
+        # with many panels, the fold controls are always reachable instead of
+        # being pushed off past the bottom of the dialog with no way to get to
+        # them (the 3D view above must never be able to squeeze this to nothing)
+        scroll = QScrollArea()
+        scroll.setWidget(gw)
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumHeight(160)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        lay.addWidget(scroll, 2)
 
         self.readout = QLabel()
         self.readout.setWordWrap(True)
@@ -648,7 +658,13 @@ class ScoredFoldDialog(QDialog):
             self._order.append(old)
         self._enabled.setdefault(old, True)
         self._enabled.pop(pid, None)
-        self._populate_rows()
+        # deferred: this runs from inside the NEW radio's own toggled signal,
+        # while Qt (and its QButtonGroup) is still mid-emission for that click.
+        # Tearing down and rebuilding the whole grid -- including that very
+        # button and its group -- synchronously here is a reentrancy hazard, so
+        # rebuild on the next event-loop turn instead, once the click has fully
+        # finished processing.
+        QTimer.singleShot(0, self._populate_rows)
 
     def _populate_rows(self):
         """(Re)build the per-PANEL rows: every panel is listed with a Fixed radio;
@@ -661,61 +677,73 @@ class ScoredFoldDialog(QDialog):
             w = it.widget()
             if w is not None:
                 w.setParent(None)
-        for c, h in enumerate(("Fixed", "Fold?", "#", "Panel", "Direction",
-                               "Angle", "Bend allowance", "Order")):
-            self._grid.addWidget(QL(f"<b>{h}</b>"), 0, c)
-        fop = self._fold_of_panel()
+        # these must exist even if building the rows below fails partway, so
+        # other handlers (``_rebuild``/``_on_change``) don't also raise
         self._fixed_group = QButtonGroup(self)
         self._checks, self._combos, self._angles, self._ba_labels = {}, {}, {}, {}
-        for row, pid in enumerate([self._fixed] + list(self._order), start=1):
-            is_fixed = (pid == self._fixed)
-            rb = QRadioButton()
-            rb.setChecked(is_fixed)
-            rb.toggled.connect(lambda on, p=pid: on and self._set_fixed(p))
-            self._fixed_group.addButton(rb)
-            self._grid.addWidget(rb, row, 0)
-            self._grid.addWidget(QL(f"Panel {self._panel_name.get(pid, '?')}"),
-                                 row, 3)
-            if is_fixed:
-                self._grid.addWidget(QL("<i>base — stays flat</i>"), row, 4, 1, 3)
-                continue
-            fi = fop.get(pid)
-            fs = self.fold_shapes[fi] if fi is not None else None
-            ck = QCheckBox()
-            ck.setChecked(self._enabled.get(pid, True))
-            ck.toggled.connect(self._on_change)
-            self._grid.addWidget(ck, row, 1)
-            self._grid.addWidget(QL(str(self._order.index(pid) + 1)), row, 2)
-            cb = QComboBox()
-            cb.addItems(["front", "back"])
-            cb.setCurrentText((fs.fold_dir or "front") if fs else "front")
-            cb.currentTextChanged.connect(self._on_change)
-            self._grid.addWidget(cb, row, 4)
-            sp = QDoubleSpinBox()
-            sp.setRange(0.0, 180.0)
-            sp.setValue(fs.fold_angle if fs else 180.0)
-            sp.setSuffix("°")
-            sp.valueChanged.connect(self._on_change)
-            self._grid.addWidget(sp, row, 5)
-            bl = QL("—")
-            self._grid.addWidget(bl, row, 6)
-            cell = QWidget()
-            hb = QHBoxLayout(cell)
-            hb.setContentsMargins(0, 0, 0, 0)
-            pos = self._order.index(pid)
-            up = QPushButton("↑")
-            up.setFixedWidth(30)
-            up.clicked.connect(lambda _c, k=pos: self._move(k, -1))
-            dn = QPushButton("↓")
-            dn.setFixedWidth(30)
-            dn.clicked.connect(lambda _c, k=pos: self._move(k, 1))
-            hb.addWidget(up)
-            hb.addWidget(dn)
-            self._grid.addWidget(cell, row, 7)
-            self._checks[pid] = ck
-            self._combos[pid] = cb
-            self._angles[pid] = sp
-            self._ba_labels[pid] = bl
+        try:
+            for c, h in enumerate(("Fixed", "Fold?", "#", "Panel", "Direction",
+                                   "Angle", "Bend allowance", "Order")):
+                self._grid.addWidget(QL(f"<b>{h}</b>"), 0, c)
+            fop = self._fold_of_panel()
+            for row, pid in enumerate([self._fixed] + list(self._order), start=1):
+                is_fixed = (pid == self._fixed)
+                rb = QRadioButton()
+                rb.setChecked(is_fixed)
+                rb.toggled.connect(lambda on, p=pid: on and self._set_fixed(p))
+                self._fixed_group.addButton(rb)
+                self._grid.addWidget(rb, row, 0)
+                self._grid.addWidget(
+                    QL(f"Panel {self._panel_name.get(pid, '?')}"), row, 3)
+                if is_fixed:
+                    self._grid.addWidget(QL("<i>base — stays flat</i>"),
+                                         row, 4, 1, 3)
+                    continue
+                fi = fop.get(pid)
+                fs = self.fold_shapes[fi] if fi is not None else None
+                ck = QCheckBox()
+                ck.setChecked(self._enabled.get(pid, True))
+                ck.toggled.connect(self._on_change)
+                self._grid.addWidget(ck, row, 1)
+                self._grid.addWidget(QL(str(self._order.index(pid) + 1)), row, 2)
+                cb = QComboBox()
+                cb.addItems(["front", "back"])
+                cb.setCurrentText((fs.fold_dir or "front") if fs else "front")
+                cb.currentTextChanged.connect(self._on_change)
+                self._grid.addWidget(cb, row, 4)
+                sp = QDoubleSpinBox()
+                sp.setRange(0.0, 180.0)
+                sp.setValue(fs.fold_angle if fs else 180.0)
+                sp.setSuffix("°")
+                sp.valueChanged.connect(self._on_change)
+                self._grid.addWidget(sp, row, 5)
+                bl = QL("—")
+                self._grid.addWidget(bl, row, 6)
+                cell = QWidget()
+                hb = QHBoxLayout(cell)
+                hb.setContentsMargins(0, 0, 0, 0)
+                pos = self._order.index(pid)
+                up = QPushButton("↑")
+                up.setFixedWidth(30)
+                up.clicked.connect(lambda _c, k=pos: self._move(k, -1))
+                dn = QPushButton("↓")
+                dn.setFixedWidth(30)
+                dn.clicked.connect(lambda _c, k=pos: self._move(k, 1))
+                hb.addWidget(up)
+                hb.addWidget(dn)
+                self._grid.addWidget(cell, row, 7)
+                self._checks[pid] = ck
+                self._combos[pid] = cb
+                self._angles[pid] = sp
+                self._ba_labels[pid] = bl
+        except Exception as exc:
+            # never leave the table silently blank -- say exactly what broke
+            # instead of hiding the whole panel list
+            err = QL(f"Couldn't build the panel list ({exc}). "
+                    "Try reopening this dialog, or re-mark the fold lines.")
+            err.setWordWrap(True)
+            self._grid.addWidget(err, 1, 0, 1, 8)
+            return
         self._rebuild()
 
     def _move(self, pos, delta):
@@ -739,6 +767,19 @@ class ScoredFoldDialog(QDialog):
         self._rebuild()
 
     def _rebuild(self, *_):
+        # never let a geometry edge case here raise past this method: the panel
+        # ROWS above are already built and visible by the time this runs, so the
+        # worst case must be a stale readout/view, never the whole dialog
+        # failing to finish opening (blocking .show()) or losing its state to a
+        # signal-handler exception.
+        try:
+            self._rebuild_impl()
+        except Exception as exc:
+            self.readout.setText(
+                "Couldn't compute the fold for the current settings "
+                f"({exc}). Try a different fold order, or reopen this dialog.")
+
+    def _rebuild_impl(self):
         from leathercad.fold3d import (registration_report, fold_bend_allowance,
                                        sequence_bend_radii, fold_stack_levels,
                                        assemble, Fold)

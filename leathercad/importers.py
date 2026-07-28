@@ -10,8 +10,13 @@ line, polyline, polygon; nested group transforms (translate/scale/rotate/
 matrix). Millimetre scaling comes from the root width/viewBox (px assumed
 96 dpi); SVG's Y-down axis is flipped to our Y-up world.
 
-DXF: LINE, CIRCLE, ARC, LWPOLYLINE and POLYLINE/VERTEX (incl. bulge arcs) from
-the ENTITIES section. Coordinates are taken as millimetres.
+DXF: LINE, CIRCLE, ARC, ELLIPSE, SPLINE (NURBS, flattened), LWPOLYLINE and
+POLYLINE/VERTEX (incl. bulge arcs), plus block references (INSERT, including
+arrays) expanded from the BLOCKS section. Per-entity extrusion directions
+(OCS, codes 210/220/230) are resolved to world space -- CAD tools write a
+(0, 0, -1) normal for anything drawn or mirrored from the back, and ignoring
+it lands those entities mirrored against everything else. Drawing units come
+from the header's $INSUNITS (unitless is assumed to be millimetres).
 """
 
 from __future__ import annotations
@@ -402,12 +407,195 @@ def import_svg(path: str, color_layers: Optional[dict] = None) -> List[Shape]:
 # DXF
 # ---------------------------------------------------------------------------
 def _dxf_pairs(text: str):
+    """(group code, value) pairs. A DXF is strictly code line / value line, so
+    one stray line would swap the two for the whole rest of the file (turning
+    the drawing to noise). Resynchronise by skipping a SINGLE bad line instead
+    of blindly stepping in twos."""
     lines = text.splitlines()
-    for i in range(0, len(lines) - 1, 2):
+    i, n = 0, len(lines)
+    while i + 1 < n:
         try:
-            yield int(lines[i].strip()), lines[i + 1].strip()
+            code = int(lines[i].strip())
         except ValueError:
+            i += 1                      # junk/blank: realign, don't stay skewed
             continue
+        yield code, lines[i + 1].strip()
+        i += 2
+
+
+def _ocs_mapper(nx: float, ny: float, nz: float):
+    """Map a point in an entity's Object Coordinate System to world space.
+
+    DXF stores LWPOLYLINE/POLYLINE/CIRCLE/ARC coordinates relative to the
+    entity's extrusion direction (codes 210/220/230), not in world space. A
+    plane normal of (0, 0, -1) -- which Rhino writes routinely for anything
+    drawn or mirrored from the back -- means the X axis is FLIPPED. Ignoring it
+    mirrors those entities relative to everything else, which is exactly what a
+    "jumbled" import looks like. This is AutoCAD's Arbitrary Axis Algorithm."""
+    ln = math.sqrt(nx * nx + ny * ny + nz * nz)
+    if ln < 1e-12 or (abs(nx) < 1e-12 and abs(ny) < 1e-12 and nz > 0):
+        return None                     # the ordinary (0,0,1) case: world = OCS
+    nx, ny, nz = nx / ln, ny / ln, nz / ln
+
+    def cross(u, v):
+        return (u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0])
+
+    n = (nx, ny, nz)
+    # pick the reference axis the algorithm prescribes, so the basis is stable
+    ax = cross((0.0, 1.0, 0.0), n) if (abs(nx) < 1.0 / 64 and abs(ny) < 1.0 / 64) \
+        else cross((0.0, 0.0, 1.0), n)
+    la = math.sqrt(sum(c * c for c in ax))
+    if la < 1e-12:
+        return None
+    ax = tuple(c / la for c in ax)
+    ay = cross(n, ax)
+    la = math.sqrt(sum(c * c for c in ay))
+    if la < 1e-12:
+        return None
+    ay = tuple(c / la for c in ay)
+
+    def to_world(x: float, y: float, z: float = 0.0) -> Vec2:
+        return Vec2(ax[0] * x + ay[0] * y + n[0] * z,
+                    ax[1] * x + ay[1] * y + n[1] * z)
+    return to_world
+
+
+# -- entity records ---------------------------------------------------------
+# Group codes repeat within one entity (a SPLINE has many 10s, 40s, 41s), so
+# entities are kept as their ordered pair list rather than a flat dict.
+
+def _ent_all(ent, code) -> List[str]:
+    return [v for c, v in ent["pairs"] if c == code]
+
+
+def _ent_str(ent, code, default: str = "") -> str:
+    for c, v in ent["pairs"]:
+        if c == code:
+            return v
+    return default
+
+
+def _ent_num(ent, code, default: float = 0.0) -> float:
+    try:
+        return float(_ent_str(ent, code, str(default)))
+    except ValueError:
+        return default
+
+
+def _ent_int(ent, code, default: int = 0) -> int:
+    try:
+        return int(float(_ent_str(ent, code, str(default))))
+    except ValueError:
+        return default
+
+
+def _dxf_records(pairs, i: int, end: int):
+    """Group flat pairs into entity records. A POLYLINE swallows its VERTEX
+    children (up to SEQEND) so they don't look like top-level entities."""
+    out = []
+    while i < end:
+        code, val = pairs[i]
+        if code != 0:
+            i += 1
+            continue
+        if val in ("ENDSEC", "EOF"):
+            break
+        ent = {"type": val, "pairs": [], "verts": []}
+        i += 1
+        while i < end and pairs[i][0] != 0:
+            ent["pairs"].append(pairs[i])
+            i += 1
+        if ent["type"] == "POLYLINE":
+            while i < end and pairs[i][0] == 0 and pairs[i][1] == "VERTEX":
+                v = {"type": "VERTEX", "pairs": [], "verts": []}
+                i += 1
+                while i < end and pairs[i][0] != 0:
+                    v["pairs"].append(pairs[i])
+                    i += 1
+                ent["verts"].append(v)
+            if i < end and pairs[i][0] == 0 and pairs[i][1] == "SEQEND":
+                i += 1
+                while i < end and pairs[i][0] != 0:
+                    i += 1
+        out.append(ent)
+    return out, i
+
+
+def _dxf_sections(pairs) -> dict:
+    """Section name -> (start, end) index range over ``pairs``."""
+    out, i, n = {}, 0, len(pairs)
+    while i < n:
+        if pairs[i][0] == 0 and pairs[i][1] == "SECTION":
+            j = i + 1
+            name = ""
+            if j < n and pairs[j][0] == 2:
+                name = pairs[j][1]
+                j += 1
+            start = j
+            while j < n and not (pairs[j][0] == 0 and pairs[j][1] == "ENDSEC"):
+                j += 1
+            out[name] = (start, j)
+            i = j
+        i += 1
+    return out
+
+
+def _nurbs_points(ctrl: List[Vec2], weights: List[float], knots: List[float],
+                  degree: int) -> List[Vec2]:
+    """Flatten a (rational) B-spline via de Boor. Rhino exports almost every
+    freeform curve as a SPLINE, so without this they vanish from the import."""
+    n = len(ctrl) - 1
+    p = max(1, min(degree, n))
+    if n < 1:
+        return list(ctrl)
+    if len(knots) != n + p + 2:         # rebuild a clamped uniform vector
+        inner = n - p + 1
+        knots = ([0.0] * (p + 1)
+                 + [k / inner for k in range(1, inner)]
+                 + [1.0] * (p + 1))
+    if len(weights) != len(ctrl):
+        weights = [1.0] * len(ctrl)
+    cw = [(c.x * w, c.y * w, w) for c, w in zip(ctrl, weights)]
+
+    def span_of(u: float) -> int:
+        if u >= knots[n + 1]:
+            return n
+        if u <= knots[p]:
+            return p
+        lo, hi = p, n + 1
+        mid = (lo + hi) // 2
+        while u < knots[mid] or u >= knots[mid + 1]:
+            if u < knots[mid]:
+                hi = mid
+            else:
+                lo = mid
+            mid = (lo + hi) // 2
+            if mid <= lo and mid >= hi:
+                break
+        return mid
+
+    def at(u: float) -> Vec2:
+        s = span_of(u)
+        d = [cw[s - p + k] for k in range(p + 1)]
+        for r in range(1, p + 1):
+            for k in range(p, r - 1, -1):
+                idx = s - p + k
+                den = knots[idx + p - r + 1] - knots[idx]
+                a = 0.0 if abs(den) < 1e-12 else (u - knots[idx]) / den
+                d[k] = tuple((1.0 - a) * d[k - 1][t] + a * d[k][t]
+                             for t in range(3))
+        x, y, w = d[p]
+        return Vec2(x / w, y / w) if abs(w) > 1e-12 else Vec2(x, y)
+
+    u0, u1 = knots[p], knots[n + 1]
+    if not (u1 > u0):
+        return list(ctrl)
+    # sample proportional to the control polygon -- fine enough for a laser
+    span = sum((ctrl[k + 1] - ctrl[k]).length() for k in range(n))
+    steps = max(16, min(512, int(span / max(_FLAT * 8.0, 1e-6))))
+    return [at(u0 + (u1 - u0) * k / steps) for k in range(steps + 1)]
 
 
 def _bulge_points(a: Vec2, b: Vec2, bulge: float) -> List[Vec2]:
@@ -435,116 +623,261 @@ _ACI_HEX = {1: "#ff0000", 2: "#ffff00", 3: "#00aa00", 4: "#00ffff",
             5: "#0066ff", 6: "#ff00ff", 7: "#ffffff", 8: "#888888"}
 
 
+#: DXF layer names we recognise by name (Rhino users organise by layer)
+_DXF_LAYER_NAMES = {"cut": "Cut", "stitch": "Stitch", "score": "Score",
+                    "fold": "Score", "engrave": "Engrave"}
+
+#: $INSUNITS code -> millimetres per drawing unit (0/unitless -> assume mm)
+_DXF_UNITS_MM = {1: 25.4, 2: 304.8, 4: 1.0, 5: 10.0, 6: 1000.0,
+                 8: 2.54e-5, 9: 0.0254, 10: 914.4, 14: 100.0, 15: 10000.0}
+
+
+def _dxf_unit_scale(pairs, sections) -> float:
+    """Millimetres per drawing unit, from the header's ``$INSUNITS``. A Rhino
+    model built in inches would otherwise import 25.4x too small."""
+    rng = sections.get("HEADER")
+    if not rng:
+        return 1.0
+    start, end = rng
+    for i in range(start, min(end, len(pairs))):
+        if pairs[i][0] == 9 and pairs[i][1] == "$INSUNITS":
+            for j in range(i + 1, min(i + 4, end)):
+                if pairs[j][0] == 70:
+                    try:
+                        return _DXF_UNITS_MM.get(int(pairs[j][1]), 1.0)
+                    except ValueError:
+                        return 1.0
+            break
+    return 1.0
+
+
+def _dxf_entity_shapes(ent, m, layer: str, blocks: dict, depth: int
+                       ) -> List[Shape]:
+    """One DXF entity -> shapes, placed through the accumulated transform ``m``
+    (identity at top level; an INSERT's placement inside a block)."""
+    kind = ent["type"]
+    ocs = _ocs_mapper(_ent_num(ent, 210, 0.0), _ent_num(ent, 220, 0.0),
+                      _ent_num(ent, 230, 1.0))
+    elev = _ent_num(ent, 38, 0.0)
+
+    def unrotate(x: float, y: float) -> Vec2:
+        """OCS -> the entity's own world plane (NOT through ``m``)."""
+        return ocs(x, y, elev) if ocs else Vec2(x, y)
+
+    def place(x: float, y: float) -> Vec2:
+        """OCS -> world -> the caller's transform."""
+        return _mat_apply(m, unrotate(x, y))
+
+    def ring(pts: List[Vec2], closed: bool) -> List[Shape]:
+        sh = _shape_from_ring(pts, closed, layer)
+        return [sh] if sh is not None else []
+
+    if kind == "LINE":                       # LINE is WCS, never OCS
+        a = _mat_apply(m, Vec2(_ent_num(ent, 10), _ent_num(ent, 20)))
+        b = _mat_apply(m, Vec2(_ent_num(ent, 11), _ent_num(ent, 21)))
+        return ring([a, b], False)
+
+    if kind == "CIRCLE":
+        r = _ent_num(ent, 40)
+        if r <= 0:
+            return []
+        c = place(_ent_num(ent, 10), _ent_num(ent, 20))
+        sx = math.hypot(m[0], m[1])
+        sy = math.hypot(m[2], m[3])
+        if abs(sx - sy) < 1e-9:              # uniform: keep it parametric
+            return [Circle(rx=r * sx, ry=r * sx, layer=layer,
+                           transform=Transform(x=c.x, y=c.y))]
+        return ring([Vec2(c.x + r * sx * math.cos(2 * math.pi * k / 64),
+                          c.y + r * sy * math.sin(2 * math.pi * k / 64))
+                     for k in range(64)], True)
+
+    if kind == "ARC":
+        r = _ent_num(ent, 40)
+        cx, cy = _ent_num(ent, 10), _ent_num(ent, 20)
+        a0 = math.radians(_ent_num(ent, 50, 0.0))
+        a1 = math.radians(_ent_num(ent, 51, 360.0))
+        # build in the entity's own plane, then map out -- so a mirrored OCS
+        # correctly reverses the sweep instead of drawing the wrong arc
+        return ring([place(cx + r * math.cos(a), cy + r * math.sin(a))
+                     for a in _arc_angles(a0, a1, r)], False)
+
+    if kind == "ELLIPSE":                    # centre/major axis are WCS
+        c = Vec2(_ent_num(ent, 10), _ent_num(ent, 20))
+        mx, my = _ent_num(ent, 11), _ent_num(ent, 21)
+        ratio = _ent_num(ent, 40, 1.0)
+        t0 = _ent_num(ent, 41, 0.0)
+        t1 = _ent_num(ent, 42, 2 * math.pi)
+        major = math.hypot(mx, my)
+        if major < 1e-12:
+            return []
+        rot = math.atan2(my, mx)
+        minor = major * ratio
+        if t1 <= t0:
+            t1 += 2 * math.pi
+        n = max(16, min(512, int(abs(t1 - t0) * major / max(_FLAT * 4, 1e-6))))
+        pts = []
+        for k in range(n + 1):
+            t = t0 + (t1 - t0) * k / n
+            ex, ey = major * math.cos(t), minor * math.sin(t)
+            pts.append(_mat_apply(m, Vec2(
+                c.x + ex * math.cos(rot) - ey * math.sin(rot),
+                c.y + ex * math.sin(rot) + ey * math.cos(rot))))
+        closed = abs((t1 - t0) - 2 * math.pi) < 1e-6
+        return ring(pts, closed)
+
+    if kind == "SPLINE":
+        xs, ys = _ent_all(ent, 10), _ent_all(ent, 20)
+        ctrl = [Vec2(float(a), float(b)) for a, b in zip(xs, ys)]
+        flags = _ent_int(ent, 70, 0)
+        if len(ctrl) < 2:                    # control points absent: fit points
+            fx, fy = _ent_all(ent, 11), _ent_all(ent, 21)
+            pts = [_mat_apply(m, Vec2(float(a), float(b)))
+                   for a, b in zip(fx, fy)]
+            return ring(pts, bool(flags & 1))
+        knots = [float(v) for v in _ent_all(ent, 40)]
+        weights = [float(v) for v in _ent_all(ent, 41)]
+        deg = _ent_int(ent, 71, 3)
+        pts = [_mat_apply(m, p)
+               for p in _nurbs_points(ctrl, weights, knots, deg)]
+        return ring(pts, bool(flags & 1))
+
+    if kind == "LWPOLYLINE":
+        closed = bool(_ent_int(ent, 70, 0) & 1)
+        verts: List[List[float]] = []        # x, y, bulge -- 10/20/42 in order
+        for c, v in ent["pairs"]:
+            try:
+                fv = float(v)
+            except ValueError:
+                continue
+            if c == 10:
+                verts.append([fv, 0.0, 0.0])
+            elif c == 20 and verts:
+                verts[-1][1] = fv
+            elif c == 42 and verts:
+                verts[-1][2] = fv
+        return ring(_polyline_points(verts, closed, place), closed)
+
+    if kind == "POLYLINE":
+        flags = _ent_int(ent, 70, 0)
+        if flags & (16 | 64):                # a 3D mesh, not a contour
+            return []
+        closed = bool(flags & 1)
+        verts = []
+        for v in ent["verts"]:
+            if _ent_int(v, 70, 0) & (16 | 64):
+                continue
+            verts.append([_ent_num(v, 10), _ent_num(v, 20), _ent_num(v, 42)])
+        return ring(_polyline_points(verts, closed, place), closed)
+
+    if kind == "INSERT" and depth < 8:
+        blk = blocks.get(_ent_str(ent, 2, ""))
+        if not blk:
+            return []
+        base = blk["base"]
+        # build the placement in the INSERT's own space; ``m`` is composed on
+        # top below, so going through ``place`` here would apply it twice
+        ins = unrotate(_ent_num(ent, 10), _ent_num(ent, 20))
+        sx = _ent_num(ent, 41, 1.0) or 1.0
+        sy = _ent_num(ent, 42, 1.0) or 1.0
+        rot = math.radians(_ent_num(ent, 50, 0.0))
+        ca, sa = math.cos(rot), math.sin(rot)
+        cols = max(1, _ent_int(ent, 70, 1))
+        rows = max(1, _ent_int(ent, 71, 1))
+        dx, dy = _ent_num(ent, 44, 0.0), _ent_num(ent, 45, 0.0)
+        out: List[Shape] = []
+        for cx in range(cols):
+            for ry in range(rows):
+                # translate(insert + array step) . rotate . scale . -blockbase
+                local = _mat_mul(
+                    (1, 0, 0, 1, ins.x + cx * dx, ins.y + ry * dy),
+                    _mat_mul((ca, sa, -sa, ca, 0, 0),
+                             (sx, 0, 0, sy, -base.x * sx, -base.y * sy)))
+                for sub in blk["ents"]:
+                    # block contents adopt the reference's layer (DXF's
+                    # "layer 0 inherits" rule, and the useful default anyway)
+                    out += _dxf_entity_shapes(sub, _mat_mul(m, local), layer,
+                                              blocks, depth + 1)
+        return out
+
+    return []
+
+
+def _arc_angles(a0: float, a1: float, r: float) -> List[float]:
+    """Angles stepping CCW from a0 to a1, fine enough for the flatten tolerance."""
+    while a1 < a0 - 1e-12:
+        a1 += 2 * math.pi
+    sweep = a1 - a0
+    if r <= 1e-9 or abs(sweep) < 1e-9:
+        return [a0]
+    ratio = max(-1.0, min(1.0, 1.0 - _FLAT / r))
+    step = 2.0 * math.acos(ratio) if ratio < 1.0 else math.pi
+    n = max(2, int(math.ceil(abs(sweep) / max(step, 1e-3))))
+    return [a0 + sweep * k / n for k in range(n + 1)]
+
+
+def _polyline_points(verts, closed: bool, place) -> List[Vec2]:
+    """Vertices (x, y, bulge) -> a flattened ring, mapped through ``place``."""
+    pts: List[Vec2] = []
+    n = len(verts)
+    for k in range(n):
+        x, y, bulge = verts[k]
+        p = place(x, y)
+        if not pts or (p - pts[-1]).length() > 1e-12:
+            pts.append(p)
+        if bulge and (k + 1 < n or closed):
+            nx, ny, _b = verts[(k + 1) % n]
+            # bulge the arc in the entity's own plane, then map it out
+            pts.extend(_bulge_points(p, place(nx, ny), bulge))
+    return pts
+
+
 def import_dxf(path: str, color_layers: Optional[dict] = None) -> List[Shape]:
     """Import a DXF. Entity colours (ACI, code 62) are mapped through
-    ``color_layers`` ('#rrggbb' -> layer name) like the SVG importer."""
+    ``color_layers`` ('#rrggbb' -> layer name) like the SVG importer; failing
+    that, a DXF layer literally named Cut/Stitch/Score/Engrave is honoured.
+
+    Handles what CAD tools (Rhino especially) actually emit: LINE, CIRCLE, ARC,
+    ELLIPSE, SPLINE, LWPOLYLINE and POLYLINE/VERTEX with bulge arcs, block
+    references (INSERT, including arrays), and per-entity extrusion directions
+    (OCS) -- without which mirrored entities land flipped against the rest."""
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
         pairs = list(_dxf_pairs(fh.read()))
     color_layers = {k.lower(): v for k, v in (color_layers or {}).items()}
 
-    def layer_for(attrs) -> str:
-        try:
-            aci = int(attrs.get(62, 0))
-        except (TypeError, ValueError):
-            aci = 0
-        return color_layers.get(_ACI_HEX.get(aci, ""), "Cut")
+    def layer_for(ent) -> str:
+        aci = _ent_int(ent, 62, 0)
+        by_color = color_layers.get(_ACI_HEX.get(aci, ""))
+        if by_color:
+            return by_color
+        return _DXF_LAYER_NAMES.get(_ent_str(ent, 8, "").strip().lower(), "Cut")
+
+    sections = _dxf_sections(pairs)
+    blocks: dict = {}
+    if "BLOCKS" in sections:
+        recs, _ = _dxf_records(pairs, *sections["BLOCKS"])
+        cur = None
+        for r in recs:
+            if r["type"] == "BLOCK":
+                cur = _ent_str(r, 2, "")
+                blocks[cur] = {"base": Vec2(_ent_num(r, 10), _ent_num(r, 20)),
+                               "ents": []}
+            elif r["type"] == "ENDBLK":
+                cur = None
+            elif cur is not None and cur in blocks:
+                blocks[cur]["ents"].append(r)
+
+    rng = sections.get("ENTITIES")
+    if rng is None:                          # no section header: scan it all
+        rng = (0, len(pairs))
+    ents, _ = _dxf_records(pairs, *rng)
+
+    # drawing units -> mm, carried as the root transform so radii scale too
+    u = _dxf_unit_scale(pairs, sections)
+    root = _IDENT if u == 1.0 else (u, 0.0, 0.0, u, 0.0, 0.0)
 
     shapes: List[Shape] = []
-    i = 0
-    in_entities = False
-    while i < len(pairs):
-        code, val = pairs[i]
-        if code == 2 and val == "ENTITIES":
-            in_entities = True
-        elif code == 0 and val == "ENDSEC":
-            in_entities = False
-        elif in_entities and code == 0:
-            ent = val
-            attrs = {}
-            verts: List[Tuple[float, float, float]] = []   # x, y, bulge
-            j = i + 1
-            pending = None      # collect per-vertex codes for LWPOLYLINE
-            while j < len(pairs) and pairs[j][0] != 0:
-                c, v = pairs[j]
-                if ent == "LWPOLYLINE" and c in (10, 20, 42):
-                    if c == 10:
-                        verts.append([float(v), 0.0, 0.0])
-                    elif c == 20 and verts:
-                        verts[-1][1] = float(v)
-                    elif c == 42 and verts:
-                        verts[-1][2] = float(v)
-                else:
-                    attrs[c] = v
-                j += 1
-            if ent == "LINE":
-                a = Vec2(float(attrs.get(10, 0)), float(attrs.get(20, 0)))
-                b = Vec2(float(attrs.get(11, 0)), float(attrs.get(21, 0)))
-                sh = _shape_from_ring([a, b], False, layer_for(attrs))
-                if sh:
-                    shapes.append(sh)
-            elif ent == "CIRCLE":
-                r = float(attrs.get(40, 0))
-                if r > 0:
-                    shapes.append(Circle(
-                        rx=r, ry=r, layer=layer_for(attrs),
-                        transform=Transform(x=float(attrs.get(10, 0)),
-                                            y=float(attrs.get(20, 0)))))
-            elif ent == "ARC":
-                c = Vec2(float(attrs.get(10, 0)), float(attrs.get(20, 0)))
-                r = float(attrs.get(40, 0))
-                a0 = math.radians(float(attrs.get(50, 0)))
-                a1 = math.radians(float(attrs.get(51, 360)))
-                sh = _shape_from_ring(_arc_points(c, r, a0, a1, True),
-                                      False, layer_for(attrs))
-                if sh:
-                    shapes.append(sh)
-            elif ent == "LWPOLYLINE":
-                closed = int(attrs.get(70, 0) or 0) & 1
-                pts: List[Vec2] = []
-                n = len(verts)
-                for k in range(n):
-                    x, y, bulge = verts[k]
-                    p = Vec2(x, y)
-                    if not pts:
-                        pts.append(p)
-                    elif (p - pts[-1]).length() > 1e-12:
-                        pts.append(p)
-                    if bulge and (k + 1 < n or closed):
-                        nx, ny, _ = verts[(k + 1) % n]
-                        pts.extend(_bulge_points(p, Vec2(nx, ny), bulge))
-                sh = _shape_from_ring(pts, bool(closed), layer_for(attrs))
-                if sh:
-                    shapes.append(sh)
-            elif ent == "POLYLINE":
-                closed = int(attrs.get(70, 0) or 0) & 1
-                pts = []
-                prev = None      # (point, bulge)
-                while j < len(pairs):
-                    if pairs[j][0] == 0 and pairs[j][1] == "VERTEX":
-                        vat = {}
-                        j += 1
-                        while j < len(pairs) and pairs[j][0] != 0:
-                            vat[pairs[j][0]] = pairs[j][1]
-                            j += 1
-                        p = Vec2(float(vat.get(10, 0)), float(vat.get(20, 0)))
-                        if prev is not None and abs(prev[1]) > 1e-12:
-                            pts.extend(_bulge_points(prev[0], p, prev[1]))
-                        elif not pts or (p - pts[-1]).length() > 1e-12:
-                            pts.append(p)
-                        prev = (p, float(vat.get(42, 0) or 0))
-                    elif pairs[j][0] == 0 and pairs[j][1] == "SEQEND":
-                        j += 1
-                        break
-                    else:
-                        j += 1
-                if closed and prev is not None and abs(prev[1]) > 1e-12 and pts:
-                    pts.extend(_bulge_points(prev[0], pts[0], prev[1]))
-                sh = _shape_from_ring(pts, bool(closed), layer_for(attrs))
-                if sh:
-                    shapes.append(sh)
-            i = j
-            continue
-        i += 1
+    for ent in ents:
+        shapes += _dxf_entity_shapes(ent, root, layer_for(ent), blocks, 0)
     return _normalize(shapes)
 
 

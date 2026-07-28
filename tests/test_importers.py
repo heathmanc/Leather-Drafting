@@ -120,6 +120,171 @@ def test_dxf_entities_and_bulge(tmp_path):
     assert abs(bw - 20) < 0.05 and abs(bh - 10) < 0.05      # true semicircle
 
 
+def _pair(c, v):
+    return f"{c}\n{v}\n"
+
+
+def _dxf(tmp_path, name, entities, header="", blocks=""):
+    body = (header + blocks
+            + _pair(0, "SECTION") + _pair(2, "ENTITIES") + entities
+            + _pair(0, "ENDSEC") + _pair(0, "EOF"))
+    p = tmp_path / name
+    p.write_text(body)
+    return str(p)
+
+
+def test_dxf_negative_extrusion_is_mirrored_to_world(tmp_path):
+    """A (0,0,-1) extrusion is an OCS whose X axis is FLIPPED -- CAD tools
+    (Rhino especially) write it for anything drawn or mirrored from the back.
+    Ignoring it lands those entities mirrored against everything else, which
+    is what a "jumbled" import looks like."""
+    # an L: (0,0) -> (10,0) -> (10,5), with the flipped normal
+    flipped = (_pair(0, "LWPOLYLINE") + _pair(90, 3) + _pair(70, 0)
+               + _pair(10, 0) + _pair(20, 0)
+               + _pair(10, 10) + _pair(20, 0)
+               + _pair(10, 10) + _pair(20, 5)
+               + _pair(210, 0) + _pair(220, 0) + _pair(230, -1))
+    # a reference line at the SAME world x range, in plain world coords
+    ref = (_pair(0, "LINE") + _pair(10, 0) + _pair(20, 20)
+           + _pair(11, 10) + _pair(21, 20))
+    shapes = import_dxf(_dxf(tmp_path, "ocs.dxf", flipped + ref))
+    poly = [s for s in shapes if isinstance(s, (Polygon, PathShape))
+            and len(s.points) > 2][0]
+    line = [s for s in shapes if s is not poly][0]
+    # mirrored, the L spans x in [-10, 0] while the line spans [0, 10]:
+    # together they cover 20 mm. Unmirrored they'd overlap and span only 10.
+    lo = min(poly.bounds()[0], line.bounds()[0])
+    hi = max(poly.bounds()[2], line.bounds()[2])
+    assert abs((hi - lo) - 20.0) < 1e-6
+
+
+def test_dxf_spline_is_flattened(tmp_path):
+    """Rhino exports freeform curves as SPLINE; without NURBS evaluation they
+    vanish from the import entirely."""
+    ctrl = [(0, 0), (10, 20), (30, 20), (40, 0)]        # a cubic Bezier
+    ent = (_pair(0, "SPLINE") + _pair(70, 8) + _pair(71, 3)
+           + _pair(72, 8) + _pair(73, 4)
+           + "".join(_pair(40, k) for k in (0, 0, 0, 0, 1, 1, 1, 1))
+           + "".join(_pair(10, x) + _pair(20, y) + _pair(30, 0)
+                     for x, y in ctrl))
+    shapes = import_dxf(_dxf(tmp_path, "sp.dxf", ent))
+    assert len(shapes) == 1
+    w, h = _w(shapes[0])
+    assert abs(w - 40.0) < 0.1                  # spans its end control points
+    assert abs(h - 15.0) < 0.2                  # cubic peak = 3/4 of 20
+    assert len(shapes[0].points) > 8            # actually flattened, not a chord
+
+
+def test_dxf_ellipse_uses_ratio_and_rotation(tmp_path):
+    """ELLIPSE: centre + major-axis vector + minor/major ratio."""
+    ent = (_pair(0, "ELLIPSE") + _pair(10, 100) + _pair(20, 0) + _pair(30, 0)
+           + _pair(11, 20) + _pair(21, 0) + _pair(31, 0) + _pair(40, 0.5)
+           + _pair(41, 0) + _pair(42, 2 * math.pi))
+    shapes = import_dxf(_dxf(tmp_path, "el.dxf", ent))
+    assert len(shapes) == 1
+    w, h = _w(shapes[0])
+    assert abs(w - 40.0) < 0.1 and abs(h - 20.0) < 0.1      # 2*20 by 2*10
+
+
+def test_dxf_block_insert_is_expanded_with_rotation(tmp_path):
+    """Geometry parked in BLOCKS and placed by INSERT used to vanish."""
+    blocks = (_pair(0, "SECTION") + _pair(2, "BLOCKS")
+              + _pair(0, "BLOCK") + _pair(2, "PART")
+              + _pair(10, 0) + _pair(20, 0)
+              + _pair(0, "LINE") + _pair(10, 0) + _pair(20, 0)
+              + _pair(11, 10) + _pair(21, 0)
+              + _pair(0, "ENDBLK") + _pair(0, "ENDSEC"))
+    ent = (_pair(0, "INSERT") + _pair(2, "PART")
+           + _pair(10, 5) + _pair(20, 5) + _pair(50, 90))
+    shapes = import_dxf(_dxf(tmp_path, "ins.dxf", ent, blocks=blocks))
+    assert len(shapes) == 1                     # the block's line came through
+    w, h = _w(shapes[0])
+    assert abs(w) < 1e-6 and abs(h - 10.0) < 1e-6   # rotated 90: now vertical
+
+
+def test_dxf_insert_is_scaled_once_not_twice(tmp_path):
+    """An INSERT's placement is built in its own coordinate space, so the
+    document's unit scale must be composed on top exactly once -- applying it
+    to the insertion point as well flings block contents far off the pattern."""
+    hdr = (_pair(0, "SECTION") + _pair(2, "HEADER")
+           + _pair(9, "$INSUNITS") + _pair(70, 1)       # inches
+           + _pair(0, "ENDSEC"))
+    blocks = (_pair(0, "SECTION") + _pair(2, "BLOCKS")
+              + _pair(0, "BLOCK") + _pair(2, "LOGO")
+              + _pair(10, 0) + _pair(20, 0)
+              + _pair(0, "CIRCLE") + _pair(10, 0) + _pair(20, 0) + _pair(40, 0.5)
+              + _pair(0, "ENDBLK") + _pair(0, "ENDSEC"))
+    # a 4x2 in panel with the logo inserted at (3, 1) in
+    ent = (_pair(0, "LWPOLYLINE") + _pair(90, 4) + _pair(70, 1)
+           + _pair(10, 0) + _pair(20, 0) + _pair(10, 4) + _pair(20, 0)
+           + _pair(10, 4) + _pair(20, 2) + _pair(10, 0) + _pair(20, 2)
+           + _pair(0, "INSERT") + _pair(2, "LOGO") + _pair(10, 3) + _pair(20, 1))
+    shapes = import_dxf(_dxf(tmp_path, "ins2.dxf", ent, header=hdr,
+                             blocks=blocks))
+    circ = [s for s in shapes if isinstance(s, Circle)][0]
+    assert abs(circ.transform.x - 3 * 25.4) < 1e-6      # not 3 * 25.4 * 25.4
+    assert abs(circ.transform.y - 1 * 25.4) < 1e-6
+    assert abs(circ.rx - 0.5 * 25.4) < 1e-6
+    # and it lands INSIDE the panel, not thousands of mm away
+    panel = [s for s in shapes if isinstance(s, Polygon)][0]
+    x0, y0, x1, y1 = panel.bounds()
+    assert x0 < circ.transform.x < x1 and y0 < circ.transform.y < y1
+
+
+def test_dxf_insunits_scales_inches_to_mm(tmp_path):
+    """A model built in inches must not import 25.4x too small."""
+    def doc(units):
+        hdr = (_pair(0, "SECTION") + _pair(2, "HEADER")
+               + _pair(9, "$INSUNITS") + _pair(70, units) + _pair(0, "ENDSEC"))
+        ent = (_pair(0, "LINE") + _pair(10, 0) + _pair(20, 0)
+               + _pair(11, 1) + _pair(21, 0)
+               + _pair(0, "CIRCLE") + _pair(10, 5) + _pair(20, 0) + _pair(40, 1))
+        return import_dxf(_dxf(tmp_path, f"u{units}.dxf", ent, header=hdr))
+
+    for units, mm in ((1, 25.4), (4, 1.0), (5, 10.0), (0, 1.0)):
+        shapes = doc(units)
+        line = [s for s in shapes if isinstance(s, PathShape)][0]
+        circ = [s for s in shapes if isinstance(s, Circle)][0]
+        assert abs(_w(line)[0] - mm) < 1e-6      # the 1-unit line
+        assert abs(circ.rx - mm) < 1e-6          # radii scale too
+
+
+def test_dxf_parser_resyncs_after_a_stray_line(tmp_path):
+    """A DXF is strictly code line / value line. One stray line used to swap
+    the two for the whole rest of the file, turning it into noise."""
+    a = (_pair(0, "LINE") + _pair(10, 0) + _pair(20, 0)
+         + _pair(11, 30) + _pair(21, 0))
+    b = (_pair(0, "LINE") + _pair(10, 0) + _pair(20, 50)
+         + _pair(11, 40) + _pair(21, 50))
+    shapes = import_dxf(_dxf(tmp_path, "sync.dxf", a + "\n" + b))
+    assert len(shapes) == 2                      # the one AFTER the junk survives
+    assert abs(_w(shapes[1])[0] - 40.0) < 1e-6   # ...with its real geometry
+
+
+def test_dxf_polygon_mesh_is_skipped(tmp_path):
+    """A POLYLINE flagged as a 3D mesh isn't a contour -- importing its raw
+    vertices would scatter junk across the pattern."""
+    mesh = (_pair(0, "POLYLINE") + _pair(70, 64)
+            + _pair(0, "VERTEX") + _pair(10, 0) + _pair(20, 0)
+            + _pair(0, "VERTEX") + _pair(10, 9) + _pair(20, 9)
+            + _pair(0, "SEQEND"))
+    real = (_pair(0, "LINE") + _pair(10, 0) + _pair(20, 0)
+            + _pair(11, 10) + _pair(21, 0))
+    shapes = import_dxf(_dxf(tmp_path, "mesh.dxf", mesh + real))
+    assert len(shapes) == 1
+
+
+def test_dxf_layer_name_maps_to_our_layers(tmp_path):
+    """Rhino users organise by layer, so honour a layer literally named
+    Cut/Stitch/Score/Engrave when no colour mapping matched."""
+    ent = (_pair(0, "LINE") + _pair(8, "Score") + _pair(10, 0) + _pair(20, 0)
+           + _pair(11, 10) + _pair(21, 0)
+           + _pair(0, "LINE") + _pair(8, "RandomName") + _pair(10, 0)
+           + _pair(20, 5) + _pair(11, 10) + _pair(21, 5))
+    layers = [s.layer for s in import_dxf(_dxf(tmp_path, "ly.dxf", ent))]
+    assert layers == ["Score", "Cut"]
+
+
 def test_import_file_dispatch_and_reject(tmp_path):
     with pytest.raises(ValueError):
         import_file(str(tmp_path / "x.txt"))

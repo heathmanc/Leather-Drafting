@@ -547,9 +547,17 @@ The Layers panel maps **colour → laser job**. A new document has:
   **circle that lands on the Stitch layer is classified as a real stitch
   hole** automatically, so a stitched pattern round-trips cleanly. Stitching
   is off on imported outlines (enable per piece in Properties). SVG paths
-  (beziers, arcs, group transforms) and the common DXF entities (lines,
-  circles, arcs, polylines with bulge arcs) are supported; millimetre scale
-  comes from the SVG width/viewBox (px assumed 96 dpi), DXF is read as mm.
+  (beziers, arcs, group transforms) are supported, and on the DXF side lines,
+  circles, arcs, ellipses, **splines** (the NURBS curves Rhino writes for
+  anything freeform), polylines with bulge arcs, and **block references**
+  (INSERT, including arrays) — expanded in place rather than dropped.
+  Millimetre scale comes from the SVG width/viewBox (px assumed 96 dpi); a
+  DXF is scaled from its `$INSUNITS` header, so a **model drawn in inches
+  arrives at the right size** (a unitless file is assumed to be mm). Entities
+  drawn or mirrored from the back carry a flipped extrusion direction, which
+  is resolved to world coordinates — without it those pieces land mirrored
+  against the rest of the pattern. A DXF layer literally named Cut, Stitch,
+  Score or Engrave is honoured when the colour didn't match one of yours.
 * **Circles → stitch holes** (Edit menu) — manually reclassify any selected
   circles as loose stitch holes (for imports where hole colour didn't match a
   layer); then attach them to their piece with `Ctrl+Shift+A`.

@@ -413,3 +413,58 @@ def test_move_snap_cache_does_not_reflatten(qapp):
     finally:
         Shape.world_polyline = orig
     assert calls["n"] == 0        # zero re-flattens: the cache carried the drag
+
+
+def test_snap_node_dedup_is_linear_not_quadratic(qapp):
+    """Building a shape's snap nodes must not rescan everything kept so far.
+
+    The naive ``any(...)`` dedup was O(n^2): a traced DXF (177 pieces, ~117k
+    candidate nodes) spent ~43 SECONDS in it on 52M distance tests, which was
+    most of the freeze when opening a detailed import. Bucketing by a 1e-6 grid
+    makes it linear, so a dense outline builds in milliseconds -- and the
+    dedup invariant (no two kept points within the tolerance) still holds.
+    """
+    import math
+    import time
+    from leathercad.shapes import Polygon
+    from leathercad_app.items import ShapeItem
+
+    def build(n):
+        pts = [Vec2(60 * math.cos(2 * math.pi * k / n),
+                    40 * math.sin(2 * math.pi * k / n)) for k in range(n)]
+        return Polygon(points=pts, close_path=True,
+                       transform=Transform(x=0, y=0), layer="Cut")
+
+    # a dense outline (like an imported spline) must not blow up
+    big = build(1500)
+    t0 = time.perf_counter()
+    item = ShapeItem(big)
+    dt = time.perf_counter() - t0
+    path = big.local_path()
+    nodes = item._geometry_snap_nodes(path, path.flatten())
+    assert len(nodes) > 100                       # it really did produce nodes
+
+    # invariant: nothing kept is a near-duplicate of anything else kept
+    pts = [p for p, _k in nodes]
+    grid = {}
+    for p in pts:
+        key = (int(p.x / 1e-6), int(p.y / 1e-6))
+        for gx in (key[0] - 1, key[0], key[0] + 1):
+            for gy in (key[1] - 1, key[1], key[1] + 1):
+                for q in grid.get((gx, gy), ()):
+                    assert (p - q).length() >= 1e-6, "kept a near-duplicate"
+        grid.setdefault(key, []).append(p)
+
+    # scaling check: 4x the points must not cost ~16x the time (quadratic).
+    # Timed generously so it pins the complexity, not the machine.
+    def cost(n):
+        sh = build(n)
+        t = time.perf_counter()
+        ShapeItem(sh)
+        return time.perf_counter() - t
+
+    small = max(cost(400), 1e-4)
+    large = cost(1600)
+    assert large / small < 8.0, (
+        f"snap-node build looks super-linear: {small*1000:.1f}ms -> "
+        f"{large*1000:.1f}ms for 4x the points")

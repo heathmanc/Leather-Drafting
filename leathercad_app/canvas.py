@@ -354,17 +354,18 @@ class Canvas(QGraphicsView):
 
     # -- snapping -------------------------------------------------------
     def _snap_candidates(self, exclude=None):
+        """Snap points for a drag, minus the item(s) being dragged.
+
+        Served from the cached index rather than re-deriving every item's nodes:
+        that re-derivation was the whole cost of grabbing a piece (~138 ms on a
+        dense import, i.e. a visible hitch on every single drag)."""
         excl = exclude if isinstance(exclude, (set, list, tuple)) else {exclude}
+        idx = self._snap_index()
         pts = []
-        for it in self.scene_obj.items():
+        for it, own in idx["by_owner"].items():
             if it in excl:
                 continue
-            if isinstance(it, (ShapeItem, TextItem)):
-                pts.extend(it.world_snap_nodes())
-            elif isinstance(it, StitchLineItem):
-                pts.extend(it.line.points)
-            elif isinstance(it, HoleItem):
-                pts.append(it.hole.point)
+            pts.extend(p for p, _kind in own)
         # very busy scenes (dense imports): thin the cache so every mouse-move
         # scan stays fast; snapping degrades gracefully instead of lagging
         if len(pts) > 6000:
@@ -488,13 +489,18 @@ class Canvas(QGraphicsView):
             return idx
 
         pts, edges, refs = [], [], []
+        by_owner: dict = {}          # item -> its own points, for drag exclusion
         for it in self.scene_obj.items():
+            own = None
             if isinstance(it, (ShapeItem, TextItem)):
-                pts.extend(it.world_snap_nodes_typed())
+                own = it.world_snap_nodes_typed()
             elif isinstance(it, StitchLineItem):
-                pts.extend((p, "end") for p in it.line.points)
+                own = [(p, "end") for p in it.line.points]
             elif isinstance(it, HoleItem):
-                pts.append((it.hole.point, "center"))
+                own = [(it.hole.point, "center")]
+            if own:
+                by_owner[it] = own
+                pts.extend(own)
             poly = None
             if isinstance(it, ShapeItem):
                 poly = it.world_outline()
@@ -540,7 +546,8 @@ class Canvas(QGraphicsView):
         idx = {"sig": sig, "pts": pts, "edges": edges, "cell": cell,
                "pgrid": pgrid, "egrid": egrid, "spread": spread, "refs": refs,
                "axs": axs, "axv": [t[0].x for t in axs],
-               "ays": ays, "ayv": [t[0].y for t in ays]}
+               "ays": ays, "ayv": [t[0].y for t in ays],
+               "by_owner": by_owner}
         self._snap_idx = idx
         return idx
 

@@ -546,3 +546,78 @@ def test_snap_index_refreshes_when_geometry_moves(qapp):
     moved = QPointF(corner.x() + 25, corner.y())
     p3, vtx3, _g3, _k3 = c._smart_snap(QPointF(moved.x() + 0.4, moved.y() + 0.4))
     assert vtx3 and abs(p3.x() - moved.x()) < 1e-6
+
+
+def test_drag_start_reuses_the_snap_index(qapp):
+    """Grabbing a piece must not re-derive every other item's snap nodes.
+
+    begin_move_snap used to rebuild the whole candidate set from geometry
+    (~138 ms on a dense import = a hitch on every drag); it now filters the
+    cached index by owner. The excluded item's own nodes must still be absent,
+    or a piece could snap to itself."""
+    import math
+    from leathercad.shapes import Polygon
+    from leathercad_app import canvas as cm
+    from leathercad_app.items import ShapeItem
+    from leathercad.geometry import Vec2 as V
+
+    d = Document()
+    for i in range(12):
+        d.add_shape(Polygon(
+            points=[V(12 * math.cos(2 * math.pi * k / 40),
+                      12 * math.sin(2 * math.pi * k / 40)) for k in range(40)],
+            close_path=True,
+            transform=Transform(x=(i % 4) * 40 + 30, y=(i // 4) * 40 + 30),
+            layer="Cut"))
+    c = cm.Canvas(d)
+    c.rebuild()
+    items = [i for i in c.scene_obj.items() if isinstance(i, ShapeItem)]
+    lead = items[0]
+
+    from leathercad.shapes import Shape
+    calls = {"n": 0}
+    orig = Shape.world_polyline
+
+    def counting(self, *a, **k):
+        calls["n"] += 1
+        return orig(self, *a, **k)
+
+    c._snap_index()                       # warm, as a first hover would
+    Shape.world_polyline = counting
+    try:
+        pts = c._snap_candidates(exclude=lead)
+    finally:
+        Shape.world_polyline = orig
+    assert calls["n"] == 0, "drag start re-flattened geometry"
+
+    own = {(round(p.x, 6), round(p.y, 6)) for p in lead.world_snap_nodes()}
+    got = {(round(p.x, 6), round(p.y, 6)) for p in pts}
+    assert not (own & got), "dragged item's own nodes leaked into its snap targets"
+    assert len(got) > 100                 # the other 11 pieces are still there
+
+
+def test_undo_snapshot_is_not_deep_copied_twice(qapp):
+    """to_dict() already returns a private graph, so History must store it as
+    is -- the extra deepcopy was ~100 ms of every single edit. Snapshots must
+    still be independent of the live document and of each other."""
+    from leathercad.shapes import Rectangle
+    from leathercad_app.history import History
+
+    d = Document()
+    d.add_shape(Rectangle(width=10, height=5, transform=Transform(x=1, y=2),
+                          layer="Cut"))
+    h = History()
+    h.reset(d.to_dict())
+    d.shapes[0].transform.x = 50.0
+    h.push(d.to_dict())
+
+    back = h.undo()
+    assert back["shapes"][0]["transform"]["x"] == 1.0     # the ORIGINAL state
+    # mutating what undo handed back must not corrupt the stack
+    back["shapes"][0]["transform"]["x"] = 999.0
+    again = h.undo() or h.redo()
+    h2 = History()
+    h2.reset(d.to_dict())
+    assert h2._stack[0]["shapes"][0]["transform"]["x"] == 50.0
+    # and the live document is untouched by any of it
+    assert d.shapes[0].transform.x == 50.0

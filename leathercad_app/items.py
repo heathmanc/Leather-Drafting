@@ -1136,32 +1136,58 @@ class ShapeItem(QGraphicsItem):
             typed += [(Vec2(m.rx, 0.0), "quad"), (Vec2(-m.rx, 0.0), "quad"),
                       (Vec2(0.0, m.ry), "quad"), (Vec2(0.0, -m.ry), "quad")]
             return typed
+        # Emit each vertex ONCE: consecutive segments share an endpoint, so
+        # emitting both ends per segment made a third of the candidates
+        # duplicates that the filter below then had to detect and discard. On a
+        # traced import that dominated the whole scene rebuild.
+        last_end = None
         for seg in path.segments:
             if isinstance(seg, Arc):
                 mid = seg._point(seg.a0 + seg._sweep() / 2.0)
-                typed += [(seg.start(), "end"), (seg.end(), "end"),
-                          (mid, "mid"), (seg.center, "center")]
+                typed += [(seg.start(), "end"), (mid, "mid"),
+                          (seg.center, "center")]
+                last_end = seg.end()
             else:
                 a, b = seg.start(), seg.end()
-                typed += [(a, "end"), (b, "end"),
+                typed += [(a, "end"),
                           (Vec2(0.5 * (a.x + b.x), 0.5 * (a.y + b.y)), "mid")]
+                last_end = b
+        if last_end is not None:            # the final vertex (open path's tip;
+            typed.append((last_end, "end"))  # on a closed one it dedupes away)
         if getattr(path, "closed", False) and local:      # geometric centre
             xs = [p.x for p in local]
             ys = [p.y for p in local]
             typed.append((Vec2(0.5 * (min(xs) + max(xs)),
                                0.5 * (min(ys) + max(ys))), "center"))
-        # Drop near-duplicates (consecutive segments share an endpoint). Bucket
-        # by a 1e-6 grid instead of rescanning everything kept so far: the naive
-        # O(n^2) scan cost ~43 s on a 177-piece traced DXF (52M distance tests),
-        # which is most of the freeze when opening a detailed import.
+        # Drop any near-duplicates left (an arc's endpoint computed trigono-
+        # metrically vs the same vertex from its neighbour; a closed path's last
+        # vertex). Bucketed rather than rescanning everything kept so far -- the
+        # naive O(n^2) scan cost ~43 s on a 177-piece traced DXF (52M distance
+        # tests), most of the freeze when opening a detailed import.
+        #
+        # Cells are much coarser than the tolerance, so a point only has to look
+        # in ONE cell unless it happens to sit within `tol` of a cell edge (then
+        # its neighbour on that side too). Still exact -- anything within `tol`
+        # is guaranteed to be in the cells checked -- but ~1 lookup per point
+        # instead of a blanket 3x3 sweep.
         out = []
         seen = {}
         tol = 1e-6
+        cell = tol * 64.0
         for p, k in typed:
-            cx, cy = int(p.x / tol), int(p.y / tol)
+            cx, cy = int(p.x // cell), int(p.y // cell)
+            gxs, gys = [cx], [cy]
+            if p.x - cx * cell < tol:
+                gxs.append(cx - 1)
+            elif (cx + 1) * cell - p.x < tol:
+                gxs.append(cx + 1)
+            if p.y - cy * cell < tol:
+                gys.append(cy - 1)
+            elif (cy + 1) * cell - p.y < tol:
+                gys.append(cy + 1)
             dup = False
-            for gx in (cx - 1, cx, cx + 1):          # neighbours too, so points
-                for gy in (cy - 1, cy, cy + 1):      # astride a cell edge match
+            for gx in gxs:
+                for gy in gys:
                     for q in seen.get((gx, gy), ()):
                         if (p - q).length() < tol:
                             dup = True

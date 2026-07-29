@@ -150,6 +150,11 @@ def _path_from_chain(chain, tol, layer):
     return sh
 
 
+#: how many near edges the junction ('cross'/'mid') osnaps will chew
+#: through in one mouse move -- see _typed_candidates
+_CROSS_EDGE_BUDGET = 300
+
+
 def _point_polyline_dist(p: Vec2, poly) -> float:
     """Shortest distance from point ``p`` to a polyline (list of Vec2)."""
     best = float("inf")
@@ -270,6 +275,7 @@ class Canvas(QGraphicsView):
         self._snap_cache = None   # static snap nodes captured at drag start
         self._snap_grid = None    # same nodes bucketed for O(1) lookup
         self._snap_cell = 1.0     # grid cell size == snap threshold (mm)
+        self._snap_idx = None     # scene-wide hover snap index (see _snap_index)
         self._group_drag = None   # active move-group drag state
         self._group_driving = False   # snap_move is repositioning members
         self._last_move_refresh = 0.0     # rate-limit for item_moved refresh
@@ -384,7 +390,11 @@ class Canvas(QGraphicsView):
 
         if self.snap_to_nodes:
             near = Vec2(pos.x(), pos.y())
-            cands = self._typed_candidates(near, thr * 1.5)
+            # only the cursor's own neighbourhood can win the direct snap; the
+            # wider-reaching alignment pass is served separately (step 2) so
+            # neither has to walk every node in the scene
+            cands = self._typed_candidates(near, thr * 1.5,
+                                           point_radius=thr * 1.5)
 
             # 1. direct point snap wins (end / midpoint / centre / intersection).
             # High-value osnaps (intersection, endpoint, centre, hole centre) are
@@ -413,16 +423,8 @@ class Canvas(QGraphicsView):
             # 2. alignment snap: lock x and/or y to an aligned KEY point (ends /
             # centres / midpoints) that's reasonably close -- not every stitch
             # hole or intersection, which would put guides everywhere.
-            ax = ay = None
-            dx = dy = thr
             lim = 300.0 / self._zoom
-            for c, kind in cands:
-                if kind in ("hole", "cross") or (c - near).length() > lim:
-                    continue
-                if abs(c.x - pos.x()) < dx:
-                    dx, ax = abs(c.x - pos.x()), c
-                if abs(c.y - pos.y()) < dy:
-                    dy, ay = abs(c.y - pos.y()), c
+            ax, ay = self._nearest_aligned(pos, near, lim, thr, cands)
             if ax is not None or ay is not None:
                 g = self.snap_grid
                 nx = ax.x if ax else (round(pos.x() / g) * g if gridok else pos.x())
@@ -442,45 +444,224 @@ class Canvas(QGraphicsView):
         # 4. free
         return pos, False, guides, None
 
-    def _typed_candidates(self, near: Vec2, radius: float):
-        """All snap targets as (Vec2, kind): shape nodes (typed), seam points,
-        hole centres, nearby outline intersections ('cross') and the midpoints
-        of the sub-segments those intersections carve out ('mid')."""
-        out = []
+    # -- spatial snap index ----------------------------------------------
+    # Hovering used to re-gather every snap node and every outline segment in
+    # the scene on EVERY mouse move: on a traced 177-piece DXF that was 77,815
+    # points rebuilt per move (~240 ms) plus a full-scene edge scan (~150 ms),
+    # so the cursor ran at ~2 fps. The scene is now indexed once and bucketed
+    # into cells, so a move only looks at the cursor's neighbourhood.
+
+    def _snap_signature(self):
+        """Cheap fingerprint of every item's geometry + placement.
+
+        ``ShapeItem._outline`` / ``_snap_typed_local`` are replaced wholesale by
+        ``sync_from_model``, so their identity changes whenever geometry does --
+        the same trick ``world_outline`` already relies on. The built index
+        keeps a reference to those objects, so a stale id can't be recycled
+        underneath us and silently validate a dead cache."""
+        sig = []
+        for it in self.scene_obj.items():
+            if isinstance(it, ShapeItem):
+                p = it.pos()
+                t = it.model.transform
+                sig.append((id(it._outline), len(it._outline),
+                            id(getattr(it, "_snap_typed_local", None)),
+                            round(p.x(), 6), round(p.y(), 6),
+                            round(getattr(t, "rotation", 0.0), 6),
+                            bool(getattr(t, "mirror_x", False))))
+            elif isinstance(it, StitchLineItem):
+                sig.append((id(it.line.points), len(it.line.points)))
+            elif isinstance(it, HoleItem):
+                h = it.hole.point
+                sig.append((round(h.x, 6), round(h.y, 6)))
+            elif isinstance(it, TextItem):
+                p = it.pos()
+                sig.append((id(it), round(p.x(), 6), round(p.y(), 6)))
+        return tuple(sig)
+
+    def _snap_index(self):
+        """Snap points and outline edges, bucketed into a uniform grid.
+        Rebuilt only when ``_snap_signature`` changes."""
+        sig = self._snap_signature()
+        idx = getattr(self, "_snap_idx", None)
+        if idx is not None and idx["sig"] == sig:
+            return idx
+
+        pts, edges, refs = [], [], []
         for it in self.scene_obj.items():
             if isinstance(it, (ShapeItem, TextItem)):
-                out.extend(it.world_snap_nodes_typed())
+                pts.extend(it.world_snap_nodes_typed())
             elif isinstance(it, StitchLineItem):
-                out.extend((p, "end") for p in it.line.points)
+                pts.extend((p, "end") for p in it.line.points)
             elif isinstance(it, HoleItem):
-                out.append((it.hole.point, "center"))
-        edges = self._edges_near(near, radius)
-        all_edges = self._all_edges()
-        out.extend((x, "cross")
-                   for x in self._intersection_candidates(edges, near, radius))
-        out.extend((p, "mid")
-                   for p in self._split_midpoints(edges, all_edges, near, radius))
-        return out
-
-    def _all_edges(self):
-        """Every outline segment (a, b, owner) in the scene -- used as cutters so
-        an edge is split at ALL its junctions even when the crossing line is far
-        from the cursor. Bounded so a very busy scene stays responsive."""
-        edges = []
-        for it in self.scene_obj.items():
+                pts.append((it.hole.point, "center"))
             poly = None
             if isinstance(it, ShapeItem):
                 poly = it.world_outline()
+                refs.append(it._outline)          # pin the id we fingerprinted
+                refs.append(getattr(it, "_snap_typed_local", None))
             elif isinstance(it, StitchLineItem):
                 poly = [Vec2(p.x, p.y) for p in it.line.points]
-            if not poly or len(poly) < 2:
+                refs.append(it.line.points)
+            if poly and len(poly) >= 2:
+                owner = id(it)
+                for k in range(len(poly) - 1):
+                    edges.append((poly[k], poly[k + 1], owner))
+
+        # cell size from the content's own extent: ~256 cells across, clamped
+        xs = [p.x for p, _k in pts] or [0.0]
+        ys = [p.y for p, _k in pts] or [0.0]
+        span = max(max(xs) - min(xs), max(ys) - min(ys), 1.0)
+        cell = min(50.0, max(0.5, span / 256.0))
+
+        pgrid: dict = {}
+        for p, kind in pts:
+            pgrid.setdefault((int(p.x // cell), int(p.y // cell)),
+                             []).append((p, kind))
+        egrid: dict = {}
+        spread = []                     # edges spanning too many cells to bucket
+        for e in edges:
+            a, b, _o = e
+            ix0, ix1 = sorted((int(a.x // cell), int(b.x // cell)))
+            iy0, iy1 = sorted((int(a.y // cell), int(b.y // cell)))
+            if (ix1 - ix0 + 1) * (iy1 - iy0 + 1) > 64:
+                spread.append(e)        # always considered; kept rare by design
                 continue
-            owner = id(it)
-            for k in range(len(poly) - 1):
-                edges.append((poly[k], poly[k + 1], owner))
-            if len(edges) > 4000:
-                break
-        return edges
+            for ix in range(ix0, ix1 + 1):
+                for iy in range(iy0, iy1 + 1):
+                    egrid.setdefault((ix, iy), []).append(e)
+
+        # the alignment pass wants the nearest point sharing the cursor's x (or
+        # y) anywhere within its reach -- a cross-shaped query a disc-shaped
+        # grid can't serve. Sort once so it can bisect instead of scanning all.
+        align = [(p, k) for p, k in pts if k not in ("hole", "cross")]
+        axs = sorted(align, key=lambda t: t[0].x)
+        ays = sorted(align, key=lambda t: t[0].y)
+        idx = {"sig": sig, "pts": pts, "edges": edges, "cell": cell,
+               "pgrid": pgrid, "egrid": egrid, "spread": spread, "refs": refs,
+               "axs": axs, "axv": [t[0].x for t in axs],
+               "ays": ays, "ayv": [t[0].y for t in ays]}
+        self._snap_idx = idx
+        return idx
+
+    def _nearest_aligned(self, pos, near: Vec2, lim: float, thr: float,
+                         extra):
+        """Nearest alignment partner in x and in y: the point whose x (or y)
+        matches the cursor's most closely, within ``thr``, and itself no farther
+        than ``lim`` away. Walks outward from a bisection instead of scanning
+        every node in the scene."""
+        import bisect
+        idx = self._snap_index()
+        px, py = pos.x(), pos.y()
+        best = [None, None]                 # (x-aligned, y-aligned)
+        bestd = [thr, thr]
+        for axis, (vals, items, cur) in enumerate(
+                ((idx["axv"], idx["axs"], px), (idx["ayv"], idx["ays"], py))):
+            i = bisect.bisect_left(vals, cur)
+            lo, hi = i - 1, i
+            while True:
+                cand = None
+                dl = abs(cur - vals[lo]) if lo >= 0 else None
+                dh = abs(vals[hi] - cur) if hi < len(vals) else None
+                if dl is None and dh is None:
+                    break
+                if dh is None or (dl is not None and dl <= dh):
+                    cand, d = items[lo], dl
+                    lo -= 1
+                else:
+                    cand, d = items[hi], dh
+                    hi += 1
+                if d >= bestd[axis]:        # sorted: nothing closer remains
+                    break
+                if (cand[0] - near).length() <= lim:
+                    bestd[axis], best[axis] = d, cand[0]
+        # per-move candidates (junction midpoints) aren't in the index
+        for c, kind in extra:
+            if kind in ("hole", "cross") or (c - near).length() > lim:
+                continue
+            if abs(c.x - px) < bestd[0]:
+                bestd[0], best[0] = abs(c.x - px), c
+            if abs(c.y - py) < bestd[1]:
+                bestd[1], best[1] = abs(c.y - py), c
+        return best[0], best[1]
+
+    @staticmethod
+    def _cells_for(near: Vec2, radius: float, cell: float):
+        """Grid cells covering the query circle, or None if it covers so much
+        that scanning the whole index is cheaper."""
+        ix0, ix1 = int((near.x - radius) // cell), int((near.x + radius) // cell)
+        iy0, iy1 = int((near.y - radius) // cell), int((near.y + radius) // cell)
+        if (ix1 - ix0 + 1) * (iy1 - iy0 + 1) > 4096:
+            return None
+        return [(ix, iy)
+                for ix in range(ix0, ix1 + 1) for iy in range(iy0, iy1 + 1)]
+
+    def _indexed_points(self, near: Vec2, radius, idx=None):
+        """Snap points whose cell is within ``radius`` (a superset -- every
+        caller already filters by exact distance). ``radius=None`` -> all."""
+        idx = idx if idx is not None else self._snap_index()
+        if radius is None:
+            return idx["pts"]
+        cells = self._cells_for(near, radius, idx["cell"])
+        if cells is None:
+            return idx["pts"]
+        pgrid = idx["pgrid"]
+        out = []
+        for c in cells:
+            out.extend(pgrid.get(c, ()))
+        return out
+
+    def _indexed_edges(self, near: Vec2, radius: float, idx=None):
+        """Candidate outline edges near ``near`` (a superset, de-duplicated)."""
+        idx = idx if idx is not None else self._snap_index()
+        cells = self._cells_for(near, radius, idx["cell"])
+        if cells is None:
+            return idx["edges"]
+        egrid = idx["egrid"]
+        out, seen = list(idx["spread"]), set()
+        for c in cells:
+            for e in egrid.get(c, ()):
+                k = id(e)
+                if k not in seen:
+                    seen.add(k)
+                    out.append(e)
+        return out
+
+    def _typed_candidates(self, near: Vec2, radius: float, point_radius=None):
+        """All snap targets as (Vec2, kind): shape nodes (typed), seam points,
+        hole centres, nearby outline intersections ('cross') and the midpoints
+        of the sub-segments those intersections carve out ('mid').
+
+        ``point_radius`` bounds the node candidates (``None`` = the whole
+        scene); ``radius`` bounds the intersection work, as before."""
+        idx = self._snap_index()          # resolve ONCE for the whole query
+        out = list(self._indexed_points(near, point_radius, idx))
+        edges = self._edges_near(near, radius, idx)
+        # Zoomed out over dense artwork the snap radius can swallow thousands of
+        # segments, and junction osnaps stop being meaningful there anyway (you
+        # can't see, let alone aim at, individual crossings). Keep the closest
+        # few so the osnap still works on whatever is actually under the cursor,
+        # and the cost stays bounded instead of running to seconds per move.
+        if len(edges) > _CROSS_EDGE_BUDGET:
+            edges = sorted(
+                edges, key=lambda e: _point_polyline_dist(near, [e[0], e[1]])
+            )[:_CROSS_EDGE_BUDGET]
+        out.extend((x, "cross")
+                   for x in self._intersection_candidates(edges, near, radius,
+                                                          idx))
+        # cutters=None -> each edge looks up only the edges sharing its own
+        # cells, which is where a crossing could possibly be
+        out.extend((p, "mid")
+                   for p in self._split_midpoints(edges, None, near, radius,
+                                                  idx))
+        return out
+
+    def _all_edges(self):
+        """Every outline segment (a, b, owner) in the scene. Served from the
+        cached snap index, so callers no longer rebuild it per mouse move (and
+        it no longer has to stop at an arbitrary 4000-segment cap to stay
+        responsive -- the index makes the full set cheap)."""
+        return self._snap_index()["edges"]
 
     def _nearest_on_guide(self, near: Vec2, radius: float):
         """Nearest point on a construction line or open guide line within
@@ -512,43 +693,71 @@ class Canvas(QGraphicsView):
                     best_d, best = d, foot
         return best
 
-    def _edges_near(self, near: Vec2, radius: float):
-        """Outline edges (a, b, owner) within ``radius`` of ``near``."""
-        edges = []
-        for it in self.scene_obj.items():
-            poly = None
-            if isinstance(it, ShapeItem):
-                poly = it.world_outline()
-            elif isinstance(it, StitchLineItem):
-                poly = [Vec2(p.x, p.y) for p in it.line.points]
-            if not poly or len(poly) < 2:
-                continue
-            owner = id(it)
-            for k in range(len(poly) - 1):
-                a, b = poly[k], poly[k + 1]
-                if _point_polyline_dist(near, [a, b]) <= radius:
-                    edges.append((a, b, owner))
-        return edges
+    def _edges_near(self, near: Vec2, radius: float, idx=None):
+        """Outline edges (a, b, owner) within ``radius`` of ``near``. Same exact
+        distance test as before -- the index just narrows what has to be tested
+        from every segment in the scene to the cursor's own cells."""
+        return [e for e in self._indexed_edges(near, radius)
+                if _point_polyline_dist(near, [e[0], e[1]]) <= radius]
 
-    def _intersection_candidates(self, edges, near: Vec2, radius: float):
-        """Points where two different outlines cross among ``edges``."""
+    def _intersection_candidates(self, edges, near: Vec2, radius: float,
+                                 idx=None):
+        """Points where two different outlines cross near the cursor.
+
+        Each near edge is only tested against the edges sharing its own grid
+        cells rather than against every other near edge: on a dense import the
+        all-pairs version was ~2.3M tests (seconds) when zoomed out. Nothing is
+        lost -- an intersection within ``radius`` puts BOTH edges within
+        ``radius``, so both are in ``edges``, and two segments can only cross
+        inside a cell they share. Results are de-duplicated by position."""
         from leathercad.trim import _seg_intersect
-        out = []
-        for i in range(len(edges)):
-            for j in range(i + 1, len(edges)):
-                if edges[i][2] == edges[j][2]:
+        found = {}
+        for e in edges:
+            a, b, owner = e
+            for c, d, o2 in self._cutters_for_edge(e, idx):
+                if o2 == owner:
                     continue                       # same object
-                x = _seg_intersect(edges[i][0], edges[i][1],
-                                   edges[j][0], edges[j][1])
+                x = _seg_intersect(a, b, c, d)
                 if x is not None and (x - near).length() <= radius:
-                    out.append(x)
+                    found[(round(x.x, 9), round(x.y, 9))] = x
+        return list(found.values())
+
+    def _cutters_for_edge(self, e, idx=None):
+        """Edges that could possibly cross ``e`` -- i.e. those sharing one of its
+        grid cells. Two segments can only intersect where their boxes overlap,
+        so this loses nothing, but it stops every near edge being tested against
+        the whole neighbourhood (118 x 4528 = 534k pointless tests, ~1.1 s, on a
+        dense traced import -- and it was returning nothing at all).
+
+        Pass ``idx`` when calling this in a loop: re-resolving the index per
+        edge re-validates the whole-scene signature every time, which on its own
+        cost ~1.2 s per mouse move."""
+        idx = idx if idx is not None else self._snap_index()
+        cell, egrid = idx["cell"], idx["egrid"]
+        a, b, _o = e
+        ix0, ix1 = sorted((int(a.x // cell), int(b.x // cell)))
+        iy0, iy1 = sorted((int(a.y // cell), int(b.y // cell)))
+        if (ix1 - ix0 + 1) * (iy1 - iy0 + 1) > 256:
+            return idx["edges"]
+        out, seen = list(idx["spread"]), set()
+        for ix in range(ix0, ix1 + 1):
+            for iy in range(iy0, iy1 + 1):
+                for o in egrid.get((ix, iy), ()):
+                    k = id(o)
+                    if k not in seen:
+                        seen.add(k)
+                        out.append(o)
         return out
 
-    def _split_midpoints(self, edges, cutters, near: Vec2, radius: float):
+    def _split_midpoints(self, edges, cutters, near: Vec2, radius: float,
+                         idx=None):
         """Midpoints of the pieces an edge (near the cursor) is cut into by every
         other outline in the scene -- e.g. a line bisected by a construction line
         gives you the 1/4 and 3/4 points, snappable even when you hover on the
-        sub-segment far from the crossing (the junctions are real 'nodes')."""
+        sub-segment far from the crossing (the junctions are real 'nodes').
+
+        ``cutters=None`` looks each edge's possible cutters up in the spatial
+        index instead of testing it against a flat list."""
         from leathercad.trim import _seg_intersect
         out = []
         for a, b, owner in edges:
@@ -557,7 +766,8 @@ class Canvas(QGraphicsView):
             if length2 <= 1e-12:
                 continue
             ts = [0.0, 1.0]
-            for c, d, o2 in cutters:
+            for c, d, o2 in (self._cutters_for_edge((a, b, owner), idx)
+                             if cutters is None else cutters):
                 if o2 == owner:
                     continue
                 x = _seg_intersect(a, b, c, d)
@@ -721,7 +931,7 @@ class Canvas(QGraphicsView):
         r = 3.0 / self._zoom
         path = QPainterPath()
         seen = set()
-        for pt, kind in self._typed_candidates(near, hl):
+        for pt, kind in self._typed_candidates(near, hl, point_radius=hl):
             if (pt - near).length() > hl:
                 continue
             key = (round(pt.x, 2), round(pt.y, 2), kind)
@@ -2143,6 +2353,7 @@ class Canvas(QGraphicsView):
         self._offset_preview = None
         self._offset_item = None
         self._offset_pts = []
+        self._snap_idx = None          # items are gone; drop the stale index
         for sh in self.doc.shapes:
             self._add_item(ShapeItem(sh, self))
         for sl in self.doc.stitch_lines:

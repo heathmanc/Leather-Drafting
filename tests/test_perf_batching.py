@@ -468,3 +468,81 @@ def test_snap_node_dedup_is_linear_not_quadratic(qapp):
     assert large / small < 8.0, (
         f"snap-node build looks super-linear: {small*1000:.1f}ms -> "
         f"{large*1000:.1f}ms for 4x the points")
+
+
+def test_hover_snap_is_spatially_indexed(qapp):
+    """Hovering must not re-walk the whole scene on every mouse move.
+
+    It used to re-gather every snap node and every outline segment per move,
+    then run junction osnaps over all of them: on a dense traced import that
+    was ~0.5 s per move zoomed in and ~23 s zoomed out. The scene is indexed
+    once and queried by cell, so a move only considers the cursor's own
+    neighbourhood.
+    """
+    import math
+    import time
+    from PySide6.QtCore import QPointF
+    from leathercad.shapes import Polygon
+    from leathercad_app import canvas as cm
+    from leathercad.geometry import Vec2 as V
+
+    d = Document()
+    for i in range(60):                      # 60 dense outlines = 7200 points
+        cx, cy = (i % 10) * 40 + 30, (i // 10) * 40 + 30
+        d.add_shape(Polygon(
+            points=[V(15 * math.cos(2 * math.pi * k / 120),
+                      15 * math.sin(2 * math.pi * k / 120)) for k in range(120)],
+            close_path=True, transform=Transform(x=cx, y=cy), layer="Cut"))
+    c = cm.Canvas(d)
+    c.rebuild()
+    c.snap_to_nodes = True
+    c._zoom = 4.0
+    idx = c._snap_index()
+    total = len(idx["pts"])
+    assert total > 5000                       # the document really is dense
+
+    # a bounded query must look at a small fraction of the scene, not all of it
+    near = V(30.0, 30.0)
+    got = c._indexed_points(near, 10.0 / c._zoom * 1.5)
+    assert len(got) < total / 10, (
+        f"query returned {len(got)} of {total} points -- not actually indexed")
+
+    # and the whole snap stays comfortably interactive
+    c._smart_snap(QPointF(30, 30))            # warm
+    t0 = time.perf_counter()
+    for k in range(20):
+        c._smart_snap(QPointF(30 + k * 0.2, 30 + k * 0.1))
+    per = (time.perf_counter() - t0) / 20
+    assert per < 0.030, f"hover snap {per*1000:.1f} ms/move on a dense document"
+
+
+def test_snap_index_refreshes_when_geometry_moves(qapp):
+    """The index is cached, so a moved piece MUST invalidate it -- a stale
+    index would snap to where a shape used to be."""
+    from PySide6.QtCore import QPointF
+    from leathercad.shapes import Rectangle
+    from leathercad_app import canvas as cm
+    from leathercad_app.items import ShapeItem
+
+    d = Document()
+    d.add_shape(Rectangle(width=40, height=20, transform=Transform(x=50, y=50),
+                          layer="Cut"))
+    c = cm.Canvas(d)
+    c.rebuild()
+    c.snap_to_nodes, c.snap_to_grid = True, False
+    c._zoom = 4.0
+
+    corner = QPointF(50 - 20, 50 - 10)              # bottom-left corner
+    p, vtx, _g, _k = c._smart_snap(QPointF(corner.x() + 0.4, corner.y() + 0.4))
+    assert vtx and abs(p.x() - corner.x()) < 1e-6
+
+    item = next(i for i in c.scene_obj.items() if isinstance(i, ShapeItem))
+    item.model.transform.x += 25                     # move the piece
+    item.sync_from_model()
+
+    # the OLD corner must no longer snap, and the NEW one must
+    p2, vtx2, _g2, _k2 = c._smart_snap(QPointF(corner.x() + 0.4, corner.y() + 0.4))
+    assert not (vtx2 and abs(p2.x() - corner.x()) < 1e-6), "snapped to a stale node"
+    moved = QPointF(corner.x() + 25, corner.y())
+    p3, vtx3, _g3, _k3 = c._smart_snap(QPointF(moved.x() + 0.4, moved.y() + 0.4))
+    assert vtx3 and abs(p3.x() - moved.x()) < 1e-6

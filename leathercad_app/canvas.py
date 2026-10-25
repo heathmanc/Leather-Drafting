@@ -2958,18 +2958,27 @@ class Canvas(QGraphicsView):
             ep, idx, self.fillet_radius)
         if not done:
             self.statusMessage.emit(
-                "That corner can't be rounded — it needs a straight edge on "
-                "both sides (weld paths first with Ctrl+J if they're separate)")
+                "That corner can't be bevelled — a chamfer needs a straight "
+                "edge on both sides" if chamfer else
+                "There's no corner to round there (it's an open end, or the "
+                "outline already runs smoothly through that point)")
             return
         it.sync_from_model()
-        self._fillet_done_msg(chamfer)
+        self._fillet_done_msg(chamfer, done)
         self.documentChangedSig.emit()
         self._emit_commit()
 
-    def _fillet_done_msg(self, chamfer: bool) -> None:
+    def _fillet_done_msg(self, chamfer: bool, used=True) -> None:
+        asked = self.fillet_radius
+        if (not chamfer and not isinstance(used, bool)
+                and abs(used - asked) > 1e-3 * max(1.0, asked)):
+            self.statusMessage.emit(
+                f"Filleted at {used:.2f} mm — the largest that fits this "
+                f"corner ({asked:g} mm would run past the middle of a side)")
+            return
         self.statusMessage.emit(
             f"{'Chamfered' if chamfer else 'Filleted'} at "
-            f"{self.fillet_radius:g} mm — keep clicking corners "
+            f"{asked:g} mm — keep clicking corners "
             "(radius / mode in the toolbar)")
 
     def _fillet_polyline(self, sh):
@@ -3045,7 +3054,7 @@ class Canvas(QGraphicsView):
         self.scene_obj.clearSelection()
         item.setSelected(True)
         if done:
-            self._fillet_done_msg(chamfer)
+            self._fillet_done_msg(chamfer, done)
         else:
             self.statusMessage.emit(
                 "Lines welded into one path, but that corner couldn't be "

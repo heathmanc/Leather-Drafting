@@ -217,3 +217,127 @@ def test_lone_end_gives_hint_not_weld():
     c._do_fillet(Vec2(20, 0))                    # a loose end
     assert len(win.doc.shapes) == 1              # unchanged
     assert isinstance(win.doc.shapes[0], PathShape)
+
+
+# ---------------------------------------------------------------------------
+# Blend fillets: the side of a corner can be a curve -- a flattened ellipse
+# (dozens of short lines, as Trim/Boolean leave it), an arc or a bezier. The
+# fillet used to need a straight edge each side and stopped at half of the
+# NEIGHBOURING EDGE, so on an ellipse notch a 10 mm request gave ~1.2 mm.
+# ---------------------------------------------------------------------------
+def _notch_path():
+    """A slot line with a half-ellipse scoop made of short straight pieces."""
+    from leathercad.shapes import Ellipse
+    ell = Ellipse(rx=45, ry=26).local_path().flatten()
+    scoop = sorted({(round(p.x, 9), round(p.y, 9)) for p in ell if p.y <= 1e-9})
+    pts = [Vec2(-110, 0)] + [Vec2(x, y) for x, y in scoop] + [Vec2(110, 0)]
+    return to_editable(PathShape(points=pts, close_path=False))
+
+
+def _arc_radii(ep):
+    from leathercad.shapes import arc_through
+    out = []
+    for k, e in enumerate(ep.edges):
+        if e.kind == "arc":
+            c, r, *_ = arc_through(ep.nodes[k], e.mid, ep.nodes[k + 1])
+            out.append((k, c, r))
+    return out
+
+
+def _turn_deg(u, v):
+    return math.degrees(abs(math.atan2(u.cross(v), u.dot(v))))
+
+
+def test_fillet_blends_into_a_flattened_ellipse():
+    ep = _notch_path()
+    for x in (-45, 45):
+        i = min(range(len(ep.nodes)), key=lambda k: (ep.nodes[k] - Vec2(x, 0)).length())
+        assert fillet_vertex(ep, i, 10.0) == 10.0
+    arcs = _arc_radii(ep)
+    assert len(arcs) == 2 and all(abs(r - 10.0) < 1e-6 for _k, _c, r in arcs)
+    for k, c, r in arcs:
+        a, b = ep.nodes[k], ep.nodes[k + 1]
+        # tangent to the straight it leaves (exactly) ...
+        for p, q in ((a, ep.nodes[k - 1]), (b, ep.nodes[k + 2])):
+            radial = p - c
+            if abs(q.y) < 1e-9 and abs(p.y) < 1e-9:   # the straight side
+                assert abs(radial.dot(q - p)) < 1e-6 * (q - p).length()
+    # the free ends are untouched
+    assert (ep.nodes[0].x, ep.nodes[-1].x) == (-110, 110)
+
+
+def test_too_big_a_radius_uses_the_largest_that_fits():
+    ep = _notch_path()
+    i = min(range(len(ep.nodes)), key=lambda k: (ep.nodes[k] - Vec2(45, 0)).length())
+    # up to ~175 mm fits: the straight side runs to a free end at x=110 and
+    # may be used in full; the scoop side up to its midpoint
+    assert fillet_vertex(_notch_path(), i, 80.0) == 80.0
+    used = fillet_vertex(ep, i, 2000.0)
+    assert 150.0 < used < 2000.0                   # clamped, but a real blend
+    assert max(p.x for p in ep.nodes) <= 110.0 + 1e-6   # never past the end
+    (_k, _c, r), = _arc_radii(ep)
+    assert abs(r - used) < 1e-6
+
+
+@pytest.mark.parametrize("edge", ["arc", "bezier"])
+def test_fillet_is_exactly_tangent_to_a_curved_side(edge):
+    from leathercad.shapes import Edge
+    from leathercad.modify import _edge_eval
+    e = (Edge("arc", mid=Vec2(20, -20)) if edge == "arc"
+         else Edge("bezier", c1=Vec2(10, -25), c2=Vec2(30, -30)))
+    end = Vec2(40, 0) if edge == "arc" else Vec2(40, -30)
+    ep = EditablePath(nodes=[Vec2(-40, 0), Vec2(0, 0), end],
+                      edges=[Edge("line"), e], closed=False)
+    assert fillet_vertex(ep, 1, 6.0) == 6.0
+    (k, c, r), = [a for a in _arc_radii(ep) if abs(a[2] - 6.0) < 1e-6]
+    _kind, nxt = _edge_eval(ep.nodes[k + 1], ep.nodes[k + 2], ep.edges[k + 1])
+    t_curve = nxt(1e-7) - nxt(0.0)
+    radial = ep.nodes[k + 1] - c
+    t_arc = Vec2(-radial.y, radial.x)
+    assert min(_turn_deg(t_arc, t_curve), _turn_deg(t_arc * -1, t_curve)) < 0.01
+    assert ep.edges[k + 1].kind == edge            # the curve keeps its kind
+
+
+def test_duplicate_point_at_the_corner_still_fillets():
+    path = PathShape(points=[Vec2(-30, 0), Vec2(0, 0), Vec2(0, 0), Vec2(0, 30)],
+                     close_path=False)
+    ep = to_editable(path)
+    assert fillet_vertex(ep, 1, 5.0) == 5.0
+
+
+def test_canvas_fillet_blends_an_ellipse_notch_and_reports_clamps():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    QApplication.instance() or QApplication([])
+
+    ep = _notch_path()
+    doc = Document()
+    doc.add_shape(PathShape(points=list(ep.nodes), close_path=False,
+                            transform=Transform(x=0, y=0), layer="Cut"))
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    msgs = []
+    c.statusMessage.connect(msgs.append)
+    c.fillet_radius = 10.0
+    for x in (-45, 45):
+        c._do_fillet(Vec2(x, 0))                  # click each notch corner
+    sh = win.doc.shapes[0]
+    radii = [r for _k, _c, r in _arc_radii(sh)]
+    assert len(radii) == 2 and all(abs(r - 10.0) < 1e-6 for r in radii)
+    assert msgs[-1].startswith("Filleted at 10 mm")
+
+    win2 = MainWindow(Document())
+    doc2 = win2.doc
+    doc2.add_shape(PathShape(points=list(_notch_path().nodes), close_path=False,
+                             transform=Transform(x=0, y=0), layer="Cut"))
+    c2 = win2.canvas
+    c2.rebuild()
+    msgs2 = []
+    c2.statusMessage.connect(msgs2.append)
+    c2.fillet_radius = 2000.0
+    c2._do_fillet(Vec2(45, 0))
+    assert "the largest that fits" in msgs2[-1]

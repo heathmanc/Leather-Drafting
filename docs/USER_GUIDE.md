@@ -223,7 +223,7 @@ Hold **Shift** while placing any line-like point to lock the segment to
 | **Score line** | `K` | Click points; lands on the **Score** layer (fold/skive/decoration). |
 | **Stitch line (seam)** | `M` | A standalone seam of holes — see [Tutorial 3](#16-tutorial-3--two-pieces-sharing-one-seam). |
 | **Trim** | `X` | Click the piece of an outline you want gone (red preview on hover). |
-| **Fillet / chamfer corner** | `6` | Set the **radius** and **Round / Chamfer** mode in the toolbar box, then click any corner of a polygon/path to round or bevel it with a true arc. |
+| **Fillet / chamfer corner** | `6` | Set the **radius** and **Round / Chamfer** mode in the toolbar box, then click any corner of a polygon/path to round or bevel it with a true arc — rounding blends into curved sides (arcs, beziers, trimmed ellipses). |
 | **Extend to intersection** | `7` | Click the **end** of a line/path: it grows until it meets the next outline or guide (the opposite of Trim). |
 | **Offset outline** | `8` | Click a shape, then move the cursor **inside or outside** it — a dashed preview follows with the live distance in the status bar. Click to place the offset copy, or press **Enter** to type an exact distance. Circles offset to true circles and rounded rectangles keep proper rounded corners. |
 | **Text** | `A` | Click to place engraved lettering. |
@@ -485,8 +485,15 @@ extra construction.
   it's a persistent box, no popup and no modifier keys. It also works across
   **two separate lines whose ends meet**: draw two lines into a corner (they
   snap), click the corner, and the lines are **welded into one path** with the
-  arc between them — the classic draft-then-round workflow. The radius clamps
-  so it never eats past an edge's midpoint. Rectangles/parametric shapes:
+  arc between them — the classic draft-then-round workflow. **Rounding blends
+  into curves**: where a side of the corner is curved — an arc, a bezier, or
+  an ellipse cut with Trim / Boolean (stored as many short straight pieces) —
+  the fillet is the true tangent circle and eats as far along the curve as the
+  radius needs, e.g. easing a slot line into a thumb-notch scoop. Each side
+  gives up at most half of its run (all of it up to a free end), so the corner
+  at the other end can be rounded too; ask for more and you get the largest
+  radius that fits, with the status bar saying so. Chamfer still needs a
+  straight edge on both sides. Rectangles/parametric shapes:
   just set Corner radius in Properties, or convert to nodes first (`Ctrl+K`).
   The rounded corner stays a true arc — node-edit it later, and stitching
   treats it like any rounded corner (symmetric holes about the apex).

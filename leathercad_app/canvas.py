@@ -431,11 +431,23 @@ class Canvas(QGraphicsView):
         self.translate(delta.x(), delta.y())
 
     def fit_to_content(self) -> None:
-        rect = QRectF()
+        rect, guides = QRectF(), QRectF()
         for it in self.scene_obj.items():
-            if it is self._underlay_item:
-                continue                 # the tracing photo isn't content
+            # the drawing only: not the tracing photo, grips or previews, and
+            # not construction guides -- a ruler guide spans the whole view,
+            # so each one zoomed the view further out
+            if not isinstance(it, (ShapeItem, StitchLineItem, HoleItem,
+                                   TextItem, DimensionItem)):
+                continue
+            if not it.isVisible():
+                continue
+            if isinstance(it, ShapeItem) and getattr(it.model, "construction",
+                                                     False):
+                guides = guides.united(it.sceneBoundingRect())
+                continue
             rect = rect.united(it.sceneBoundingRect())
+        if rect.isNull():
+            rect = guides                 # nothing but guides: show those
         if rect.isNull():
             rect = QRectF(-50, -50, 100, 100)
         rect = rect.adjusted(-15, -15, 15, 15)
@@ -557,6 +569,9 @@ class Canvas(QGraphicsView):
         underneath us and silently validate a dead cache."""
         sig = []
         for it in self.scene_obj.items():
+            if not it.isVisible():
+                continue           # hidden layers don't snap (and toggling
+                                   # one changes the fingerprint)
             if isinstance(it, ShapeItem):
                 p = it.pos()
                 t = it.model.transform
@@ -586,6 +601,8 @@ class Canvas(QGraphicsView):
         pts, edges, refs = [], [], []
         by_owner: dict = {}          # item -> its own points, for drag exclusion
         for it in self.scene_obj.items():
+            if not it.isVisible():
+                continue
             own = None
             if isinstance(it, (ShapeItem, TextItem)):
                 own = it.world_snap_nodes_typed()
@@ -2369,6 +2386,7 @@ class Canvas(QGraphicsView):
         for h in self._resize_handles:
             if h is not dragged:
                 h.reposition()
+        self.update_dimensions()        # attached dimensions follow the grip
         self.documentChangedSig.emit()
 
     # -- group-aware resize (outline + engraved labels move/scale together) --
@@ -2805,7 +2823,7 @@ class Canvas(QGraphicsView):
         best = None
         best_d = pick
         for it in self.scene_obj.items():
-            if not isinstance(it, ShapeItem):
+            if not isinstance(it, ShapeItem) or not it.isVisible():
                 continue
             sh = it.model
             if isinstance(sh, (Polygon, PathShape)):
@@ -2870,8 +2888,9 @@ class Canvas(QGraphicsView):
         hit = None
         hit_d = float("inf")
         for other in self.scene_obj.items():
-            if other is it or not isinstance(other, ShapeItem):
-                continue
+            if (other is it or not isinstance(other, ShapeItem)
+                    or not other.isVisible()):
+                continue                  # don't stop at hidden geometry
             opts, _c, _cl = other.model.world_polyline()
             for k in range(len(opts) - 1):
                 p = _seg_intersect(end, far, opts[k], opts[k + 1])
@@ -3482,6 +3501,10 @@ class Canvas(QGraphicsView):
     def add_stitch_line(self, line) -> StitchLineItem:
         self.doc.add_stitch_line(line)
         item = self._add_item(StitchLineItem(line, self))
+        # select it, like any new shape -- the previous selection stayed, so
+        # typing into Properties edited the wrong object
+        self.scene_obj.clearSelection()
+        item.setSelected(True)
         self.documentChangedSig.emit()
         self._emit_commit()
         return item
@@ -4837,7 +4860,7 @@ class Canvas(QGraphicsView):
     # -- trim: cut the segment under the cursor back to its intersections ---
     def _trim_targets(self):
         return [it for it in self._live
-                if isinstance(it, ShapeItem) and _alive(it)]
+                if isinstance(it, ShapeItem) and _alive(it) and it.isVisible()]
 
     def _entity_for_trim(self, click: Vec2):
         """The ShapeItem whose outline passes nearest ``click`` (within a few
@@ -4855,8 +4878,8 @@ class Canvas(QGraphicsView):
         """World polylines of every other outline/seam, used as cut lines."""
         cutters = []
         for it in self._live:
-            if it is exclude or not _alive(it):
-                continue
+            if it is exclude or not _alive(it) or not it.isVisible():
+                continue                  # a hidden layer cuts nothing
             if isinstance(it, ShapeItem):
                 wpts, _c, closed = it.model.world_polyline()
                 poly = [Vec2(p.x, p.y) for p in wpts]

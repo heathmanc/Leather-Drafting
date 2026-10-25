@@ -1296,7 +1296,9 @@ class ShapeItem(QGraphicsItem):
             sh.width, sh.height = 2.0 * hx, 2.0 * hy
             return
         if isinstance(sh, Circle):
-            sh.rx = sh.ry = max(hx, hy)     # a circle stays round
+            # a circle stays round: follow the axis being pulled (the larger
+            # of the two meant an edge grip could only ever grow it)
+            sh.rx = sh.ry = hx if abs(hx - sh.rx) >= abs(hy - sh.ry) else hy
             return
         if isinstance(sh, Ellipse):
             sh.rx, sh.ry = hx, hy

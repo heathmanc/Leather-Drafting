@@ -1319,6 +1319,52 @@ def test_undo_mid_drawing_abandons_the_shape_cleanly(qapp):
     assert c._start is not None                   # this was a FIRST click
 
 
+def test_small_ui_fixes_from_the_audit(qapp):
+    """Fit to content counted ruler guides; a circle's edge grip could only
+    grow it; a new seam left the old selection selected; trim / extend used
+    geometry on hidden layers as boundaries."""
+    from leathercad.document import Document
+    from leathercad.shapes import Circle, PathShape
+    from leathercad.stitchline import StitchLine
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import ShapeItem, StitchLineItem
+    doc = Document()
+    doc.add_shape(Rectangle(width=40, height=40, layer="Cut"))
+    win = MainWindow(doc)
+    win.resize(1000, 700)
+    win.show()
+    c = win.canvas
+    c.rebuild()
+    c.fit_to_content()
+    z0 = c._zoom
+    if hasattr(c, "add_guide"):
+        c.add_guide("v", 900.0)
+        c.add_guide("h", -900.0)
+        c.fit_to_content()
+        assert abs(c._zoom - z0) < 1e-9
+    # circle: an edge grip shrinks it too
+    ci = Circle(rx=20, ry=20, layer="Cut", transform=Transform(x=100))
+    item = c.add_shape(ci)
+    item.set_resize_extents(12.0, 20.0)
+    assert ci.rx == ci.ry == 12.0
+    # a new seam is the selection
+    sl = c.add_stitch_line(StitchLine(points=[Vec2(0, 60), Vec2(30, 60)]))
+    assert [type(i) for i in c.selected_items()] == [StitchLineItem]
+    assert sl.isSelected()
+    # a hidden layer's outline stops neither trim nor extend
+    win.doc.layer("Engrave").visible = False
+    wall = PathShape(points=[Vec2(60, -50), Vec2(60, 50)], layer="Engrave")
+    line = PathShape(points=[Vec2(30, 0), Vec2(50, 0)], layer="Cut")
+    stop = PathShape(points=[Vec2(80, -50), Vec2(80, 50)], layer="Cut")
+    for sh in (wall, line, stop):
+        win.doc.add_shape(sh)
+    c.rebuild()
+    c.apply_layer_visibility()
+    c._do_extend(Vec2(50, 0))
+    end = line.transform.apply(line.points[1])
+    assert abs(end.x - 80.0) < 1e-6              # past the hidden wall
+
+
 def test_tool_shortcuts_unique_and_unambiguous():
     from leathercad_app.mainwindow import TOOLS
     keys = [k for _n, _m, k in TOOLS]

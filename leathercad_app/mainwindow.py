@@ -877,11 +877,12 @@ class MainWindow(QMainWindow):
         hints = {
             m.SELECT: "Select: click to pick, drag to move, drag a blank area "
                       "to rubber-band · double-click a shape to edit its nodes",
-            m.RECT: "Rectangle: drag to draw · Shift = square · type W×H after",
-            m.ROUNDED: "Rounded rectangle: drag to draw, then set the corner "
-                       "radius in Properties",
-            m.ELLIPSE: "Ellipse: drag a bounding box · Shift = circle",
-            m.CIRCLE: "Circle: click the centre, drag out the radius",
+            m.RECT: "Rectangle: click two opposite corners (or drag, with "
+                    "Drag to draw on) · type exact W×H in Properties after",
+            m.ROUNDED: "Rounded rectangle: click two opposite corners, then "
+                       "set the corner radius in Properties",
+            m.ELLIPSE: "Ellipse: click two opposite corners of its box",
+            m.CIRCLE: "Circle: click the centre, then a point on the circle",
             m.POLYGON: "Polygon: click each vertex · double-click or Enter to "
                        "close · Esc cancels",
             m.LINE: "Line: click the start, click the end · Shift = ortho · "
@@ -893,7 +894,7 @@ class MainWindow(QMainWindow):
             m.SCORE: "Score line: click each point · double-click / Enter to "
                      "finish (a fold/score, not a cut)",
             m.HOLE: "Hole: click to drop a single stitch hole",
-            m.SLOT: "Slot: drag to place a rounded slot",
+            m.SLOT: "Slot: click two opposite corners of a rounded slot",
             m.PEN: "Pen: click for corners, click-drag for curves · "
                    "double-click / Enter / right-click to finish",
             m.DIMENSION: "Dimension: click two points to measure · click again "

@@ -20,8 +20,11 @@ from typing import List
 from .geometry import Vec2, distance
 
 
-def _polyline_len(pts: List[Vec2]) -> float:
-    return sum(distance(pts[i], pts[i + 1]) for i in range(len(pts) - 1))
+def _polyline_len(pts: List[Vec2], closed: bool = False) -> float:
+    n = sum(distance(pts[i], pts[i + 1]) for i in range(len(pts) - 1))
+    if closed and len(pts) >= 2:
+        n += distance(pts[-1], pts[0])      # the last hole back to the first
+    return n
 
 
 def estimate_thread(res, settings, thickness_mm: float = 3.0,
@@ -46,16 +49,17 @@ def estimate_thread(res, settings, thickness_mm: float = 3.0,
         mids = [Vec2((pts[i].x + pts[i + 1].x) / 2.0,
                      (pts[i].y + pts[i + 1].y) / 2.0)
                 for i in range(0, n - 1, 2)]
-        seam = _polyline_len(mids)
+        seam = _polyline_len(mids, closed)
         row_holes = n // 2
         runs = 2
     else:
-        seam = _polyline_len(pts)
+        seam = _polyline_len(pts, closed)
         row_holes = n
         runs = 1
         rows = 1
 
-    per_gap = seam / max(row_holes - 1, 1)
+    # a closed seam has as many gaps as holes; an open one, one fewer
+    per_gap = seam / max(row_holes - (0 if closed else 1), 1)
     bs = int(getattr(settings, "backstitch", 0) or 0)
     per_run = 2.0 * seam + 2.0 * row_holes * thickness_mm + 2.0 * tail_mm
     if bs:

@@ -2006,7 +2006,10 @@ class Canvas(QGraphicsView):
                            layer=score_layer)  # fold / skive / decoration line
             self.add_shape(sh)
         else:  # STITCHLINE
-            sl = StitchLine(points=[Vec2(p.x(), p.y()) for p in pts],
+            from leathercad.stitchline import turning_points
+            seam_pts = [Vec2(p.x(), p.y()) for p in pts]
+            sl = StitchLine(points=seam_pts,
+                            corner_points=turning_points(seam_pts),
                             closed=False,
                             settings=StitchSettings(pitch_mm=3.85, inset=0.0,
                                                     fit="endpoints"))
@@ -2625,7 +2628,7 @@ class Canvas(QGraphicsView):
                 return False
             idx = min(range(len(pts)),
                       key=lambda i: (pts[i] - world).length())
-            pts.pop(idx)
+            it.line.remove_point(idx)
         elif isinstance(it, ShapeItem):
             sh = it.model
             local = sh.transform.inverse_apply(world)

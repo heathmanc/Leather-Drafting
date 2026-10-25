@@ -445,3 +445,31 @@ def test_fit_on_one_straight_edge_is_exact():
     from leathercad.stitching import fit_pitch_for_count
     poly = Polyline([Vec2(0, 0), Vec2(170, 0)])
     assert fit_pitch_for_count(poly, 34, 0.0, 170.0) == 5.0
+
+
+def test_open_seam_short_leg_has_no_wide_end_gap():
+    # no hole count fit the short leg within tolerance, so it marched at the
+    # plain pitch and dropped its last marched hole: a 6.8 mm end gap at
+    # pitch 4 (and a single 6 mm gap on a 6 mm seam)
+    from leathercad.stitchline import StitchLine
+    from leathercad.stitchsettings import StitchSettings
+    for pts, cps in (([Vec2(0, 0), Vec2(6, 0)], []),
+                     ([Vec2(0, 0), Vec2(40, 0), Vec2(40, 6.8)], [Vec2(40, 0)])):
+        r = StitchLine(points=pts, corner_points=cps,
+                       settings=StitchSettings(pitch_mm=4.0)).result()
+        gaps = [(r.holes[i + 1].point - r.holes[i].point).length()
+                for i in range(r.count - 1)]
+        assert max(gaps) < 4.0 * 1.25
+
+
+def test_closed_seam_without_repeated_start_sews_its_closing_edge():
+    from leathercad.stitchline import StitchLine
+    from leathercad.stitchsettings import StitchSettings
+    from leathercad.thread import estimate_thread
+    sq = [Vec2(0, 0), Vec2(40, 0), Vec2(40, 40), Vec2(0, 40)]
+    st = StitchSettings(pitch_mm=4.0)
+    a = StitchLine(points=sq, closed=True, settings=st).result()
+    b = StitchLine(points=sq + [sq[0]], closed=True, settings=st).result()
+    assert a.count == b.count == 40
+    # thread covers the whole loop, last hole back to the first included
+    assert estimate_thread(b, st)["seam_mm"] == pytest.approx(160.0, abs=1e-3)

@@ -639,7 +639,8 @@ def stitch_path(path: Path, pitch: float, *, mode: str = "chord",
     positions: List[float] = []
     pitches: List[float] = []
     for a, b in _spans(anchors, path.closed, poly.length):
-        p_eff, n = _best_fit_span(poly, pitch, a, b, max_dev)
+        p_eff, n = _best_fit_span(poly, pitch, a, b, max_dev,
+                                  symmetric_fallback=True)
         if n is None:
             span_positions = march_chord(poly, pitch, a, b)
             pitches.append(pitch)
@@ -905,6 +906,8 @@ def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
     from .offset import inset_with_corners, inset_path_with_corners
 
     pts = list(points)
+    if closed and len(pts) >= 2 and (pts[0] - pts[-1]).length() > 1e-9:
+        pts.append(pts[0])       # a closed ring must include its closing edge
     corner_points = list(corner_points or [])
     arcs: list = []
 
@@ -1110,9 +1113,12 @@ def _march_corner_style(poly: Polyline, cor: List[float], settings, style: str,
         b_key = 0.0 if abs(b - total) < 1e-6 else b
         if (round(a, 4), round(b_key, 4)) in straddle_keys:
             parity = "odd"          # straddle: an even pair around a bare apex
+        # When no count fits the pitch, take the nearest one -- on an open
+        # seam too: marching at the plain pitch there and then dropping the
+        # last marched hole left an end gap of up to ~1.7 pitches.
         p_eff, n = _best_fit_span(poly, settings.pitch_mm, a, b,
                                   settings.max_dev, parity,
-                                  symmetric_fallback=closed, memo=memo)
+                                  symmetric_fallback=True, memo=memo)
         if n is None:
             span_positions = march_chord(poly, settings.pitch_mm, a, b)
             pitches.append(settings.pitch_mm)

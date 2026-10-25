@@ -1172,6 +1172,45 @@ def test_every_drawing_tool_is_click_to_place(qapp):
     assert len(win.doc.stitch_lines) == n + 1
 
 
+def test_drawn_seam_puts_holes_on_its_corners(qapp):
+    """A seam drawn with the tool had no corner points, so an L seam's holes
+    missed the corner by up to a pitch; dragging or deleting a corner node
+    then left its old corner behind."""
+    from PySide6.QtCore import QPointF, QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document
+    win = MainWindow(Document())
+    c = win.canvas
+    c.resize(500, 500)
+    c.drag_to_draw = False
+    c.snap_to_grid = c.snap_to_nodes = False
+
+    def ev(kind, x, y):
+        vp = QPointF(c.mapFromScene(QPointF(x, y)))
+        return QMouseEvent(kind, vp, Qt.LeftButton, Qt.LeftButton,
+                           Qt.NoModifier)
+
+    c.tool = cm.STITCHLINE
+    for x, y in ((0, 0), (37, 0), (37, 37)):
+        c.mousePressEvent(ev(QEvent.MouseButtonPress, x, y))
+        c.mouseReleaseEvent(ev(QEvent.MouseButtonRelease, x, y))
+    c.mouseDoubleClickEvent(ev(QEvent.MouseButtonDblClick, 37, 37))
+    sl = win.doc.stitch_lines[-1]
+    corner = sl.points[1]
+
+    def nearest(p):
+        return min((h.point - p).length() for h in sl.result().holes)
+    assert len(sl.corner_points) == 1 and nearest(corner) < 1e-6
+    # drag the corner node: the corner (and its hole) goes with it
+    new = Vec2(corner.x + 6, corner.y - 3)
+    sl.move_point(1, new)
+    assert nearest(new) < 1e-6 and sl.corner_points == [new]
+    sl.remove_point(1)
+    assert sl.corner_points == []
+
+
 def test_tool_shortcuts_unique_and_unambiguous():
     from leathercad_app.mainwindow import TOOLS
     keys = [k for _n, _m, k in TOOLS]

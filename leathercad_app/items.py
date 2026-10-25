@@ -1770,5 +1770,5 @@ class StitchLineItem(QGraphicsItem):
 
     def _set_pt(self, i):
         def s(world):
-            self.line.points[i] = Vec2(world.x, world.y)
+            self.line.move_point(i, Vec2(world.x, world.y))
         return s

@@ -22,7 +22,7 @@ class ArrayDialog(QDialog):
         root = QVBoxLayout(self)
 
         self.mode = QComboBox()
-        self.mode.addItems(["Grid", "Circular"])
+        self.mode.addItems(["Grid", "Circular", "Along path"])
         mrow = QFormLayout()
         mrow.addRow("Type", self.mode)
         root.addLayout(mrow)
@@ -64,6 +64,22 @@ class ArrayDialog(QDialog):
         cf.addRow("", self.rotate)
         self.stack.addWidget(circ)
 
+        # -- along-path page ----------------------------------------------
+        path = QWidget()
+        pf = QFormLayout(path)
+        self.pcount = QSpinBox(); self.pcount.setRange(1, 500); self.pcount.setValue(5)
+        self.pspacing = MathSpinBox(); self.pspacing.setRange(0, 10000)
+        self.pspacing.setValue(0.0); self.pspacing.setSuffix(" mm")
+        self.pspacing.setToolTip("0 = spread the copies evenly along the path")
+        self.pfollow = QCheckBox("Turn copies to follow the path")
+        self.pfollow.setChecked(True)
+        pf.addRow("Count", self.pcount)
+        pf.addRow("Spacing (0 = even)", self.pspacing)
+        pf.addRow("", self.pfollow)
+        pf.addRow("", QLabel("Select the pieces AND an open line / curve / "
+                             "guide to copy along. Originals stay put."))
+        self.stack.addWidget(path)
+
         self.mode.currentIndexChanged.connect(self.stack.setCurrentIndex)
 
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -75,6 +91,10 @@ class ArrayDialog(QDialog):
         if self.mode.currentIndex() == 0:
             return "grid", dict(rows=self.rows.value(), cols=self.cols.value(),
                                 dx=self.dx.value(), dy=self.dy.value())
+        if self.mode.currentIndex() == 2:
+            return "path", dict(count=self.pcount.value(),
+                                spacing=self.pspacing.value(),
+                                follow=self.pfollow.isChecked())
         return "circular", dict(count=self.count.value(), cx=self.cx.value(),
                                 cy=self.cy.value(), total_deg=self.angle.value(),
                                 rotate_items=self.rotate.isChecked())

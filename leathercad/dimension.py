@@ -22,12 +22,15 @@ def _next_id() -> str:
 
 @dataclass
 class Dimension:
-    p1: Vec2                      # world start (mm)
-    p2: Vec2                      # world end (mm)
+    p1: Vec2                      # world start (mm) -- a radius dim's centre
+    p2: Vec2                      # world end (mm)   -- a radius dim's arc point
     offset: float = 8.0           # perpendicular offset of the dim line (mm)
     layer: str = "Dimension"
     dim_id: str = field(default_factory=_next_id)
     kind: str = "dimension"
+    # 'linear' (p1 -> p2 distance) or 'radius' (p1 is the arc's centre, p2 a
+    # point on it; drawn as a leader from the centre, labelled R)
+    measure: str = "linear"
     # optional associativity: (shape_id, u, v) fractional bbox positions so the
     # endpoints follow a shape when it moves/resizes and the length updates.
     a_ref: tuple | None = None
@@ -41,9 +44,10 @@ class Dimension:
         return math.degrees(math.atan2(d.y, d.x))
 
     def label(self, unit: str = "mm") -> str:
+        pre = "R " if self.measure == "radius" else ""
         if unit == "in":
-            return f"{self.length() / 25.4:.3f} in"
-        return f"{self.length():.1f} mm"
+            return f"{pre}{self.length() / 25.4:.3f} in"
+        return f"{pre}{self.length():.1f} mm"
 
     def normal(self) -> Vec2:
         """Unit perpendicular (left of p1->p2)."""
@@ -55,7 +59,10 @@ class Dimension:
         return Vec2(-d.y, d.x)
 
     def line_points(self):
-        """(a, b) endpoints of the offset dimension line in world coords."""
+        """(a, b) endpoints of the offset dimension line in world coords (a
+        radius dimension's leader runs centre -> arc point, no offset)."""
+        if self.measure == "radius":
+            return self.p1, self.p2
         off = self.normal() * self.offset
         return self.p1 + off, self.p2 + off
 
@@ -68,6 +75,7 @@ class Dimension:
             "dim_id": self.dim_id,
             "a_ref": list(self.a_ref) if self.a_ref else None,
             "b_ref": list(self.b_ref) if self.b_ref else None,
+            "measure": self.measure,
         }
 
     @classmethod
@@ -82,4 +90,5 @@ class Dimension:
             dim_id=d.get("dim_id", _next_id()),
             a_ref=_ref(d.get("a_ref")),
             b_ref=_ref(d.get("b_ref")),
+            measure=d.get("measure", "linear"),
         )

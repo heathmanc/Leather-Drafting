@@ -807,6 +807,15 @@ class DimensionItem(QGraphicsItem):
         base = self.canvas.line_width if self.canvas else 1.0
         pen.setWidthF(base + (0.5 if self.isSelected() else 0.0))
         painter.setPen(pen)
+        if getattr(self.dim, "measure", "linear") == "radius":
+            # a leader from the centre out to the arc, arrow at the arc, and
+            # a small cross on the centre
+            painter.drawLine(self._p1, self._p2)
+            self._arrow(painter, self._p2, self._p1)
+            c = self._p1
+            painter.drawLine(QPointF(c.x() - 1.5, c.y()), QPointF(c.x() + 1.5, c.y()))
+            painter.drawLine(QPointF(c.x(), c.y() - 1.5), QPointF(c.x(), c.y() + 1.5))
+            return
         painter.drawLine(self._p1, self._a)      # extension lines
         painter.drawLine(self._p2, self._b)
         painter.drawLine(self._a, self._b)       # dimension line

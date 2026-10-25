@@ -242,6 +242,14 @@ Beyond drawing and stitching, Stitch Hero covers the rest of a real bench workfl
 | **Seam-mate check** | Verify that pieces sharing a seam actually line up hole-for-hole before you cut |
 | **Parts library** | Save any selection to a personal parts library and drop it into any document |
 | **Templates & generators** | Open a ready-made card holder, belt, key fob or slim card holder, or generate parametric **card-pocket stacks** and **zipper openings** |
+| **Stitch only some edges** | right-click an edge of a stitched piece → *Don't stitch this edge*: the seam stops with a hole at the inset corner either side of a pocket's open mouth |
+| **Hardware library** | rivets, snaps, Chicago screws, Sam Browne studs, magnetic snaps, eyelets, buckle slots, turn locks and ring footprints in the Parts dock — each placed with the cut it needs and a **stitch keep-out** the seam flows round |
+| **Group rotate / scale / flip** | one rotate grip for a group or multi-selection; Arrange → Rotate 90°/180°/by…, Scale…, Move by…, Flip horizontal / vertical, Mirror across selected line; arrow-key nudge |
+| **Units** | View → Units → Inches shows and takes every length in inches (stored in mm); type `10mm` to enter millimetres |
+| **Fold allowance** | Edit → Fold allowance… lengthens a piece across its fold lines by angle × (radius + ½ thickness) |
+| **Generators** | strap / belt, box and curved gussets, bifold wallet, key tab, hemmed pocket — plus card pocket stacks and zipper openings |
+| **Export options** | outlines / holes / lettering, selection only; arcs and curves export as true arcs (SVG `A`/`C`, DXF bulges) |
+| **Edit several at once** | select several pieces; only the fields you change are written to all of them · Layers panel **Lock** |
 | **Dark theme** | A full dark UI for late-night bench sessions (*View → Dark theme*) |
 | **Autosave & recovery** | Work is autosaved and offered back after an unexpected quit |
 

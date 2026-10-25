@@ -1931,6 +1931,13 @@ class MainWindow(QMainWindow):
         mode, p = dlg.result_params()
         if mode == "grid":
             self.canvas.array_grid(p["rows"], p["cols"], p["dx"], p["dy"])
+        elif mode == "path":
+            if not self.canvas.array_along_path(p["count"], p["spacing"],
+                                                p["follow"]):
+                QMessageBox.information(
+                    self, "Copy along path",
+                    "Select the piece(s) to copy AND an open line, curve or "
+                    "guide to copy them along.")
         else:
             self.canvas.array_circular(p["count"], p["cx"], p["cy"],
                                        p["total_deg"], p["rotate_items"])
@@ -2110,20 +2117,73 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(msg, 7000)
         return n_shapes + n_holes
 
+    def _export_options(self, title):
+        """What to export: everything or the selection; outlines, stitch
+        holes, lettering. Returns (selection_ids or None, include set) or None."""
+        from PySide6.QtWidgets import (QDialog, QVBoxLayout, QCheckBox,
+                                       QDialogButtonBox, QLabel)
+        s = self._settings()
+        sel = self.canvas.selected_items()
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel("Export:"))
+        only_sel = QCheckBox(f"Selection only ({len(sel)} selected)")
+        only_sel.setEnabled(bool(sel))
+        only_sel.setChecked(bool(sel) and s.value("expSelOnly", False, type=bool))
+        boxes = {}
+        for key, label, default in (("outlines", "Outlines (cut / score)", True),
+                                    ("holes", "Stitch holes", True),
+                                    ("text", "Lettering", True)):
+            cb = QCheckBox(label)
+            cb.setChecked(s.value("exp_" + key, default, type=bool))
+            boxes[key] = cb
+            lay.addWidget(cb)
+        lay.addWidget(only_sel)
+        note = QLabel("Arcs and curves export as true arcs / curves; with "
+                      "kerf compensation on, as compensated polylines.")
+        note.setWordWrap(True)
+        lay.addWidget(note)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        if dlg.exec() != QDialog.Accepted:
+            return None
+        include = {k for k, cb in boxes.items() if cb.isChecked()}
+        for k, cb in boxes.items():
+            s.setValue("exp_" + k, cb.isChecked())
+        s.setValue("expSelOnly", only_sel.isChecked())
+        selection = None
+        if only_sel.isChecked():
+            selection = set()
+            for it in sel:
+                m = self.canvas._item_model(it)
+                for attr in ("shape_id", "text_id", "line_id", "hole_id"):
+                    if hasattr(m, attr):
+                        selection.add(getattr(m, attr))
+        return selection, include
+
     def export_svg(self):
+        opts = self._export_options("Export SVG")
+        if opts is None:
+            return
         fn, _ = QFileDialog.getSaveFileName(self, "Export SVG", "pattern.svg",
                                             "SVG (*.svg)")
         if not fn:
             return
-        export.export_svg(self.doc, fn)
+        export.export_svg(self.doc, fn, selection=opts[0], include=opts[1])
         self.statusBar().showMessage(f"Exported {os.path.basename(fn)}", 4000)
 
     def export_dxf(self):
+        opts = self._export_options("Export DXF")
+        if opts is None:
+            return
         fn, _ = QFileDialog.getSaveFileName(self, "Export DXF", "pattern.dxf",
                                             "DXF (*.dxf)")
         if not fn:
             return
-        export.export_dxf(self.doc, fn)
+        export.export_dxf(self.doc, fn, selection=opts[0], include=opts[1])
         self.statusBar().showMessage(f"Exported {os.path.basename(fn)}", 4000)
 
     def export_pdf(self):

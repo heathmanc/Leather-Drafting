@@ -532,3 +532,191 @@ def to_editable(sh) -> Optional[EditablePath]:
     copy_shape_attrs(sh, ep, holes=True)
     ep.stitch = sh.stitch                     # shared, as before
     return ep
+
+
+# ---------------------------------------------------------------------------
+# node tools: change an edge's kind, remove a node without straightening,
+# break a path at a node
+# ---------------------------------------------------------------------------
+def _as_cubic(a: Vec2, b: Vec2, e: Edge):
+    """Cubic control points (c1, c2) equivalent (line, bezier) or close (arc)
+    to edge a->b."""
+    if e.kind == "bezier" and e.c1 is not None and e.c2 is not None:
+        return e.c1, e.c2
+    if e.kind == "arc" and e.mid is not None:
+        arc = arc_through(a, e.mid, b)
+        if arc is not None:
+            c, r, a0, a1, ccw = arc
+            two_pi = 2.0 * math.pi
+            sweep = (a1 - a0) % two_pi if ccw else -((a0 - a1) % two_pi)
+            k = 4.0 / 3.0 * math.tan(abs(sweep) / 4.0) * r
+            sgn = 1.0 if ccw else -1.0
+            ta = Vec2(-math.sin(a0), math.cos(a0)) * sgn    # tangent at a
+            tb = Vec2(-math.sin(a1), math.cos(a1)) * sgn    # tangent at b
+            return a + ta * k, b - tb * k
+    d = b - a
+    return a + d * (1.0 / 3.0), a + d * (2.0 / 3.0)
+
+
+def convert_edge(ep: EditablePath, i: int, kind: str) -> bool:
+    """Make edge ``i`` a 'line', an 'arc' or a 'bezier' (curve). A line
+    becomes a gently bulged arc / curve so its handles can be grabbed; an
+    arc becomes the matching cubic; a curve becomes the arc through its
+    midpoint. False if nothing changed."""
+    n = len(ep.nodes)
+    a, b = ep.nodes[i], ep.nodes[(i + 1) % n]
+    e = ep.edges[i]
+    cur = ("arc" if e.kind == "arc" and e.mid is not None else
+           "bezier" if e.kind == "bezier" and e.c1 is not None else "line")
+    if kind == cur:
+        return False
+    d = b - a
+    L = d.length()
+    if L < 1e-9:
+        return False
+    perp = Vec2(-d.y, d.x) * (1.0 / L)
+    if kind == "line":
+        ep.edges[i] = Edge("line")
+    elif kind == "arc":
+        if cur == "bezier":
+            _k, pt = _edge_eval(a, b, e)
+            mid = pt(0.5)
+            if abs((mid - a).cross(b - a)) < 1e-9 * L * L:
+                mid = a + d * 0.5 + perp * (0.25 * L)
+        else:
+            mid = a + d * 0.5 + perp * (0.25 * L)
+        ep.edges[i] = Edge("arc", mid=mid)
+    elif kind == "bezier":
+        if cur == "arc":
+            c1, c2 = _as_cubic(a, b, e)
+        else:
+            c1 = a + d * (1.0 / 3.0) + perp * (0.12 * L)
+            c2 = a + d * (2.0 / 3.0) + perp * (0.12 * L)
+        ep.edges[i] = Edge("bezier", c1=c1, c2=c2)
+    else:
+        return False
+    return True
+
+
+def remove_node(ep: EditablePath, idx: int) -> bool:
+    """Remove node ``idx`` and join its two edges into ONE that keeps the
+    outline's character: two straights stay a straight; two arcs on the
+    same circle become one arc; anything curved becomes a single curve
+    keeping the end tangents (it used to straighten both neighbours)."""
+    n = len(ep.nodes)
+    if n <= (3 if ep.closed else 2):
+        return False
+    if not ep.closed and idx in (0, n - 1):
+        # an end node: just drop it and its edge
+        if idx == 0:
+            ep.nodes.pop(0)
+            ep.edges.pop(0)
+        else:
+            ep.nodes.pop(-1)
+            ep.edges.pop(-1)
+        return True
+    ip, inx = (idx - 1) % n, (idx + 1) % n
+    A, M, B = ep.nodes[ip], ep.nodes[idx], ep.nodes[inx]
+    e1, e2 = ep.edges[ip % len(ep.edges)], ep.edges[idx % len(ep.edges)]
+    k1 = e1.kind if (e1.kind != "arc" or e1.mid is not None) else "line"
+    k2 = e2.kind if (e2.kind != "arc" or e2.mid is not None) else "line"
+    if k1 == "line" and k2 == "line":
+        merged = Edge("line")
+    elif k1 == "arc" and k2 == "arc":
+        c1 = arc_through(A, e1.mid, M)
+        c2 = arc_through(M, e2.mid, B)
+        if (c1 is not None and c2 is not None
+                and (c1[0] - c2[0]).length() < 1e-3 * max(1.0, c1[1])
+                and abs(c1[1] - c2[1]) < 1e-3 * max(1.0, c1[1])):
+            merged = Edge("arc", mid=Vec2(M.x, M.y))      # same circle
+        else:
+            merged = None
+    else:
+        merged = None
+    if merged is None:
+        # one cubic through both edges' sample points, keeping the outline's
+        # tangent where it leaves A and arrives at B
+        _k1, p1 = _edge_eval(A, M, e1)
+        _k2, p2 = _edge_eval(M, B, e2)
+        samples = [p1(j / 12.0) for j in range(13)] + \
+                  [p2(j / 12.0) for j in range(1, 13)]
+        ca1, _ = _as_cubic(A, M, e1)
+        _, cb2 = _as_cubic(M, B, e2)
+        t1, t2 = ca1 - A, B - cb2
+        c1, c2 = _fit_cubic(samples, t1, t2)
+        merged = Edge("bezier", c1=c1, c2=c2)
+    ep.nodes.pop(idx)
+    m = len(ep.edges)
+    ep.edges.pop(idx % m)
+    ep.edges[(idx - 1) % len(ep.edges)] = merged
+    return True
+
+
+def _fit_cubic(pts, t1: Vec2, t2: Vec2):
+    """Least-squares cubic through ``pts`` (first and last are its ends)
+    with end tangent DIRECTIONS ``t1`` (leaving) and ``t2`` (arriving):
+    solves the two handle lengths (Schneider's method, chord-length
+    parameters). Returns (c1, c2)."""
+    A, B = pts[0], pts[-1]
+    n1 = t1.length()
+    n2 = t2.length()
+    if n1 < 1e-12 or n2 < 1e-12:
+        d = B - A
+        return A + d * (1 / 3), A + d * (2 / 3)
+    u1, u2 = t1 * (1.0 / n1), t2 * (1.0 / n2)
+    cum = [0.0]
+    for p, q in zip(pts, pts[1:]):
+        cum.append(cum[-1] + (q - p).length())
+    total = cum[-1] or 1.0
+    X = [[0.0, 0.0], [0.0, 0.0]]
+    Y = [0.0, 0.0]
+    for p, s in zip(pts, cum):
+        t = s / total
+        u = 1.0 - t
+        b1, b2 = 3 * u * u * t, 3 * u * t * t
+        a1, a2 = u1 * b1, u2 * (-b2)
+        base = A * (u * u * u + b1) + B * (b2 + t * t * t)
+        r = p - base
+        X[0][0] += a1.dot(a1)
+        X[0][1] += a1.dot(a2)
+        X[1][1] += a2.dot(a2)
+        Y[0] += a1.dot(r)
+        Y[1] += a2.dot(r)
+    X[1][0] = X[0][1]
+    det = X[0][0] * X[1][1] - X[0][1] * X[1][0]
+    L = (B - A).length()
+    if abs(det) < 1e-12:
+        alpha = beta = L / 3.0
+    else:
+        alpha = (Y[0] * X[1][1] - Y[1] * X[0][1]) / det
+        beta = (X[0][0] * Y[1] - X[1][0] * Y[0]) / det
+        if alpha <= 1e-9 or beta <= 1e-9:
+            alpha = beta = L / 3.0
+    return A + u1 * alpha, B - u2 * beta
+
+
+def break_path_at(ep: EditablePath, idx: int):
+    """Open a closed path at node ``idx`` (one open path back) or split an
+    open path there (two open paths). Returns the new ``EditablePath``s,
+    sharing ``ep``'s transform and attributes; ``[]`` if it can't be done."""
+    import copy
+    from .shapes import copy_shape_attrs
+    n = len(ep.nodes)
+
+    def make(nodes, edges):
+        new = EditablePath(nodes=[Vec2(p.x, p.y) for p in nodes],
+                           edges=[copy.deepcopy(e) for e in edges],
+                           closed=False)
+        new.transform = copy.deepcopy(ep.transform)
+        copy_shape_attrs(ep, new)
+        return new
+    if ep.closed:
+        if n < 3:
+            return []
+        order = [(idx + k) % n for k in range(n)] + [idx]
+        return [make([ep.nodes[j] for j in order],
+                     [ep.edges[(idx + k) % n] for k in range(n)])]
+    if idx <= 0 or idx >= n - 1:
+        return []
+    return [make(ep.nodes[:idx + 1], ep.edges[:idx]),
+            make(ep.nodes[idx:], ep.edges[idx:])]

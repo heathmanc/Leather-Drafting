@@ -1856,6 +1856,52 @@ class Canvas(QGraphicsView):
             shapes[0].model, (Polygon, PathShape, EditablePath))
 
         menu = QMenu(self)
+        # -- node editing: the clicked node / edge of the path being edited
+        node_item, node_idx, edge_idx, edge_kind = None, None, None, None
+        if self._edit_owner is not None and _alive(self._edit_owner) \
+                and isinstance(self._edit_owner.model, EditablePath):
+            ep = self._edit_owner.model
+            wp = self.mapToScene(event.pos())
+            local = ep.transform.inverse_apply(Vec2(wp.x(), wp.y()))
+            tol = 10.0 / max(self._zoom, 1e-6)
+            if ep.nodes:
+                k = min(range(len(ep.nodes)),
+                        key=lambda i: (ep.nodes[i] - local).length())
+                if (ep.nodes[k] - local).length() <= tol:
+                    node_item, node_idx = self._edit_owner, k
+            if node_idx is None and ep.edges:
+                from leathercad.modify import nearest_on_edge
+                best = min(((nearest_on_edge(ep, i, local)[2], i)
+                            for i in range(len(ep.edges))), default=None)
+                if best is not None and best[0] <= tol:
+                    node_item, edge_idx = self._edit_owner, best[1]
+                    e = ep.edges[edge_idx]
+                    edge_kind = ("arc" if e.kind == "arc" and e.mid is not None
+                                 else "bezier" if e.kind == "bezier"
+                                 and e.c1 is not None else "line")
+        a_nrm = a_brk = a_line = a_arc = a_bez = None
+        if node_item is not None:
+            if node_idx is not None:
+                a_nrm = menu.addAction("Remove node (keep the curve)")
+                ep = node_item.model
+                a_brk = menu.addAction("Open the path here" if ep.closed
+                                       else "Split the path here")
+                a_brk.setEnabled(ep.closed or 0 < node_idx < len(ep.nodes) - 1)
+            else:
+                a_line = menu.addAction("Make this edge straight")
+                a_arc = menu.addAction("Make this edge an arc")
+                a_bez = menu.addAction("Make this edge a curve")
+                {"line": a_line, "arc": a_arc, "bezier": a_bez}[edge_kind] \
+                    .setEnabled(False)
+            menu.addSeparator()
+        # -- a radius dimension on the arc / circle under the cursor
+        a_rdim = None
+        rdim = None
+        if isinstance(owner, ShapeItem):
+            wp = self.mapToScene(event.pos())
+            rdim = self._arc_under(owner.model, Vec2(wp.x(), wp.y()))
+            if rdim is not None:
+                a_rdim = menu.addAction("Radius dimension")
         a_mgroup = menu.addAction("Group (move together)")
         a_mgroup.setEnabled(len(sel) >= 2)
         a_mungroup = menu.addAction("Ungroup (move group)")
@@ -1919,7 +1965,19 @@ class Canvas(QGraphicsView):
         a_del = menu.addAction("Delete")
         a_del.setEnabled(bool(sel))
         chosen = menu.exec(event.globalPos())
-        if chosen is a_mgroup:
+        if chosen is None:
+            return
+        if chosen is a_nrm:
+            self.remove_node_index(node_item, node_idx)
+        elif chosen is a_brk:
+            self.break_path_at_node(node_item, node_idx)
+        elif chosen in (a_line, a_arc, a_bez):
+            self.convert_edge_kind(node_item, edge_idx,
+                                   {a_line: "line", a_arc: "arc",
+                                    a_bez: "bezier"}[chosen])
+        elif chosen is a_rdim:
+            self.add_radius_dimension(*rdim)
+        elif chosen is a_mgroup:
             self.make_group()
         elif chosen is a_mungroup:
             self.ungroup_group()
@@ -2528,8 +2586,22 @@ class Canvas(QGraphicsView):
         sx = phx1 / phx0 if phx0 > 1e-9 else 1.0
         sy = phy1 / phy0 if phy0 > 1e-9 else 1.0
         s_uni = math.sqrt(max(sx * sy, 1e-9))
+        # the stretch happens along the PRIMARY's axes (a rotated group
+        # stretches along its own length, not the page's)
+        th = math.radians(getattr(primary.model.transform, "rotation", 0.0))
+        ct, st_ = math.cos(th), math.sin(th)
+
         def scaled(p):
-            return Vec2(pc1x + (p.x - pc0x) * sx, pc1y + (p.y - pc0y) * sy)
+            dx, dy = p.x - pc0x, p.y - pc0y
+            lx, ly = dx * ct + dy * st_, -dx * st_ + dy * ct   # into the frame
+            lx, ly = lx * sx, ly * sy
+            return Vec2(pc1x + lx * ct - ly * st_, pc1y + lx * st_ + ly * ct)
+
+        def axes_for(m):
+            # a member turned 90 deg to the primary stretches the other way
+            rot = getattr(m.transform, "rotation", 0.0)
+            diff = (rot - math.degrees(th) + 90.0) % 180.0 - 90.0
+            return (sy, sx) if abs(diff) > 45.0 else (sx, sy)
 
         for it, base in members:
             if not _alive(it):
@@ -2550,8 +2622,8 @@ class Canvas(QGraphicsView):
                 # re-bake -> no strobe; the crisp re-bake happens on release).
                 lc0x, lc0y = base["lc"]
                 c0x, c0y = base["x"] + lc0x, base["y"] + lc0y
-                ncx = pc1x + (c0x - pc0x) * sx
-                ncy = pc1y + (c0y - pc0y) * sy
+                nc = scaled(Vec2(c0x, c0y))
+                ncx, ncy = nc.x, nc.y
                 m.size = max(0.5, base["size"] * s_uni)
                 m.contours = [[Vec2(p.x * s_uni, p.y * s_uni) for p in c]
                               for c in base["contours"]]
@@ -2559,15 +2631,16 @@ class Canvas(QGraphicsView):
                 m.transform.x = ncx - lc0x * s_uni
                 m.transform.y = ncy - lc0y * s_uni
             else:
-                m.transform.x = pc1x + (base["x"] - pc0x) * sx
-                m.transform.y = pc1y + (base["y"] - pc0y) * sy
+                o = scaled(Vec2(base["x"], base["y"]))
+                m.transform.x, m.transform.y = o.x, o.y
+                mx, my = axes_for(m)
                 if isinstance(m, Rectangle):
-                    m.width = base["width"] * sx
-                    m.height = base["height"] * sy
+                    m.width = base["width"] * mx
+                    m.height = base["height"] * my
                     m.corner_radius = base["corner_radius"] * min(sx, sy)
                 elif isinstance(m, Ellipse):
-                    m.rx = base["rx"] * sx
-                    m.ry = base["ry"] * sy
+                    m.rx = base["rx"] * mx
+                    m.ry = base["ry"] * my
                 elif "geom" in base:
                     bt, t = base["t"], m.transform
 
@@ -3124,6 +3197,154 @@ class Canvas(QGraphicsView):
                  f"(assumes {thickness_mm:g} mm total leather stack and "
                  f"{tail_mm:g} mm needle tails per run — cut generously)"]
         return "\n".join(rows)
+
+    # -- node-edit commands (right-click while editing nodes) -------------
+    def remove_node_index(self, item, idx: int) -> None:
+        """Remove node ``idx`` of the path being edited, keeping the outline's
+        character (two arcs on a circle stay one arc, curves stay curved)."""
+        from leathercad.modify import remove_node
+        ep = item.model
+        if not remove_node(ep, idx):
+            self.statusMessage.emit("Can't remove any more nodes")
+            return
+        item.sync_from_model()
+        self.enter_vertex_edit(item)
+        self.statusMessage.emit("Node removed")
+        self.documentChangedSig.emit()
+        self._emit_commit()
+
+    def convert_edge_kind(self, item, idx: int, kind: str) -> None:
+        from leathercad.modify import convert_edge
+        if not convert_edge(item.model, idx, kind):
+            return
+        item.sync_from_model()
+        self.enter_vertex_edit(item)
+        self.statusMessage.emit(
+            {"line": "Edge straightened", "arc": "Edge is an arc — drag its "
+             "midpoint", "bezier": "Edge is a curve — drag the green handles"}
+            [kind])
+        self.documentChangedSig.emit()
+        self._emit_commit()
+
+    def break_path_at_node(self, item, idx: int) -> None:
+        """Open a closed path at a node, or split an open one in two."""
+        from leathercad.modify import break_path_at
+        parts = break_path_at(item.model, idx)
+        if not parts:
+            self.statusMessage.emit("Can't break the path at an end node")
+            return
+        self.clear_vertex_handles()
+        self._suppress_commit = True
+        self.doc.remove_shape(item.model)
+        self._remove_item(item)
+        made = [self._add_item(ShapeItem(self.doc.add_shape(p), self))
+                for p in parts]
+        self._suppress_commit = False
+        self.scene_obj.clearSelection()
+        for m in made:
+            m.setSelected(True)
+        self.statusMessage.emit("Path opened" if len(parts) == 1
+                                else "Path split in two")
+        self.documentChangedSig.emit()
+        self.selectionChangedSig.emit()
+        self._emit_commit()
+
+    # -- radius dimensions --------------------------------------------------
+    def _arc_under(self, sh, world: Vec2):
+        """(centre, point on the arc) of the arc / circle edge of ``sh`` under
+        ``world``, or None."""
+        from leathercad.path import Arc
+        from leathercad.shapes import Circle as _Circle, segment_index_at
+        t = sh.transform
+        tol = 12.0 / max(self._zoom, 1e-6)
+        if isinstance(sh, _Circle) and abs(sh.rx - sh.ry) < 1e-9:
+            c = t.apply(Vec2(0.0, 0.0))
+            d = (world - c).length()
+            if abs(d - sh.rx) <= tol and d > 1e-9:
+                return c, c + (world - c) * (sh.rx / d)
+            return None
+        i = segment_index_at(sh, world, tol)
+        if i is None:
+            return None
+        sg = sh.local_path().segments[i]
+        if not isinstance(sg, Arc) or sg.radius <= 1e-9:
+            return None
+        c = t.apply(sg.center)
+        d = (world - c).length()
+        if d < 1e-9:
+            return None
+        return c, c + (world - c) * (sg.radius / d)
+
+    def add_radius_dimension(self, centre: Vec2, on_arc: Vec2) -> None:
+        from leathercad.dimension import Dimension
+        dim = Dimension(p1=centre, p2=on_arc, layer="Dimension",
+                        measure="radius")
+        self.doc.dimensions.append(dim)
+        self._add_item(DimensionItem(dim, self))
+        from . import units as U
+        self.statusMessage.emit(f"Radius {U.fmt(dim.length())}")
+        self.documentChangedSig.emit()
+        self._emit_commit()
+
+    # -- copy along a path -------------------------------------------------
+    def array_along_path(self, count: int, spacing: float = 0.0,
+                         follow: bool = True) -> bool:
+        """Copy the selection ``count`` times along a selected open path or
+        guide (the rail): ``spacing`` mm apart from its start, or spread
+        evenly along it when 0; ``follow`` turns each copy to the rail's
+        direction. The originals stay. False if no rail is selected."""
+        from leathercad.stitching import Polyline
+        sel = list(self.selected_items())
+        rail = None
+        for it in sel:
+            m = self._item_model(it)
+            if isinstance(it, ShapeItem) and not m.local_path().closed \
+                    and len(m.world_polyline()[0]) >= 2:
+                if rail is None or (getattr(m, "construction", False)
+                                    and not getattr(rail.model, "construction",
+                                                    False)):
+                    rail = it
+        if rail is None or count < 1:
+            return False
+        others = [it for it in sel if it is not rail]
+        if not others:
+            return False
+        pts = [Vec2(p.x, p.y) for p in rail.model.world_polyline()[0]]
+        poly = Polyline(pts)
+        if poly.length <= 1e-9:
+            return False
+        b = self._unit_bounds(others)
+        if b is None:
+            return False
+        c0 = ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
+        if spacing > 0:
+            stations = [i * spacing for i in range(count)
+                        if i * spacing <= poly.length + 1e-9]
+        else:
+            stations = ([0.0] if count == 1 else
+                        [poly.length * i / (count - 1) for i in range(count)])
+        made = []
+        self._suppress_commit = True
+        self._suspend_move_refresh = True
+        try:
+            for s in stations:
+                p = poly.point_at(s)
+                ang = 0.0
+                if follow:
+                    tg = poly.tangent_at(min(s, poly.length - 1e-6))
+                    ang = math.degrees(math.atan2(tg.y, tg.x))
+                groups = {}
+                for it in others:
+                    m = self._clone_item(it, translate=(p.x - c0[0], p.y - c0[1]),
+                                         pivot=c0, pos_angle=ang,
+                                         orient_angle=ang, groups=groups)
+                    if m:
+                        made.append(m)
+        finally:
+            self._suspend_move_refresh = False
+            self._suppress_commit = False
+        self._finish_array(made)
+        return True
 
     def toggle_stitch_edge(self, item, idx: int) -> None:
         """Sew / don't sew edge ``idx`` of a stitched piece. The holes stop
@@ -4918,8 +5139,7 @@ class Canvas(QGraphicsView):
         if len(gids) != 1 or None in gids:
             return None, []
         shapes = [it for it in sel if isinstance(it, ShapeItem)
-                  and it.resize_extents() is not None
-                  and abs(getattr(it.model.transform, "rotation", 0.0)) < 1e-6]
+                  and it.resize_extents() is not None]
         if not shapes:
             return None, []
         # the largest outline is the frame the user thinks of as "the object"

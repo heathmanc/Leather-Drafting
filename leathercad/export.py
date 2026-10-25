@@ -25,8 +25,24 @@ def _layer_color(doc: Document, name: str, default: str) -> str:
     return lyr.color if lyr else default
 
 
-def collect(doc: Document, kerf: float = 0.0):
+def _wanted(doc, obj, selection, include, part):
+    """Export filters: ``selection`` (ids to keep, or None for all) and
+    ``include`` (which parts: 'outlines', 'holes', 'text')."""
+    if include is not None and part not in include:
+        return False
+    if selection is not None:
+        oid = getattr(obj, "shape_id", None) or getattr(obj, "text_id", None) \
+            or getattr(obj, "line_id", None) or getattr(obj, "hole_id", None)
+        if oid not in selection:
+            return False
+    return True
+
+
+def collect(doc: Document, kerf: float = 0.0, selection=None, include=None):
     """Return (outlines, stitch_results) in world coordinates.
+
+    ``selection`` -- ids of the objects to export (None = everything);
+    ``include`` -- a set of 'outlines', 'holes', 'text' (None = all three).
 
     outlines: list of (points, color)
     stitch_results: list of (StitchResult, settings, color)
@@ -56,13 +72,16 @@ def collect(doc: Document, kerf: float = 0.0):
         if getattr(sh, "construction", False):
             continue                      # guides are references, never cut
         lyr = doc.layer(sh.layer)
-        if lyr is None or lyr.visible:
+        if (lyr is None or lyr.visible) and _wanted(doc, sh, selection,
+                                                   include, "outlines"):
             color = lyr.color if lyr else "#ff0000"
             role = getattr(lyr, "role", "cut") if lyr else "cut"
             pts, corners, closed = sh.world_polyline()
             outlines.append((pts, color))
             cuttable.append(bool(closed) and role == "cut" and len(pts) >= 4)
-        res = holes_for_shape(sh, doc) if holes_shown else None
+        res = (holes_for_shape(sh, doc)
+               if holes_shown and _wanted(doc, sh, selection, include, "holes")
+               else None)
         if res is not None and res.count:
             style = sh.stitch or StitchSettings()
             # a mirrored piece reverses the slant sense of slit/diamond holes;
@@ -77,6 +96,8 @@ def collect(doc: Document, kerf: float = 0.0):
         lyr = doc.layer(tx.layer)
         if lyr is not None and not lyr.visible:
             continue
+        if not _wanted(doc, tx, selection, include, "text"):
+            continue
         color = lyr.color if lyr else "#888888"
         for contour in tx.world_contours():
             if len(contour) >= 2:
@@ -87,7 +108,8 @@ def collect(doc: Document, kerf: float = 0.0):
         outlines = _apply_kerf(outlines, cuttable, kerf)
 
     for sl in doc.stitch_lines:
-        if not shown(sl.layer):
+        if not shown(sl.layer) or not _wanted(doc, sl, selection, include,
+                                              "holes"):
             continue
         from .hardware import keepouts_near
         res = sl.result(keepouts_near(sl.points, doc))
@@ -96,11 +118,84 @@ def collect(doc: Document, kerf: float = 0.0):
 
     # individual (ungrouped) holes
     for h in getattr(doc, "holes", []):
-        if not shown(h.layer):
+        if not shown(h.layer) or not _wanted(doc, h, selection, include,
+                                             "holes"):
             continue
         res = StitchResult(holes=[Hole(h.point, h.tangent)])
         stitches.append((res, h, stitch_color))  # LooseHole has hole_* fields
     return outlines, stitches
+
+
+def collect_paths(doc: Document, selection=None, include=None):
+    """The visible outlines as TRUE segments in world coordinates -- for an
+    export without kerf, so a laser gets real arcs instead of chords:
+    ``[(segments, color, closed)]`` where a segment is ``("line", a, b)``,
+    ``("arc", a, mid, b)`` or ``("bezier", a, c1, c2, b)``. Text contours
+    come as line segments. Same order and filters as ``collect``."""
+    from .path import Arc, CubicBezier, QuadraticBezier
+    from .shapes import Circle
+    out = []
+    for sh in doc.shapes:
+        if getattr(sh, "construction", False):
+            continue
+        lyr = doc.layer(sh.layer)
+        if lyr is not None and not lyr.visible:
+            continue
+        if not _wanted(doc, sh, selection, include, "outlines"):
+            continue
+        color = lyr.color if lyr else "#ff0000"
+        t = sh.transform
+        segs = []
+        if isinstance(sh, Circle) and abs(sh.rx - sh.ry) < 1e-9:
+            r = sh.rx
+            a, m1, b, m2 = (t.apply(Vec2(r, 0)), t.apply(Vec2(0, r)),
+                            t.apply(Vec2(-r, 0)), t.apply(Vec2(0, -r)))
+            segs = [("arc", a, m1, b), ("arc", b, m2, a)]
+            closed = True
+        else:
+            path = sh.local_path()
+            closed = path.closed
+            for sg in path.segments:
+                if isinstance(sg, Arc):
+                    mid = sg._point(sg.a0 + sg._sweep() / 2.0)
+                    segs.append(("arc", t.apply(sg.start()), t.apply(mid),
+                                 t.apply(sg.end())))
+                elif isinstance(sg, (CubicBezier, QuadraticBezier)):
+                    cb = sg.to_cubic() if isinstance(sg, QuadraticBezier) else sg
+                    segs.append(("bezier", t.apply(cb.p0), t.apply(cb.p1),
+                                 t.apply(cb.p2), t.apply(cb.p3)))
+                else:
+                    segs.append(("line", t.apply(sg.start()), t.apply(sg.end())))
+            if closed and segs and (segs[-1][-1] - segs[0][1]).length() > 1e-9:
+                segs.append(("line", segs[-1][-1], segs[0][1]))
+        if segs:
+            out.append((segs, color, closed))
+    for tx in getattr(doc, "texts", []):
+        lyr = doc.layer(tx.layer)
+        if lyr is not None and not lyr.visible:
+            continue
+        if not _wanted(doc, tx, selection, include, "text"):
+            continue
+        color = lyr.color if lyr else "#888888"
+        for contour in tx.world_contours():
+            if len(contour) >= 2:
+                pts = list(contour) + [contour[0]]
+                out.append(([("line", a, b) for a, b in zip(pts, pts[1:])],
+                            color, True))
+    return out
+
+
+def _arc_params(a: Vec2, mid: Vec2, b: Vec2):
+    """(centre, radius, sweep in radians, ccw) of the arc a -> b through
+    mid, or None when the three points are collinear."""
+    from .shapes import arc_through
+    arc = arc_through(a, mid, b)
+    if arc is None:
+        return None
+    c, r, a0, a1, ccw = arc
+    two_pi = 2.0 * math.pi
+    sweep = (a1 - a0) % two_pi if ccw else (a0 - a1) % two_pi
+    return c, r, sweep, ccw
 
 
 def _apply_kerf(outlines, cuttable, kerf: float):
@@ -160,9 +255,16 @@ def _bbox_all(outlines, stitches):
 
 
 def export_svg(doc: Document, path: str, *, margin: float = 6.0,
-               hairline: float = 0.05, kerf: float | None = None) -> None:
+               hairline: float = 0.05, kerf: float | None = None,
+               selection=None, include=None) -> None:
+    """Write ``doc`` as a laser-ready SVG. Without kerf compensation the
+    outlines are written as true arcs and curves (``A`` / ``C`` commands);
+    with it, as the compensated polylines. ``selection`` / ``include``: see
+    ``collect``."""
     k = _resolve_kerf(doc, kerf)
-    outlines, stitches = collect(doc, kerf=k)
+    outlines, stitches = collect(doc, kerf=k, selection=selection,
+                                 include=include)
+    exact = collect_paths(doc, selection, include) if k <= 1e-9 else None
     minx, miny, maxx, maxy = _bbox_all(outlines, stitches)
     minx -= margin; miny -= margin; maxx += margin; maxy += margin
     w = maxx - minx
@@ -182,12 +284,39 @@ def export_svg(doc: Document, path: str, *, margin: float = 6.0,
     out.append("  <!-- leathercad export. Units: mm. 1 user unit = 1 mm. -->")
 
     out.append("  <g id='outlines' fill='none'>")
-    for pl, color in outlines:
-        if len(pl) < 2:
-            continue
-        d = "M " + " L ".join(f"{_fmt(X(p.x))} {_fmt(Y(p.y))}" for p in pl)
-        out.append(f"    <path d='{d}' stroke='{color}' "
-                   f"stroke-width='{hairline}' />")
+    if exact is not None:
+        for segs, color, closed in exact:
+            d = [f"M {_fmt(X(segs[0][1].x))} {_fmt(Y(segs[0][1].y))}"]
+            for sg in segs:
+                if sg[0] == "arc":
+                    prm = _arc_params(sg[1], sg[2], sg[3])
+                    if prm is None:
+                        d.append(f"L {_fmt(X(sg[3].x))} {_fmt(Y(sg[3].y))}")
+                        continue
+                    _c, r, sweep, ccw = prm
+                    # Y is flipped on the page: a world-CCW arc still LOOKS
+                    # counter-clockwise, which in SVG's y-down frame is the
+                    # negative-angle direction (sweep-flag 0)
+                    d.append(f"A {_fmt(r)} {_fmt(r)} 0 "
+                             f"{1 if sweep > math.pi else 0} {0 if ccw else 1} "
+                             f"{_fmt(X(sg[3].x))} {_fmt(Y(sg[3].y))}")
+                elif sg[0] == "bezier":
+                    d.append(f"C {_fmt(X(sg[2].x))} {_fmt(Y(sg[2].y))} "
+                             f"{_fmt(X(sg[3].x))} {_fmt(Y(sg[3].y))} "
+                             f"{_fmt(X(sg[4].x))} {_fmt(Y(sg[4].y))}")
+                else:
+                    d.append(f"L {_fmt(X(sg[2].x))} {_fmt(Y(sg[2].y))}")
+            if closed:
+                d.append("Z")
+            out.append(f"    <path d='{' '.join(d)}' stroke='{color}' "
+                       f"stroke-width='{hairline}' />")
+    else:
+        for pl, color in outlines:
+            if len(pl) < 2:
+                continue
+            d = "M " + " L ".join(f"{_fmt(X(p.x))} {_fmt(Y(p.y))}" for p in pl)
+            out.append(f"    <path d='{d}' stroke='{color}' "
+                       f"stroke-width='{hairline}' />")
     out.append("  </g>")
 
     out.append("  <g id='stitches' fill='none'>")
@@ -282,9 +411,15 @@ def _dxf_pair(code: int, value) -> str:
     return f"{code}\n{value}\n"
 
 
-def export_dxf(doc: Document, path: str, *, kerf: float | None = None) -> None:
+def export_dxf(doc: Document, path: str, *, kerf: float | None = None,
+               selection=None, include=None) -> None:
+    """Write ``doc`` as an R12 DXF. Without kerf compensation each outline
+    is one POLYLINE whose arcs are bulge vertices (true arcs, one connected
+    contour); with it, the compensated polylines."""
     k = _resolve_kerf(doc, kerf)
-    outlines, stitches = collect(doc, kerf=k)
+    outlines, stitches = collect(doc, kerf=k, selection=selection,
+                                 include=include)
+    exact = collect_paths(doc, selection, include) if k <= 1e-9 else None
 
     # gather layer names/colors actually used
     used = {}
@@ -331,29 +466,61 @@ def export_dxf(doc: Document, path: str, *, kerf: float | None = None) -> None:
         s.append(_dxf_pair(20, f"{c.y:.4f}"))
         s.append(_dxf_pair(40, f"{r:.4f}"))
 
-    def polyline(pts: Sequence[Vec2], color: str, closed: bool):
+    def polyline(pts: Sequence[Vec2], color: str, closed: bool, bulges=None):
         # A single (R12) POLYLINE per outline so importers see one connected
         # contour -- and, when closed, a genuine closed loop (needed for correct
         # cut ordering / fill in LightBurn, Illustrator, etc.) rather than a heap
-        # of disconnected LINE segments.
+        # of disconnected LINE segments. ``bulges[i]`` (tan of a quarter of
+        # the sweep, + for CCW) makes the edge leaving vertex i a true arc.
         aci = used[color]
         s.append(_dxf_pair(0, "POLYLINE"))
         s.append(_dxf_pair(8, lname[color]))
         s.append(_dxf_pair(62, aci))
         s.append(_dxf_pair(66, 1))                 # vertices-follow flag
         s.append(_dxf_pair(70, 1 if closed else 0))
-        for p in pts:
+        for i, p in enumerate(pts):
             s.append(_dxf_pair(0, "VERTEX"))
             s.append(_dxf_pair(8, lname[color]))
             s.append(_dxf_pair(10, f"{p.x:.4f}"))
             s.append(_dxf_pair(20, f"{p.y:.4f}"))
+            if bulges and abs(bulges[i]) > 1e-12:
+                s.append(_dxf_pair(42, f"{bulges[i]:.6f}"))
         s.append(_dxf_pair(0, "SEQEND"))
 
-    for pl, color in outlines:
-        if len(pl) < 2:
-            continue
-        closed = len(pl) > 2 and (pl[0] - pl[-1]).length() < 1e-6
-        polyline(pl[:-1] if closed else pl, color, closed)
+    def exact_polyline(segs, color, closed):
+        pts, bulges = [], []
+        for sg in segs:
+            if sg[0] == "arc":
+                prm = _arc_params(sg[1], sg[2], sg[3])
+                pts.append(sg[1])
+                if prm is None:
+                    bulges.append(0.0)
+                else:
+                    _c, _r, sweep, ccw = prm
+                    bulges.append(math.tan(sweep / 4.0) * (1 if ccw else -1))
+            elif sg[0] == "bezier":
+                from .path import CubicBezier
+                fl = [sg[1]] + CubicBezier(sg[1], sg[2], sg[3], sg[4]).flatten(0.02)
+                for p in fl[:-1]:
+                    pts.append(p)
+                    bulges.append(0.0)
+            else:
+                pts.append(sg[1])
+                bulges.append(0.0)
+        if not closed:
+            pts.append(segs[-1][-1])
+            bulges.append(0.0)
+        polyline(pts, color, closed, bulges)
+
+    if exact is not None:
+        for segs, color, closed in exact:
+            exact_polyline(segs, color, closed)
+    else:
+        for pl, color in outlines:
+            if len(pl) < 2:
+                continue
+            closed = len(pl) > 2 and (pl[0] - pl[-1]).length() < 1e-6
+            polyline(pl[:-1] if closed else pl, color, closed)
 
     scol = stitch_color
     for res, settings, _ in stitches:

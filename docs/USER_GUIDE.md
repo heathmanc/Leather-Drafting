@@ -515,6 +515,13 @@ extra construction.
   hair short (up to 0.05 mm).
 * **Break apart** (`Ctrl+B`) — explode a shape into its individual edges
   (lines and arcs), each independently movable.
+* **Node editing extras** — while editing nodes, **right-click a node** for
+  *Remove node (keep the curve)*: the two edges either side merge into one
+  that keeps the outline's character (two arcs on one circle stay a single
+  arc; a curve stays a curve) instead of straightening, and *Open / Split
+  the path here* breaks the path at that node. **Right-click an edge** for
+  *Make this edge straight / an arc / a curve*. Alt-click a node still
+  removes it the quick way.
 * **Join / weld** (`Ctrl+J`) — select several touching segments and weld them
   back into one continuous path (arcs kept). Only **Cut**-layer pieces are
   joined; score / engrave / stitch lines in the selection are left alone, so
@@ -539,7 +546,10 @@ extra construction.
   (no overlap) can't be merged — overlap them slightly first.
 * **Array** (`Ctrl+Shift+R`) — repeat the selection in a **grid**
   (rows × columns at spacings) or a **circle** (count around a centre,
-  optionally rotating each copy). Perfect for belt holes and decorative
+  optionally rotating each copy), or **along a path**: select the pieces
+  AND an open line, curve or guide, pick *Along path*, and the copies are
+  spaced along it (evenly, or a set distance apart), turned to follow it if
+  you like. Perfect for belt holes and decorative
   punching.
 * **Card pocket stack** (Edit menu) — generates every piece of a stepped
   wallet interior from real numbers: card size (bank card 85.6 × 54 pre-set),
@@ -634,6 +644,12 @@ snaps and still bounds Trim and Extend, but nothing on it can be selected,
 moved, edited or deleted — lock the finished outline while you lay out
 hardware and seams on top of it. **Unlock** frees it again.
 
+### Radius dimensions
+
+Right-click a circle, a rounded corner or any arc → **Radius dimension**:
+a leader from the arc's centre labelled `R 8.0 mm` (or inches). Like
+linear dimensions it's an annotation — never exported.
+
 ## 12. Saving, exporting and cutting
 
 * **Save / Open** (`Ctrl+S` / `Ctrl+O`) — projects are plain JSON
@@ -697,6 +713,15 @@ layer becomes your cut, blue becomes the stitch-hole cut (small holes: slow
 speed, full power works well), green a light score, grey an engrave.
 
 ---
+
+### What the export contains
+
+Export SVG / DXF first asks **what** to export: outlines, stitch holes and
+lettering can each be left out (a holes-only file for a second pass, say),
+and **Selection only** exports just what's selected. Arcs and curves are
+written as **true arcs and curves** — SVG `A` / `C` path commands, DXF
+bulge polylines — so LightBurn gets smooth geometry and small files; with
+kerf compensation on they go out as the compensated polylines instead.
 
 ## 13. Printing at 1:1
 

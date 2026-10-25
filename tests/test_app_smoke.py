@@ -2503,6 +2503,61 @@ def test_seam_moved_with_its_group_is_saved_where_it_is_drawn(qapp):
     assert where(seam) == (15.0, 30.0)
 
 
+def test_group_rotates_as_one_piece(qapp):
+    """A group had no rotate grip at all: only a lone shape could be turned.
+    Its grip now turns every member about the group's centre, rigidly."""
+    import math
+    from leathercad_app.items import SelectionRotateHandle
+    win, c, drag, model, where = _group_rig(qapp)
+    rect = [i for i in c.scene_obj.items()
+            if getattr(model(i), "kind", "") == "rectangle"][0]
+    c.press_select(rect)
+    qapp.processEvents()
+    grips = [h for h in c._resize_handles
+             if isinstance(h, SelectionRotateHandle)]
+    assert len(grips) == 1
+    members = [model(i) for i in c.selected_items()]
+    assert len(members) == 5
+    box = c._selection_box(c._rotatable_selection())
+    px, py = box.center().x(), box.center().y()
+    start = {id(m): where(m) for m in members}
+    rots = {id(m): m.transform.rotation for m in members
+            if hasattr(m, "transform")}
+    gx, gy = grips[0].pos().x(), grips[0].pos().y()
+    # swing the grip a quarter turn counter-clockwise round the centre
+    drag(gx, gy, px - (gy - py), py + (gx - px))
+    for m in members:
+        x0, y0 = start[id(m)]
+        want = (px - (y0 - py), py + (x0 - px))
+        assert math.dist(where(m), want) < 1e-6
+        if id(m) in rots:
+            assert abs(m.transform.rotation - (rots[id(m)] + 90.0)) < 1e-9
+    win.undo()
+    assert sorted(where(m) for m in _all_models(c)) == sorted(start.values())
+
+
+def test_rotate_command_turns_a_mixed_selection(qapp):
+    import math
+    from leathercad_app.items import SelectionRotateHandle
+    win, c, drag, model, where = _group_rig(qapp)
+    c.press_select([i for i in c.scene_obj.items() if model(i)][0])
+    c.ungroup_group()
+    for i in c.scene_obj.items():
+        if model(i) is not None:
+            i.setSelected(True)
+    qapp.processEvents()
+    assert sum(isinstance(h, SelectionRotateHandle)
+               for h in c._resize_handles) == 1
+    before = sorted(where(m) for m in _all_models(c))
+    hole = [m for m in _all_models(c) if hasattr(m, "tangent")][0]
+    t0 = (hole.tangent.x, hole.tangent.y)
+    c.rotate_selected(-90.0)
+    assert math.dist((hole.tangent.x, hole.tangent.y), (t0[1], -t0[0])) < 1e-9
+    c.rotate_selected(90.0)
+    after = sorted(where(m) for m in _all_models(c))
+    assert all(math.dist(a, b) < 1e-9 for a, b in zip(before, after))
+
+
 def test_exploded_stitching_stays_in_its_group(qapp):
     """Explode stitching -> holes made ungrouped holes, so the next drag of
     the (duplicated) piece left them behind."""

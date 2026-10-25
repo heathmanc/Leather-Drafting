@@ -28,7 +28,8 @@ from leathercad.holes import LooseHole
 from leathercad.stitching import (stitch_shape_path, holes_for_shape, Hole,
                                   StitchResult, flip_symmetry)
 from .items import (ShapeItem, StitchLineItem, VertexHandle, HoleItem,
-                    ResizeHandle, RotateHandle, DimensionItem, TextItem,
+                    ResizeHandle, RotateHandle, SelectionRotateHandle,
+                    DimensionItem, TextItem,
                     bake_text_contours)
 
 try:
@@ -367,6 +368,7 @@ class Canvas(QGraphicsView):
         self._resize_group = []           # sibling items scaled with a group resize
         self._resize_group_base = None    # baseline snapshot captured on drag start
         self._suspend_move_refresh = False   # set during bulk creates (duplicate)
+        self._selrot_pending = False
         self.scene_obj.selectionChanged.connect(self._emit_selection_changed)
 
     # -- zoom / view ----------------------------------------------------
@@ -1725,7 +1727,7 @@ class Canvas(QGraphicsView):
                 # beneath, else to the shape they belong to.
                 under = [i for i in self.items(event.position().toPoint())
                          if not isinstance(i, (ResizeHandle, RotateHandle))]
-                it = under[0] if under else it.owner
+                it = under[0] if under else (it.owner or it)
             # double-click a text -> open its edit dialog (string / font / style)
             towner = it
             while towner is not None and not isinstance(towner, TextItem):
@@ -4019,6 +4021,89 @@ class Canvas(QGraphicsView):
         self.documentChangedSig.emit()
         self._emit_commit()
 
+    # -- rotate the selection as a whole --------------------------------
+    def _rotatable_selection(self):
+        return [it for it in self.selected_items()
+                if isinstance(it, (ShapeItem, HoleItem, StitchLineItem,
+                                   TextItem))]
+
+    @staticmethod
+    def _selection_box(items):
+        """Scene rect around ``items`` (None if empty)."""
+        rect = None
+        for it in items:
+            r = it.sceneBoundingRect()
+            rect = r if rect is None else rect.united(r)
+        return rect
+
+    def _rotation_baseline(self, items):
+        """Snapshot what a rotation changes, so a drag can re-rotate from the
+        start every frame instead of accumulating rounding."""
+        base = []
+        for it in items:
+            if not _alive(it):
+                continue
+            if isinstance(it, StitchLineItem):
+                it._bake_move()
+                m = it.line
+                base.append((it, (list(m.points), list(m.corner_points))))
+            elif isinstance(it, HoleItem):
+                base.append((it, (it.hole.point, it.hole.tangent)))
+            else:
+                t = it.model.transform
+                base.append((it, (t.x, t.y, t.rotation)))
+        return base
+
+    def _apply_rotation(self, base, pivot, deg) -> None:
+        """Rotate every item in ``base`` by ``deg`` (CCW) about ``pivot``: its
+        position swings round the pivot and its own orientation turns by the
+        same angle, so the selection turns as one rigid piece."""
+        import math
+        a = math.radians(deg)
+        c, s = math.cos(a), math.sin(a)
+        px, py = pivot
+
+        def turn(p):
+            dx, dy = p.x - px, p.y - py
+            return Vec2(px + dx * c - dy * s, py + dx * s + dy * c)
+
+        def spin(v):
+            return Vec2(v.x * c - v.y * s, v.x * s + v.y * c)
+
+        self._suspend_move_refresh = True
+        try:
+            for it, b in base:
+                if not _alive(it):
+                    continue
+                if isinstance(it, StitchLineItem):
+                    it.line.points = [turn(p) for p in b[0]]
+                    it.line.corner_points = [turn(p) for p in b[1]]
+                elif isinstance(it, HoleItem):
+                    it.hole.point = turn(b[0])
+                    it.hole.tangent = spin(b[1])
+                else:
+                    t = it.model.transform
+                    o = turn(Vec2(b[0], b[1]))
+                    t.x, t.y = o.x, o.y
+                    t.rotation = ((b[2] + deg + 180.0) % 360.0) - 180.0
+                it.sync_from_model()
+        finally:
+            self._suspend_move_refresh = False
+        self.update_dimensions()
+        self.documentChangedSig.emit()
+
+    def rotate_selected(self, deg: float) -> None:
+        """Rotate the whole selection ``deg`` degrees CCW about its centre."""
+        items = self._rotatable_selection()
+        box = self._selection_box(items)
+        if box is None or abs(deg) < 1e-12:
+            return
+        pivot = (box.center().x(), box.center().y())
+        self._apply_rotation(self._rotation_baseline(items), pivot, deg)
+        self._refresh_resize_handles()
+        self.geometryMovedSig.emit()
+        self._emit_commit()
+
     def item_moved(self, item) -> None:
         if self._suspend_move_refresh:
             return      # bulk op (duplicate/array): one refresh happens at end
@@ -4099,6 +4184,7 @@ class Canvas(QGraphicsView):
         if len(self._selected_shapes) <= 2:
             self._selected_shapes = {it for it in self._selected_shapes
                                      if _alive(it) and it.isSelected()}
+        self._queue_selection_rotate()
         if len(self._selected_shapes) == 1:
             it = next(iter(self._selected_shapes))
             if it.resize_extents() is not None:
@@ -4109,6 +4195,36 @@ class Canvas(QGraphicsView):
             self.show_resize_handles(primary, group=members)
             return
         self.clear_resize_handles()
+
+    def _queue_selection_rotate(self) -> None:
+        # once per burst of selection changes, not once per selected item
+        if not self._selrot_pending:
+            self._selrot_pending = True
+            QTimer.singleShot(0, self._show_selection_rotate)
+
+    def _show_selection_rotate(self) -> None:
+        """Give a multi-selection (or a group) one rotate grip that turns it
+        all about its centre. A lone shape keeps its own grip."""
+        self._selrot_pending = False
+        if self._edit_owner is not None or self._active_resize is not None:
+            return
+        items = self._rotatable_selection()
+        if len(items) < 2:
+            return
+        keep = []
+        for h in self._resize_handles:
+            if isinstance(h, SelectionRotateHandle):
+                if set(h.items) == set(items):
+                    return                    # already showing this one
+            elif isinstance(h, RotateHandle):
+                pass                          # one shape's grip: not for all
+            else:
+                keep.append(h)
+                continue
+            self.scene_obj.removeItem(h)
+        h = SelectionRotateHandle(items, self)
+        self.scene_obj.addItem(h)
+        self._resize_handles = keep + [h]
 
     def _group_resize_target(self):
         """If the selection is exactly one group, return ``(primary, members)``:
@@ -4138,7 +4254,7 @@ class Canvas(QGraphicsView):
         for h in self._resize_handles:
             if h is self._active_resize:
                 continue
-            if _alive(h) and _alive(h.owner):
+            if _alive(h) and (h.owner is None or _alive(h.owner)):
                 h.reposition()
 
     def refresh_item(self, item) -> None:

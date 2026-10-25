@@ -720,6 +720,15 @@ class MainWindow(QMainWindow):
                   lambda: self.canvas.distribute_selected(True))
         self._add(am, "Distribute vertically", None,
                   lambda: self.canvas.distribute_selected(False))
+        am.addSeparator()
+        # turn the whole selection (a group, or several pieces) about its centre
+        self._add(am, "Rotate 90° clockwise", "Ctrl+]",
+                  lambda: self.canvas.rotate_selected(-90.0))
+        self._add(am, "Rotate 90° counter-clockwise", "Ctrl+[",
+                  lambda: self.canvas.rotate_selected(90.0))
+        self._add(am, "Rotate 180°", None,
+                  lambda: self.canvas.rotate_selected(180.0))
+        self._add(am, "Rotate by…", None, self._rotate_by)
 
         vm = m.addMenu("&View")
         self._add(vm, "Fit to content", "F", self.canvas.fit_to_content)
@@ -815,6 +824,18 @@ class MainWindow(QMainWindow):
             "<b>Stitch Hero</b><br>CAD for laser-cut leather patterns "
             "with pricking-iron-accurate (chord-spaced) stitch holes.<br><br>"
             "Units are millimetres. Press <b>F1</b> for the user guide.")
+
+    def _rotate_by(self):
+        from PySide6.QtWidgets import QInputDialog
+        if not self.canvas.selected_items():
+            self.statusBar().showMessage("Select something to rotate", 3000)
+            return
+        deg, ok = QInputDialog.getDouble(
+            self, "Rotate selection",
+            "Angle in degrees (positive = counter-clockwise):",
+            0.0, -360.0, 360.0, 3)
+        if ok:
+            self.canvas.rotate_selected(deg)
 
     def _add(self, menu, text, shortcut, slot):
         act = QAction(text, self)

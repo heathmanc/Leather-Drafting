@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import (QColor, QPainterPath, QPainterPathStroker, QPen,
                            QPolygonF, QBrush, QFont)
 from PySide6.QtWidgets import (QGraphicsItem, QApplication,
@@ -1516,6 +1516,95 @@ class RotateHandle(QGraphicsItem):
             self._dragged = False
             self.canvas.commitRequested.emit()
         event.accept()
+
+
+def _alive(obj) -> bool:
+    """True if the C++ object behind a PySide wrapper still exists."""
+    try:
+        import shiboken6
+        return obj is not None and shiboken6.isValid(obj)
+    except ImportError:  # pragma: no cover
+        return obj is not None
+
+
+class SelectionRotateHandle(RotateHandle):
+    """The rotate grip for a multi-selection or a group: it floats above the
+    selection's box and turns every selected item about the box centre as one
+    rigid piece (positions swing round, orientations turn with them)."""
+
+    def __init__(self, items, canvas):
+        self.items = list(items)
+        self._pivot = None
+        self._base = None
+        self._grip0 = None
+        self._reposition_pending = False
+        super().__init__(None, canvas)
+        self._do_reposition()
+
+    def _grip_world(self):
+        box = self.canvas._selection_box([i for i in self.items if _alive(i)])
+        if box is None:
+            return None
+        pad = self.OFFSET_PX * 1.6 / max(getattr(self.canvas, "_zoom", 3.0), 1e-6)
+        # world +Y is up on screen, so the box's max-Y edge is its top
+        return Vec2(box.center().x(), box.bottom() + pad)
+
+    def reposition(self):
+        # Many items each report their own move during a drag; measure the
+        # selection once per event-loop turn rather than once per item.
+        if self._reposition_pending:
+            return
+        self._reposition_pending = True
+        QTimer.singleShot(0, self._do_reposition)
+
+    def _do_reposition(self):
+        self._reposition_pending = False
+        if not _alive(self) or self.canvas._active_resize is self:
+            return
+        w = self._grip_world()
+        if w is not None:
+            self.setPos(w.x, w.y)
+
+    def _origin(self) -> Vec2:
+        return self._pivot
+
+    def mousePressEvent(self, event):
+        import math
+        if event.button() != Qt.LeftButton:
+            event.ignore()
+            return
+        live = [i for i in self.items if _alive(i)]
+        box = self.canvas._selection_box(live)
+        if box is None:
+            event.ignore()
+            return
+        self._pivot = Vec2(box.center().x(), box.center().y())
+        self._base = self.canvas._rotation_baseline(live)
+        self._grip0 = Vec2(self.pos().x(), self.pos().y())
+        sp = event.scenePos()
+        self._start_ang = math.degrees(math.atan2(sp.y() - self._pivot.y,
+                                                  sp.x() - self._pivot.x))
+        self._start_rot = 0.0
+        self._dragged = False
+        self.canvas._active_resize = self
+        self.setCursor(Qt.ClosedHandCursor)
+        event.accept()
+
+    def apply_rotation(self, degrees_ccw: float) -> None:
+        import math
+        self.canvas._apply_rotation(self._base, (self._pivot.x, self._pivot.y),
+                                    degrees_ccw)
+        a = math.radians(degrees_ccw)
+        dx, dy = self._grip0.x - self._pivot.x, self._grip0.y - self._pivot.y
+        self.setPos(self._pivot.x + dx * math.cos(a) - dy * math.sin(a),
+                    self._pivot.y + dx * math.sin(a) + dy * math.cos(a))
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        self.canvas.geometryMovedSig.emit()
+        # re-fit the grips to the turned selection -- after this event returns,
+        # since that replaces this very handle
+        QTimer.singleShot(0, self.canvas._refresh_resize_handles)
 
 
 class NodeRef:

@@ -282,7 +282,11 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
   frees it).
 * **Rotate**: drag the round **rotation grip** floating above a selected
   shape's box — snaps to 1° (hold **Shift** for 15° detents) — or type an
-  exact angle in Properties → Rotation.
+  exact angle in Properties → Rotation. A **group** or any **multi-selection**
+  gets one grip above the whole selection that turns everything together
+  about its centre — outlines, seams, holes and labels as one rigid piece.
+  For exact turns use **Arrange → Rotate 90° clockwise** (`Ctrl+]`),
+  **counter-clockwise** (`Ctrl+[`), **180°** or **Rotate by…**.
 * **Mirror**: Properties → "Mirror (laser from back)".
 * **Duplicate**: `Ctrl+D` (copies land beside the original). Duplicating a **group** gives a new group of its own — the copies select and move together, separately from the original — with its text labels and seams included. **Array** works the same way: each copy of a group is its own group.
 * **Delete**: `Delete` or `Backspace`.

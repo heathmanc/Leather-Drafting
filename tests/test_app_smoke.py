@@ -2191,6 +2191,46 @@ def test_double_click_edits_bezier_nodes(qapp):
     assert any(getattr(h.node, "is_ctrl", False) for h in c._handles)
 
 
+def test_double_click_through_resize_grips_edits_the_curve(qapp):
+    """A freshly drawn curve stays selected, and its box-resize grips sit on
+    the curve's ends and extremes -- where you double-click to edit it. The
+    grips used to swallow that double-click (on a short curve, or zoomed out,
+    they cover most of it); they are looked through now."""
+    from PySide6.QtCore import QPointF, QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app import canvas as cm
+    from leathercad_app.items import ShapeItem, ResizeHandle
+    from leathercad.document import Document
+    from leathercad.shapes import EditablePath, Transform
+    from leathercad.geometry import Vec2
+
+    ep = EditablePath.from_bezier([Vec2(0, 0), Vec2(20, 0)],
+                                  [Vec2(4, 5), Vec2(4, -5)], closed=False)
+    ep.layer = "Cut"
+    ep.transform = Transform(x=0, y=0)
+    doc = Document()
+    doc.add_shape(ep)
+    win = MainWindow(doc)
+    win.show()
+    c = win.canvas
+    c.rebuild()
+    c.tool = cm.SELECT
+    it = [i for i in c.scene_obj.items() if isinstance(i, ShapeItem)][0]
+    it.setSelected(True)                     # as right after drawing
+    qapp.processEvents()
+    end = ep.transform.apply(ep.nodes[-1])   # the curve's end: a grip sits here
+    vp = c.mapFromScene(QPointF(end.x, end.y))
+    assert isinstance(c.itemAt(vp), ResizeHandle)      # the grip is on top
+    pt = QPointF(vp)
+    QApplication.sendEvent(c.viewport(), QMouseEvent(
+        QEvent.MouseButtonDblClick, pt, c.viewport().mapToGlobal(pt),
+        Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+    assert c._edit_owner is it                         # node-edit entered
+    assert any(getattr(h.node, "is_ctrl", False) for h in c._handles)
+
+
 def _multi_click(c, pts):
     from PySide6.QtCore import QPointF, QEvent, Qt
     from PySide6.QtGui import QMouseEvent

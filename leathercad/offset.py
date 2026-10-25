@@ -350,12 +350,26 @@ def _mitred_offset(ring: List[Vec2], move: float, sign: float):
         offset_edges.append((a + inward, b + inward, d, a))
     m = len(offset_edges)
     pts: List[Vec2] = []
+    dirs: List[Vec2] = []
+    starts: list = []
+    lim = MITER_LIMIT * abs(move)
     for i in range(m):
         prev = offset_edges[(i - 1) % m]
         cur = offset_edges[i]
         p = _line_intersection(prev[0], prev[1], cur[0], cur[1])
+        if p is not None and (p - cur[3]).length() > lim:
+            # bevel: prev's offset end -> midpoint (the corner) -> cur's start
+            mid = (prev[1] + cur[0]) * 0.5
+            g = cur[0] - prev[1]
+            gd = g * (1.0 / g.length()) if g.length() > _EPS else cur[2]
+            pts += [prev[1], mid, cur[0]]
+            dirs += [gd, gd, cur[2]]
+            starts += [None, cur[3], None]
+            continue
         pts.append(p if p is not None else cur[0])
-    return pts, [e[2] for e in offset_edges], [e[3] for e in offset_edges]
+        dirs.append(cur[2])
+        starts.append(cur[3])
+    return pts, dirs, starts
 
 
 def _runs_backwards(pts: List[Vec2], dirs: List[Vec2]) -> bool:
@@ -427,7 +441,7 @@ def _trim_inset(raw: List[Vec2], dirs: List[Vec2], starts, src: List[Vec2],
     kept = {key(p) for p in new_pts}
     raw_keys = {key(p) for p in raw}
     mitre = {key(v): p for vs, p in zip(starts, raw)
-             for v in (vs if isinstance(vs, list) else [vs])}
+             for v in (vs if isinstance(vs, list) else [vs]) if v is not None}
     out: List[Vec2] = []
     for c in corners:
         m = mitre.get(key(c))
@@ -447,6 +461,16 @@ def _trim_inset(raw: List[Vec2], dirs: List[Vec2], starts, src: List[Vec2],
             out.append(p)
     new_pts.append(new_pts[0])
     return new_pts, out
+
+
+# A mitred join is used only while its corner stays within this many offset
+# distances of the source vertex; past that it is bevelled. Where an outline
+# doubles back on itself (a cusp or hairpin in a pen curve) two neighbouring
+# edges are nearly antiparallel and their offsets meet hundreds of metres
+# away: a ~300 mm curve's 3.5 mm inset came out over a kilometre long, and
+# marching holes along it froze the app. 10 bevels only joins sharper than
+# ~11.5 degrees -- the SVG default (4) would bevel at ~29.
+MITER_LIMIT = 10.0
 
 
 # Inset arcs are flattened this finely (sagitta, mm) so holes marched along
@@ -516,7 +540,10 @@ def _offset_path_raw(path, move: float, sign: float):
                 pieces.append([[a + nrm, b + nrm], [u], a])
     m = len(pieces)
     closed = path.closed
-    # join neighbours: shared point if they already meet, else a mitre
+    # join neighbours: shared point if they already meet, else a mitre --
+    # or, past the mitre limit, a bevel with the corner at its midpoint
+    lim = MITER_LIMIT * abs(move)
+    bevel_mid: dict = {}                # index of piece B -> bevel midpoint
     for i in range(m if closed else m - 1):
         A, B = pieces[i], pieces[(i + 1) % m]
         a_end, b_start = A[0][-1], B[0][0]
@@ -524,27 +551,36 @@ def _offset_path_raw(path, move: float, sign: float):
             B[0][0] = a_end
         else:
             x = _line_intersection(A[0][-2], A[0][-1], B[0][0], B[0][1])
-            if x is not None:
+            if x is not None and (x - B[2]).length() > lim:
+                bevel_mid[(i + 1) % m] = (a_end + b_start) * 0.5
+            elif x is not None:
                 A[0][-1] = x
                 B[0][0] = x
     raw: List[Vec2] = []
     dirs: List[Vec2] = []
     starts: list = []
     for i, (pts, pdirs, src) in enumerate(pieces):
-        nxt = pieces[(i + 1) % m][0][0] if (closed or i + 1 < m) else None
+        nb = (i + 1) % m
+        nxt = pieces[nb][0][0] if (closed or i + 1 < m) else None
         for j in range(len(pts) - 1):
             raw.append(pts[j])
             dirs.append(pdirs[j])
-            starts.append([src] if j == 0 else [])
-        if nxt is None or pts[-1] is not nxt:       # a gap (parallel join)
+            # a bevelled corner is carried by the bevel's midpoint instead
+            starts.append([src] if j == 0 and i not in bevel_mid else [])
+        if nxt is None or pts[-1] is not nxt:   # a gap: bevel / parallel join
             raw.append(pts[-1])
             if nxt is not None:
                 g = nxt - pts[-1]
-                dirs.append(g * (1.0 / g.length()) if g.length() > _EPS
-                            else pdirs[-1])
+                gd = g * (1.0 / g.length()) if g.length() > _EPS else pdirs[-1]
+                dirs.append(gd)
+                starts.append([])
+                if nb in bevel_mid:
+                    raw.append(bevel_mid[nb])
+                    dirs.append(gd)
+                    starts.append([pieces[nb][2]])
             else:
                 dirs.append(pdirs[-1])
-            starts.append([])
+                starts.append([])
     # merge coincident neighbours (an arc whose radius equals the offset
     # collapses to a point): keep the first, take the later outgoing edge
     out_p: List[Vec2] = []

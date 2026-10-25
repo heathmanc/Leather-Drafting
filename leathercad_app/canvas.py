@@ -1641,6 +1641,16 @@ class Canvas(QGraphicsView):
                 event.accept()
                 return
             it = self.itemAt(event.position().toPoint())
+            if isinstance(it, (ResizeHandle, RotateHandle)):
+                # The selection box's grips sit right on a curve's ends and
+                # extremes -- exactly where you double-click to edit it -- and
+                # are a fixed size on screen, so on a short or flat curve, or
+                # zoomed out, they cover most of it. They have no double-click
+                # action of their own: look through them to whatever is
+                # beneath, else to the shape they belong to.
+                under = [i for i in self.items(event.position().toPoint())
+                         if not isinstance(i, (ResizeHandle, RotateHandle))]
+                it = under[0] if under else it.owner
             # double-click a text -> open its edit dialog (string / font / style)
             towner = it
             while towner is not None and not isinstance(towner, TextItem):

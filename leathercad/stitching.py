@@ -826,6 +826,11 @@ def _rotate_closed_ring(points: List[Vec2], start_offset: float) -> List[Vec2]:
     return rotated
 
 
+# More holes than this on one stitch line (385 m at a 3.85 mm iron) means the
+# geometry has gone wrong; return none rather than hang the app fitting them.
+_MAX_HOLES = 100_000
+
+
 # Fitting a big outline is pure but not cheap, and the SAME outline is fitted
 # again on every rebuild (open, undo, redo, layer toggle...). Memoise on the
 # exact inputs: items compute holes on LOCAL geometry, so moving a shape --
@@ -927,6 +932,10 @@ def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
     if poly.length <= _EPS:
         return StitchResult(closed=closed)
     total = poly.length
+    if total > _MAX_HOLES * settings.pitch_mm:
+        # never a real seam: a runaway stitch line (see offset.MITER_LIMIT)
+        # would otherwise be marched hole by hole with the UI frozen
+        return StitchResult(closed=closed)
 
     fit = settings.fit
     if fit == "auto":

@@ -248,3 +248,33 @@ def test_ellipse_narrower_than_twice_the_inset_has_no_stitch_line():
     pts = Ellipse(rx=6.5, ry=4.0).local_path().flatten()
     assert offset_closed_inward(pts, 5.0) == []
     assert len(offset_closed_inward(pts, 3.0)) > 3
+
+
+def test_cusp_in_a_pen_curve_cannot_blow_up_the_inset():
+    # Two pen anchors a hair apart (one dragged, one clicked 0.00005 mm away)
+    # leave a microscopic edge pointing any which way: a cusp, whose
+    # neighbouring offsets meet hundreds of metres away. The 185 mm outline's
+    # 2 mm inset came out ~1.9 km long and marching holes along it hung the
+    # app. The mitre limit bevels such joins.
+    import time
+    from leathercad.offset import inset_path_with_corners, offset_closed_inward
+    from leathercad.shapes import EditablePath
+    ep = EditablePath.from_bezier(
+        [Vec2(49.105893881064134, 24.94855314913302),
+         Vec2(-22.011279912865902, 46.93375132336571),
+         Vec2(-22.01133437517618, 46.93375132336571)],
+        [Vec2(8.324121720118725, -16.903495336316972),
+         Vec2(17.283022524038508, 18.719414941902784), None], closed=True)
+    path = ep.local_path()
+    src = path.flatten()
+    outline = sum((src[i + 1] - src[i]).length() for i in range(len(src) - 1))
+    for ring in (inset_path_with_corners(path, 2.0, [])[0],
+                 offset_closed_inward(src, 2.0)):
+        length = sum((ring[i + 1] - ring[i]).length()
+                     for i in range(len(ring) - 1))
+        assert 0 < length < 1.5 * outline
+    from leathercad.stitching import stitch_shape_path
+    from leathercad.stitchsettings import StitchSettings
+    t0 = time.perf_counter()
+    res = stitch_shape_path(path, StitchSettings(inset=2.0, pitch_mm=3.85))
+    assert time.perf_counter() - t0 < 2.0 and 0 < len(res.holes) < 100

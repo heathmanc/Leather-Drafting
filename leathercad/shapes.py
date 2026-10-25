@@ -201,6 +201,11 @@ class Polygon(Shape):
     corner_radius: float = 0.0
     close_path: bool = True
     sharp_corners: bool = True
+    # Per-vertex "this is a real corner" flags, for outlines that mix corners
+    # with a flattened curve (a boolean result): there neither rule above
+    # fits -- every facet would force a hole, or no corner would. Ignored
+    # when it doesn't match the points (then sharp_corners decides).
+    corner_mask: Optional[List[bool]] = None
     kind: str = "polygon"
 
     def local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:
@@ -216,6 +221,9 @@ class Polygon(Shape):
             # Only a genuine turn forces a stitch hole. A collinear vertex
             # (e.g. a node the user inserted on a straight edge without moving
             # it) is NOT a corner, so it leaves the stitch pattern unchanged.
+            mask = self.corner_mask
+            if mask is not None and len(mask) == n:
+                return bool(mask[i])
             if not self.sharp_corners:
                 return False
             if not self.close_path and (i == 0 or i == n - 1):

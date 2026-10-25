@@ -107,6 +107,8 @@ def _shape_to_dict(sh: Shape) -> dict:
                     corner_radius=sh.corner_radius,
                     close_path=sh.close_path,
                     sharp_corners=sh.sharp_corners)
+        if sh.corner_mask is not None:
+            base["corner_mask"] = list(sh.corner_mask)
     elif isinstance(sh, PathShape):
         base.update(points=[[p.x, p.y] for p in sh.points],
                     close_path=sh.close_path)
@@ -158,7 +160,8 @@ def _shape_from_dict(d: dict) -> Shape:
         pts = [Vec2(x, y) for x, y in d.get("points", [])]
         sh = Polygon(points=pts, corner_radius=d.get("corner_radius", 0.0),
                      close_path=d.get("close_path", True),
-                     sharp_corners=d.get("sharp_corners", True), **common)
+                     sharp_corners=d.get("sharp_corners", True),
+                     corner_mask=d.get("corner_mask"), **common)
     elif kind == "path":
         pts = [Vec2(x, y) for x, y in d.get("points", [])]
         sh = PathShape(points=pts, close_path=d.get("close_path", False), **common)

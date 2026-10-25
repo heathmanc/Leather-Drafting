@@ -121,3 +121,75 @@ def test_canvas_subtract_bottom_minus_top():
     assert closed
     # top rect spans x 20..40, y 10..30 -> overlap with A's corner = 10x10=100
     assert round(abs(signed_area(pts[:-1])), 1) == 2300.0
+
+
+def _areas(rings):
+    return sorted(round(abs(signed_area(r)), 6) for r in rings)
+
+
+@pytest.mark.parametrize("a,b", [
+    (rect(0, 0, 10, 10), rect(10, 0, 20, 10)),      # B to the right
+    (rect(10, 0, 20, 10), rect(0, 0, 10, 10)),      # B to the left
+    (rect(0, 0, 10, 10), rect(0, 10, 10, 20)),      # B above
+    (rect(0, 10, 10, 20), rect(0, 0, 10, 10)),      # B below
+])
+def test_union_of_pieces_sharing_an_edge_fuses_from_any_side(a, b):
+    # the old fixed (+x, +y) nudge pushed a piece on that side AWAY, so the
+    # union came back as two separate pieces
+    assert _areas(boolean_op("union", a, b)) == [200.0]
+
+
+def test_shared_edge_cases_come_out_exact():
+    notch = boolean_op("difference", rect(0, 0, 30, 10), rect(10, 0, 20, 5))
+    assert _areas(notch) == [250.0]
+    pts = {(p.x, p.y) for p in notch[0]}
+    assert {(10, 0), (10, 5), (20, 5), (20, 0)} <= pts    # exact corners
+    assert _areas(boolean_op("union", rect(0, 0, 30, 10),
+                             rect(10, 10, 20, 20))) == [400.0]
+    assert _areas(boolean_op("intersection", rect(0, 0, 30, 10),
+                             rect(10, 0, 20, 5))) == [50.0]
+    assert boolean_op("intersection", rect(0, 0, 10, 10),
+                      rect(10, 0, 20, 10)) == []
+
+
+def test_combine_applies_every_operand_to_every_piece():
+    # the bar splits the strap; the later hole must still be cut from the
+    # right-hand piece (it was only applied to the largest piece)
+    out = combine("difference", [rect(0, 0, 100, 50), rect(60, -1, 65, 51),
+                                 rect(80, 20, 90, 30)])
+    assert _areas(out) == [100.0, 1750.0, 3000.0]
+    # overlapping cutouts merge into one hole, not two overlapping rings
+    out = combine("difference", [rect(0, 0, 100, 100), rect(20, 20, 40, 40),
+                                 rect(30, 30, 50, 50)])
+    assert _areas(out) == [700.0, 10000.0]
+    # a later shape can join two pieces
+    out = combine("union", [rect(0, 0, 50, 50), rect(100, 0, 120, 20),
+                            rect(110, 10, 130, 30)])
+    assert _areas(out) == [700.0, 2500.0]
+
+
+def test_union_keeps_the_stitch_hole_on_real_corners():
+    pytest.importorskip("PySide6")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    from leathercad.shapes import Rectangle, Circle, Transform
+    from leathercad.stitchsettings import StitchSettings
+    from leathercad.stitching import holes_for_shape
+    win = MainWindow(Document())
+    c = win.canvas
+    r = c.add_shape(Rectangle(width=60, height=40, layer="Cut",
+                              stitch=StitchSettings(pitch_mm=4.0, inset=3.0)))
+    ci = c.add_shape(Circle(rx=10, ry=10, layer="Cut",
+                            transform=Transform(x=30, y=20)))
+    c.scene_obj.clearSelection()
+    r.setSelected(True)
+    ci.setSelected(True)
+    c.boolean_selected("union")
+    sh = win.doc.shapes[0]
+    holes = holes_for_shape(sh).holes
+    for corner in (Vec2(-27, -17), Vec2(27, -17), Vec2(-27, 17)):
+        assert min((h.point - corner).length() for h in holes) < 1e-6
+    assert sum(sh.corner_mask) == 5      # 3 corners + where the circle meets

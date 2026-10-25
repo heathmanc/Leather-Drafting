@@ -2582,6 +2582,9 @@ class Canvas(QGraphicsView):
                 if i is None or d > thr:
                     return False
                 sh.points.insert(i + 1, proj)
+                mask = getattr(sh, "corner_mask", None)
+                if mask is not None and len(mask) == len(sh.points) - 1:
+                    mask.insert(i + 1, False)    # a node on an edge: no corner
             elif isinstance(sh, EditablePath):
                 from leathercad.modify import nearest_on_edge, split_edge_at
                 # any edge -- line, arc or bezier -- split where you clicked,
@@ -2634,6 +2637,9 @@ class Canvas(QGraphicsView):
                 idx = min(range(len(sh.points)),
                           key=lambda i: (sh.points[i] - local).length())
                 sh.points.pop(idx)
+                mask = getattr(sh, "corner_mask", None)
+                if mask is not None and len(mask) == len(sh.points) + 1:
+                    mask.pop(idx)
             elif isinstance(sh, EditablePath):
                 if getattr(handle.node, "is_ctrl", False):
                     self.statusMessage.emit(
@@ -3276,6 +3282,42 @@ class Canvas(QGraphicsView):
         ordered.sort(key=lambda x: x[0])          # bottom-most first
         base = ordered[0][1].model
         result = combine(op, [ring for _i, _it, ring in ordered])
+        # Which result vertices are real corners: the inputs' own corners
+        # (sharp corners, a rounded corner's tangent points) wherever they
+        # survive, and the new points where two outlines cross -- if the
+        # outline really turns there. Facets of a flattened curve are neither.
+        from leathercad.shapes import _is_real_corner
+        in_pts, in_corners = {}, set()
+        for k, (_i, it, ring) in enumerate(ordered):
+            for p in ring:
+                in_pts.setdefault((p.x, p.y), set()).add(k)
+            t = it.model.transform
+            for cp in it.model.local_path().corner_points:
+                w = t.apply(cp)
+                in_corners.add((round(w.x, 6), round(w.y, 6)))
+
+        def on_other(p, own):
+            # an input vertex lying on ANOTHER input's outline is where the two
+            # meet -- a crossing that happens to land on a vertex
+            for k, (_i, _it, other) in enumerate(ordered):
+                if k in own:
+                    continue
+                if _point_polyline_dist(p, other + other[:1]) < 1e-6:
+                    return True
+            return False
+
+        def corner_mask(ring):
+            n = len(ring)
+            out = []
+            for i, p in enumerate(ring):
+                if (round(p.x, 6), round(p.y, 6)) in in_corners:
+                    out.append(True)
+                elif (p.x, p.y) in in_pts and not on_other(p, in_pts[(p.x, p.y)]):
+                    out.append(False)
+                else:
+                    out.append(_is_real_corner(ring[i - 1], p,
+                                               ring[(i + 1) % n]))
+            return out
         keep_stitch = _copy.deepcopy(base.stitch)
         layer, opacity = base.layer, base.opacity
         for _i, it, _r in ordered:
@@ -3292,7 +3334,8 @@ class Canvas(QGraphicsView):
             cx = sum(p.x for p in ring) / len(ring)
             cy = sum(p.y for p in ring) / len(ring)
             local = [Vec2(p.x - cx, p.y - cy) for p in ring]
-            sh = Polygon(points=local, close_path=True, sharp_corners=False,
+            sh = Polygon(points=local, close_path=True, sharp_corners=True,
+                         corner_mask=corner_mask(ring),
                          transform=Transform(x=cx, y=cy),
                          stitch=keep_stitch if k == 0 else None, layer=layer)
             sh.opacity = opacity

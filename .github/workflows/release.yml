@@ -3,7 +3,8 @@ name: Release builds
 # Builds downloadable desktop packages and publishes them to a public GitHub
 # Release:
 #   * Windows -> Stitch-Hero-Setup-<ver>.exe            (Inno Setup)
-#   * macOS   -> Stitch-Hero-<ver>-macOS-universal.dmg  (Intel + Apple Silicon)
+#   * macOS   -> Stitch-Hero-<ver>-macOS-universal.dmg  (Intel + Apple Silicon;
+#                OFF by default -- tick "build_macos" when running it by hand)
 #   * The user manual (docs/Stitch-Hero-Manual.pdf) is attached too.
 #
 # Trigger by pushing a tag like v0.2.0, or Actions -> "Release builds" ->
@@ -21,6 +22,10 @@ on:
         description: "Publish a public GitHub Release (uncheck to only build artifacts)"
         type: boolean
         default: true
+      build_macos:
+        description: "Also build the macOS .dmg (paused for now)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -100,6 +105,8 @@ jobs:
 
   macos:
     needs: version
+    # Paused: only built when asked for on a manual run (tag pushes skip it).
+    if: ${{ github.event.inputs.build_macos == 'true' }}
     # One universal2 build on the Apple-Silicon runner. GitHub's Intel
     # (macos-13) runners are being retired and jobs targeting them sit
     # "waiting for a runner" forever, so instead of a per-arch matrix we build
@@ -177,7 +184,10 @@ jobs:
 
   release:
     needs: [version, windows, macos]
-    if: ${{ needs.version.outputs.publish == 'true' }}
+    # macos may be skipped (it's opt-in); publish as long as nothing failed
+    if: ${{ !cancelled() && needs.version.outputs.publish == 'true'
+            && needs.windows.result == 'success'
+            && needs.macos.result != 'failure' }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out (for the bundled manual PDF)
@@ -199,4 +209,6 @@ jobs:
             dist/*.dmg
             docs/Stitch-Hero-Manual.pdf
           generate_release_notes: true
-          fail_on_unmatched_files: true
+          # no .dmg when the macOS build is skipped; the Windows job's own
+          # if-no-files-found guard already guarantees the .exe
+          fail_on_unmatched_files: false

@@ -89,10 +89,13 @@ page — no Python needed:
   natively on both Apple Silicon and Intel). Open it and drag the app to
   Applications. It's unsigned, so the first launch is **right-click → Open**
   (or `xattr -dr com.apple.quarantine "/Applications/Stitch Hero.app"`).
+  *Mac builds are paused for now: releases after 0.3.2 ship Windows only
+  unless the build is run with "Also build the macOS .dmg" ticked.*
 
 Both are built by the **Release builds** GitHub Action: push a `v0.2.0`-style
 tag, or run it manually (Actions → *Release builds* → *Run workflow*), and it
-publishes the Windows `.exe` and macOS `.dmg` to a Release automatically.
+publishes the Windows `.exe` (and the macOS `.dmg`, when that option is
+ticked) to a Release automatically.
 
 ### From source (any OS)
 

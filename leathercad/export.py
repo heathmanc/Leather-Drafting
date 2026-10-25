@@ -44,19 +44,26 @@ def collect(doc: Document, kerf: float = 0.0):
     from .stitching import Hole, holes_for_shape
     from .stitchsettings import StitchSettings
 
+    # What's exported is what's shown: an outline goes with its own layer and
+    # its stitch holes with the Stitch layer (the canvas's rule), so hiding Cut
+    # exports just the holes and hiding Stitch just the outlines.
+    def shown(name):
+        lyr = doc.layer(name)
+        return lyr is None or lyr.visible
+    holes_shown = shown("Stitch")
+
     for sh in doc.shapes:
         if getattr(sh, "construction", False):
             continue                      # guides are references, never cut
         lyr = doc.layer(sh.layer)
-        if lyr is not None and not lyr.visible:
-            continue
-        color = lyr.color if lyr else "#ff0000"
-        role = getattr(lyr, "role", "cut") if lyr else "cut"
-        pts, corners, closed = sh.world_polyline()
-        outlines.append((pts, color))
-        cuttable.append(bool(closed) and role == "cut" and len(pts) >= 4)
-        res = holes_for_shape(sh)
-        if res.count:
+        if lyr is None or lyr.visible:
+            color = lyr.color if lyr else "#ff0000"
+            role = getattr(lyr, "role", "cut") if lyr else "cut"
+            pts, corners, closed = sh.world_polyline()
+            outlines.append((pts, color))
+            cuttable.append(bool(closed) and role == "cut" and len(pts) >= 4)
+        res = holes_for_shape(sh) if holes_shown else None
+        if res is not None and res.count:
             style = sh.stitch or StitchSettings()
             # a mirrored piece reverses the slant sense of slit/diamond holes;
             # negate the exported angle so the lasered back registers with the
@@ -80,12 +87,16 @@ def collect(doc: Document, kerf: float = 0.0):
         outlines = _apply_kerf(outlines, cuttable, kerf)
 
     for sl in doc.stitch_lines:
+        if not shown(sl.layer):
+            continue
         res = sl.result()
         if res.count:
             stitches.append((res, sl.settings, stitch_color))
 
     # individual (ungrouped) holes
     for h in getattr(doc, "holes", []):
+        if not shown(h.layer):
+            continue
         res = StitchResult(holes=[Hole(h.point, h.tangent)])
         stitches.append((res, h, stitch_color))  # LooseHole has hole_* fields
     return outlines, stitches
@@ -227,10 +238,43 @@ _ACI = {  # hex -> AutoCAD Color Index (nearest of the standard 7)
     "#0000ff": 5, "#ff00ff": 6, "#ffffff": 7, "#0066ff": 5,
     "#00aa00": 3, "#888888": 8,
 }
+_ACI_RGB = {1: (255, 0, 0), 2: (255, 255, 0), 3: (0, 255, 0), 4: (0, 255, 255),
+            5: (0, 0, 255), 6: (255, 0, 255), 7: (255, 255, 255),
+            8: (128, 128, 128), 9: (192, 192, 192)}
 
 
 def _aci(color: str) -> int:
-    return _ACI.get(color.lower(), 7)
+    """The AutoCAD colour index for a hex colour: exact for the standard
+    ones, else the nearest -- a custom red stays red rather than every custom
+    colour collapsing to white."""
+    c = color.lower()
+    if c in _ACI:
+        return _ACI[c]
+    try:
+        rgb = tuple(int(c.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return 7
+    return min(_ACI_RGB, key=lambda k: sum((a - b) ** 2 for a, b in
+                                           zip(_ACI_RGB[k], rgb)))
+
+
+def _dxf_layer_names(doc: Document, colors) -> dict:
+    """colour -> DXF layer name, after the document layer of that colour (so
+    two layers whose colours share a nearest ACI still arrive as separate
+    layers the laser software can map to different operations)."""
+    import re
+    names, taken = {}, set()
+    for color in colors:
+        lyr = next((l for l in doc.layers
+                    if l.color.lower() == color.lower()), None)
+        base = re.sub(r"[^A-Za-z0-9_-]+", "_", lyr.name).strip("_") \
+            if lyr else ""
+        name = base or f"L{_aci(color)}"
+        while name in taken:
+            name += "_"
+        taken.add(name)
+        names[color] = name
+    return names
 
 
 def _dxf_pair(code: int, value) -> str:
@@ -247,6 +291,7 @@ def export_dxf(doc: Document, path: str, *, kerf: float | None = None) -> None:
         used.setdefault(color, _aci(color))
     stitch_color = _layer_color(doc, "Stitch", "#0066ff")
     used.setdefault(stitch_color, _aci(stitch_color))
+    lname = _dxf_layer_names(doc, used)
 
     s = []
     s.append(_dxf_pair(0, "SECTION"))
@@ -256,7 +301,7 @@ def export_dxf(doc: Document, path: str, *, kerf: float | None = None) -> None:
     s.append(_dxf_pair(70, len(used)))
     for i, (color, aci) in enumerate(used.items()):
         s.append(_dxf_pair(0, "LAYER"))
-        s.append(_dxf_pair(2, f"L{aci}"))
+        s.append(_dxf_pair(2, lname[color]))
         s.append(_dxf_pair(70, 0))
         s.append(_dxf_pair(62, aci))
         s.append(_dxf_pair(6, "CONTINUOUS"))
@@ -266,36 +311,39 @@ def export_dxf(doc: Document, path: str, *, kerf: float | None = None) -> None:
     s.append(_dxf_pair(0, "SECTION"))
     s.append(_dxf_pair(2, "ENTITIES"))
 
-    def line(a: Vec2, b: Vec2, aci: int):
+    def line(a: Vec2, b: Vec2, color: str):
+        aci = used[color]
         s.append(_dxf_pair(0, "LINE"))
-        s.append(_dxf_pair(8, f"L{aci}"))
+        s.append(_dxf_pair(8, lname[color]))
         s.append(_dxf_pair(62, aci))
         s.append(_dxf_pair(10, f"{a.x:.4f}"))
         s.append(_dxf_pair(20, f"{a.y:.4f}"))
         s.append(_dxf_pair(11, f"{b.x:.4f}"))
         s.append(_dxf_pair(21, f"{b.y:.4f}"))
 
-    def circle(c: Vec2, r: float, aci: int):
+    def circle(c: Vec2, r: float, color: str):
+        aci = used[color]
         s.append(_dxf_pair(0, "CIRCLE"))
-        s.append(_dxf_pair(8, f"L{aci}"))
+        s.append(_dxf_pair(8, lname[color]))
         s.append(_dxf_pair(62, aci))
         s.append(_dxf_pair(10, f"{c.x:.4f}"))
         s.append(_dxf_pair(20, f"{c.y:.4f}"))
         s.append(_dxf_pair(40, f"{r:.4f}"))
 
-    def polyline(pts: Sequence[Vec2], aci: int, closed: bool):
+    def polyline(pts: Sequence[Vec2], color: str, closed: bool):
         # A single (R12) POLYLINE per outline so importers see one connected
         # contour -- and, when closed, a genuine closed loop (needed for correct
         # cut ordering / fill in LightBurn, Illustrator, etc.) rather than a heap
         # of disconnected LINE segments.
+        aci = used[color]
         s.append(_dxf_pair(0, "POLYLINE"))
-        s.append(_dxf_pair(8, f"L{aci}"))
+        s.append(_dxf_pair(8, lname[color]))
         s.append(_dxf_pair(62, aci))
         s.append(_dxf_pair(66, 1))                 # vertices-follow flag
         s.append(_dxf_pair(70, 1 if closed else 0))
         for p in pts:
             s.append(_dxf_pair(0, "VERTEX"))
-            s.append(_dxf_pair(8, f"L{aci}"))
+            s.append(_dxf_pair(8, lname[color]))
             s.append(_dxf_pair(10, f"{p.x:.4f}"))
             s.append(_dxf_pair(20, f"{p.y:.4f}"))
         s.append(_dxf_pair(0, "SEQEND"))
@@ -303,28 +351,27 @@ def export_dxf(doc: Document, path: str, *, kerf: float | None = None) -> None:
     for pl, color in outlines:
         if len(pl) < 2:
             continue
-        aci = _aci(color)
         closed = len(pl) > 2 and (pl[0] - pl[-1]).length() < 1e-6
-        polyline(pl[:-1] if closed else pl, aci, closed)
+        polyline(pl[:-1] if closed else pl, color, closed)
 
-    saci = _aci(stitch_color)
+    scol = stitch_color
     for res, settings, _ in stitches:
         if settings.hole_style == "diamond":
             length = max(0.1, settings.slit_length - k)
             for hle in res.holes:
                 pts = diamond_points(hle.point, hle.tangent, length,
                                      settings.slit_angle, DIAMOND_WIDTH_RATIO)
-                polyline(pts, saci, True)
+                polyline(pts, scol, True)
         elif settings.hole_style == "slit":
             half = max(0.05, (settings.slit_length - k) / 2.0)
             slant = math.radians(settings.slit_angle)
             for hle in res.holes:
                 d = hle.tangent.rotate(slant)
-                line(hle.point - d * half, hle.point + d * half, saci)
+                line(hle.point - d * half, hle.point + d * half, scol)
         else:
             r = max(0.05, (settings.hole_diameter - k) / 2.0)
             for hle in res.holes:
-                circle(hle.point, r, saci)
+                circle(hle.point, r, scol)
 
     s.append(_dxf_pair(0, "ENDSEC"))
     s.append(_dxf_pair(0, "EOF"))

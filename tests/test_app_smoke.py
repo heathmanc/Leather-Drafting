@@ -2627,6 +2627,33 @@ def test_rotate_command_turns_a_mixed_selection(qapp):
     assert all(math.dist(a, b) < 1e-9 for a, b in zip(before, after))
 
 
+def test_exploding_a_mirrored_piece_keeps_its_slit_slant(qapp):
+    """A mirrored piece draws its slits slanting the other way; exploding it
+    made loose holes with the un-mirrored angle, so every slit flipped."""
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    from leathercad.export import collect
+    win = MainWindow(Document())
+    c = win.canvas
+    item = c.add_shape(Rectangle(
+        width=40, height=30, layer="Cut", transform=Transform(mirror_x=True),
+        stitch=StitchSettings(pitch_mm=4.0, inset=3.0, hole_style="slit",
+                              slit_angle=30.0)))
+
+    def slits():
+        out = []
+        for res, st, _c in collect(win.doc)[1]:
+            for h in res.holes:
+                out.append((round(h.point.x, 6), round(h.point.y, 6),
+                            round(st.slit_angle, 6)))
+        return sorted(out)
+    before = slits()
+    c.scene_obj.clearSelection()
+    item.setSelected(True)
+    c.ungroup_selected()
+    assert slits() == before
+
+
 def test_exploded_stitching_stays_in_its_group(qapp):
     """Explode stitching -> holes made ungrouped holes, so the next drag of
     the (duplicated) piece left them behind."""

@@ -40,6 +40,38 @@ def _stitch_to_dict(s: Optional[StitchSettings]) -> Optional[dict]:
     return asdict(s) if s is not None else None
 
 
+def _advance_id_counters(doc) -> None:
+    """Move the id counters past every id a loaded document already uses.
+    Ids are restored from the file but the counters restart at zero in a new
+    session, so the next shape drawn took ``shape1`` again -- and a parameter
+    binding or dimension keyed on the loaded ``shape1`` drove the new one."""
+    import re
+    from . import dimension, holes, shapes, stitchline
+
+    def top(ids, prefix):
+        n = 0
+        for i in ids:
+            m = re.fullmatch(re.escape(prefix) + r"(\d+)", str(i or ""))
+            if m:
+                n = max(n, int(m.group(1)))
+        return n
+    groups = [o.group_id for o in (*doc.shapes, *doc.holes, *doc.stitch_lines,
+                                   *doc.texts)]
+    # shapes, texts and groups all draw on the one shape counter
+    used = max(top([s.shape_id for s in doc.shapes], "shape"),
+               top([t.text_id for t in doc.texts], "text"),
+               top(groups, "group"))
+    shapes._shape_counter[0] = max(shapes._shape_counter[0], used)
+    stitchline._sl_counter[0] = max(
+        stitchline._sl_counter[0], top([l.line_id for l in doc.stitch_lines],
+                                       "seam"))
+    dimension._dim_counter[0] = max(
+        dimension._dim_counter[0], top([d.dim_id for d in doc.dimensions],
+                                       "dim"))
+    holes._hole_counter[0] = max(
+        holes._hole_counter[0], top([h.hole_id for h in doc.holes], "hole"))
+
+
 def _stitch_from_dict(d: Optional[dict]) -> Optional[StitchSettings]:
     if d is None:
         return None
@@ -188,7 +220,7 @@ def _stitchline_from_dict(d: dict) -> StitchLine:
         points=[Vec2(x, y) for x, y in d.get("points", [])],
         closed=d.get("closed", False),
         corner_points=[Vec2(x, y) for x, y in d.get("corner_points", [])],
-        settings=StitchSettings(**d.get("settings", {})),
+        settings=_stitch_from_dict(d.get("settings", {})),
         name=d.get("name", ""),
         layer=d.get("layer", "Stitch"),
         group_id=d.get("group_id"),
@@ -300,11 +332,17 @@ class Document:
         doc.underlay = d.get("underlay") or None
         doc.params = dict(d.get("params", {}))
         doc.bindings = dict(d.get("bindings", {}))
+        _advance_id_counters(doc)
         return doc
 
     def save(self, path: str) -> None:
-        with open(path, "w", encoding="utf-8") as fh:
+        # write a sibling file and swap it in, so a failure part-way (disk
+        # full, crash) never truncates the last good save
+        import os
+        tmp = f"{path}.saving"
+        with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(self.to_dict(), fh, indent=2)
+        os.replace(tmp, path)
 
     @classmethod
     def load(cls, path: str) -> "Document":

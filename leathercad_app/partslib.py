@@ -25,8 +25,28 @@ def parts_dir(base: Optional[str] = None) -> Path:
 
 
 def _slug(name: str) -> str:
-    s = re.sub(r"[^A-Za-z0-9._ -]", "", name).strip().replace(" ", "_")
+    # \w keeps letters of any script, so "財布" isn't reduced to "part"
+    s = re.sub(r"[^\w. -]", "", name).strip().replace(" ", "_")
     return s or "part"
+
+
+def _part_path(name: str, base: Optional[str]) -> Path:
+    """The file for part ``name``: its slug, unless that file already holds a
+    DIFFERENT part (names differing only in symbols, e.g. "Strap ★" and
+    "Strap ☆") -- then a short hash of the name keeps them apart instead of
+    one silently overwriting the other."""
+    import hashlib
+    d = parts_dir(base)
+    p = d / f"{_slug(name)}.part.json"
+    if p.exists():
+        try:
+            other = json.loads(p.read_text(encoding="utf-8")).get("name")
+        except Exception:
+            other = None
+        if other is not None and other != name:
+            tag = hashlib.sha1(name.encode("utf-8")).hexdigest()[:8]
+            p = d / f"{_slug(name)}-{tag}.part.json"
+    return p
 
 
 def save_part(name: str, shapes: List[Shape], texts=None,
@@ -34,7 +54,7 @@ def save_part(name: str, shapes: List[Shape], texts=None,
     payload = {"part": 1, "name": name,
                "shapes": [_shape_to_dict(s) for s in shapes],
                "texts": [t.to_dict() for t in (texts or [])]}
-    p = parts_dir(base) / f"{_slug(name)}.part.json"
+    p = _part_path(name, base)
     p.write_text(json.dumps(payload, indent=1), encoding="utf-8")
     return p
 

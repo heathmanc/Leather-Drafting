@@ -4449,7 +4449,8 @@ class Canvas(QGraphicsView):
                 sh = it.model
                 res, style = self._shape_world_holes(sh)
                 if res and res.count:
-                    made += self._explode(res, style, sh.group_id)
+                    made += self._explode(res, style, sh.group_id,
+                                          sh.transform.mirror_x)
                     sh.baked_holes = None
                     if sh.stitch:
                         sh.stitch.enabled = False
@@ -4470,15 +4471,19 @@ class Canvas(QGraphicsView):
             self.documentChangedSig.emit()
             self._emit_commit()
 
-    def _explode(self, res, style, group_id=None):
+    def _explode(self, res, style, group_id=None, mirrored=False):
         """Loose holes for ``res``. ``group_id`` keeps them in the group of
-        the shape / seam they came from, so they still move with the piece."""
+        the shape / seam they came from, so they still move with the piece.
+        ``mirrored``: they came off a mirrored piece, whose slits slant the
+        other way -- keep them slanting as they were drawn."""
+        from leathercad.holes import mirrored_slit_angle
+        slit_angle = mirrored_slit_angle(style.slit_angle, mirrored)
         items = []
         for h in res.holes:
             lh = LooseHole(
                 point=h.point, tangent=h.tangent,
                 hole_style=style.hole_style, hole_diameter=style.hole_diameter,
-                slit_length=style.slit_length, slit_angle=style.slit_angle,
+                slit_length=style.slit_length, slit_angle=slit_angle,
                 layer="Stitch", group_id=group_id)
             self.doc.add_hole(lh)
             items.append(self._add_item(HoleItem(lh, self)))
@@ -4659,7 +4664,8 @@ class Canvas(QGraphicsView):
             # (they stay exactly where they are) before splitting the outline.
             res, style = self._shape_world_holes(it.model)
             if res and res.count:
-                made += self._explode(res, style)
+                made += self._explode(res, style,
+                                      mirrored=it.model.transform.mirror_x)
             for kind, wpts in segs:
                 new = _segment_shape(kind, wpts, it.model.layer)
                 self.doc.add_shape(new)

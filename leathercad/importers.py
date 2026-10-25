@@ -135,16 +135,33 @@ def _parse_transform(text: str):
     return m
 
 
-def _svg_len_mm(text: str) -> Optional[float]:
-    """A width/height attribute in mm (None if unitless/unknown)."""
-    m = re.match(r"\s*([0-9.eE+-]+)\s*([a-z%]*)\s*$", text or "")
-    if not m:
+#: millimetres per SVG unit; a bare number is a CSS px (1/96 in), per the spec
+_SVG_UNIT_MM = {"mm": 1.0, "cm": 10.0, "in": 25.4, "pt": 25.4 / 72.0,
+                "pc": 25.4 / 6.0, "px": 25.4 / 96.0, "": 25.4 / 96.0}
+
+
+def _svg_len(text: str):
+    """(value, mm per unit) of an SVG length, or None (missing, %, unknown)."""
+    m = re.match(r"\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*([a-z%]*)\s*$",
+                 text or "")
+    if not m or m.group(2) not in _SVG_UNIT_MM:
         return None
-    v = float(m.group(1))
-    unit = m.group(2)
-    scale = {"mm": 1.0, "cm": 10.0, "in": 25.4, "pt": 25.4 / 72.0,
-             "px": 25.4 / 96.0, "": None, "%": None}.get(unit, None)
-    return v * scale if scale else None
+    return float(m.group(1)), _SVG_UNIT_MM[m.group(2)]
+
+
+def _svg_len_mm(text: str) -> Optional[float]:
+    """A width/height attribute in mm (None if missing or relative)."""
+    v = _svg_len(text)
+    return v[0] * v[1] if v else None
+
+
+def _attr_user(el, name: str, default: float = 0.0) -> float:
+    """An element's length attribute in user units (= px), so ``width='10mm'``
+    or ``r='2px'`` work as well as a bare number."""
+    v = _svg_len(el.get(name, ""))
+    if v is None:
+        return default
+    return v[0] * v[1] / _SVG_UNIT_MM["px"]
 
 
 def _endpoint_arc(p0: Vec2, rx, ry, rot_deg, large, sweep, p1: Vec2):
@@ -183,7 +200,12 @@ def _endpoint_arc(p0: Vec2, rx, ry, rot_deg, large, sweep, p1: Vec2):
         dth -= 2 * math.pi
     elif sweep and dth < 0:
         dth += 2 * math.pi
-    n = max(2, int(math.ceil(abs(dth) / (math.pi / 32))))
+    # fine enough that the sag stays inside the import tolerance on a big arc
+    # (a fixed pi/32 step sagged 0.36 mm at r=300), never coarser than before
+    r = max(rx, ry)
+    ratio = max(-1.0, min(1.0, 1.0 - _FLAT / r))
+    step = min(math.pi / 32, 2.0 * math.acos(ratio) if ratio < 1.0 else math.pi)
+    n = max(2, int(math.ceil(abs(dth) / max(step, 1e-3))))
     out = []
     for i in range(1, n + 1):
         t = th1 + dth * i / n
@@ -210,6 +232,18 @@ def _parse_path_d(d: str) -> List[Tuple[List[Vec2], bool]]:
         v = float(tokens[i])
         i += 1
         return v
+
+    def flag():
+        # Arc flags are single 0/1 characters and minifiers run them into the
+        # next number ("a10 10 0 1020 0" = flags 1, 0 then x=20), which the
+        # tokenizer read as one number. Peel one digit off the front.
+        nonlocal i
+        t = tokens[i]
+        if t[0] in "01" and len(t) > 1:
+            tokens[i] = t[1:]
+            return t[0] == "1"
+        i += 1
+        return float(t) != 0
 
     def flush(closed):
         nonlocal pts
@@ -277,7 +311,7 @@ def _parse_path_d(d: str) -> List[Tuple[List[Vec2], bool]]:
             cur = end
         elif c == "A":
             rx, ry, rot = num(), num(), num()
-            large, sweep = bool(num()), bool(num())
+            large, sweep = flag(), flag()
             x, y = num(), num()
             end = Vec2(cur.x + x, cur.y + y) if rel else Vec2(x, y)
             pts.extend(_endpoint_arc(cur, rx, ry, rot, large, sweep, end))
@@ -291,14 +325,29 @@ def _parse_path_d(d: str) -> List[Tuple[List[Vec2], bool]]:
 
 def _element_polylines(el, tag) -> List[Tuple[List[Vec2], bool]]:
     """Basic SVG shape elements -> (points, closed) in local coords."""
-    def f(name, default="0"):
-        return float(el.get(name, default))
+    def f(name):
+        return _attr_user(el, name)
     if tag == "path":
         return _parse_path_d(el.get("d", ""))
     if tag == "rect":
         x, y, w, h = f("x"), f("y"), f("width"), f("height")
-        return [([Vec2(x, y), Vec2(x + w, y), Vec2(x + w, y + h),
-                  Vec2(x, y + h)], True)]
+        # rounded corners: rx/ry, either one standing in for a missing other
+        rx = _attr_user(el, "rx", -1.0)
+        ry = _attr_user(el, "ry", -1.0)
+        rx, ry = (ry if rx < 0 else rx), (rx if ry < 0 else ry)
+        rx, ry = min(max(rx, 0.0), w / 2.0), min(max(ry, 0.0), h / 2.0)
+        if rx <= 1e-9 or ry <= 1e-9:
+            return [([Vec2(x, y), Vec2(x + w, y), Vec2(x + w, y + h),
+                      Vec2(x, y + h)], True)]
+        ring = []
+        for cx, cy, a0 in ((x + w - rx, y + ry, -math.pi / 2),
+                           (x + w - rx, y + h - ry, 0.0),
+                           (x + rx, y + h - ry, math.pi / 2),
+                           (x + rx, y + ry, math.pi)):
+            arc = _arc_points(Vec2(0, 0), max(rx, ry), a0, a0 + math.pi / 2)
+            k = max(rx, ry)
+            ring += [Vec2(cx + p.x * rx / k, cy + p.y * ry / k) for p in arc]
+        return [(ring, True)]
     if tag in ("circle", "ellipse"):
         cx, cy = f("cx"), f("cy")
         rx = f("r") if tag == "circle" else f("rx")
@@ -344,10 +393,12 @@ def _true_round(el, tag, m, scale) -> Optional[Shape]:
     a, b, c, d, _e, _f = m
     if abs(b) > 1e-9 or abs(c) > 1e-9 or a <= 0 or d <= 0:
         return None                       # rotated/skewed: fall back to polygon
-    cx = float(el.get("cx", 0))
-    cy = float(el.get("cy", 0))
-    rx = float(el.get("r", el.get("rx", 0)))
-    ry = float(el.get("r", el.get("ry", 0)))
+    cx = _attr_user(el, "cx")
+    cy = _attr_user(el, "cy")
+    if tag == "circle":
+        rx = ry = _attr_user(el, "r")
+    else:
+        rx, ry = _attr_user(el, "rx"), _attr_user(el, "ry")
     if rx <= 0 or ry <= 0:
         return None
     centre = _mat_apply(m, Vec2(cx, cy))
@@ -366,14 +417,18 @@ def import_svg(path: str, color_layers: Optional[dict] = None) -> List[Shape]:
     root = ET.parse(path).getroot()
     color_layers = {k.lower(): v for k, v in (color_layers or {}).items()}
 
-    # unit scale: root width + viewBox -> mm per user unit
-    scale = 1.0
+    # unit scale: mm per user unit. With a viewBox, the root width maps it;
+    # without one a user unit is the width's own unit; and with no absolute
+    # width at all it's a CSS px (1/96 in) -- as browsers and Inkscape do. A
+    # bare width='378' is px too, not mm (it imported 3.78x too big).
+    scale = _SVG_UNIT_MM["px"]
     vb = root.get("viewBox")
-    w_mm = _svg_len_mm(root.get("width", ""))
-    if vb and w_mm:
-        parts = [float(v) for v in _NUM.findall(vb)]
-        if len(parts) == 4 and parts[2] > 0:
-            scale = w_mm / parts[2]
+    w = _svg_len(root.get("width", ""))
+    parts = [float(v) for v in _NUM.findall(vb or "")]
+    if w and len(parts) == 4 and parts[2] > 0:
+        scale = w[0] * w[1] / parts[2]
+    elif w:
+        scale = w[1]
 
     shapes: List[Shape] = []
 
@@ -712,6 +767,11 @@ def _dxf_entity_shapes(ent, m, layer: str, blocks: dict, depth: int
             return []
         rot = math.atan2(my, mx)
         minor = major * ratio
+        # the minor axis is normal x major, so a (0, 0, -1) extrusion (drawn
+        # or mirrored from the back) runs the ellipse the other way round --
+        # ignoring it landed a partial ellipse mirrored across its major axis
+        if _ent_num(ent, 230, 1.0) < 0:
+            minor = -minor
         if t1 <= t0:
             t1 += 2 * math.pi
         n = max(16, min(512, int(abs(t1 - t0) * major / max(_FLAT * 4, 1e-6))))

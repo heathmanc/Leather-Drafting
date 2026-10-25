@@ -73,6 +73,7 @@ def estimate_project(doc, *, thickness_mm: float = 3.0, tail_mm: float = 150.0,
     est = JobEstimate()
     xs: List[float] = []
     ys: List[float] = []
+    rings: List[List[Vec2]] = []        # closed cut outlines
 
     def role_of(layer_name: str) -> str:
         lyr = doc.layer(layer_name)
@@ -95,8 +96,7 @@ def estimate_project(doc, *, thickness_mm: float = 3.0, tail_mm: float = 150.0,
         elif role == CUT:
             est.cut_mm += length
             if closed and len(pts) >= 4:
-                est.pieces += 1
-                est.parts_area_mm2 += abs(signed_area(_ring(pts)))
+                rings.append(_ring(pts))
         # holes carried by the shape's stitching
         res = holes_for_shape(sh)
         if res.count:
@@ -115,6 +115,21 @@ def estimate_project(doc, *, thickness_mm: float = 3.0, tail_mm: float = 150.0,
         for h in res.holes:
             xs.append(h.point.x)
             ys.append(h.point.y)
+
+    # A ring inside an odd number of others is a cutout (a buckle slot, a
+    # thumb hole): it isn't a piece and its area isn't leather to buy. Every
+    # other ring is a piece. Same nesting rule as the kerf compensation.
+    from .geometry import point_in_polygon
+    for i, ring in enumerate(rings):
+        sample = ring[::max(1, len(ring) // 12)]
+        depth = sum(1 for j, other in enumerate(rings) if j != i
+                    and all(point_in_polygon(p, other) for p in sample))
+        area = abs(signed_area(ring))
+        if depth % 2 == 0:
+            est.pieces += 1
+            est.parts_area_mm2 += area
+        else:
+            est.parts_area_mm2 -= area
 
     # individually placed (ungrouped) holes still get sewn
     for h in doc.holes:

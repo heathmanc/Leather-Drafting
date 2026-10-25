@@ -19,9 +19,11 @@ from typing import Dict, Optional, Set
 _ALLOWED_BINOPS = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv,
                    ast.Mod, ast.Pow)
 # a number followed by a unit word -- but not inside an identifier (strap2in)
-_UNIT = re.compile(r"(?<![\w.])(\d(?:[\d.]*))\s*(mm|cm|in)\b", re.IGNORECASE)
+_UNIT = re.compile(r"(?<![\w.])(\d[\d.]*|\.\d+)\s*(mm|cm|in)\b", re.IGNORECASE)
 _UNIT_MM = {"mm": 1.0, "cm": 10.0, "in": 25.4}
 _IDENT = re.compile(r"[A-Za-z_]\w*")
+# a name as it appears inside an expression: not the exponent of 1e2
+_NAME_REF = re.compile(r"(?<![\w.])[A-Za-z_]\w*")
 
 #: words that can never be parameter names (they'd collide with unit suffixes)
 RESERVED = {"mm", "cm", "in"}
@@ -67,12 +69,23 @@ def evaluate(text: str, values: Optional[Dict[str, float]] = None) -> float:
     supplies parameter names the expression may use."""
     s = text.strip().replace(",", ".")
     s = _UNIT.sub(lambda m: f"({m.group(1)}*{_UNIT_MM[m.group(2).lower()]})", s)
-    return _eval_node(ast.parse(s, mode="eval"), values)
+    # every way bad input can fail is a ValueError, so callers (the
+    # Parameters dialog, typed fields) only need to catch that one
+    try:
+        v = _eval_node(ast.parse(s, mode="eval"), values)
+    except (SyntaxError, ZeroDivisionError, OverflowError, TypeError,
+            RecursionError) as e:
+        msg = "division by zero" if isinstance(e, ZeroDivisionError) else \
+            "not a valid expression"
+        raise ValueError(msg) from None
+    if not isinstance(v, float) or v != v or v in (float("inf"), float("-inf")):
+        raise ValueError("not a real number")      # (-8)**0.5, inf, nan
+    return v
 
 
 def names_in(text: str) -> Set[str]:
     """Identifiers referenced by ``text`` (unit words excluded)."""
-    return {n for n in _IDENT.findall(text) if n.lower() not in RESERVED}
+    return {n for n in _NAME_REF.findall(text) if n.lower() not in RESERVED}
 
 
 def resolve(params: Dict[str, str]) -> Dict[str, float]:

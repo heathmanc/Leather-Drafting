@@ -65,6 +65,7 @@ class MathSpinBox(QDoubleSpinBox):
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
         self.trim_zeros = False     # show 191.06, not 191.0600
+        self.physical = False       # a length in mm: shown in the display unit
         self.last_expr = None
         self._user_edited = False
         self.lineEdit().textEdited.connect(self._mark_edited)
@@ -83,6 +84,14 @@ class MathSpinBox(QDoubleSpinBox):
         super().setValue(v)
 
     def textFromValue(self, v: float) -> str:   # noqa: N802
+        if self.physical:
+            from . import units
+            if units.is_inches():
+                # a thousandth of an inch is finer than a 4-decimal mm field
+                text = f"{units.to_display(v):.4f}"
+                point = self.locale().decimalPoint()
+                text = text.replace(".", point)
+                return text.rstrip("0").rstrip(point) if point in text else text
         text = super().textFromValue(v)
         if self.trim_zeros:
             point = self.locale().decimalPoint()
@@ -111,6 +120,12 @@ class MathSpinBox(QDoubleSpinBox):
                 v = float(s.replace(",", "."))
             except ValueError:
                 return self.value()          # unparseable: keep the old value
+        if self.physical:
+            from . import units
+            # a bare number is in the display unit; "10mm" / "1/2in" name
+            # theirs and evaluate() already made them millimetres
+            if not units.has_explicit_unit(s) and not (names_in(s) & set(params)):
+                v = units.from_display(v)
         if self._user_edited:
             used = names_in(s) & set(params)
             self.last_expr = s if used else ""

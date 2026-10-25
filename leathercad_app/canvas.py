@@ -1456,8 +1456,9 @@ class Canvas(QGraphicsView):
         dx, dy = b.x() - a.x(), b.y() - a.y()
         dist = (dx * dx + dy * dy) ** 0.5
         ang = math.degrees(math.atan2(dy, dx))
-        return (f"length {dist:.2f} mm   ∠ {ang:.1f}°   "
-                f"(dx {dx:.2f}, dy {dy:.2f})")
+        from . import units as U
+        return (f"length {U.fmt(dist)}   ∠ {ang:.1f}°   "
+                f"(dx {U.fmt_num(dx)}, dy {U.fmt_num(dy)})")
 
     def _show_measure(self, a: QPointF, b: QPointF) -> None:
         self.statusMessage.emit(self._measure_text(a, b))

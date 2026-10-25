@@ -44,6 +44,10 @@ def _spin(lo, hi, step=1.0, decimals=2, suffix=" mm") -> QDoubleSpinBox:
     s.setDecimals(decimals)
     s.trim_zeros = decimals > 2
     s.setSuffix(suffix)
+    if suffix == " mm":
+        from . import units
+        s.physical = True
+        units.register_spin(s)
     s.setButtonSymbols(QAbstractSpinBox.NoButtons)
     s.setKeyboardTracking(False)
     return s
@@ -959,7 +963,9 @@ class PropertiesPanel(QWidget):
                                  "move or Delete freely; right-click to group")
             return
         if isinstance(it, DimensionItem):
-            self.readout.setText(f"<b>Dimension</b><br>{it.dim.label()}")
+            from . import units as U
+            self.readout.setText(
+                f"<b>Dimension</b><br>{it.dim.label(U.current())}")
             return
         if isinstance(it, TextItem):
             self.readout.setText(f"<b>Text</b><br>“{it.model.text}”")
@@ -975,17 +981,19 @@ class PropertiesPanel(QWidget):
             if closed and len(pts) >= 4:
                 from leathercad.offset import signed_area
                 ring = pts[:-1] if (pts[0] - pts[-1]).length() < 1e-9 else pts
-                area_line = (f"<br>area {abs(signed_area(ring)) / 100.0:.1f} "
-                             f"cm²")
+                from . import units
+                area_line = f"<br>area {units.fmt_area(abs(signed_area(ring)))}"
         res = it._holes if isinstance(it, ShapeItem) else it.line.result()
         if res and res.count:
             gaps = res.chord_spacings()
             pitches = res.pitches or [0]
             txt = f"<b>{res.count} holes</b>"
             if gaps:                             # a lone hole has no spacing
-                txt += (f"<br>chord spacing {min(gaps):.2f}–{max(gaps):.2f} mm"
-                        f"<br>effective pitch "
-                        f"{min(pitches):.3f}–{max(pitches):.3f} mm")
+                from . import units as U
+                txt += (f"<br>chord spacing {U.fmt_num(min(gaps))}–"
+                        f"{U.fmt(max(gaps))}<br>effective pitch "
+                        f"{U.fmt_num(min(pitches), 3)}–"
+                        f"{U.fmt(max(pitches), 3)}")
             self.readout.setText(txt + area_line)
         else:
             self.readout.setText("No holes" + area_line)

@@ -507,11 +507,8 @@ class MainWindow(QMainWindow):
 
         tb.addWidget(QLabel(" grid "))
         self.grid_combo = NoWheelComboBox()
-        for mm in (0.5, 1.0, 2.0, 2.5, 5.0, 10.0):
-            self.grid_combo.addItem(f"{mm:g} mm", mm)
-        self.grid_combo.setCurrentIndex(1)  # 1 mm
-        self.grid_combo.currentIndexChanged.connect(
-            lambda: setattr(self.canvas, "snap_grid", self.grid_combo.currentData()))
+        self._fill_grid_combo()
+        self.grid_combo.currentIndexChanged.connect(self._grid_changed)
         tb.addWidget(self.grid_combo)
 
         tb.addSeparator()
@@ -786,6 +783,22 @@ class MainWindow(QMainWindow):
         self._add(tim, "Remove", None,
                   lambda: self.canvas.underlay_config(remove=True))
         vm.addSeparator()
+        um = vm.addMenu("Units")
+        from PySide6.QtGui import QActionGroup
+        self._unit_group = QActionGroup(self)
+        self.act_unit_mm = QAction("Millimetres", self, checkable=True)
+        self.act_unit_in = QAction("Inches", self, checkable=True)
+        for a in (self.act_unit_mm, self.act_unit_in):
+            self._unit_group.addAction(a)
+            um.addAction(a)
+        self.act_unit_mm.triggered.connect(lambda: self._set_units("mm"))
+        self.act_unit_in.triggered.connect(lambda: self._set_units("in"))
+        from . import units as _units
+        saved = self._settings().value("units", "mm")
+        (self.act_unit_in if saved == "in" else self.act_unit_mm).setChecked(True)
+        _units.set_current(saved)
+        self._fill_grid_combo()
+        vm.addSeparator()
         self.act_dark = QAction("Dark theme", self)
         self.act_dark.setCheckable(True)
         self.act_dark.toggled.connect(self._apply_theme)
@@ -834,6 +847,49 @@ class MainWindow(QMainWindow):
             "<b>Stitch Hero</b><br>CAD for laser-cut leather patterns "
             "with pricking-iron-accurate (chord-spaced) stitch holes.<br><br>"
             "Units are millimetres. Press <b>F1</b> for the user guide.")
+
+    # -- display units ----------------------------------------------------
+    _GRIDS_MM = (0.5, 1.0, 2.0, 2.5, 5.0, 10.0)
+    _GRIDS_IN = ((1 / 32, "1/32"), (1 / 16, "1/16"), (1 / 8, "1/8"),
+                 (1 / 4, "1/4"), (1 / 2, "1/2"), (1.0, "1"))
+
+    def _fill_grid_combo(self):
+        from . import units as U
+        if not hasattr(self, "grid_combo"):
+            return
+        self.grid_combo.blockSignals(True)
+        self.grid_combo.clear()
+        if U.is_inches():
+            for inch, label in self._GRIDS_IN:
+                self.grid_combo.addItem(f"{label} in", inch * U.MM_PER_IN)
+            self.grid_combo.setCurrentIndex(1)            # 1/16"
+        else:
+            for mm in self._GRIDS_MM:
+                self.grid_combo.addItem(f"{mm:g} mm", mm)
+            self.grid_combo.setCurrentIndex(1)            # 1 mm
+        self.grid_combo.blockSignals(False)
+        self.canvas.snap_grid = self.grid_combo.currentData()
+
+    def _grid_changed(self):
+        self.canvas.snap_grid = self.grid_combo.currentData()
+
+    def _set_units(self, unit: str):
+        """View -> Units: everything is still millimetres inside; lengths are
+        shown and typed in ``unit`` (spinboxes, rulers, status bar, measure,
+        dimensions, readouts)."""
+        from . import units as U
+        U.set_current(unit)
+        self._settings().setValue("units", U.current())
+        self._fill_grid_combo()
+        self.canvas.update_dimensions()
+        for r in (getattr(self, "ruler_h", None), getattr(self, "ruler_v", None)):
+            if r is not None:
+                r.update()
+        self.properties.show_selection(self.canvas.selected_items())
+        self.canvas.viewport().update()
+        self.statusBar().showMessage(
+            "Showing inches (stored in millimetres; type 10mm to enter "
+            "millimetres)" if U.is_inches() else "Showing millimetres", 4000)
 
     def _two_numbers(self, title, labels, defaults, suffixes=(" mm", " mm")):
         """A small dialog for two numbers; (a, b) or None."""
@@ -1012,7 +1068,9 @@ class MainWindow(QMainWindow):
         self._update_title()
 
     def _cursor_moved(self, x, y):
-        self.sb_pos.setText(f"X {x:.1f}   Y {y:.1f}   mm")
+        from . import units as U
+        self.sb_pos.setText(f"X {U.fmt_num(x)}   Y {U.fmt_num(y)}   "
+                            f"{U.current()}")
 
     def _layer_changed(self, name):
         self.canvas._current_layer = name

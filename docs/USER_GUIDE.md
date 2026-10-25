@@ -95,6 +95,13 @@ The user guide travels inside the app (Help → User guide still works).
 
 ## 3. The workspace
 
+* **Units** — everything is stored in millimetres, and shown in millimetres
+  unless you choose **View → Units → Inches**. Then the rulers, status bar,
+  measure tool, dimensions, readouts and every length field show inches
+  (to a thousandth), the grid offers 1/32"–1" steps, and a number you type
+  into a field is inches — `3/8` is three-eighths of an inch. Type `10mm`
+  (or `2cm`) to enter millimetres regardless. Pitch presets stay on the
+  standard mm / SPI ladder because that's how irons are sold.
 * **Canvas** (centre) — your drawing. The grid is in mm; the origin is marked.
   * **Zoom**: mouse wheel — zooms **about the cursor** (the point under your
     mouse stays put, Fusion-style). **Pan**: drag with the middle mouse

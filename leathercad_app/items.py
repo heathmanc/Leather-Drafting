@@ -781,7 +781,8 @@ class DimensionItem(QGraphicsItem):
         self._a, self._b = QPointF(a.x, a.y), QPointF(b.x, b.y)
         self._p1 = QPointF(self.dim.p1.x, self.dim.p1.y)
         self._p2 = QPointF(self.dim.p2.x, self.dim.p2.y)
-        self._label.setText(self.dim.label())
+        from . import units
+        self._label.setText(self.dim.label(units.current()))
         self._label.setBrush(QColor(70, 70, 70))
         # anchor the label at the dim-line midpoint (constant screen size)
         br = self._label.boundingRect()

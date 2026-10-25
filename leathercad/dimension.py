@@ -40,7 +40,9 @@ class Dimension:
         d = self.p2 - self.p1
         return math.degrees(math.atan2(d.y, d.x))
 
-    def label(self) -> str:
+    def label(self, unit: str = "mm") -> str:
+        if unit == "in":
+            return f"{self.length() / 25.4:.3f} in"
         return f"{self.length():.1f} mm"
 
     def normal(self) -> Vec2:

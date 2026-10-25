@@ -33,6 +33,18 @@ def _nice_step(px_per_mm: float, min_px: float = 46.0) -> float:
     return step
 
 
+_INCH_STEPS = (1 / 32, 1 / 16, 1 / 8, 1 / 4, 1 / 2, 1.0, 2.0, 5.0, 10.0,
+               20.0, 50.0, 100.0)
+
+
+def _nice_step_in(px_per_in: float, min_px: float = 46.0) -> float:
+    """Smallest of the usual inch divisions whose labels are min_px apart."""
+    for step in _INCH_STEPS:
+        if step * px_per_in >= min_px:
+            return step
+    return _INCH_STEPS[-1]
+
+
 class Ruler(QWidget):
     def __init__(self, canvas, horizontal: bool, parent=None):
         super().__init__(parent)
@@ -80,7 +92,14 @@ class Ruler(QWidget):
         lo, hi = min(a, b), max(a, b)
         span = max(hi - lo, 1e-6)
         px_per_mm = length / span
-        step = _nice_step(px_per_mm)
+        from . import units
+        inches = units.is_inches()
+        if inches:
+            step = _nice_step_in(px_per_mm * units.MM_PER_IN) * units.MM_PER_IN
+            minors = 4                       # quarters of an inch division
+        else:
+            step = _nice_step(px_per_mm)
+            minors = 5
         font = QFont()
         font.setPixelSize(9)
         p.setFont(font)
@@ -94,14 +113,14 @@ class Ruler(QWidget):
         t = math.floor(lo / step) * step
         while t <= hi + step:
             px = to_px(t)
-            minor = step / 5.0
-            for k in range(1, 5):
+            minor = step / minors
+            for k in range(1, minors):
                 mpx = to_px(t + k * minor)
                 if self.horizontal:
                     p.drawLine(QPointF(mpx, THICKNESS - 5), QPointF(mpx, THICKNESS))
                 else:
                     p.drawLine(QPointF(THICKNESS - 5, mpx), QPointF(THICKNESS, mpx))
-            label = f"{t:g}"
+            label = units.fmt_num(t, 3) if inches else f"{t:g}"
             if self.horizontal:
                 p.drawLine(QPointF(px, THICKNESS - 10), QPointF(px, THICKNESS))
                 p.setPen(QPen(fg, 1))

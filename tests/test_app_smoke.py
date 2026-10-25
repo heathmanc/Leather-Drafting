@@ -2676,3 +2676,26 @@ def test_line_width_change_repaints_live(qapp):
     assert abs(c.line_width - 4.5) < 1e-9          # value applied
     assert abs(c.outline_width() - 4.5) < 1e-9     # pens will read the new width
     assert calls["n"] >= 1                          # ...and it repainted at once
+
+
+def test_join_attaches_the_closest_end_not_the_first_in_range():
+    """A flattened curve can begin with a segment shorter than the 0.6 mm weld
+    tolerance (an exported ellipse began with a 0.55 mm piece). Taking the
+    first end within tolerance let a neighbour weld onto that piece's FAR end,
+    skipping it and leaving it behind -- depending on selection order."""
+    from leathercad_app.canvas import _chain_segments
+    from leathercad.geometry import Vec2
+    long_ = (Vec2(0, 0), Vec2(10, 0), "line", None)
+    short = (Vec2(10, 0), Vec2(10, -0.55), "line", None)
+    tail = (Vec2(10, -0.55), Vec2(15, -3), "line", None)
+    for order in ([tail, long_, short], [short, tail, long_], [long_, tail, short],
+                  [tail, short, long_], [short, long_, tail], [long_, short, tail]):
+        chain, rest = _chain_segments(list(order), 0.6)
+        assert rest == []
+        pts = [chain[0][0]] + [s[1] for s in chain]
+        ends = {(round(pts[0].x, 6), round(pts[0].y, 6)),
+                (round(pts[-1].x, 6), round(pts[-1].y, 6))}
+        assert ends == {(0.0, 0.0), (15.0, -3.0)}
+        assert len(chain) == 3
+        for a, b in zip(chain, chain[1:]):            # truly continuous
+            assert (a[1] - b[0]).length() < 1e-9

@@ -98,27 +98,40 @@ def _rev(seg):
 
 def _chain_segments(segments, tol):
     """Greedily chain segments sharing endpoints (within tol). Returns
-    (ordered chain, leftover segments)."""
+    (ordered chain, leftover segments).
+
+    Each step attaches the CLOSEST free endpoint, not the first one within
+    ``tol``: a flattened curve can start with a segment shorter than ``tol``
+    (an exported ellipse began with a 0.55 mm piece), and taking the first
+    match let a neighbour weld onto that piece's far end -- skipping it and
+    leaving it behind as a stray, depending on selection order."""
     remaining = list(segments)
     chain = [remaining.pop(0)]
-    grew = True
-    while grew:
-        grew = False
-        end = chain[-1][1]
+
+    def closest(pt):
+        best = None
         for i, s in enumerate(remaining):
-            if (s[0] - end).length() < tol:
-                chain.append(remaining.pop(i)); grew = True; break
-            if (s[1] - end).length() < tol:
-                chain.append(_rev(remaining.pop(i))); grew = True; break
-    grew = True
-    while grew:
-        grew = False
-        start = chain[0][0]
-        for i, s in enumerate(remaining):
-            if (s[1] - start).length() < tol:
-                chain.insert(0, remaining.pop(i)); grew = True; break
-            if (s[0] - start).length() < tol:
-                chain.insert(0, _rev(remaining.pop(i))); grew = True; break
+            for d, flip in (((s[0] - pt).length(), False),
+                            ((s[1] - pt).length(), True)):
+                if d < tol and (best is None or d < best[0]):
+                    best = (d, i, flip)
+        return best
+
+    while True:                                   # grow the end
+        hit = closest(chain[-1][1])
+        if hit is None:
+            break
+        _d, i, flip = hit
+        seg = remaining.pop(i)
+        chain.append(_rev(seg) if flip else seg)
+    while True:                                   # ...then the start
+        hit = closest(chain[0][0])
+        if hit is None:
+            break
+        _d, i, flip = hit
+        seg = remaining.pop(i)
+        # a segment ENDING at the chain start keeps its direction
+        chain.insert(0, seg if flip else _rev(seg))
     return chain, remaining
 
 

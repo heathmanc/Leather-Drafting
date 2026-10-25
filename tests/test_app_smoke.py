@@ -2503,6 +2503,27 @@ def test_seam_moved_with_its_group_is_saved_where_it_is_drawn(qapp):
     assert where(seam) == (15.0, 30.0)
 
 
+def test_exploded_stitching_stays_in_its_group(qapp):
+    """Explode stitching -> holes made ungrouped holes, so the next drag of
+    the (duplicated) piece left them behind."""
+    win, c, drag, model, where = _group_rig(qapp)
+    rect = [i for i in c.scene_obj.items()
+            if getattr(model(i), "kind", "") == "rectangle"][0]
+    gid = model(rect).group_id
+    rect.model.stitch = StitchSettings(pitch_mm=4.0, inset=3.0)
+    rect.sync_from_model()
+    c.press_select(rect)
+    c.ungroup_selected()                       # rectangle's and seam's holes
+    made = [model(i) for i in c.selected_items()]
+    assert len(made) > 20 and {m.group_id for m in made} == {gid}
+    start = {id(m): where(m) for m in made}
+    c.scene_obj.clearSelection()
+    drag(20, 0, 50, 20)                        # grab the rectangle's edge
+    for m in made:
+        x0, y0 = start[id(m)]
+        assert where(m) == (round(x0 + 30, 6), round(y0 + 20, 6))
+
+
 def _multi_click(c, pts):
     from PySide6.QtCore import QPointF, QEvent, Qt
     from PySide6.QtGui import QMouseEvent

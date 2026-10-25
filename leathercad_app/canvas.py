@@ -3406,6 +3406,7 @@ class Canvas(QGraphicsView):
             self.doc.holes.append(lh)
             return self._add_item(HoleItem(lh, self))
         if isinstance(it, StitchLineItem):
+            it._bake_move()                  # copy it from where it's drawn
             sl = copy.deepcopy(it.line)
             sl.points = [place(p) for p in sl.points]
             sl.line_id = _lid()
@@ -4284,15 +4285,17 @@ class Canvas(QGraphicsView):
                 sh = it.model
                 res, style = self._shape_world_holes(sh)
                 if res and res.count:
-                    made += self._explode(res, style)
+                    made += self._explode(res, style, sh.group_id)
                     sh.baked_holes = None
                     if sh.stitch:
                         sh.stitch.enabled = False
                     it.sync_from_model()
             elif isinstance(it, StitchLineItem):
+                it._bake_move()              # holes go where the seam is drawn
                 res = it.line.result()
                 if res.count:
-                    made += self._explode(res, it.line.settings)
+                    made += self._explode(res, it.line.settings,
+                                          it.line.group_id)
                     self.doc.remove_stitch_line(it.line)
                     self._remove_item(it)
         self._suppress_commit = False
@@ -4303,14 +4306,16 @@ class Canvas(QGraphicsView):
             self.documentChangedSig.emit()
             self._emit_commit()
 
-    def _explode(self, res, style):
+    def _explode(self, res, style, group_id=None):
+        """Loose holes for ``res``. ``group_id`` keeps them in the group of
+        the shape / seam they came from, so they still move with the piece."""
         items = []
         for h in res.holes:
             lh = LooseHole(
                 point=h.point, tangent=h.tangent,
                 hole_style=style.hole_style, hole_diameter=style.hole_diameter,
                 slit_length=style.slit_length, slit_angle=style.slit_angle,
-                layer="Stitch")
+                layer="Stitch", group_id=group_id)
             self.doc.add_hole(lh)
             items.append(self._add_item(HoleItem(lh, self)))
         return items

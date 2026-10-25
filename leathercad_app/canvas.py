@@ -1611,6 +1611,16 @@ class Canvas(QGraphicsView):
         if anchor is None:
             return pos, False, None
         op = self._apply_ortho(anchor, raw)
+        if pos != raw:
+            # take the LENGTH from the snapped point (grid, node...): its
+            # projection on the locked ray -- the raw cursor gave 40.471 mm
+            # on a 1 mm grid
+            ux, uy = op.x() - anchor.x(), op.y() - anchor.y()
+            n = math.hypot(ux, uy)
+            if n > 1e-9:
+                ux, uy = ux / n, uy / n
+                t = (pos.x() - anchor.x()) * ux + (pos.y() - anchor.y()) * uy
+                op = QPointF(anchor.x() + ux * t, anchor.y() + uy * t)
         crossed = self._ortho_edge_snap(anchor, op)
         if crossed is not None:
             return crossed, True, "cross"
@@ -1674,7 +1684,7 @@ class Canvas(QGraphicsView):
             w = abs(pos.x() - self._start.x())
             h = abs(pos.y() - self._start.y())
             if self.tool in (CIRCLE,):
-                r = max(w, h)
+                r = math.hypot(w, h)          # through the cursor
                 self.statusMessage.emit(f"r {r:.1f} mm   ø {2*r:.1f} mm")
             else:
                 self.statusMessage.emit(f"{w:.1f} × {h:.1f} mm")
@@ -1717,9 +1727,12 @@ class Canvas(QGraphicsView):
                 self._update_pen_preview(None, dragging=False)
             event.accept()
             return
-        pos = self.mapToScene(event.position().toPoint())
+        raw = self.mapToScene(event.position().toPoint())
+        pos = raw
         if self.tool != SELECT:
-            pos, _v = self.snap(pos)
+            pos, _v = self.snap(raw)
+            # the same Shift lock the preview showed while dragging
+            pos, _o, _k = self._maybe_ortho(raw, pos, event)
         # In drag mode, releasing finishes the shape. In click-to-place mode the
         # release after the first click does nothing (the second click finishes).
         if (self.drag_to_draw and self._preview is not None
@@ -1936,7 +1949,7 @@ class Canvas(QGraphicsView):
         w, h = abs(b.x() - a.x()), abs(b.y() - a.y())
         if self.tool in (ELLIPSE, CIRCLE):
             if self.tool == CIRCLE:
-                s = max(w, h)
+                s = math.hypot(w, h)
                 path.addEllipse(a.x() - s, a.y() - s, 2 * s, 2 * s)
             else:
                 path.addEllipse(x0, y0, w, h)
@@ -1977,6 +1990,12 @@ class Canvas(QGraphicsView):
         w, h = abs(b.x() - a.x()), abs(b.y() - a.y())
         if w < 1 and h < 1:
             return
+        if self.tool in (RECT, ROUNDED, ELLIPSE, SLOT) and (w < 0.5 or h < 0.5):
+            # a flat box -- a shape with no height (and stitch holes!) --
+            # comes from a mis-click along a line, not from wanting it
+            self.statusMessage.emit(
+                "Too thin to be a shape — drag out both a width and a height")
+            return
         cx, cy = (a.x() + b.x()) / 2, (a.y() + b.y()) / 2
         if self.tool == RECT:
             sh = Rectangle(width=w, height=h,
@@ -1987,7 +2006,7 @@ class Canvas(QGraphicsView):
                            transform=Transform(x=cx, y=cy),
                            stitch=self._default_stitch(), layer=self._current_layer)
         elif self.tool == CIRCLE:
-            s = max(w, h)
+            s = math.hypot(w, h)       # the circle passes through the click
             sh = Circle(rx=s, ry=s, transform=Transform(x=a.x(), y=a.y()),
                         stitch=self._default_stitch(), layer=self._current_layer)
         elif self.tool == ELLIPSE:
@@ -2524,6 +2543,17 @@ class Canvas(QGraphicsView):
         self._live.clear()
         self._underlay_item = None        # freed by scene.clear()
         self._preview = None
+        self._pen_hud = None
+        # a shape half-drawn when the document is swapped (undo / redo /
+        # open) is abandoned: its preview overlays were just freed, and a
+        # kept first click would anchor the next shape somewhere unseen
+        self._start = None
+        self._poly_pts = []
+        self._pen_pts = []
+        self._pen_handles = []
+        self._pen_drag = False
+        self._multi_pts = []
+        self._cal_pts = []
         self._snap_marker = None
         self._node_hl = None
         self._trim_hover = None

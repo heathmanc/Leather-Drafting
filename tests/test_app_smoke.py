@@ -1233,6 +1233,92 @@ def test_drawn_seam_puts_holes_on_its_corners(qapp):
     assert sl.corner_points == []
 
 
+def _draw_rig(qapp):
+    from PySide6.QtCore import QPointF, QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    win = MainWindow(Document())
+    c = win.canvas
+    c.resize(500, 500)
+    c.drag_to_draw = False
+    c.snap_to_grid = c.snap_to_nodes = False
+
+    def ev(kind, x, y, mods=Qt.NoModifier, held=True):
+        vp = QPointF(c.mapFromScene(QPointF(x, y)))
+        btn = Qt.NoButton if kind == QEvent.MouseMove else Qt.LeftButton
+        return QMouseEvent(kind, vp, btn,
+                           Qt.LeftButton if held else Qt.NoButton, mods)
+
+    def click(x, y, mods=Qt.NoModifier):
+        c.mousePressEvent(ev(QEvent.MouseButtonPress, x, y, mods))
+        c.mouseReleaseEvent(ev(QEvent.MouseButtonRelease, x, y, mods))
+    return win, c, ev, click
+
+
+def test_drawing_tools_size_and_lock_correctly(qapp):
+    """Area tools made 40 x 0 shapes (with holes) from a mis-click; the circle
+    radius was max(|dx|, |dy|), missing the clicked point; Shift was ignored
+    on a drag-to-draw release and didn't respect the grid."""
+    import math
+    from PySide6.QtCore import QEvent, Qt
+    from leathercad_app import canvas as cm
+    win, c, ev, click = _draw_rig(qapp)
+    c.tool = cm.RECT
+    click(0, 0)
+    click(40, 0.2)
+    assert win.doc.shapes == []                   # too flat: refused
+    c.tool = cm.CIRCLE
+    click(100, 0)
+    click(106, 8)
+    assert abs(win.doc.shapes[-1].rx - 10.0) < 1e-6   # passes through (106,8)
+    # drag-to-draw a line with Shift: the release keeps the lock
+    c.drag_to_draw = True
+    c.tool = cm.LINE
+    c.mousePressEvent(ev(QEvent.MouseButtonPress, 0, 40))
+    c.mouseMoveEvent(ev(QEvent.MouseMove, 20, 41, Qt.ShiftModifier))
+    c.mouseReleaseEvent(ev(QEvent.MouseButtonRelease, 40, 43,
+                           Qt.ShiftModifier))
+    pts = win.doc.shapes[-1].world_polyline()[0]
+    assert abs(pts[0].y - pts[-1].y) < 1e-9       # horizontal, not (40, 43)
+    # Shift + grid snap: the length lands on the grid
+    c.drag_to_draw = False
+    c.snap_to_grid = True
+    c.tool = cm.LINE
+    click(0, 0)
+    click(40.3, 3.2, Qt.ShiftModifier)
+    pts = win.doc.shapes[-1].world_polyline()[0]
+    length = math.hypot(pts[-1].x - pts[0].x, pts[-1].y - pts[0].y)
+    assert abs(length - round(length)) < 1e-6 and abs(pts[-1].y) < 1e-9
+
+
+def test_undo_mid_drawing_abandons_the_shape_cleanly(qapp):
+    """Undo while a pen curve was in progress left the tool pointing at a
+    freed preview: every later move or click raised."""
+    from PySide6.QtCore import QEvent
+    from leathercad_app import canvas as cm
+    win, c, ev, click = _draw_rig(qapp)
+    c.tool = cm.RECT
+    click(-50, -50)
+    click(-30, -30)                               # something to undo
+    c.tool = cm.PEN
+    click(0, 0)
+    click(20, 10)
+    c.mouseMoveEvent(ev(QEvent.MouseMove, 30, 0, held=False))
+    win.undo()
+    c.mouseMoveEvent(ev(QEvent.MouseMove, 35, 5, held=False))   # no crash
+    click(0, 0)                                   # a fresh curve works
+    click(30, 0)
+    c.mouseDoubleClickEvent(ev(QEvent.MouseButtonDblClick, 30, 0))
+    assert len(win.doc.shapes) == 1               # undo removed the rect
+    # a half-drawn rectangle's first click doesn't survive an undo either
+    c.tool = cm.RECT
+    click(100, 100)
+    win.undo()
+    click(10, 10)
+    assert c._start is not None                   # this was a FIRST click
+
+
 def test_tool_shortcuts_unique_and_unambiguous():
     from leathercad_app.mainwindow import TOOLS
     keys = [k for _n, _m, k in TOOLS]

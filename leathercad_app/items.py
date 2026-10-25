@@ -1646,10 +1646,18 @@ class StitchLineItem(QGraphicsItem):
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
-        self._bake_move()
+        if self.canvas is not None:
+            self.canvas.bake_seam_moves()     # this seam + any group-mates
+            self.canvas.reassert_group_selection(self)
+        else:
+            self._bake_move()
 
-    def _bake_move(self):
-        """Bake the drag offset (setPos) into the seam points, once, on release."""
+    def _bake_move(self) -> bool:
+        """Bake the drag offset (setPos) into the seam points. True if it had
+        moved. Shapes/holes/text write their position into the model as they
+        move; a seam keeps its points and only an offset while dragged, so
+        every moved seam -- including one dragged along as part of a group,
+        which never gets a release of its own -- must be baked at drag end."""
         dx = self.pos().x() - self._base.x
         dy = self.pos().y() - self._base.y
         if abs(dx) > 1e-9 or abs(dy) > 1e-9:
@@ -1657,8 +1665,8 @@ class StitchLineItem(QGraphicsItem):
             self.line.corner_points = [Vec2(p.x + dx, p.y + dy)
                                        for p in self.line.corner_points]
             self.sync_from_model()
-            if self.canvas is not None:
-                self.canvas.commitRequested.emit()
+            return True
+        return False
 
     @property
     def hole_count(self) -> int:

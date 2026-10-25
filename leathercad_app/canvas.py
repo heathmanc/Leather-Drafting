@@ -1117,6 +1117,20 @@ class Canvas(QGraphicsView):
         self._snap_cache = None
         self._snap_grid = None
         self._hide_snap_marker()
+        self.bake_seam_moves()
+
+    def bake_seam_moves(self) -> bool:
+        """Write every moved seam's drag offset into its points (see
+        StitchLineItem._bake_move). Called at the end of every drag, whichever
+        item was grabbed, so a seam moved as part of a group is saved where it
+        is drawn -- it used to snap back on the next undo / save / reload."""
+        moved = False
+        for it in self.scene_obj.items():
+            if isinstance(it, StitchLineItem) and it._bake_move():
+                moved = True
+        if moved and not self._moved_during_press:
+            self._emit_commit()          # a drag the view didn't see commit
+        return moved
 
     def snap_move(self, item, value: QPointF) -> QPointF:
         """Snap a dragged shape so one of its nodes lands on a nearby node."""
@@ -3306,45 +3320,24 @@ class Canvas(QGraphicsView):
         self._emit_commit()
 
     def duplicate_selected(self) -> None:
-        import copy
-        from leathercad.geometry import Vec2
+        """Copy the selection 8 mm down-right. A selected group comes out as a
+        NEW group of its own (moves and selects together, separate from the
+        original); its text labels are copied with it."""
         new_items = []
+        groups = {}
         self._suppress_commit = True
         # Positioning each freshly-created item fires item_moved -> a full
         # document refresh (dimension re-anchor + total_holes scene scan); doing
         # that per item is O(N^2). Suspend it and refresh once at the end.
         self._suspend_move_refresh = True
-        for it in self.selected_items():
-            if isinstance(it, ShapeItem):
-                sh = copy.deepcopy(it.model)
-                sh.transform.x += 8
-                sh.transform.y -= 8
-                from leathercad.shapes import _next_id
-                sh.shape_id = _next_id("shape")
-                sh.group_id = None          # a copy is not in the original group
-                # Lightweight add (like the hole/seam branches): the per-shape
-                # add_shape() does clearSelection + documentChangedSig + commit
-                # each, which is O(N^2) selection churn for a big duplicate.
-                self.doc.add_shape(sh)
-                new_items.append(self._add_item(ShapeItem(sh, self)))
-            elif isinstance(it, HoleItem):
-                from leathercad.holes import _next_id as _next_hole_id
-                lh = copy.deepcopy(it.hole)
-                lh.point = Vec2(it.hole.point.x + 8, it.hole.point.y - 8)
-                lh.hole_id = _next_hole_id()
-                lh.group_id = None
-                self.doc.holes.append(lh)
-                new_items.append(self._add_item(HoleItem(lh, self)))
-            elif isinstance(it, StitchLineItem):
-                from leathercad.stitchline import _next_id as _next_line_id
-                sl = copy.deepcopy(it.line)
-                sl.points = [Vec2(p.x + 8, p.y - 8) for p in it.line.points]
-                sl.line_id = _next_line_id()
-                sl.group_id = None
-                self.doc.add_stitch_line(sl)
-                new_items.append(self._add_item(StitchLineItem(sl, self)))
-        self._suppress_commit = False
-        self._suspend_move_refresh = False
+        try:
+            for it in self.selected_items():
+                m = self._clone_item(it, translate=(8.0, -8.0), groups=groups)
+                if m is not None:
+                    new_items.append(m)
+        finally:
+            self._suppress_commit = False
+            self._suspend_move_refresh = False
         self.scene_obj.clearSelection()
         for it in new_items:
             it.setSelected(True)
@@ -3354,10 +3347,24 @@ class Canvas(QGraphicsView):
 
     # -- array (grid / circular duplication) ---------------------------
     def _clone_item(self, it, translate=(0.0, 0.0), pivot=None,
-                    pos_angle=0.0, orient_angle=0.0):
+                    pos_angle=0.0, orient_angle=0.0, groups=None):
         """Clone one selectable item, rotating its POSITION around ``pivot`` by
         ``pos_angle`` degrees (if given), optionally rotating its ORIENTATION by
-        ``orient_angle``, then translating. Fresh ids, ungrouped."""
+        ``orient_angle``, then translating. Fresh ids.
+
+        ``groups`` maps an original group id to the id its copies share: pass
+        one dict per COPY of the selection, so a duplicated group comes out as
+        a group of its own (not ungrouped, and not merged into the original).
+        Ungrouped items stay ungrouped."""
+        if groups is None:
+            groups = {}
+
+        def regroup(gid):
+            if gid is None:
+                return None
+            if gid not in groups:
+                groups[gid] = _sid("group")
+            return groups[gid]
         import copy
         import math
         from leathercad.geometry import Vec2
@@ -3387,7 +3394,7 @@ class Canvas(QGraphicsView):
             sh.transform.x, sh.transform.y = c.x, c.y
             sh.transform.rotation += orient_angle
             sh.shape_id = _sid("shape")
-            sh.group_id = None
+            sh.group_id = regroup(it.model.group_id)
             self.doc.add_shape(sh)
             return self._add_item(ShapeItem(sh, self))
         if isinstance(it, HoleItem):
@@ -3395,16 +3402,25 @@ class Canvas(QGraphicsView):
             lh.point = place(lh.point)
             lh.tangent = spin(lh.tangent)
             lh.hole_id = _hid()
-            lh.group_id = None
+            lh.group_id = regroup(it.hole.group_id)
             self.doc.holes.append(lh)
             return self._add_item(HoleItem(lh, self))
         if isinstance(it, StitchLineItem):
             sl = copy.deepcopy(it.line)
             sl.points = [place(p) for p in sl.points]
             sl.line_id = _lid()
-            sl.group_id = None
+            sl.group_id = regroup(it.line.group_id)
             self.doc.add_stitch_line(sl)
             return self._add_item(StitchLineItem(sl, self))
+        if isinstance(it, TextItem):     # lettering (e.g. a group's label)
+            tx = copy.deepcopy(it.model)
+            c = place(Vec2(tx.transform.x, tx.transform.y))
+            tx.transform.x, tx.transform.y = c.x, c.y
+            tx.transform.rotation += orient_angle
+            tx.text_id = _sid("text")
+            tx.group_id = regroup(it.model.group_id)
+            self.doc.texts.append(tx)
+            return self._add_item(TextItem(tx, self))
         return None
 
     def array_grid(self, rows: int, cols: int, dx: float, dy: float) -> None:
@@ -3419,8 +3435,10 @@ class Canvas(QGraphicsView):
             for cc in range(cols):
                 if r == 0 and cc == 0:
                     continue
+                groups = {}                   # each cell's copy: own groups
                 for it in sel:
-                    m = self._clone_item(it, translate=(cc * dx, r * dy))
+                    m = self._clone_item(it, translate=(cc * dx, r * dy),
+                                         groups=groups)
                     if m:
                         made.append(m)
         self._suppress_commit = False
@@ -3440,9 +3458,11 @@ class Canvas(QGraphicsView):
         self._suppress_commit = True
         for k in range(1, count):
             ang = step * k
+            groups = {}                       # each copy: its own groups
             for it in sel:
                 m = self._clone_item(it, pivot=(cx, cy), pos_angle=ang,
-                                     orient_angle=ang if rotate_items else 0.0)
+                                     orient_angle=ang if rotate_items else 0.0,
+                                     groups=groups)
                 if m:
                     made.append(m)
         self._suppress_commit = False

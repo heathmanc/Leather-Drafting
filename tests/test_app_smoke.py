@@ -1528,7 +1528,8 @@ def test_group_drag_snaps_to_node_and_stays_rigid(qapp):
 
 def test_duplicate_does_not_inherit_group(qapp):
     # Duplicating grouped items must NOT leave the copies in the original group
-    # (otherwise every new duplicate "latches" onto the group).
+    # (otherwise every new duplicate "latches" onto the group) -- they form a
+    # NEW group of their own instead (a duplicated group stays a group).
     from leathercad_app import canvas as cm
     from leathercad.document import Document, LooseHole
     from leathercad.geometry import Vec2
@@ -1543,8 +1544,10 @@ def test_duplicate_does_not_inherit_group(qapp):
     for h in holes:
         h.setSelected(True)
     c.make_group()
+    original = doc.holes[0].group_id
     c.duplicate_selected()
-    assert {h.group_id for h in doc.holes[3:]} == {None}   # copies ungrouped
+    copies = {h.group_id for h in doc.holes[3:]}
+    assert len(copies) == 1 and original not in copies and None not in copies
 
 
 def test_make_back_piece_mirrors_loose_holes(qapp):
@@ -2319,6 +2322,131 @@ def test_code_placed_parts_never_snap(qapp):
     items[1].setPos(QPointF(34.0, 0.0))   # 1 mm from snapping onto part 0
     assert (items[1].model.transform.x, items[1].model.transform.y) == (34.0, 0.0)
     c.end_move_snap()
+
+
+def _group_rig(qapp):
+    """A group of one of everything: rectangle, circle, loose hole, seam and a
+    text label; returns (win, canvas, drag(x0,y0,x1,y1), model_of, where)."""
+    from PySide6.QtCore import QPointF, QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document
+    from leathercad.geometry import Vec2
+    from leathercad.shapes import Rectangle, Circle, Transform
+    from leathercad.holes import LooseHole
+    from leathercad.stitchline import StitchLine
+    from leathercad.text import TextShape
+    doc = Document()
+    doc.add_shape(Rectangle(width=40, height=30, layer="Cut",
+                            transform=Transform(x=0, y=0)))
+    doc.add_shape(Circle(rx=4, ry=4, layer="Cut", transform=Transform(x=8, y=5)))
+    doc.holes.append(LooseHole(point=Vec2(-10, -8)))
+    doc.add_stitch_line(StitchLine(points=[Vec2(-15, 10), Vec2(15, 10)]))
+    doc.texts.append(TextShape(text="A", size=4, layer="Cut",
+                               contours=[[Vec2(0, 0), Vec2(3, 0), Vec2(1.5, 4),
+                                          Vec2(0, 0)]],
+                               transform=Transform(x=-5, y=-12)))
+    win = MainWindow(doc)
+    win.show()
+    qapp.processEvents()
+    c = win.canvas
+    c.rebuild()
+    c.tool = cm.SELECT
+    c.snap_to_grid = c.snap_to_nodes = False
+    for i in c.scene_obj.items():
+        if c._item_model(i) is not None:
+            i.setSelected(True)
+    c.make_group()
+    c.scene_obj.clearSelection()
+    vpw = c.viewport()
+
+    def ev(kind, x, y, btns=Qt.LeftButton):
+        pt = QPointF(c.mapFromScene(QPointF(x, y)))
+        btn = Qt.NoButton if kind == QEvent.MouseMove else Qt.LeftButton
+        QApplication.sendEvent(vpw, QMouseEvent(kind, pt, vpw.mapToGlobal(pt),
+                                                btn, btns, Qt.NoModifier))
+        qapp.processEvents()
+
+    def drag(x0, y0, x1, y1):
+        ev(QEvent.MouseButtonPress, x0, y0)
+        for t in (0.5, 1.0):
+            ev(QEvent.MouseMove, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t,
+               Qt.LeftButton)
+        ev(QEvent.MouseButtonRelease, x1, y1, Qt.NoButton)
+
+    def where(m):
+        if hasattr(m, "transform"):
+            return (round(m.transform.x, 6), round(m.transform.y, 6))
+        if hasattr(m, "point"):
+            return (round(m.point.x, 6), round(m.point.y, 6))
+        return (round(m.points[0].x, 6), round(m.points[0].y, 6))
+    return win, c, drag, c._item_model, where
+
+
+def _all_models(c):
+    return [m for m in (c._item_model(i) for i in c.scene_obj.items())
+            if m is not None]
+
+
+def test_duplicated_group_stays_a_group_of_its_own(qapp):
+    """Duplicating a group used to give ungrouped copies (dragging one copy
+    left the rest behind) and silently skipped its text labels."""
+    win, c, drag, model, where = _group_rig(qapp)
+    originals = {id(m): where(m) for m in _all_models(c)}
+    rect = [i for i in c.scene_obj.items()
+            if getattr(model(i), "kind", "") == "rectangle"][0]
+    c.press_select(rect)                       # selects the whole group
+    c.duplicate_selected()
+    copies = [model(i) for i in c.selected_items()]
+    assert len(copies) == 5                    # text label included
+    gids = {m.group_id for m in copies}
+    orig_gid = model(rect).group_id
+    assert len(gids) == 1 and None not in gids and orig_gid not in gids
+    start = {id(m): where(m) for m in copies}
+    r = [m for m in copies if getattr(m, "kind", "") == "rectangle"][0]
+    c.scene_obj.clearSelection()               # no resize grips in the way
+    x, y = r.transform.x + 10, r.transform.y + 15          # its top edge
+    drag(x, y, x + 30, y + 20)
+    for m in copies:                           # every copy moved together
+        x0, y0 = start[id(m)]
+        assert where(m) == (round(x0 + 30, 6), round(y0 + 20, 6))
+    for m in _all_models(c):                   # ...and no original did
+        if id(m) in originals:
+            assert where(m) == originals[id(m)]
+
+
+def test_arrayed_group_gives_one_new_group_per_copy(qapp):
+    win, c, drag, model, where = _group_rig(qapp)
+    rect = [i for i in c.scene_obj.items()
+            if getattr(model(i), "kind", "") == "rectangle"][0]
+    orig_gid = model(rect).group_id
+    c.press_select(rect)
+    c.array_grid(1, 3, 60.0, 0.0)
+    copies = [model(i) for i in c.selected_items()]
+    assert len(copies) == 10                   # 2 copies x 5 members
+    by_gid = {}
+    for m in copies:
+        by_gid.setdefault(m.group_id, []).append(m)
+    assert len(by_gid) == 2 and orig_gid not in by_gid and None not in by_gid
+    assert all(len(v) == 5 for v in by_gid.values())
+
+
+def test_seam_moved_with_its_group_is_saved_where_it_is_drawn(qapp):
+    """A seam dragged along as part of a group moved on screen only: its
+    points were baked on ITS OWN release, which a group-mate's drag never
+    sends -- so undo/save/reload put it back where it started."""
+    win, c, drag, model, where = _group_rig(qapp)
+    seam = [m for m in _all_models(c) if hasattr(m, "points")
+            and not hasattr(m, "transform")][0]
+    drag(20, 0, 50, 20)                        # grab the rectangle's edge
+    assert where(seam) == (15.0, 30.0)         # (-15,10) + (30,20)
+    win.undo()
+    win.redo()
+    seam = [m for m in _all_models(c) if hasattr(m, "points")
+            and not hasattr(m, "transform")][0]
+    assert where(seam) == (15.0, 30.0)
 
 
 def _multi_click(c, pts):

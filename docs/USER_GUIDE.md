@@ -284,7 +284,7 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
   shape's box — snaps to 1° (hold **Shift** for 15° detents) — or type an
   exact angle in Properties → Rotation.
 * **Mirror**: Properties → "Mirror (laser from back)".
-* **Duplicate**: `Ctrl+D` (copies land beside the original).
+* **Duplicate**: `Ctrl+D` (copies land beside the original). Duplicating a **group** gives a new group of its own — the copies select and move together, separately from the original — with its text labels and seams included. **Array** works the same way: each copy of a group is its own group.
 * **Delete**: `Delete` or `Backspace`.
 * **Undo / Redo**: `Ctrl+Z` / `Ctrl+Shift+Z` — every discrete edit is undoable.
 * **Group (move together)**: select 2+ items, `Ctrl+G`. Clicking any member

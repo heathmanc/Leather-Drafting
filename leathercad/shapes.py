@@ -197,6 +197,24 @@ class Circle(Ellipse):
         self.ry = r
 
 
+def copy_shape_attrs(src, dst, *, holes: bool = False):
+    """Give ``dst`` the identity ``src`` had beyond its geometry -- name,
+    layer, opacity, stitching, construction (guide) flag, group, fold -- so a
+    command that rebuilds a shape (trim, join, convert to nodes...) doesn't
+    quietly turn a guide into a cut line or drop it out of its group.
+    ``holes`` also carries attached holes (only valid in the same local
+    frame). Returns ``dst``."""
+    import copy
+    for name in ("name", "layer", "opacity", "construction", "group_id",
+                 "fold_dir", "fold_angle"):
+        if hasattr(src, name):
+            setattr(dst, name, getattr(src, name))
+    dst.stitch = copy.deepcopy(src.stitch)
+    if holes:
+        dst.baked_holes = copy.deepcopy(src.baked_holes)
+    return dst
+
+
 @dataclass
 class Polygon(Shape):
     points: List[Vec2] = field(default_factory=list)

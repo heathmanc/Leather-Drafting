@@ -3,8 +3,8 @@ bracket a picked point -- the classic 2D-sketch trim (Fusion 360 / LightBurn).
 
 It works on the same segment representation the app already uses for
 break-apart: a list of ``(kind, [world points])`` where a line is
-``("line", [a, b])`` and an arc is ``("arc", [a, mid, b])`` (``mid`` is a point
-the arc passes through). Curve type is preserved -- trimming an arc yields arcs.
+``("line", [a, b])``, an arc is ``("arc", [a, mid, b])`` (``mid`` is a point
+the arc passes through) and a cubic bezier ``("bezier", [a, c1, c2, b])``. Curve type is preserved -- trimming an arc yields arcs.
 
 The picked entity is intersected against a set of *cutter* polylines (every
 other outline, flattened). The intersections split the entity into cells; the
@@ -33,6 +33,8 @@ Segment = Tuple[str, List[Vec2]]
 # One primitive piece of the picked outline (a line or a circular arc)
 # ---------------------------------------------------------------------------
 class _Piece:
+    bez = None                   # a _BezPiece's control points
+
     def __init__(self, kind: str, a: Vec2, b: Vec2, mid: Optional[Vec2] = None):
         self.a = a
         self.b = b
@@ -78,6 +80,81 @@ class _Piece:
         if self.center is None:
             return ("line", [p0, p1])
         return ("arc", [p0, self.point_at(0.5 * (f0 + f1)), p1])
+
+
+class _BezPiece(_Piece):
+    """A cubic bezier piece. Fractions are by arc length, through a fine
+    sample table; ``sub`` splits the curve exactly (de Casteljau), so a span
+    the trim keeps whole comes back with its very own control points."""
+    _N = 128
+
+    def __init__(self, a: Vec2, c1: Vec2, c2: Vec2, b: Vec2):
+        self.a, self.b = a, b
+        self.center = None
+        self.bez = (a, c1, c2, b)
+        self._pts = [self._at(i / self._N) for i in range(self._N + 1)]
+        self._cum = [0.0]
+        for i in range(self._N):
+            self._cum.append(self._cum[-1]
+                             + (self._pts[i + 1] - self._pts[i]).length())
+        self.length = self._cum[-1]
+
+    def _at(self, t: float) -> Vec2:
+        a, c1, c2, b = self.bez
+        u = 1.0 - t
+        return (a * (u * u * u) + c1 * (3 * u * u * t)
+                + c2 * (3 * u * t * t) + b * (t * t * t))
+
+    def _t_of(self, f: float) -> float:
+        s = max(0.0, min(1.0, f)) * self.length
+        lo, hi = 0, self._N
+        while hi - lo > 1:
+            m = (lo + hi) // 2
+            if self._cum[m] <= s:
+                lo = m
+            else:
+                hi = m
+        seg = self._cum[lo + 1] - self._cum[lo]
+        k = (s - self._cum[lo]) / seg if seg > _EPS else 0.0
+        return (lo + k) / self._N
+
+    def point_at(self, f: float) -> Vec2:
+        return self._at(self._t_of(f))
+
+    def frac_of(self, p: Vec2) -> float:
+        best, bs = float("inf"), 0.0
+        for i in range(self._N):
+            a, b = self._pts[i], self._pts[i + 1]
+            ab = b - a
+            d2 = ab.length_sq()
+            k = 0.0 if d2 <= _EPS else max(0.0, min(1.0, (p - a).dot(ab) / d2))
+            d = (a + ab * k - p).length()
+            if d < best:
+                best, bs = d, self._cum[i] + k * ab.length()
+        return bs / self.length if self.length > _EPS else 0.0
+
+    def flatten(self, flatness: float = 0.05) -> List[Vec2]:
+        return list(self._pts)
+
+    def sub(self, f0: float, f1: float) -> Segment:
+        t0, t1 = self._t_of(f0), self._t_of(f1)
+        a, c1, c2, b = self.bez
+        # head [0, t1] ...
+        p01, p12, p23 = a.lerp(c1, t1), c1.lerp(c2, t1), c2.lerp(b, t1)
+        p012, p123 = p01.lerp(p12, t1), p12.lerp(p23, t1)
+        h = (a, p01, p012, p012.lerp(p123, t1))
+        # ... then its tail from t0 (rescaled into the head's own range)
+        u = t0 / t1 if t1 > _EPS else 0.0
+        q01, q12, q23 = h[0].lerp(h[1], u), h[1].lerp(h[2], u), h[2].lerp(h[3], u)
+        q012, q123 = q01.lerp(q12, u), q12.lerp(q23, u)
+        return ("bezier", [q012.lerp(q123, u), q123, q23, h[3]])
+
+
+def _piece_from(kind: str, pts: List[Vec2]) -> _Piece:
+    if kind == "bezier" and len(pts) >= 4:
+        return _BezPiece(pts[0], pts[1], pts[2], pts[-1])
+    return _Piece(kind, pts[0], pts[-1],
+                  pts[1] if kind == "arc" and len(pts) >= 3 else None)
 
 
 def _signed_sweep(a0: float, a1: float, ccw: bool) -> float:
@@ -160,6 +237,14 @@ def intersection_arclengths(segments: Sequence[Segment],
             for (c0, c1) in edges:
                 for f in _arc_hits(p, c0, c1):
                     hits.append(cum[pi] + f * p.length)
+            continue
+        if p.bez is not None:
+            pts, pc = p._pts, p._cum
+            for j in range(len(pts) - 1):
+                for (c0, c1) in edges:
+                    x = _seg_intersect(pts[j], pts[j + 1], c0, c1)
+                    if x is not None:
+                        hits.append(cum[pi] + pc[j] + (x - pts[j]).length())
             continue
         for (c0, c1) in edges:
             x = _seg_intersect(p.a, p.b, c0, c1)
@@ -244,8 +329,7 @@ def removed_cell_polyline(segments: Sequence[Segment],
     removed = _walk(pieces, cum, total, cell[0], cell[1])
     out: List[Vec2] = []
     for kind, pts in removed:
-        piece = _Piece(kind, pts[0], pts[-1],
-                       pts[1] if kind == "arc" and len(pts) >= 3 else None)
+        piece = _piece_from(kind, pts)
         fl = piece.flatten(flatness)
         if out and (out[-1] - fl[0]).length() < 1e-6:
             out.extend(fl[1:])
@@ -260,8 +344,7 @@ def removed_cell_polyline(segments: Sequence[Segment],
 def _build(segments):
     pieces = []
     for kind, pts in segments:
-        mid = pts[1] if (kind == "arc" and len(pts) >= 3) else None
-        piece = _Piece(kind, pts[0], pts[-1], mid)
+        piece = _piece_from(kind, pts)
         if piece.length > _EPS:
             pieces.append(piece)
     cum = [0.0]
@@ -317,7 +400,10 @@ def _nearest(pieces, cum, target):
     measured on the true lines and arcs rather than their flattening."""
     best_s, best_d = 0.0, float("inf")
     for pi, p in enumerate(pieces):
-        if p.center is None:
+        if p.bez is not None:
+            f = p.frac_of(target)
+            q = p.point_at(f)
+        elif p.center is None:
             f = p.frac_of(target)
             q = p.a.lerp(p.b, f)
         else:

@@ -477,10 +477,39 @@ def chamfer_vertex(ep: EditablePath, i: int, setback: float) -> bool:
     return True
 
 
+def path_to_nodes(path):
+    """A ``Path`` (lines, arcs, cubic beziers) as EditablePath ``(nodes,
+    edges, closed)`` in the same coordinates -- exact, nothing flattened."""
+    from .path import Arc, CubicBezier, QuadraticBezier
+    segs = list(path.segments)
+    if not segs:
+        return [], [], path.closed
+    nodes, edges = [], []
+    for sg in segs:
+        nodes.append(sg.start())
+        if isinstance(sg, Arc):
+            sweep = sg._sweep()
+            edges.append(Edge("arc", mid=sg._point(sg.a0 + sweep / 2.0)))
+        elif isinstance(sg, (CubicBezier, QuadraticBezier)):
+            cb = sg.to_cubic() if isinstance(sg, QuadraticBezier) else sg
+            edges.append(Edge("bezier", c1=cb.p1, c2=cb.p2))
+        else:
+            edges.append(Edge("line"))
+    end = segs[-1].end()
+    if path.closed:
+        if (end - nodes[0]).length() > 1e-9:     # an open-ended closed path
+            nodes.append(end)
+            edges.append(Edge("line"))
+    else:
+        nodes.append(end)
+    return nodes, edges, path.closed
+
+
 def to_editable(sh) -> Optional[EditablePath]:
     """A Polygon/PathShape as an equivalent EditablePath (same local coords),
-    carrying over transform/layer/stitch. EditablePath passes through."""
-    from .shapes import Polygon, PathShape
+    carrying over everything about the shape but its geometry. A polygon's
+    rounded corners come across as real arcs. EditablePath passes through."""
+    from .shapes import Polygon, PathShape, copy_shape_attrs
     if isinstance(sh, EditablePath):
         return sh
     if not isinstance(sh, (Polygon, PathShape)):
@@ -489,14 +518,17 @@ def to_editable(sh) -> Optional[EditablePath]:
     closed = bool(getattr(sh, "close_path", False))
     if len(pts) < 2:
         return None
-    n_edges = len(pts) if closed else len(pts) - 1
-    ep = EditablePath(nodes=[Vec2(p.x, p.y) for p in pts],
-                      edges=[Edge("line") for _ in range(n_edges)],
-                      closed=closed)
+    if getattr(sh, "corner_radius", 0.0) > 1e-9:
+        # a rounded polygon: its true outline, arcs and all (taking the bare
+        # points dropped the rounding from every other corner)
+        nodes, edges, closed = path_to_nodes(sh.local_path())
+        ep = EditablePath(nodes=nodes, edges=edges, closed=closed)
+    else:
+        n_edges = len(pts) if closed else len(pts) - 1
+        ep = EditablePath(nodes=[Vec2(p.x, p.y) for p in pts],
+                          edges=[Edge("line") for _ in range(n_edges)],
+                          closed=closed)
     ep.transform = sh.transform
-    ep.layer = sh.layer
-    ep.opacity = sh.opacity
-    ep.stitch = sh.stitch
-    ep.baked_holes = sh.baked_holes
-    ep.name = sh.name
+    copy_shape_attrs(sh, ep, holes=True)
+    ep.stitch = sh.stitch                     # shared, as before
     return ep

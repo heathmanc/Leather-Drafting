@@ -7,6 +7,7 @@ selection/move tool drags items (which is how you overlay pieces to check fit).
 
 from __future__ import annotations
 
+import copy
 import math
 from typing import List, Optional
 
@@ -20,7 +21,8 @@ from PySide6.QtWidgets import (QGraphicsScene, QGraphicsView, QGraphicsPathItem,
 
 from leathercad.geometry import Vec2
 from leathercad.document import Document
-from leathercad.shapes import (Rectangle, Ellipse, Circle, Polygon, PathShape,
+from leathercad.shapes import (copy_shape_attrs, Rectangle, Ellipse, Circle,
+                               Polygon, PathShape,
                                EditablePath, Edge, Transform, arc_through)
 from leathercad.stitchsettings import StitchSettings
 from leathercad.stitchline import StitchLine
@@ -94,6 +96,8 @@ _SNAP_LABEL = {"center": "centre", "end": "endpoint", "mid": "midpoint",
 
 def _rev(seg):
     a, b, kind, mid = seg
+    if kind == "bezier":
+        mid = (mid[1], mid[0])          # (c1, c2) swap when reversed
     return (b, a, kind, mid)
 
 
@@ -162,7 +166,8 @@ def _merge_open(a, idx_a, b, idx_b):
 
 def _editpath_from_world(nodes, edges, closed, base):
     """An EditablePath centred on its nodes, from world nodes/edges, taking
-    layer / stitch / opacity from ``base``."""
+    everything but geometry (layer, stitch, group, guide flag...) from
+    ``base``."""
     cx = sum(p.x for p in nodes) / len(nodes)
     cy = sum(p.y for p in nodes) / len(nodes)
 
@@ -171,10 +176,29 @@ def _editpath_from_world(nodes, edges, closed, base):
     ep = EditablePath(nodes=[loc(p) for p in nodes],
                       edges=[Edge(e.kind, mid=loc(e.mid), c1=loc(e.c1),
                                   c2=loc(e.c2)) for e in edges],
-                      closed=closed, transform=Transform(x=cx, y=cy),
-                      layer=base.layer, stitch=base.stitch)
-    ep.opacity = base.opacity
+                      closed=closed, transform=Transform(x=cx, y=cy))
+    copy_shape_attrs(base, ep)
+    ep.stitch = base.stitch
     return ep
+
+
+def _sharpen_at(ep, v):
+    """Index of the node of ``ep`` at local point ``v`` (a polygon's vertex),
+    first collapsing the arc that rounds that corner back onto ``v``."""
+    for i, p in enumerate(ep.nodes):
+        if (p - v).length() < 1e-9:
+            return i
+    n = len(ep.nodes)
+    arcs = [j for j, e in enumerate(ep.edges)
+            if e.kind == "arc" and e.mid is not None]
+    if not arcs:
+        return min(range(n), key=lambda i: (ep.nodes[i] - v).length())
+    j = min(arcs, key=lambda j: (ep.edges[j].mid - v).length())
+    k = (j + 1) % n                               # the arc runs node j -> k
+    ep.nodes[j] = Vec2(v.x, v.y)
+    del ep.edges[j]
+    del ep.nodes[k]
+    return j if k > j else j - 1
 
 
 def _path_from_chain(chain, tol, layer):
@@ -187,15 +211,22 @@ def _path_from_chain(chain, tol, layer):
     closed = len(nodes) > 2 and (nodes[-1] - nodes[0]).length() < tol
     if closed:
         nodes = nodes[:-1]
-    allpts = list(nodes) + [m for _, m in edges if m is not None]
+    allpts = list(nodes)
+    for k, m in edges:
+        if k == "bezier":
+            allpts += list(m)
+        elif m is not None:
+            allpts.append(m)
     cx = sum(p.x for p in allpts) / len(allpts)
     cy = sum(p.y for p in allpts) / len(allpts)
     def loc(p):
         return Vec2(p.x - cx, p.y - cy)
     local_nodes = [loc(p) for p in nodes]
 
-    if any(k == "arc" for k, _ in edges):
-        e_objs = [Edge(k, loc(m) if m is not None else None) for k, m in edges]
+    if any(k in ("arc", "bezier") for k, _ in edges):
+        e_objs = [Edge("bezier", c1=loc(m[0]), c2=loc(m[1])) if k == "bezier"
+                  else Edge(k, loc(m) if m is not None else None)
+                  for k, m in edges]
         sh = EditablePath(nodes=local_nodes, edges=e_objs, closed=closed)
     elif closed:
         sh = Polygon(points=local_nodes, close_path=True, sharp_corners=True)
@@ -248,6 +279,10 @@ def _segment_shape(kind, wpts, layer):
     if kind == "arc" and len(local) == 3:
         sh = EditablePath(nodes=[local[0], local[2]],
                           edges=[Edge("arc", local[1])], closed=False)
+    elif kind == "bezier" and len(local) == 4:
+        sh = EditablePath(nodes=[local[0], local[3]],
+                          edges=[Edge("bezier", c1=local[1], c2=local[2])],
+                          closed=False)
     else:
         sh = PathShape(points=[local[0], local[-1]], close_path=False)
     sh.transform = Transform(x=cx, y=cy)
@@ -2531,7 +2566,8 @@ class Canvas(QGraphicsView):
         for it in circles:
             m = it.model
             c = m.transform.apply(Vec2(0.0, 0.0))
-            lh = LooseHole(point=Vec2(c.x, c.y), hole_diameter=2.0 * m.rx)
+            lh = LooseHole(point=Vec2(c.x, c.y), hole_diameter=2.0 * m.rx,
+                           group_id=m.group_id)
             self.doc.holes.append(lh)
             self.doc.remove_shape(m)
             self._remove_item(it)
@@ -3103,6 +3139,13 @@ class Canvas(QGraphicsView):
 
         sh = it.model
         ep_probe = to_editable(sh)
+        if (ep_probe is not None and ep_probe is not sh
+                and getattr(sh, "corner_radius", 0.0) > 1e-9):
+            # A rounded polygon comes across with its corners as arcs, so the
+            # clicked vertex isn't a node any more: find it, and if its corner
+            # is rounded, take the arc back to the sharp vertex -- the new
+            # radius replaces the old one there; every other corner keeps its
+            idx = _sharpen_at(ep_probe, sh.points[idx])
         endpoint = (ep_probe is not None and not ep_probe.closed
                     and idx in (0, len(ep_probe.nodes) - 1))
         if endpoint:
@@ -3195,8 +3238,8 @@ class Canvas(QGraphicsView):
         """Another shape's open END within a hair of ``wpos`` -> (item, idx)."""
         tol = max(0.75, 8.0 / max(self._zoom, 1e-6))     # snap slop, in mm
         for _d, jt, j, w in cands:
-            if jt is it:
-                continue
+            if jt is it or jt.model.layer != it.model.layer:
+                continue          # never weld a cut line into a score line
             path = self._fillet_open_path(jt.model)
             if path is None or j not in (0, len(path[0]) - 1):
                 continue
@@ -3276,6 +3319,7 @@ class Canvas(QGraphicsView):
                     self._reach_further(items, nodes, edges, closed, corner,
                                         got)
         ep = _editpath_from_world(nodes, edges, closed, base)
+        self._distribute_holes([old.model for old in items], [ep])
         for old in items:
             self.doc.remove_shape(old.model)
             self._remove_item(old)
@@ -3369,15 +3413,20 @@ class Canvas(QGraphicsView):
             return
         result.sort(key=lambda r: -abs(signed_area(r)))
         first_item = None
+        made = []
         for k, ring in enumerate(result):
             cx = sum(p.x for p in ring) / len(ring)
             cy = sum(p.y for p in ring) / len(ring)
             local = [Vec2(p.x - cx, p.y - cy) for p in ring]
             sh = Polygon(points=local, close_path=True, sharp_corners=True,
                          corner_mask=corner_mask(ring),
-                         transform=Transform(x=cx, y=cy),
-                         stitch=keep_stitch if k == 0 else None, layer=layer)
-            sh.opacity = opacity
+                         transform=Transform(x=cx, y=cy))
+            copy_shape_attrs(base, sh)        # group, name, guide flag...
+            sh.stitch = keep_stitch if k == 0 else None
+            sh.layer, sh.opacity = layer, opacity
+            made.append(sh)
+        self._distribute_holes([it.model for _i, it, _r in ordered], made)
+        for k, sh in enumerate(made):
             self.doc.add_shape(sh)
             item = self._add_item(ShapeItem(sh, self))
             if k == 0:
@@ -4521,6 +4570,28 @@ class Canvas(QGraphicsView):
             return holes_for_shape(sh), sh.stitch
         return None, None
 
+    @staticmethod
+    def _distribute_holes(sources, targets) -> None:
+        """Hand the attached holes of ``sources`` (old shapes) to ``targets``
+        (the shapes a command rebuilt them into), each hole -- unmoved -- to
+        the target whose outline passes nearest it. Trim, join, booleans...
+        used to drop attached holes altogether."""
+        targets = [t for t in targets if t is not None]
+        if not targets:
+            return
+        outlines = [[Vec2(p.x, p.y) for p in t.world_polyline()[0]]
+                    for t in targets]
+        for src in sources:
+            for h in (src.baked_holes or []):
+                w = src.transform.apply(h.point)
+                wt = src.transform.apply_dir(h.tangent)
+                k = min(range(len(targets)),
+                        key=lambda i: _point_polyline_dist(w, outlines[i]))
+                t = targets[k]
+                t.baked_holes = list(t.baked_holes or []) + [
+                    Hole(t.transform.inverse_apply(w),
+                         t.transform.inverse_apply_dir(wt))]
+
     def ungroup_selected(self) -> None:
         """Explode selected shapes'/seams' holes into individual, directly
         selectable/deletable holes (auto-spacing is turned off)."""
@@ -4601,12 +4672,10 @@ class Canvas(QGraphicsView):
             if closed and len(pts) > 1 and (pts[0] - pts[-1]).length() < 1e-9:
                 pts = pts[:-1]
             new = PathShape(points=[Vec2(p.x, p.y) for p in pts], close_path=closed)
-        # preserve everything else
+        # preserve everything else (name, guide flag, fold, group...)
         new.transform = sh.transform
-        new.layer = sh.layer
-        new.opacity = sh.opacity
+        copy_shape_attrs(sh, new, holes=True)
         new.stitch = sh.stitch
-        new.baked_holes = sh.baked_holes
 
         idx = self.doc.shapes.index(sh)
         self.doc.shapes[idx] = new
@@ -4709,14 +4778,18 @@ class Canvas(QGraphicsView):
         if result:
             for chain in result:
                 conv = [(pts[0], pts[-1], kind,
-                         (pts[1] if kind == "arc" and len(pts) >= 3 else None))
+                         (pts[1], pts[2]) if kind == "bezier"
+                         else (pts[1] if kind == "arc" and len(pts) >= 3
+                               else None))
                         for kind, pts in chain]
                 sh = _path_from_chain(conv, 0.6, model.layer)
-                if model.stitch is not None:
-                    sh.stitch = copy.deepcopy(model.stitch)
-                sh.opacity = model.opacity
+                # still a guide / fold / group member / named part
+                copy_shape_attrs(model, sh)
                 self.doc.add_shape(sh)
                 made.append(self._add_item(ShapeItem(sh, self)))
+            self._distribute_holes([model], [m.model for m in made])
+            for m in made:
+                m.sync_from_model()
         self._suppress_commit = False
 
         self.scene_obj.clearSelection()
@@ -4746,10 +4819,12 @@ class Canvas(QGraphicsView):
             # (they stay exactly where they are) before splitting the outline.
             res, style = self._shape_world_holes(it.model)
             if res and res.count:
-                made += self._explode(res, style,
+                made += self._explode(res, style, it.model.group_id,
                                       mirrored=it.model.transform.mirror_x)
             for kind, wpts in segs:
                 new = _segment_shape(kind, wpts, it.model.layer)
+                copy_shape_attrs(it.model, new)
+                new.stitch = None             # its holes are loose holes now
                 self.doc.add_shape(new)
                 made.append(self._add_item(ShapeItem(new, self)))
             self.doc.remove_shape(it.model)
@@ -4805,6 +4880,9 @@ class Canvas(QGraphicsView):
             for kind, wpts in self._segments_world(it.model):
                 if kind == "arc":
                     segs.append((wpts[0], wpts[2], "arc", wpts[1]))
+                elif kind == "bezier":
+                    segs.append((wpts[0], wpts[3], "bezier",
+                                 (wpts[1], wpts[2])))
                 else:
                     segs.append((wpts[0], wpts[1], "line", None))
         made = []
@@ -4812,6 +4890,15 @@ class Canvas(QGraphicsView):
         while remaining:
             chain, remaining = _chain_segments(remaining, tol)
             made.append(_path_from_chain(chain, tol, layer))
+        # the welded path is still what its pieces were: a guide, a fold, a
+        # group member -- and stitched if they were (Join dropped stitching)
+        first = shapes[0].model
+        stitched = next((it.model for it in shapes
+                         if it.model.stitch is not None), first)
+        for m in made:
+            copy_shape_attrs(first, m)
+            m.stitch = copy.deepcopy(stitched.stitch)
+        self._distribute_holes([it.model for it in shapes], made)
 
         self._suppress_commit = True
         for it in shapes:
@@ -4844,7 +4931,7 @@ class Canvas(QGraphicsView):
 
     def _segments_world(self, sh):
         """Return [(kind, [world points]), ...] -- 'line' has [a,b], 'arc'
-        has [a, mid, b]."""
+        has [a, mid, b], 'bezier' has [a, c1, c2, b]."""
         t = sh.transform
         segs = []
         if isinstance(sh, EditablePath):
@@ -4855,8 +4942,16 @@ class Canvas(QGraphicsView):
                 e = sh.edges[i]
                 if e.kind == "arc" and e.mid is not None:
                     segs.append(("arc", [t.apply(a), t.apply(e.mid), t.apply(b)]))
+                elif (e.kind == "bezier" and e.c1 is not None
+                      and e.c2 is not None):
+                    # kept a curve -- it was taken as the straight chord
+                    segs.append(("bezier", [t.apply(a), t.apply(e.c1),
+                                            t.apply(e.c2), t.apply(b)]))
                 else:
                     segs.append(("line", [t.apply(a), t.apply(b)]))
+        elif isinstance(sh, Polygon) and sh.corner_radius > 1e-9:
+            from leathercad.modify import to_editable
+            return self._segments_world(to_editable(sh))   # its real arcs
         elif isinstance(sh, (Polygon, PathShape)):
             pts = sh.points
             n = len(pts)

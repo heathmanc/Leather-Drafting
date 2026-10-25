@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leathercad"
-version = "0.3.0"
+version = "0.3.1"
 description = "Python CAD for laser-cut leather patterns with pricking-iron-accurate stitch hole spacing"
 readme = "README.md"
 requires-python = ">=3.9"

@@ -36,6 +36,7 @@ def _find_chromium() -> str | None:
     base = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/opt/pw-browsers")
     patterns = [
         f"{base}/chromium-*/chrome-linux/chrome",
+        f"{base}/chromium-*/chrome-linux64/chrome",
         f"{base}/chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium",
         f"{base}/chromium-*/chrome-win/chrome.exe",
     ]

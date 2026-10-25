@@ -7,7 +7,7 @@ across overlapping pieces** no matter which side you laser.
 
 ![the app](docs/app.png)
 
-> Status: v0.2, working and tested. Draw with a full CAD toolset (rectangles,
+> Status: v0.3, working and tested. Draw with a full CAD toolset (rectangles,
 > circles, polygons, bezier pen, arcs, trim, fillet / chamfer, boolean ops), get
 > chord-accurate stitch holes that register hole-for-hole across pieces, and put
 > laser-ready **SVG / DXF / 1:1 PDF** on the bed — with kerf compensation, sheet

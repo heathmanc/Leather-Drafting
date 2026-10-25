@@ -404,6 +404,7 @@ class Canvas(QGraphicsView):
         self._resize_group_base = None    # baseline snapshot captured on drag start
         self._suspend_move_refresh = False   # set during bulk creates (duplicate)
         self._selrot_pending = False
+        self._multi_toggle = None       # (item, was_selected) on Ctrl-press
         self.scene_obj.selectionChanged.connect(self._emit_selection_changed)
 
     # -- zoom / view ----------------------------------------------------
@@ -4150,60 +4151,131 @@ class Canvas(QGraphicsView):
     def _shape_items(self):
         return [it for it in self.selected_items() if isinstance(it, ShapeItem)]
 
-    def align_selected(self, mode: str) -> None:
-        items = self._shape_items()
-        if len(items) < 2:
+    def _arrange_units(self):
+        """The selection as units that move rigidly: each group is ONE unit
+        with all its members (outlines, seams, holes, labels), and each
+        ungrouped outline or label is its own. Aligning outline by outline
+        tore groups apart and left their seams and holes behind."""
+        units, order = {}, []
+        for it in self.selected_items():
+            m = self._item_model(it)
+            if m is None:
+                continue
+            gid = getattr(m, "group_id", None)
+            if gid:
+                key = ("g", gid)
+            elif isinstance(it, (ShapeItem, TextItem)):
+                key = ("i", id(it))
+            else:
+                continue              # a loose hole / seam isn't an object
+            if key not in units:
+                units[key] = []
+                order.append(key)
+            if key[0] == "i":
+                units[key].append(it)
+        for key in order:
+            if key[0] == "g":
+                units[key] = [it for it in self._live if _alive(it)
+                              and getattr(self._item_model(it), "group_id",
+                                          None) == key[1]]
+        return [units[k] for k in order if units[k]]
+
+    def _unit_bounds(self, unit):
+        xs, ys = [], []
+        for it in unit:
+            if isinstance(it, ShapeItem):
+                b = it.model.bounds()
+                xs += [b[0], b[2]]
+                ys += [b[1], b[3]]
+            elif isinstance(it, HoleItem):
+                xs.append(it.hole.point.x)
+                ys.append(it.hole.point.y)
+            elif isinstance(it, StitchLineItem):
+                it._bake_move()
+                xs += [p.x for p in it.line.points]
+                ys += [p.y for p in it.line.points]
+            elif isinstance(it, TextItem):
+                for c in it.model.world_contours():
+                    xs += [p.x for p in c]
+                    ys += [p.y for p in c]
+        if not xs:
+            return None
+        return min(xs), min(ys), max(xs), max(ys)
+
+    def _move_unit(self, unit, dx: float, dy: float) -> None:
+        if abs(dx) < 1e-12 and abs(dy) < 1e-12:
             return
-        boxes = [(it, it.model.bounds()) for it in items]
-        if mode in ("left", "hcenter", "right"):
-            if mode == "left":
-                target = min(b[0] for _, b in boxes)
-                for it, b in boxes:
-                    it.model.transform.x += target - b[0]
-            elif mode == "right":
-                target = max(b[2] for _, b in boxes)
-                for it, b in boxes:
-                    it.model.transform.x += target - b[2]
-            else:
-                target = sum((b[0] + b[2]) / 2 for _, b in boxes) / len(boxes)
-                for it, b in boxes:
-                    it.model.transform.x += target - (b[0] + b[2]) / 2
-        else:  # top/vcenter/bottom
-            if mode == "bottom":
-                target = min(b[1] for _, b in boxes)
-                for it, b in boxes:
-                    it.model.transform.y += target - b[1]
-            elif mode == "top":
-                target = max(b[3] for _, b in boxes)
-                for it, b in boxes:
-                    it.model.transform.y += target - b[3]
-            else:
-                target = sum((b[1] + b[3]) / 2 for _, b in boxes) / len(boxes)
-                for it, b in boxes:
-                    it.model.transform.y += target - (b[1] + b[3]) / 2
-        for it, _ in boxes:
+        for it in unit:
+            if isinstance(it, (ShapeItem, TextItem)):
+                it.model.transform.x += dx
+                it.model.transform.y += dy
+            elif isinstance(it, HoleItem):
+                p = it.hole.point
+                it.hole.point = Vec2(p.x + dx, p.y + dy)
+            elif isinstance(it, StitchLineItem):
+                ln = it.line
+                ln.points = [Vec2(p.x + dx, p.y + dy) for p in ln.points]
+                ln.corner_points = [Vec2(p.x + dx, p.y + dy)
+                                    for p in ln.corner_points]
             it.sync_from_model()
+
+    def align_selected(self, mode: str) -> None:
+        units = [(u, self._unit_bounds(u)) for u in self._arrange_units()]
+        units = [(u, b) for u, b in units if b is not None]
+        if len(units) < 2:
+            return
+        horiz = mode in ("left", "hcenter", "right")
+        lo, hi = (0, 2) if horiz else (1, 3)
+        if mode in ("left", "bottom"):
+            target = min(b[lo] for _, b in units)
+
+            def edge(b):
+                return b[lo]
+        elif mode in ("right", "top"):
+            target = max(b[hi] for _, b in units)
+
+            def edge(b):
+                return b[hi]
+        else:
+            target = sum((b[lo] + b[hi]) / 2 for _, b in units) / len(units)
+
+            def edge(b):
+                return (b[lo] + b[hi]) / 2
+        self._suspend_move_refresh = True
+        try:
+            for u, b in units:
+                d = target - edge(b)
+                self._move_unit(u, d if horiz else 0.0, 0.0 if horiz else d)
+        finally:
+            self._suspend_move_refresh = False
+        self.update_dimensions()
+        self._refresh_resize_handles()
         self.documentChangedSig.emit()
         self._emit_commit()
 
     def distribute_selected(self, horizontal: bool) -> None:
-        items = self._shape_items()
-        if len(items) < 3:
+        units = [(u, self._unit_bounds(u)) for u in self._arrange_units()]
+        units = [(u, b) for u, b in units if b is not None]
+        if len(units) < 3:
             return
-        def center(it):
-            b = it.model.bounds()
-            return ((b[0] + b[2]) / 2) if horizontal else ((b[1] + b[3]) / 2)
-        items.sort(key=center)
-        lo, hi = center(items[0]), center(items[-1])
-        step = (hi - lo) / (len(items) - 1)
-        for i, it in enumerate(items[1:-1], start=1):
-            c = center(it)
-            target = lo + step * i
-            if horizontal:
-                it.model.transform.x += target - c
-            else:
-                it.model.transform.y += target - c
-            it.sync_from_model()
+        lo, hi = (0, 2) if horizontal else (1, 3)
+
+        def center(b):
+            return (b[lo] + b[hi]) / 2
+
+        units.sort(key=lambda ub: center(ub[1]))
+        first, last = center(units[0][1]), center(units[-1][1])
+        step = (last - first) / (len(units) - 1)
+        self._suspend_move_refresh = True
+        try:
+            for i, (u, b) in enumerate(units[1:-1], start=1):
+                d = first + step * i - center(b)
+                self._move_unit(u, d if horizontal else 0.0,
+                                0.0 if horizontal else d)
+        finally:
+            self._suspend_move_refresh = False
+        self.update_dimensions()
+        self._refresh_resize_handles()
         self.documentChangedSig.emit()
         self._emit_commit()
 
@@ -5105,6 +5177,10 @@ class Canvas(QGraphicsView):
         self._moved_during_press = False
         mods = event.modifiers() if event is not None else Qt.NoModifier
         multi = bool(mods & (Qt.ControlModifier | Qt.ShiftModifier))
+        # Ctrl/Shift-click toggles; on release Qt toggles just the clicked
+        # item, which half-selected a group -- reassert_group_selection then
+        # applies the toggle to the whole group
+        self._multi_toggle = (item, item.isSelected()) if multi else None
         if not multi and not item.isSelected():
             self.scene_obj.clearSelection()
             if _alive(item):
@@ -5115,10 +5191,22 @@ class Canvas(QGraphicsView):
         """After a plain click (no drag), Qt re-selects ONLY the pressed item on
         release, dropping the rest of its group from the highlight. Restore the
         whole group so a template always reads (and behaves) as one object."""
-        if self._moved_during_press or not _alive(item) or not item.isSelected():
+        toggle, self._multi_toggle = self._multi_toggle, None
+        if self._moved_during_press or not _alive(item):
             return
         gid = getattr(self._item_model(item), "group_id", None)
-        if not gid:
+        if toggle is not None and toggle[0] is item:
+            want = not toggle[1]                 # select / deselect it ALL
+            members = [item]
+            if gid:
+                members = [it for it in self.scene_obj.items()
+                           if getattr(self._item_model(it), "group_id",
+                                      None) == gid]
+            for it in members:
+                if it.isSelected() != want:
+                    it.setSelected(want)
+            return
+        if not item.isSelected() or not gid:
             return
         for it in self.scene_obj.items():
             mm = self._item_model(it)

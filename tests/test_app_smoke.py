@@ -2688,6 +2688,62 @@ def test_rotate_command_turns_a_mixed_selection(qapp):
     assert all(math.dist(a, b) < 1e-9 for a, b in zip(before, after))
 
 
+def test_align_moves_a_group_as_one_piece(qapp):
+    """Align lined up each outline on its own, so a group's circle jumped to
+    the group's edge and its seam, hole and label stayed behind."""
+    from leathercad.shapes import Rectangle as R
+    win, c, drag, model, where = _group_rig(qapp)
+    other = c.add_shape(R(width=10, height=10, layer="Cut",
+                          transform=Transform(x=-80, y=0)))
+    members = [model(i) for i in c.scene_obj.items()
+               if model(i) is not None and model(i) is not other.model]
+    start = {id(m): where(m) for m in members}
+    rect = [i for i in c.scene_obj.items()
+            if getattr(model(i), "kind", "") == "rectangle"
+            and model(i) is not other.model][0]
+    c.scene_obj.clearSelection()
+    c.press_select(rect)
+    other.setSelected(True)
+    c.align_selected("left")
+    dx = None
+    for m in members:                          # every member, by the same amount
+        x0, y0 = start[id(m)]
+        x1, y1 = where(m)
+        assert abs(y1 - y0) < 1e-9
+        dx = x1 - x0 if dx is None else dx
+        assert abs((x1 - x0) - dx) < 1e-6
+    assert dx < -50                            # it did move left, as one
+
+
+def test_ctrl_click_toggles_a_whole_group(qapp):
+    """Ctrl-clicking a group member left the group half-selected (Qt toggled
+    just the clicked item), so Delete removed the wrong things."""
+    from PySide6.QtCore import QPointF, QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+    from leathercad.shapes import Rectangle as R
+    win, c, drag, model, where = _group_rig(qapp)
+    a = c.add_shape(R(width=10, height=10, layer="Cut",
+                      transform=Transform(x=-80, y=0)))
+    vpw = c.viewport()
+
+    def click(x, y, mods=Qt.NoModifier):
+        pt = QPointF(c.mapFromScene(QPointF(x, y)))
+        for kind, btns in ((QEvent.MouseButtonPress, Qt.LeftButton),
+                           (QEvent.MouseButtonRelease, Qt.NoButton)):
+            QApplication.sendEvent(vpw, QMouseEvent(
+                kind, pt, vpw.mapToGlobal(pt), Qt.LeftButton, btns, mods))
+            qapp.processEvents()
+    group = [i for i in c.scene_obj.items() if model(i) is not None
+             and getattr(model(i), "group_id", None)]
+    click(-75, 0)                               # A's right edge
+    assert a.isSelected()
+    click(20, 0, Qt.ControlModifier)            # the group's rectangle edge
+    assert a.isSelected() and all(i.isSelected() for i in group)
+    click(20, 0, Qt.ControlModifier)            # again: the group goes
+    assert a.isSelected() and not any(i.isSelected() for i in group)
+
+
 def test_exploding_a_mirrored_piece_keeps_its_slit_slant(qapp):
     """A mirrored piece draws its slits slanting the other way; exploding it
     made loose holes with the un-mirrored angle, so every slit flipped."""

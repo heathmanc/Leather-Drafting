@@ -729,6 +729,16 @@ class MainWindow(QMainWindow):
         self._add(am, "Rotate 180°", None,
                   lambda: self.canvas.rotate_selected(180.0))
         self._add(am, "Rotate by…", None, self._rotate_by)
+        am.addSeparator()
+        self._add(am, "Flip horizontal", "Shift+H",
+                  lambda: self.canvas.mirror_selected(None, 90.0))
+        self._add(am, "Flip vertical", "Shift+V",
+                  lambda: self.canvas.mirror_selected(None, 0.0))
+        self._add(am, "Mirror across selected line", None,
+                  self._mirror_across_line)
+        am.addSeparator()
+        self._add(am, "Scale…", "Ctrl+Shift+E", self._scale_by)
+        self._add(am, "Move by…", "Ctrl+Shift+M", self._move_by)
 
         vm = m.addMenu("&View")
         self._add(vm, "Fit to content", "F", self.canvas.fit_to_content)
@@ -824,6 +834,57 @@ class MainWindow(QMainWindow):
             "<b>Stitch Hero</b><br>CAD for laser-cut leather patterns "
             "with pricking-iron-accurate (chord-spaced) stitch holes.<br><br>"
             "Units are millimetres. Press <b>F1</b> for the user guide.")
+
+    def _two_numbers(self, title, labels, defaults, suffixes=(" mm", " mm")):
+        """A small dialog for two numbers; (a, b) or None."""
+        from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFormLayout,
+                                       QDoubleSpinBox)
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        form = QFormLayout(dlg)
+        spins = []
+        for label, val, suf in zip(labels, defaults, suffixes):
+            sp = QDoubleSpinBox()
+            sp.setRange(-100000.0, 100000.0)
+            sp.setDecimals(4)
+            sp.setValue(val)
+            sp.setSuffix(suf)
+            form.addRow(label, sp)
+            spins.append(sp)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        form.addRow(bb)
+        spins[0].selectAll()
+        if dlg.exec() != QDialog.Accepted:
+            return None
+        return tuple(sp.value() for sp in spins)
+
+    def _scale_by(self):
+        if not self.canvas.selected_items():
+            self.statusBar().showMessage("Select something to scale", 3000)
+            return
+        v = self._two_numbers("Scale selection",
+                              ("Width", "Height"), (100.0, 100.0),
+                              (" %", " %"))
+        if v and v[0] > 0 and v[1] > 0:
+            self.canvas.scale_selected(v[0] / 100.0, v[1] / 100.0)
+
+    def _move_by(self):
+        if not self.canvas.selected_items():
+            self.statusBar().showMessage("Select something to move", 3000)
+            return
+        v = self._two_numbers("Move selection by",
+                              ("Right (+) / left (−)", "Up (+) / down (−)"),
+                              (0.0, 0.0))
+        if v:
+            self.canvas.nudge_selected(v[0], v[1])
+
+    def _mirror_across_line(self):
+        if not self.canvas.mirror_across_selected_line():
+            self.statusBar().showMessage(
+                "Mirror across line: select the pieces AND a 2-point line or "
+                "guide to mirror them across", 5000)
 
     def _rotate_by(self):
         from PySide6.QtWidgets import QInputDialog
@@ -1002,7 +1063,8 @@ class MainWindow(QMainWindow):
 
     def _select_all(self):
         for it in self.canvas.scene_obj.items():
-            it.setSelected(True)
+            if not self.canvas.item_locked(it):
+                it.setSelected(True)
 
     def _check_symmetry(self):
         QMessageBox.information(self, "Back-to-back symmetry",

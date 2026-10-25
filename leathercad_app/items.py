@@ -728,7 +728,9 @@ class TextItem(QGraphicsItem):
 
     def mousePressEvent(self, event):
         if self.canvas is not None:
-            self.canvas.press_select(self, event)   # select this (+group) only
+            if not self.canvas.press_select(self, event):   # locked layer
+                event.ignore()
+                return
             # only a left press starts a move: a right-click's release goes to
             # the context menu, so a drag armed here would never be ended
             if event.button() == Qt.LeftButton:
@@ -885,7 +887,9 @@ class HoleItem(QGraphicsItem):
 
     def mousePressEvent(self, event):
         if self.canvas is not None:
-            self.canvas.press_select(self, event)   # select this (+group) only
+            if not self.canvas.press_select(self, event):   # locked layer
+                event.ignore()
+                return
             # only a left press starts a move: a right-click's release goes to
             # the context menu, so a drag armed here would never be ended
             if event.button() == Qt.LeftButton:
@@ -1134,7 +1138,9 @@ class ShapeItem(QGraphicsItem):
 
     def mousePressEvent(self, event):
         if self.canvas is not None:
-            self.canvas.press_select(self, event)   # select this (+group) only
+            if not self.canvas.press_select(self, event):   # locked layer
+                event.ignore()
+                return
             # only a left press starts a move: a right-click's release goes to
             # the context menu, so a drag armed here would never be ended
             if event.button() == Qt.LeftButton:
@@ -1787,7 +1793,9 @@ class StitchLineItem(QGraphicsItem):
 
     def mousePressEvent(self, event):
         if self.canvas is not None:
-            self.canvas.press_select(self, event)   # select this (+group) only
+            if not self.canvas.press_select(self, event):   # locked layer
+                event.ignore()
+                return
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):

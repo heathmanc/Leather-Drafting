@@ -73,6 +73,8 @@ class PropertiesPanel(QWidget):
         super().__init__()
         self.canvas = canvas
         self._item = None
+        self._multi = []          # the other selected items an edit also hits
+        self._dirty = set()       # widgets changed since the selection loaded
         self._loading = False
         self._build()
         self.setEnabled(False)
@@ -307,6 +309,30 @@ class PropertiesPanel(QWidget):
 
     def show_selection(self, items):
         items = [it for it in items if _alive(it)]
+        self._multi = []
+        self._dirty = set()
+        if len(items) > 1:
+            # Several things at once: shapes, seams and holes share the
+            # stitching / hole fields, and shapes the layer and opacity.
+            # The first shape leads; only the fields you then CHANGE are
+            # written to the rest, so their other settings stay as they are.
+            kinds = {type(it) for it in items}
+            if kinds <= {ShapeItem, StitchLineItem, HoleItem}:
+                lead = next((it for it in items if isinstance(it, ShapeItem)),
+                            items[0])
+                self._item = lead
+                self._multi = [it for it in items if it is not lead]
+                self.setEnabled(True)
+                self._populate()
+                for g in (self.g_transform, self.g_rect, self.g_ellipse,
+                          self.g_poly, self.g_line, self.g_text):
+                    g.setVisible(False)
+                n_sh = sum(isinstance(it, ShapeItem) for it in items)
+                self.readout.setText(
+                    f"<b>{len(items)} items selected</b> — a field you change "
+                    "applies to all of them"
+                    + (f" ({n_sh} shapes)" if n_sh != len(items) else ""))
+                return
         if len(items) != 1:
             self._item = None
             self.setEnabled(False)
@@ -662,6 +688,88 @@ class PropertiesPanel(QWidget):
         if not _alive(self._item):
             self._item = None
             return
+        w = self.sender()
+        if w is not None and w is not self:
+            self._dirty.add(w)
+        self._apply_one()
+        if self._multi:
+            self._apply_to_others()
+            if self._dirty & {self.layer_combo, self.opacity, self.g_stitch}:
+                self.canvas.apply_layer_visibility()
+
+    def _apply_to_others(self):
+        """Write the fields changed since loading to every other selected
+        item (see show_selection)."""
+        lead = self._item
+        lead_st = (lead.model.stitch if isinstance(lead, ShapeItem)
+                   else lead.line.settings if isinstance(lead, StitchLineItem)
+                   else lead.hole)
+        for it in self._multi:
+            if not _alive(it):
+                continue
+            if isinstance(it, ShapeItem):
+                sh = it.model
+                if self.layer_combo in self._dirty:
+                    sh.layer = self.layer_combo.currentData() or sh.layer
+                if self.opacity in self._dirty:
+                    sh.opacity = self.opacity.value() / 100.0
+                if self.g_stitch in self._dirty and not sh.baked_holes:
+                    if self.g_stitch.isChecked():
+                        if sh.stitch is None:
+                            sh.stitch = StitchSettings()
+                        sh.stitch.enabled = True
+                    elif sh.stitch is not None:
+                        sh.stitch.enabled = False
+                target = sh.stitch
+                if target is None and self._stitch_dirty():
+                    target = sh.stitch = StitchSettings(enabled=False)
+            elif isinstance(it, StitchLineItem):
+                target = it.line.settings
+            else:
+                target = it.hole
+            if target is not None:
+                self._write_dirty_stitch(target, lead_st)
+                if isinstance(it, StitchLineItem):
+                    it.line.settings.inset = 0.0
+            it.sync_from_model()
+        self.canvas.update_dimensions()
+        self.canvas.documentChangedSig.emit()
+
+    def _stitch_dirty(self) -> bool:
+        return bool(self._dirty & set(self._stitch_setters()))
+
+    def _stitch_setters(self):
+        """widget -> (attribute, value getter) for the shared stitch fields."""
+        return {
+            self.pitch: ("pitch_mm", self.pitch.value),
+            self.pitch_combo: ("pitch_mm", self.pitch.value),
+            self.inset: ("inset", self.inset.value),
+            self.fit: ("fit", self.fit.currentText),
+            self.hole_dia: ("hole_diameter", self.hole_dia.value),
+            self.hole_dia_combo: ("hole_diameter", self.hole_dia.value),
+            self.slit_len: ("slit_length", self.slit_len.value),
+            self.slit_angle: ("slit_angle", self.slit_angle.value),
+            self.rows: ("rows", lambda: 2 if self.rows.currentIndex() == 1
+                        else 1),
+            self.row_spacing: ("row_spacing", self.row_spacing.value),
+            self.backstitch: ("backstitch", self.backstitch.value),
+            self.symmetry: ("symmetry", self.symmetry.currentText),
+            self.corner_style: ("corner_style", self.corner_style.currentText),
+        }
+
+    def _write_dirty_stitch(self, target, lead_st) -> None:
+        for w, (attr, get) in self._stitch_setters().items():
+            if w in self._dirty and hasattr(target, attr):
+                setattr(target, attr, get())
+        if self.punch_style in self._dirty:
+            # a new punch: its hole shape and the sizes it implies, as set
+            # on the lead
+            for attr in ("punch_style", "hole_style", "hole_diameter",
+                         "slit_length", "slit_angle"):
+                if hasattr(target, attr) and hasattr(lead_st, attr):
+                    setattr(target, attr, getattr(lead_st, attr))
+
+    def _apply_one(self):
         it = self._item
         if isinstance(it, DimensionItem):
             return                          # a dimension has no editable props
@@ -888,9 +996,14 @@ class LayersPanel(QWidget):
         self.btn_add = QPushButton("Add")
         self.btn_color = QPushButton("Colour…")
         self.btn_vis = QPushButton("Show/Hide")
+        self.btn_lock = QPushButton("Lock")
+        self.btn_lock.setToolTip(
+            "A locked layer shows, snaps and bounds trims, but nothing on it "
+            "can be selected, moved or edited")
         row.addWidget(self.btn_add)
         row.addWidget(self.btn_color)
         row.addWidget(self.btn_vis)
+        row.addWidget(self.btn_lock)
         root.addLayout(row)
 
         self.role = NoWheelComboBox()
@@ -904,6 +1017,7 @@ class LayersPanel(QWidget):
         self.btn_add.clicked.connect(self._add_layer)
         self.btn_color.clicked.connect(self._pick_color)
         self.btn_vis.clicked.connect(self._toggle_vis)
+        self.btn_lock.clicked.connect(self._toggle_lock)
         self.reload()
 
     def _swatch(self, color: str) -> QIcon:
@@ -917,7 +1031,8 @@ class LayersPanel(QWidget):
         self.list.clear()
         for lyr in self.canvas.doc.layers:
             item = QListWidgetItem(self._swatch(lyr.color),
-                                   f"{lyr.name}  [{lyr.role}]")
+                                   f"{lyr.name}  [{lyr.role}]"
+                                   + ("  🔒" if lyr.locked else ""))
             item.setData(Qt.UserRole, lyr.name)
             # A real checkbox toggles visibility (click to show/hide the layer).
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
@@ -934,9 +1049,19 @@ class LayersPanel(QWidget):
             return None
         return self.canvas.doc.layer(it.data(Qt.UserRole))
 
+    def _toggle_lock(self):
+        lyr = self.current_layer()
+        if not lyr:
+            return
+        lyr.locked = not lyr.locked
+        self.canvas.apply_layer_visibility()
+        self.reload()
+        self.committed.emit()
+
     def _row_changed(self):
         lyr = self.current_layer()
         if lyr:
+            self.btn_lock.setText("Unlock" if lyr.locked else "Lock")
             self.role.blockSignals(True)
             self.role.setCurrentText(lyr.role)
             self.role.blockSignals(False)

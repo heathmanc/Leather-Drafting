@@ -1981,6 +1981,18 @@ class Canvas(QGraphicsView):
                 self._finish_pen(closed=False)
             elif self.tool == OFFSET and self._offset_item is not None:
                 self._ask_offset_exact()
+        elif event.key() in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up,
+                             Qt.Key_Down) and self.selected_items():
+            # nudge: 1 mm, Shift 10 mm, Ctrl 0.1 mm (world Y is up on screen)
+            step = 1.0
+            if event.modifiers() & Qt.ShiftModifier:
+                step = 10.0
+            elif event.modifiers() & Qt.ControlModifier:
+                step = 0.1
+            dx = {Qt.Key_Left: -step, Qt.Key_Right: step}.get(event.key(), 0.0)
+            dy = {Qt.Key_Down: -step, Qt.Key_Up: step}.get(event.key(), 0.0)
+            self.nudge_selected(dx, dy)
+            event.accept()
         else:
             super().keyPressEvent(event)
 
@@ -2846,7 +2858,8 @@ class Canvas(QGraphicsView):
         best = None
         best_d = pick
         for it in self.scene_obj.items():
-            if not isinstance(it, ShapeItem) or not it.isVisible():
+            if (not isinstance(it, ShapeItem) or not it.isVisible()
+                    or self.item_locked(it)):
                 continue
             sh = it.model
             if isinstance(sh, (Polygon, PathShape)):
@@ -3220,7 +3233,7 @@ class Canvas(QGraphicsView):
             if not isinstance(it, ShapeItem):
                 continue
             sh = it.model
-            if getattr(sh, "construction", False):
+            if getattr(sh, "construction", False) or self.item_locked(it):
                 continue                          # guides aren't fillet targets
             if isinstance(sh, (Polygon, PathShape)):
                 pts = sh.points
@@ -4262,6 +4275,222 @@ class Canvas(QGraphicsView):
     def _shape_items(self):
         return [it for it in self.selected_items() if isinstance(it, ShapeItem)]
 
+    def _selection_with_groups(self):
+        """Every selected item plus the rest of any group it belongs to --
+        what a nudge, scale or flip acts on."""
+        sel = [it for it in self.selected_items() if _alive(it)
+               and self._item_model(it) is not None]
+        gids = {getattr(self._item_model(it), "group_id", None) for it in sel}
+        gids.discard(None)
+        out = list(sel)
+        if gids:
+            seen = set(id(it) for it in out)
+            for it in self._live:
+                if (_alive(it) and id(it) not in seen
+                        and getattr(self._item_model(it), "group_id",
+                                    None) in gids):
+                    out.append(it)
+        return out
+
+    def _bake_seams(self, items) -> None:
+        for it in items:
+            if isinstance(it, StitchLineItem):
+                it._bake_move()
+
+    def nudge_selected(self, dx: float, dy: float) -> None:
+        """Move the selection (with its groups) by (dx, dy) mm."""
+        items = self._selection_with_groups()
+        if not items or (abs(dx) < 1e-12 and abs(dy) < 1e-12):
+            return
+        self._bake_seams(items)
+        self._suspend_move_refresh = True
+        try:
+            self._move_unit(items, dx, dy)
+        finally:
+            self._suspend_move_refresh = False
+        self.update_dimensions()
+        self._reposition_resize_handles()
+        self.geometryMovedSig.emit()
+        self.documentChangedSig.emit()
+        self._emit_commit()
+
+    def scale_selected(self, sx: float, sy: Optional[float] = None,
+                       pivot=None) -> None:
+        """Scale the selection by ``sx`` (and ``sy``, default the same) about
+        ``pivot`` (default: the selection's centre). Sizes, positions, holes,
+        seams and labels all scale; stitch pitch and inset are physical and
+        stay as set."""
+        sy = sx if sy is None else sy
+        items = self._selection_with_groups()
+        if not items or sx <= 0 or sy <= 0:
+            return
+        self._bake_seams(items)
+        b = self._unit_bounds(items)          # model bounds, not pen margins
+        if b is None:
+            return
+        px, py = pivot if pivot is not None else ((b[0] + b[2]) / 2,
+                                                  (b[1] + b[3]) / 2)
+
+        def scaled(p):
+            return Vec2(px + (p.x - px) * sx, py + (p.y - py) * sy)
+
+        self._suspend_move_refresh = True
+        try:
+            for it in items:
+                if isinstance(it, HoleItem):
+                    it.hole.point = scaled(it.hole.point)
+                elif isinstance(it, StitchLineItem):
+                    ln = it.line
+                    ln.points = [scaled(p) for p in ln.points]
+                    ln.corner_points = [scaled(p) for p in ln.corner_points]
+                elif isinstance(it, TextItem):
+                    m = it.model
+                    o = scaled(Vec2(m.transform.x, m.transform.y))
+                    m.transform.x, m.transform.y = o.x, o.y
+                    k = math.sqrt(sx * sy)
+                    m.size = max(0.5, m.size * k)
+                    m.contours = [[Vec2(p.x * k, p.y * k) for p in c]
+                                  for c in m.contours]
+                    it._needs_rebake = True
+                elif isinstance(it, ShapeItem):
+                    m = it.model
+                    t = m.transform
+                    if isinstance(m, (Polygon, PathShape, EditablePath)):
+                        # node shapes scale through world space, so a rotated
+                        # one stretches along the page axes like the rest
+                        def remap(p):
+                            return t.inverse_apply(scaled(t.apply(p)))
+                        if isinstance(m, EditablePath):
+                            m.nodes = [remap(p) for p in m.nodes]
+                            for e in m.edges:
+                                for attr in ("mid", "c1", "c2"):
+                                    q = getattr(e, attr)
+                                    if q is not None:
+                                        setattr(e, attr, remap(q))
+                        else:
+                            m.points = [remap(p) for p in m.points]
+                        if getattr(m, "corner_radius", 0.0):
+                            m.corner_radius *= min(sx, sy)
+                        it.sync_from_model()
+                        continue
+                    # parametric: size in its own frame, origin through world
+                    a = math.radians(t.rotation)
+                    c, s = abs(math.cos(a)), abs(math.sin(a))
+                    lx = sx * c + sy * s          # local x axis' world stretch
+                    ly = sx * s + sy * c
+                    o = scaled(Vec2(t.x, t.y))
+                    t.x, t.y = o.x, o.y
+                    if isinstance(m, Rectangle):
+                        m.width *= lx
+                        m.height *= ly
+                        m.corner_radius *= min(lx, ly)
+                    elif isinstance(m, Circle):
+                        m.rx = m.ry = m.rx * math.sqrt(lx * ly)
+                    elif isinstance(m, Ellipse):
+                        m.rx *= lx
+                        m.ry *= ly
+                it.sync_from_model()
+        finally:
+            self._suspend_move_refresh = False
+        self.update_dimensions()
+        self._refresh_resize_handles(now=True)
+        self.geometryMovedSig.emit()
+        self.documentChangedSig.emit()
+        self._emit_commit()
+
+    def mirror_selected(self, axis_point=None, axis_deg: float = 90.0,
+                        exclude=()) -> None:
+        """Mirror the selection in place across the line through
+        ``axis_point`` (default: the selection's centre) at ``axis_deg``
+        (90 = a vertical axis: flip left-right; 0 = horizontal: flip
+        top-bottom). Every item stays registered with the others; slits
+        keep their slant sense, so the result sews back-to-back."""
+        items = [it for it in self._selection_with_groups()
+                 if it not in exclude]
+        if not items:
+            return
+        self._bake_seams(items)
+        b = self._unit_bounds(items)
+        if b is None:
+            return
+        cx, cy = axis_point if axis_point is not None else (
+            (b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
+        phi = math.radians(axis_deg)
+        ux, uy = math.cos(phi), math.sin(phi)
+
+        def refl(p):            # reflect a point across the axis line
+            dx, dy = p.x - cx, p.y - cy
+            along = dx * ux + dy * uy
+            return Vec2(cx + 2 * along * ux - dx, cy + 2 * along * uy - dy)
+
+        def refl_dir(v):
+            along = v.x * ux + v.y * uy
+            return Vec2(2 * along * ux - v.x, 2 * along * uy - v.y)
+
+        from leathercad.holes import mirrored_slit_angle
+        self._suspend_move_refresh = True
+        try:
+            for it in items:
+                if isinstance(it, HoleItem):
+                    h = it.hole
+                    h.point = refl(h.point)
+                    h.tangent = refl_dir(h.tangent)
+                    h.slit_angle = mirrored_slit_angle(h.slit_angle, True)
+                elif isinstance(it, StitchLineItem):
+                    ln = it.line
+                    ln.points = [refl(p) for p in ln.points]
+                    ln.corner_points = [refl(p) for p in ln.corner_points]
+                    ln.settings.slit_angle = mirrored_slit_angle(
+                        ln.settings.slit_angle, True)
+                else:
+                    # F_phi . R(theta) . M(m) = R(2 phi - theta + 180) . M(!m)
+                    t = it.model.transform
+                    o = refl(Vec2(t.x, t.y))
+                    t.x, t.y = o.x, o.y
+                    t.rotation = ((2 * axis_deg - t.rotation + 180.0 + 180.0)
+                                  % 360.0) - 180.0
+                    t.mirror_x = not t.mirror_x
+                it.sync_from_model()
+        finally:
+            self._suspend_move_refresh = False
+        self.update_dimensions()
+        self._refresh_resize_handles(now=True)
+        self.geometryMovedSig.emit()
+        self.documentChangedSig.emit()
+        self._emit_commit()
+
+    def mirror_across_selected_line(self) -> bool:
+        """Use a selected 2-point line / guide as the mirror axis for the
+        rest of the selection. False if no such line is selected."""
+        axis = None
+        for it in self.selected_items():
+            if (isinstance(it, ShapeItem) and isinstance(it.model, PathShape)
+                    and len(it.model.points) == 2
+                    and not it.model.close_path):
+                axis = it
+                break
+        if axis is None:
+            return False
+        a = axis.model.transform.apply(axis.model.points[0])
+        b = axis.model.transform.apply(axis.model.points[1])
+        if (b - a).length() < 1e-9:
+            return False
+        deg = math.degrees(math.atan2(b.y - a.y, b.x - a.x))
+        self.mirror_selected((a.x, a.y), deg, exclude=(axis,))
+        return True
+
+    # -- layer locking ----------------------------------------------------
+    def _layer_locked(self, name: str) -> bool:
+        lyr = self.doc.layer(name)
+        return bool(lyr.locked) if lyr else False
+
+    def item_locked(self, it) -> bool:
+        """True if ``it`` sits on a locked layer: it can't be selected,
+        moved or edited (it still shows, snaps and bounds trims)."""
+        m = self._item_model(it)
+        layer = getattr(m, "layer", None)
+        return bool(layer) and self._layer_locked(layer)
+
     def _arrange_units(self):
         """The selection as units that move rigidly: each group is ONE unit
         with all its members (outlines, seams, holes, labels), and each
@@ -4738,6 +4967,12 @@ class Canvas(QGraphicsView):
             if not vis and it.isSelected():
                 it.setSelected(False)      # don't leave hidden items selected
             it.setVisible(vis)
+            locked = self.item_locked(it)
+            if locked and it.isSelected():
+                it.setSelected(False)
+            it.setFlag(QGraphicsItem.ItemIsSelectable, not locked)
+            if it is not self._edit_owner:
+                it.setFlag(QGraphicsItem.ItemIsMovable, not locked)
 
     def layer_color(self, name: str) -> str:
         lyr = self.doc.layer(name)
@@ -4917,7 +5152,8 @@ class Canvas(QGraphicsView):
     # -- trim: cut the segment under the cursor back to its intersections ---
     def _trim_targets(self):
         return [it for it in self._live
-                if isinstance(it, ShapeItem) and _alive(it) and it.isVisible()]
+                if isinstance(it, ShapeItem) and _alive(it) and it.isVisible()
+                and not self.item_locked(it)]
 
     def _entity_for_trim(self, click: Vec2):
         """The ShapeItem whose outline passes nearest ``click`` (within a few
@@ -5308,7 +5544,7 @@ class Canvas(QGraphicsView):
         return any(getattr(self._item_model(it), "group_id", None)
                    for it in self.selected_items())
 
-    def press_select(self, item, event=None) -> None:
+    def press_select(self, item, event=None) -> bool:
         """Left-press selection. Make ``item`` (plus its move-group) the current
         selection, clearing any previous selection FIRST -- unless Ctrl/Shift is
         held for multi-select, or the item is already selected (so an existing
@@ -5321,6 +5557,8 @@ class Canvas(QGraphicsView):
         (begin_move_snap) samples it.
         """
         self._moved_during_press = False
+        if self.item_locked(item):
+            return False                       # a locked layer: look, don't touch
         mods = event.modifiers() if event is not None else Qt.NoModifier
         multi = bool(mods & (Qt.ControlModifier | Qt.ShiftModifier))
         # Ctrl/Shift-click toggles; on release Qt toggles just the clicked
@@ -5332,6 +5570,7 @@ class Canvas(QGraphicsView):
             if _alive(item):
                 item.setSelected(True)
         self.select_group_of(item)
+        return True
 
     def reassert_group_selection(self, item) -> None:
         """After a plain click (no drag), Qt re-selects ONLY the pressed item on

@@ -289,7 +289,22 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
   about its centre — outlines, seams, holes and labels as one rigid piece.
   For exact turns use **Arrange → Rotate 90° clockwise** (`Ctrl+]`),
   **counter-clockwise** (`Ctrl+[`), **180°** or **Rotate by…**.
-* **Mirror**: Properties → "Mirror (laser from back)".
+* **Nudge**: with something selected, the **arrow keys** move it 1 mm
+  (**Shift** 10 mm, **Ctrl** 0.1 mm). A group moves whole.
+* **Mirror / flip**: **Arrange → Flip horizontal** (`Shift+H`) and **Flip
+  vertical** (`Shift+V`) mirror the selection in place about its centre;
+  **Mirror across selected line** uses a selected 2-point line or guide as
+  the axis (select the pieces and the line together). Slit holes keep their
+  slant sense, so a flipped piece still sews back-to-back. Properties →
+  "Mirror (laser from back)" flips a single shape about its own centre.
+* **Scale / Move by**: **Arrange → Scale…** (`Ctrl+Shift+E`) scales the
+  selection by a percentage about its centre — sizes, positions, holes and
+  seams, but not the stitch pitch or inset, which are physical. **Arrange →
+  Move by…** (`Ctrl+Shift+M`) moves it an exact distance.
+* **Edit several at once**: select two or more pieces (or seams, or holes)
+  and the Properties panel shows the first one's settings with "N items
+  selected". Only the fields you then **change** are written to all of them
+  — set a common inset without touching their different pitches.
 * **Duplicate**: `Ctrl+D` (copies land beside the original). Duplicating a **group** gives a new group of its own — the copies select and move together, separately from the original — with its text labels and seams included. **Array** works the same way: each copy of a group is its own group.
 * **Delete**: `Delete` or `Backspace`.
 * **Undo / Redo**: `Ctrl+Z` / `Ctrl+Shift+Z` — every discrete edit is undoable.
@@ -562,6 +577,13 @@ The Layers panel maps **colour → laser job**. A new document has:
 
 ---
 
+### Locking a layer
+
+**Layers panel → Lock** (the row shows 🔒). A locked layer still shows, still
+snaps and still bounds Trim and Extend, but nothing on it can be selected,
+moved, edited or deleted — lock the finished outline while you lay out
+hardware and seams on top of it. **Unlock** frees it again.
+
 ## 12. Saving, exporting and cutting
 
 * **Save / Open** (`Ctrl+S` / `Ctrl+O`) — projects are plain JSON
@@ -752,6 +774,10 @@ what the **Stitch line** tool is for.
 | `Ctrl+Shift+N` | Nest on sheet |
 | `Ctrl+Shift+P` | Parameters |
 | `Ctrl+M` | Make back piece (mirror) |
+| `Shift+H` / `Shift+V` | Flip horizontal / vertical in place |
+| `Ctrl+Shift+E` / `Ctrl+Shift+M` | Scale… / Move by… |
+| `Ctrl+]` / `Ctrl+[` | Rotate selection 90° clockwise / counter-clockwise |
+| Arrow keys | Nudge 1 mm (Shift 10 mm, Ctrl 0.1 mm) |
 | `F` | Fit view to content |
 | `Ctrl+1` / `Ctrl+2` | Properties / Layers panel |
 | `Esc` | Cancel in-progress shape; again → Select tool |

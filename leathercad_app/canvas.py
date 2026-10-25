@@ -135,6 +135,47 @@ def _chain_segments(segments, tol):
     return chain, remaining
 
 
+def _rev_path(path):
+    """A world (nodes, edges) open path, reversed (bezier handles swapped)."""
+    nodes, edges = path
+    return nodes[::-1], [Edge(e.kind, mid=e.mid, c1=e.c2, c2=e.c1)
+                         for e in reversed(edges)]
+
+
+def _merge_open(a, idx_a, b, idx_b):
+    """Weld open world paths ``a`` (at its end node ``idx_a``) and ``b`` (at
+    ``idx_b``): returns (nodes, edges, closed, junction node index)."""
+    if idx_a == 0:
+        a = _rev_path(a)                       # junction goes at A's end
+    if idx_b != 0:
+        b = _rev_path(b)                       # ...and at B's start
+    (na, ea), (nb, eb) = a, b
+    junction = Vec2((na[-1].x + nb[0].x) / 2.0, (na[-1].y + nb[0].y) / 2.0)
+    nodes = na[:-1] + [junction] + nb[1:]
+    edges = ea + eb
+    closed = len(nodes) > 3 and (nodes[0] - nodes[-1]).length() < 1e-6
+    if closed:
+        nodes = nodes[:-1]                     # ends met too: a loop
+    return nodes, edges, closed, len(na) - 1
+
+
+def _editpath_from_world(nodes, edges, closed, base):
+    """An EditablePath centred on its nodes, from world nodes/edges, taking
+    layer / stitch / opacity from ``base``."""
+    cx = sum(p.x for p in nodes) / len(nodes)
+    cy = sum(p.y for p in nodes) / len(nodes)
+
+    def loc(p):
+        return Vec2(p.x - cx, p.y - cy) if p is not None else None
+    ep = EditablePath(nodes=[loc(p) for p in nodes],
+                      edges=[Edge(e.kind, mid=loc(e.mid), c1=loc(e.c1),
+                                  c2=loc(e.c2)) for e in edges],
+                      closed=closed, transform=Transform(x=cx, y=cy),
+                      layer=base.layer, stitch=base.stitch)
+    ep.opacity = base.opacity
+    return ep
+
+
 def _path_from_chain(chain, tol, layer):
     """Build a shape from an ordered chain of world-space segments."""
     nodes = [chain[0][0]]
@@ -2973,6 +3014,17 @@ class Canvas(QGraphicsView):
             self.doc.shapes[self.doc.shapes.index(sh)] = ep
             self._remove_item(it)
             it = self._add_item(ShapeItem(ep, self))
+        if not chamfer and not ep.closed:
+            import copy as _copy
+            got = fillet_vertex(_copy.deepcopy(ep), idx, self.fillet_radius)
+            if got and got < self.fillet_radius * (1 - 1e-4):
+                path = self._fillet_open_path(ep)
+                reach = self._reach_further([it], path[0], path[1], False,
+                                            idx, got)
+                if len(reach[0]) > 1:          # a continuing piece helped
+                    self._finish_fillet(reach[0], reach[1], reach[2],
+                                        reach[3], reach[4], chamfer, ep)
+                    return
         done = (chamfer_vertex if chamfer else fillet_vertex)(
             ep, idx, self.fillet_radius)
         if not done:
@@ -2993,31 +3045,42 @@ class Canvas(QGraphicsView):
                 and abs(used - asked) > 1e-3 * max(1.0, asked)):
             self.statusMessage.emit(
                 f"Filleted at {used:.2f} mm — the largest that fits this "
-                f"corner ({asked:g} mm would run past the middle of a side)")
+                f"corner ({asked:g} mm needs more room along a side: past "
+                f"its middle, or past the end of a piece that doesn't "
+                f"continue end-to-end)")
             return
         self.statusMessage.emit(
             f"{'Chamfered' if chamfer else 'Filleted'} at "
             f"{asked:g} mm — keep clicking corners "
             "(radius / mode in the toolbar)")
 
-    def _fillet_polyline(self, sh):
-        """World points of an open, all-straight shape (weldable for fillet),
-        or None."""
+    def _fillet_open_path(self, sh):
+        """An OPEN shape as world-space ``(nodes, edges)`` -- straight, arc and
+        bezier edges alike (arc midpoints / bezier handles carried into world
+        space) -- so two pieces meeting at a corner can be welded and rounded.
+        None for closed or non-path shapes."""
         if getattr(sh, "construction", False):
             return None
+        t = sh.transform
         if isinstance(sh, (Polygon, PathShape)):
             if getattr(sh, "close_path", False):
                 return None
-            pts = sh.points
+            nodes = [t.apply(p) for p in sh.points]
+            edges = [Edge("line") for _ in range(len(nodes) - 1)]
         elif isinstance(sh, EditablePath):
-            if sh.closed or any(e.kind != "line" for e in sh.edges):
+            if sh.closed:
                 return None
-            pts = sh.nodes
+            nodes = [t.apply(p) for p in sh.nodes]
+            edges = [Edge(e.kind,
+                          mid=t.apply(e.mid) if e.mid is not None else None,
+                          c1=t.apply(e.c1) if e.c1 is not None else None,
+                          c2=t.apply(e.c2) if e.c2 is not None else None)
+                     for e in sh.edges]
         else:
             return None
-        if len(pts) < 2:
+        if len(nodes) < 2 or len(edges) != len(nodes) - 1:
             return None
-        return [sh.transform.apply(p) for p in pts]
+        return nodes, edges
 
     def _fillet_partner(self, it, idx, wpos, cands):
         """Another shape's open END within a hair of ``wpos`` -> (item, idx)."""
@@ -3025,50 +3088,92 @@ class Canvas(QGraphicsView):
         for _d, jt, j, w in cands:
             if jt is it:
                 continue
-            pts = self._fillet_polyline(jt.model)
-            if pts is None or j not in (0, len(pts) - 1):
+            path = self._fillet_open_path(jt.model)
+            if path is None or j not in (0, len(path[0]) - 1):
                 continue
             if ((w.x - wpos.x) ** 2 + (w.y - wpos.y) ** 2) ** 0.5 <= tol:
                 return jt, j
         return None
 
     def _fillet_across(self, it_a, idx_a, partner, chamfer: bool) -> None:
-        """Weld two open paths at their meeting ends and round that corner."""
-        from leathercad.modify import fillet_vertex, chamfer_vertex
+        """Weld two open paths at their meeting ends and round that corner.
+        Either may hold arcs / beziers already (e.g. an earlier fillet)."""
         it_b, idx_b = partner
-        a = self._fillet_polyline(it_a.model)
-        b = self._fillet_polyline(it_b.model)
+        a = self._fillet_open_path(it_a.model)
+        b = self._fillet_open_path(it_b.model)
         if a is None or b is None:
             self.statusMessage.emit(
                 "Those paths can't be welded automatically — join them with "
                 "Ctrl+J first, then fillet")
             return
-        if idx_a == 0:
-            a = a[::-1]                            # junction goes at A's end
-        if idx_b != 0:
-            b = b[::-1]                            # ...and at B's start
-        junction = Vec2((a[-1].x + b[0].x) / 2.0, (a[-1].y + b[0].y) / 2.0)
-        merged = a[:-1] + [junction] + b[1:]
-        closed = len(merged) > 3 and (merged[0] - merged[-1]).length() < 1e-6
-        if closed:
-            merged = merged[:-1]                   # ends met too: a loop
-        cx = sum(p.x for p in merged) / len(merged)
-        cy = sum(p.y for p in merged) / len(merged)
-        base = it_a.model
-        ep = EditablePath(nodes=[Vec2(p.x - cx, p.y - cy) for p in merged],
-                          edges=[Edge("line") for _ in
-                                 range(len(merged) if closed else len(merged) - 1)],
-                          closed=closed,
-                          transform=Transform(x=cx, y=cy),
-                          layer=base.layer, stitch=base.stitch)
-        ep.opacity = base.opacity
-        for old in (it_a, it_b):
+        nodes, edges, closed, corner = _merge_open(a, idx_a, b, idx_b)
+        self._finish_fillet([it_a, it_b], nodes, edges, closed, corner,
+                            chamfer, it_a.model)
+
+    _REACH_TOL = 0.05     # mm: pieces this close end-to-end continue a side
+
+    def _reach_further(self, items, nodes, edges, closed, corner, got):
+        """A fillet came out smaller than asked because a side ran out at a
+        free end. If another open piece continues from that end (end to end),
+        weld it in and try again -- repeatedly, keeping a weld only if it lets
+        the radius grow. Returns (items, nodes, edges, closed, corner, got)."""
+        from leathercad.modify import fillet_vertex
+        want = self.fillet_radius
+        used_items = list(items)
+        while not closed and got < want * (1 - 1e-4):
+            better = None
+            for end in (0, len(nodes) - 1):
+                for jt in self.scene_obj.items():
+                    if not isinstance(jt, ShapeItem) or jt in used_items:
+                        continue
+                    if jt.model.layer != items[0].model.layer:
+                        continue
+                    q = self._fillet_open_path(jt.model)
+                    if q is None:
+                        continue
+                    for qi in (0, len(q[0]) - 1):
+                        if (q[0][qi] - nodes[end]).length() > self._REACH_TOL:
+                            continue
+                        if end == len(nodes) - 1:
+                            m = _merge_open((nodes, edges), end, q, qi)
+                            k = corner
+                        else:
+                            m = _merge_open(q, qi, (nodes, edges), 0)
+                            k = corner + m[3]
+                        trial = _editpath_from_world(m[0], m[1], m[2],
+                                                     items[0].model)
+                        r = fillet_vertex(trial, k, want)
+                        if r and r > got + 1e-6 and (better is None
+                                                     or r > better[-1]):
+                            better = (jt, m[0], m[1], m[2], k, r)
+            if better is None:
+                break
+            jt, nodes, edges, closed, corner, got = better
+            used_items.append(jt)
+        return used_items, nodes, edges, closed, corner, got
+
+    def _finish_fillet(self, items, nodes, edges, closed, corner, chamfer,
+                       base) -> None:
+        """Round (or bevel) ``corner`` of the world path made of ``items``'
+        shapes, reaching into continuing pieces if the radius needs it, and
+        replace those shapes with the one resulting path."""
+        import copy
+        from leathercad.modify import fillet_vertex, chamfer_vertex
+        if not chamfer:
+            probe = _editpath_from_world(nodes, edges, closed, base)
+            got = fillet_vertex(probe, corner, self.fillet_radius)
+            if got:
+                items, nodes, edges, closed, corner, got = \
+                    self._reach_further(items, nodes, edges, closed, corner,
+                                        got)
+        ep = _editpath_from_world(nodes, edges, closed, base)
+        for old in items:
             self.doc.remove_shape(old.model)
             self._remove_item(old)
         self.doc.add_shape(ep)
         item = self._add_item(ShapeItem(ep, self))
         done = (chamfer_vertex if chamfer else fillet_vertex)(
-            ep, len(a) - 1, self.fillet_radius)
+            ep, corner, self.fillet_radius)
         item.sync_from_model()
         self.scene_obj.clearSelection()
         item.setSelected(True)
@@ -3076,8 +3181,8 @@ class Canvas(QGraphicsView):
             self._fillet_done_msg(chamfer, done)
         else:
             self.statusMessage.emit(
-                "Lines welded into one path, but that corner couldn't be "
-                "rounded (are they parallel?)")
+                "Paths welded into one, but that corner couldn't be "
+                "rounded (do they meet in a straight line?)")
         self.documentChangedSig.emit()
         self._emit_commit()
 

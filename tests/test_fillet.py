@@ -341,3 +341,94 @@ def test_canvas_fillet_blends_an_ellipse_notch_and_reports_clamps():
     c2.fillet_radius = 2000.0
     c2._do_fillet(Vec2(45, 0))
     assert "the largest that fits" in msgs2[-1]
+
+
+# ---------------------------------------------------------------------------
+# Fillet tool on SEPARATE pieces, no Join first: the first corner welds two
+# straight pieces; the second has to weld a piece that now holds that arc. It
+# used to refuse ("join them with Ctrl+J first"). And when a side is too short
+# for the radius but another piece continues from its end, the fillet reaches
+# onto that piece.
+# ---------------------------------------------------------------------------
+def _slot_doc(curve_meets=True, right_len=14.0):
+    from leathercad.document import Document
+    from leathercad.shapes import Ellipse
+    ell = Ellipse(rx=18, ry=10).local_path().flatten()
+    scoop = sorted({(round(p.x, 9), round(p.y, 9)) for p in ell if p.y <= 1e-9})
+    doc = Document()
+    t = Transform(x=0, y=0)
+    doc.add_shape(PathShape(points=[Vec2(-60, 0), Vec2(-18, 0)],
+                            close_path=False, transform=t, layer="Cut"))
+    doc.add_shape(PathShape(points=[Vec2(x, y) for x, y in scoop],
+                            close_path=False, transform=Transform(x=0, y=0),
+                            layer="Cut"))
+    end = 18 + right_len
+    doc.add_shape(PathShape(points=[Vec2(18, 0), Vec2(end, 0)],
+                            close_path=False, transform=Transform(x=0, y=0),
+                            layer="Cut"))
+    start = Vec2(end, 0) if curve_meets else Vec2(end + 3, 0)
+    rise = [start] + [Vec2(end + 2 + 4 * k, 0.15 * k * k) for k in range(1, 12)]
+    doc.add_shape(PathShape(points=rise, close_path=False,
+                            transform=Transform(x=0, y=0), layer="Cut"))
+    return doc
+
+
+def _slot_canvas(doc):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from leathercad_app.mainwindow import MainWindow
+    QApplication.instance() or QApplication([])
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    msgs = []
+    c.statusMessage.connect(msgs.append)
+    return win, c, msgs
+
+
+def _all_arc_radii(doc):
+    out = []
+    for sh in doc.shapes:
+        if isinstance(sh, EditablePath):
+            out += [r for _k, _c, r in _arc_radii(sh)]
+    return sorted(out)
+
+
+def test_fillet_tool_rounds_both_rims_of_separate_pieces_without_join():
+    pytest.importorskip("PySide6")
+    win, c, msgs = _slot_canvas(_slot_doc())
+    c.fillet_radius = 6.0
+    c._do_fillet(Vec2(-18, 0))
+    c._do_fillet(Vec2(18, 0))                     # used to demand Ctrl+J
+    assert "Ctrl+J" not in msgs[-1]
+    assert _all_arc_radii(win.doc) == pytest.approx([6.0, 6.0], abs=1e-6)
+
+
+def test_fillet_reaches_onto_a_piece_continuing_end_to_end():
+    pytest.importorskip("PySide6")
+    win, c, msgs = _slot_canvas(_slot_doc(curve_meets=True, right_len=4.0))
+    c.fillet_radius = 12.0
+    c._do_fillet(Vec2(18, 0))                     # 4 mm straight is too short
+    assert _all_arc_radii(win.doc) == pytest.approx([12.0], abs=1e-6)
+    assert msgs[-1].startswith("Filleted at 12 mm")
+
+
+def test_no_reach_when_the_next_piece_does_not_meet_end_to_end():
+    pytest.importorskip("PySide6")
+    win, c, msgs = _slot_canvas(_slot_doc(curve_meets=False, right_len=4.0))
+    n_before = len(win.doc.shapes)
+    c.fillet_radius = 12.0
+    c._do_fillet(Vec2(18, 0))
+    (r,) = _all_arc_radii(win.doc)
+    assert r < 12.0 and "the largest that fits" in msgs[-1]
+    assert len(win.doc.shapes) == n_before - 1    # only scoop+straight welded
+
+
+def test_small_fillet_does_not_weld_neighbours_it_doesnt_need():
+    pytest.importorskip("PySide6")
+    win, c, msgs = _slot_canvas(_slot_doc(curve_meets=True, right_len=14.0))
+    n_before = len(win.doc.shapes)
+    c.fillet_radius = 3.0
+    c._do_fillet(Vec2(18, 0))
+    assert _all_arc_radii(win.doc) == pytest.approx([3.0], abs=1e-6)
+    assert len(win.doc.shapes) == n_before - 1    # the curve stays its own piece

@@ -111,6 +111,8 @@ class Shape:
 
     def bounds(self) -> Tuple[float, float, float, float]:
         pts, _, _ = self.world_polyline()
+        if not pts:                     # a path with no points yet
+            pts = [self.transform.apply(Vec2(0.0, 0.0))]
         xs = [p.x for p in pts]
         ys = [p.y for p in pts]
         return min(xs), min(ys), max(xs), max(ys)

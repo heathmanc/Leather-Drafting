@@ -200,6 +200,12 @@ def _remove_inverted_loops(ring: List[Vec2], dirs: List[Vec2],
         # margin, there is no offset at all.
         if any((ring[(k + 1) % n] - ring[k]).dot(dirs[k]) < -1e-9
                for k in range(n)):
+            # A real inset winds the same way as its source; a folded one
+            # comes out inside-out (an L with 6 mm arms inset 3.5 gave a
+            # ring of area -67 against +444, and stitched it 2.5 mm from
+            # the edge because one mitre vertex happened to clear the source)
+            if signed_area(ring) * signed_area(src) <= 0:
+                return []
             near = _Proximity(src, abs(dist) * 0.9)
             if all(near.too_close(p) for p in ring[::max(1, n // 64)]):
                 return []
@@ -640,6 +646,8 @@ def offset_closed(points: Sequence[Vec2], dist: float) -> List[Vec2]:
         return list(points)
     sign = 1.0 if signed_area(ring) > 0 else -1.0     # +1 for CCW
     new_pts, dirs, _ = _mitred_offset(ring, -dist, sign)  # +dist -> outward
+    if len(new_pts) < 3:
+        return list(points)        # zero-size outline: nothing to offset
     # A ring that collapsed (shrunk past its own width) keeps the raw miter
     # result: callers such as export's kerf pass must never lose a cut.
     if len(new_pts) >= 3 and not _runs_backwards(new_pts, dirs):
@@ -687,10 +695,19 @@ def offset_shape(shape, dist: float):
         if len(wpts) < 2:
             return None
         if closed:
-            ring = offset_closed(wpts, dist)
-            if len(ring) >= 2 and (ring[0] - ring[-1]).length() < 1e-6:
-                ring = ring[:-1]
-            if len(ring) < 3:
+            # inward uses the trimmed inset, which reports a collapse as []
+            # (offset_closed keeps a collapsed ring on purpose, for the kerf
+            # pass -- here that gave a phantom shape instead of None)
+            ring = (offset_closed_inward(wpts, -dist) if dist < 0
+                    else offset_closed(wpts, dist))
+            out = []
+            for p in ring:                  # no repeated / closing points
+                if not out or (p - out[-1]).length() > 1e-9:
+                    out.append(p)
+            while len(out) >= 2 and (out[0] - out[-1]).length() < 1e-6:
+                out.pop()
+            ring = out
+            if len(ring) < 3 or abs(signed_area(ring)) < 1e-9:
                 return None
             cx = sum(p.x for p in ring) / len(ring)
             cy = sum(p.y for p in ring) / len(ring)

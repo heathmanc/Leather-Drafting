@@ -1,5 +1,7 @@
 """Offset / seam-allowance engine + command."""
 import os
+
+import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from leathercad.geometry import Vec2
@@ -278,3 +280,65 @@ def test_cusp_in_a_pen_curve_cannot_blow_up_the_inset():
     t0 = time.perf_counter()
     res = stitch_shape_path(path, StitchSettings(inset=2.0, pitch_mm=3.85))
     assert time.perf_counter() - t0 < 2.0 and 0 < len(res.holes) < 100
+
+
+def _L(arm, size):
+    from leathercad.geometry import Vec2
+    return [Vec2(0, 0), Vec2(size, 0), Vec2(size, arm), Vec2(arm, arm),
+            Vec2(arm, size), Vec2(0, size)]
+
+
+def _min_edge_dist(poly, p):
+    best = float("inf")
+    for i in range(len(poly)):
+        a, b = poly[i], poly[(i + 1) % len(poly)]
+        ab = b - a
+        t = max(0.0, min(1.0, (p - a).dot(ab) / ab.length_sq()))
+        best = min(best, (a + ab * t - p).length())
+    return best
+
+
+def test_folded_inset_puts_no_holes_too_close_to_the_edge():
+    # 6 mm arms can't take a 3.5 mm inset: the offset folds into an
+    # inside-out ring without crossing itself, and used to be stitched
+    # 2.5 mm from the edge (tear-out)
+    from leathercad.shapes import Polygon
+    from leathercad.stitchsettings import StitchSettings
+    from leathercad.stitching import holes_for_shape
+    for arm, size, inset, any_holes in ((6, 40, 3.5, False),
+                                        (20, 80, 10.5, False),
+                                        (20, 80, 9.5, True),
+                                        (7.2, 40, 3.5, True)):
+        poly = _L(arm, size)
+        res = holes_for_shape(Polygon(points=poly, stitch=StitchSettings(
+            pitch_mm=4.0, inset=inset)))
+        assert (res.count > 0) == any_holes
+        for h in res.holes:
+            assert _min_edge_dist(poly, h.point) > inset - 1e-6
+
+
+def test_offset_shape_returns_none_when_inward_offset_collapses():
+    from leathercad.geometry import Vec2
+    from leathercad.shapes import Polygon, Ellipse
+    from leathercad.offset import offset_shape, signed_area
+    box = [Vec2(0, 0), Vec2(40, 0), Vec2(40, 20), Vec2(0, 20)]
+    assert offset_shape(Polygon(points=box), -12) is None
+    assert offset_shape(Ellipse(rx=30, ry=10), -12) is None
+    assert offset_shape(Polygon(points=_L(6, 40)), -11) is None
+    inner = offset_shape(Polygon(points=box), -5)
+    assert abs(signed_area(inner.points)) == pytest.approx(300.0)
+    for sh in (inner, offset_shape(Polygon(points=box), 6)):
+        pts = sh.points
+        assert all((pts[i] - pts[i - 1]).length() > 1e-9
+                   for i in range(len(pts)))     # no repeated closing point
+
+
+def test_kerf_export_tolerates_zero_size_shapes():
+    from leathercad.document import Document
+    from leathercad.export import collect
+    from leathercad.shapes import Rectangle, Circle, PathShape
+    d = Document()
+    d.add_shape(Rectangle(width=0, height=0))
+    d.add_shape(Circle(rx=0, ry=0))
+    collect(d, kerf=0.2)
+    assert PathShape(points=[]).bounds() == (0.0, 0.0, 0.0, 0.0)

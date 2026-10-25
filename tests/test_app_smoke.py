@@ -1172,6 +1172,28 @@ def test_every_drawing_tool_is_click_to_place(qapp):
     assert len(win.doc.stitch_lines) == n + 1
 
 
+def test_stitch_edits_leave_the_other_stitch_values_exact(qapp):
+    """Any stitch edit wrote pitch / inset / hole size back from 2-decimal
+    fields: picking a Corners style rounded a 25.4/7 pitch to 3.63."""
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    win = MainWindow(Document())
+    item = win.canvas.add_shape(Rectangle(
+        width=60, height=40, layer="Cut",
+        stitch=StitchSettings(pitch_mm=25.4 / 7, inset=3.5125,
+                              hole_diameter=1.234)))
+    props = win.properties
+    props.show_selection([item])
+    props.symmetry.setCurrentIndex((props.symmetry.currentIndex() + 1)
+                                   % props.symmetry.count())
+    st = item.model.stitch
+    assert (st.pitch_mm, st.inset, st.hole_diameter) == (25.4 / 7, 3.5125,
+                                                         1.234)
+    props.pitch.setValue(3.85)                    # a real edit still applies
+    props.pitch.editingFinished.emit()
+    assert st.pitch_mm == 3.85
+
+
 def test_drawn_seam_puts_holes_on_its_corners(qapp):
     """A seam drawn with the tool had no corner points, so an L seam's holes
     missed the corner by up to a pitch; dragging or deleting a corner node

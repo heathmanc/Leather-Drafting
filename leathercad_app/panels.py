@@ -192,18 +192,18 @@ class PropertiesPanel(QWidget):
             self.punch_style.addItem(key.capitalize(), key)
         self.pitch_combo = NoWheelComboBox()
         self._build_pitch_combo()
-        self.pitch = _spin(0.5, 50, 0.05)
+        self.pitch = _spin(0.5, 50, 0.05, _GEOM_DECIMALS)
         self.hole_dia_combo = NoWheelComboBox()
         self._build_dia_combo()
-        self.inset = _spin(0.0, 100, 0.5)
+        self.inset = _spin(0.0, 100, 0.5, _GEOM_DECIMALS)
         self.fit = NoWheelComboBox()
         self.fit.addItems(["auto", "endpoints", "closed", "none"])
-        self.hole_dia = _spin(0.1, 10, 0.1)
-        self.slit_len = _spin(0.2, 10, 0.1)
+        self.hole_dia = _spin(0.1, 10, 0.1, _GEOM_DECIMALS)
+        self.slit_len = _spin(0.2, 10, 0.1, _GEOM_DECIMALS)
         self.slit_angle = _spin(-89, 89, 1.0, 1, " °")
         self.rows = NoWheelComboBox()
         self.rows.addItems(["1 (single)", "2 (double)"])
-        self.row_spacing = _spin(0.5, 20, 0.5)
+        self.row_spacing = _spin(0.5, 20, 0.5, _GEOM_DECIMALS)
         self.backstitch = NoWheelSpinBox()
         self.backstitch.setRange(0, 8)
         self.backstitch.setSuffix(" holes")
@@ -734,21 +734,23 @@ class PropertiesPanel(QWidget):
 
     def _write_hole_style(self, obj):
         obj.hole_style = self._cur_hole_style
-        obj.hole_diameter = self.hole_dia.value()
-        obj.slit_length = self.slit_len.value()
-        obj.slit_angle = self.slit_angle.value()
+        obj.hole_diameter = _kept(self.hole_dia, obj.hole_diameter)
+        obj.slit_length = _kept(self.slit_len, obj.slit_length)
+        obj.slit_angle = _kept(self.slit_angle, obj.slit_angle)
 
     def _write_stitch(self, st: StitchSettings):
-        st.pitch_mm = self.pitch.value()
-        st.inset = self.inset.value()
+        # _kept: untouched fields keep their exact value -- changing Corners
+        # or Symmetry used to round a 25.4/7 pitch to 3.63
+        st.pitch_mm = _kept(self.pitch, st.pitch_mm)
+        st.inset = _kept(self.inset, st.inset)
         st.fit = self.fit.currentText()
         st.punch_style = self.punch_style.currentData() or "round"
         st.hole_style = self._cur_hole_style
-        st.hole_diameter = self.hole_dia.value()
-        st.slit_length = self.slit_len.value()
-        st.slit_angle = self.slit_angle.value()
+        st.hole_diameter = _kept(self.hole_dia, st.hole_diameter)
+        st.slit_length = _kept(self.slit_len, st.slit_length)
+        st.slit_angle = _kept(self.slit_angle, st.slit_angle)
         st.rows = 2 if self.rows.currentIndex() == 1 else 1
-        st.row_spacing = self.row_spacing.value()
+        st.row_spacing = _kept(self.row_spacing, st.row_spacing)
         st.backstitch = self.backstitch.value()
         st.symmetry = self.symmetry.currentText()
         st.corner_style = self.corner_style.currentText()

@@ -679,6 +679,9 @@ class TextItem(QGraphicsItem):
         minx, miny, maxx, maxy = box
         return (minx + maxx) / 2.0, (miny + maxy) / 2.0
 
+    def pivot_center(self):
+        return self.resize_center()
+
     def set_resize_extents(self, hx: float, hy: float) -> None:
         """Decision D: RE-BAKE the lettering at the new cap height instead of
         scaling the flat contours. A font scales UNIFORMLY, so pick the uniform
@@ -1266,6 +1269,23 @@ class ShapeItem(QGraphicsItem):
         box = self._resize_box()
         return (box[0], box[1]) if box is not None else (0.0, 0.0)
 
+    def pivot_center(self):
+        """The local point the part turns / mirrors / arrays about: the
+        middle of its outline, whatever shape it is (even a 2-point line,
+        which has no resize box)."""
+        from leathercad.shapes import Rectangle, Circle, Ellipse
+        if isinstance(self.model, (Rectangle, Circle, Ellipse)):
+            return 0.0, 0.0
+        box = self._resize_box()
+        if box is not None:
+            return box[0], box[1]
+        pts = self.model.local_path().flatten()
+        if not pts:
+            return 0.0, 0.0
+        xs = [p.x for p in pts]
+        ys = [p.y for p in pts]
+        return (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
+
     def set_resize_extents(self, hx: float, hy: float) -> None:
         from leathercad.shapes import (Rectangle, Circle, Ellipse, Polygon,
                                         PathShape, EditablePath)
@@ -1470,8 +1490,10 @@ class RotateHandle(QGraphicsItem):
 
     # -- manual drag ------------------------------------------------------
     def _origin(self) -> Vec2:
+        # the shape turns about its own centre -- not its transform origin,
+        # which for a drawn line is the page origin (it swung across the page)
         t = self.owner.model.transform
-        return t.apply(Vec2(0.0, 0.0))
+        return t.apply(Vec2(*self.owner.pivot_center()))
 
     def mousePressEvent(self, event):
         import math
@@ -1502,7 +1524,12 @@ class RotateHandle(QGraphicsItem):
 
     def apply_rotation(self, degrees_ccw: float) -> None:
         t = self.owner.model.transform
+        lc = Vec2(*self.owner.pivot_center())
+        pivot = t.apply(lc)
         t.rotation = ((degrees_ccw + 180.0) % 360.0) - 180.0
+        now = t.apply(lc)                     # keep the centre where it was
+        t.x += pivot.x - now.x
+        t.y += pivot.y - now.y
         self.owner.sync_from_model()
         self.reposition()
         if self.canvas is not None:

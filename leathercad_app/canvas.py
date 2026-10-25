@@ -3569,11 +3569,20 @@ class Canvas(QGraphicsView):
             return Vec2(v.x * math.cos(a) - v.y * math.sin(a),
                         v.x * math.sin(a) + v.y * math.cos(a))
 
+        def carry(t, local_centre):
+            # move the part by its CENTRE (its origin can be far away -- a
+            # drawn line's is the page origin, so a circular array that left
+            # copies unturned stacked them all on the original), turning it
+            # about that centre by orient_angle
+            c0 = t.apply(local_centre)
+            c1 = place(c0)
+            o = spin(Vec2(t.x - c0.x, t.y - c0.y))
+            t.x, t.y = c1.x + o.x, c1.y + o.y
+            t.rotation += orient_angle
+
         if isinstance(it, ShapeItem):
             sh = copy.deepcopy(it.model)
-            c = place(Vec2(sh.transform.x, sh.transform.y))
-            sh.transform.x, sh.transform.y = c.x, c.y
-            sh.transform.rotation += orient_angle
+            carry(sh.transform, Vec2(*it.pivot_center()))
             sh.shape_id = _sid("shape")
             sh.group_id = regroup(it.model.group_id)
             self.doc.add_shape(sh)
@@ -3596,9 +3605,7 @@ class Canvas(QGraphicsView):
             return self._add_item(StitchLineItem(sl, self))
         if isinstance(it, TextItem):     # lettering (e.g. a group's label)
             tx = copy.deepcopy(it.model)
-            c = place(Vec2(tx.transform.x, tx.transform.y))
-            tx.transform.x, tx.transform.y = c.x, c.y
-            tx.transform.rotation += orient_angle
+            carry(tx.transform, Vec2(*it.pivot_center()))
             tx.text_id = _sid("text")
             tx.group_id = regroup(it.model.group_id)
             self.doc.texts.append(tx)

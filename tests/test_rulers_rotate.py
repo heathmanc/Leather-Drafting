@@ -99,3 +99,68 @@ def test_rotate_handle_repositions_with_shape(qapp):
     rot.reposition()
     # after a 90° spin the grip is no longer straight above the origin
     assert abs(rot.pos().x()) > 10.0 or abs(rot.pos().y() - y0) > 5.0
+
+
+def _offset_line_win():
+    # a line drawn with the Score tool: its points are world points and its
+    # transform origin is the page origin, far from the line itself
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    from leathercad.geometry import Vec2
+    from leathercad.shapes import PathShape, Transform
+    doc = Document()
+    line = PathShape(points=[Vec2(100, 100), Vec2(140, 120), Vec2(140, 100)],
+                     layer="Cut", transform=Transform())
+    doc.add_shape(line)
+    win = MainWindow(doc)
+    win.canvas.rebuild()
+    return win, line
+
+
+def _centre(sh):
+    b = sh.bounds()
+    return round((b[0] + b[2]) / 2, 6), round((b[1] + b[3]) / 2, 6)
+
+
+def test_rotate_and_mirror_turn_a_part_about_its_own_centre(qapp):
+    from leathercad.geometry import Vec2
+    from leathercad_app.items import ShapeItem, RotateHandle
+    win, line = _offset_line_win()
+    c = win.canvas
+    it = [i for i in c.scene_obj.items() if isinstance(i, ShapeItem)][0]
+    lc = Vec2(*it.pivot_center())
+
+    def pivot():
+        w = line.transform.apply(lc)
+        return round(w.x, 6), round(w.y, 6)
+    p0 = pivot()
+    assert p0 == (120.0, 110.0)                    # the part's own middle
+    it.setSelected(True)
+    c._refresh_resize_handles()
+    rot = [h for h in c._resize_handles if type(h) is RotateHandle][0]
+    rot.apply_rotation(90.0)                       # the grip
+    assert pivot() == p0
+    props = win.properties
+    props.show_selection([it])
+    props.rot.setValue(45.0)                       # the Rotation field
+    props.rot.editingFinished.emit()
+    assert line.transform.rotation == 45.0 and pivot() == p0
+    props.mirror.setChecked(True)                  # Mirror
+    assert line.transform.mirror_x and pivot() == p0
+    # the X/Y fields show the moved origin, so a later edit can't undo it
+    assert abs(props.pos_x.value() - line.transform.x) < 1e-3
+
+
+def test_circular_array_without_turning_moves_each_copy(qapp):
+    win, line = _offset_line_win()
+    c = win.canvas
+    c.scene_obj.clearSelection()
+    [i for i in c.scene_obj.items() if c._item_model(i) is line][0] \
+        .setSelected(True)
+    c.array_circular(4, 0.0, 0.0, 360.0, rotate_items=False)
+    centres = sorted(_centre(s) for s in win.doc.shapes)
+    assert len(set(centres)) == 4                  # not stacked
+    for s in win.doc.shapes:
+        assert s.transform.rotation == 0.0         # unturned
+        x, y = _centre(s)
+        assert abs((x * x + y * y) ** 0.5 - (120 ** 2 + 110 ** 2) ** 0.5) < 1e-6

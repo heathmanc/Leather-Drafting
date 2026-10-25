@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from leathercad.stitchsettings import StitchSettings
+from leathercad.geometry import Vec2
 from leathercad.shapes import Rectangle, Ellipse, Circle, Polygon, PathShape
 from leathercad.layers import Layer, ROLES
 from .items import ShapeItem, StitchLineItem, HoleItem, DimensionItem, TextItem
@@ -645,7 +646,6 @@ class PropertiesPanel(QWidget):
         if isinstance(it, ShapeItem) and it.model.baked_holes:
             sh = it.model
             self._apply_transform(sh)
-            sh.transform.mirror_x = self.mirror.isChecked()
             sh.opacity = self.opacity.value() / 100.0
             sh.layer = self.layer_combo.currentData() or sh.layer
             self._apply_shape_geometry(sh)
@@ -660,7 +660,6 @@ class PropertiesPanel(QWidget):
         if isinstance(it, ShapeItem):
             sh = it.model
             self._apply_transform(sh)
-            sh.transform.mirror_x = self.mirror.isChecked()
             sh.opacity = self.opacity.value() / 100.0
             sh.layer = self.layer_combo.currentData() or sh.layer
             self._apply_shape_geometry(sh)
@@ -682,9 +681,26 @@ class PropertiesPanel(QWidget):
 
     def _apply_transform(self, sh):
         t = sh.transform
-        t.x = _kept(self.pos_x, t.x)
-        t.y = _kept(self.pos_y, t.y)
-        t.rotation = _kept(self.rot, t.rotation)
+        it = self._item
+        lc = Vec2(*it.pivot_center()) if hasattr(it, "pivot_center") \
+            else Vec2(0.0, 0.0)
+        centre = t.apply(lc)
+        x, y = _kept(self.pos_x, t.x), _kept(self.pos_y, t.y)
+        moved = (x, y) != (t.x, t.y)
+        rot = _kept(self.rot, t.rotation)
+        mirror = self.mirror.isChecked()
+        turned = rot != t.rotation or mirror != t.mirror_x
+        t.x, t.y, t.rotation, t.mirror_x = x, y, rot, mirror
+        if turned and not moved:
+            # turn / mirror the part in place, about its own centre (its
+            # origin can be far off -- a drawn line's is the page origin)
+            now = t.apply(lc)
+            t.x += centre.x - now.x
+            t.y += centre.y - now.y
+            for spin, v in ((self.pos_x, t.x), (self.pos_y, t.y)):
+                spin.blockSignals(True)       # show the moved origin, quietly
+                spin.setValue(v)
+                spin.blockSignals(False)
 
     def _apply_shape_geometry(self, sh):
         if isinstance(sh, Rectangle):

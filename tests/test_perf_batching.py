@@ -623,3 +623,29 @@ def test_undo_snapshot_is_not_deep_copied_twice(qapp):
     assert h2._stack[0]["shapes"][0]["transform"]["x"] == 50.0
     # and the live document is untouched by any of it
     assert d.shapes[0].transform.x == 50.0
+
+
+def test_selecting_a_big_group_sizes_its_grips_once(qapp):
+    """Each member selected re-ran the group-grip search over the whole
+    selection: O(N^2), 48 s to click one member of a 2000-part group."""
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    from leathercad.shapes import Rectangle, Transform
+    doc = Document()
+    for i in range(300):
+        doc.add_shape(Rectangle(width=4, height=4, layer="Cut",
+                                group_id="groupX",
+                                transform=Transform(x=(i % 20) * 6,
+                                                    y=(i // 20) * 6)))
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    calls = []
+    orig = c._group_resize_target
+    c._group_resize_target = lambda: (calls.append(1), orig())[1]
+    first = [i for i in c.scene_obj.items() if c._item_model(i) is not None][0]
+    c.press_select(first)
+    qapp.processEvents()
+    assert len(c.selected_items()) == 300
+    assert len(calls) <= 3
+    assert c._resize_handles                  # the group still gets its grips

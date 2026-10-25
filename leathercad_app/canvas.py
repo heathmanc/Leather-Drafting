@@ -405,6 +405,8 @@ class Canvas(QGraphicsView):
         self._suspend_move_refresh = False   # set during bulk creates (duplicate)
         self._selrot_pending = False
         self._multi_toggle = None       # (item, was_selected) on Ctrl-press
+        self._sel_batch = 0             # >0 while selecting many at once
+        self._grips_pending = False     # a deferred grip refresh is queued
         self.scene_obj.selectionChanged.connect(self._emit_selection_changed)
 
     # -- zoom / view ----------------------------------------------------
@@ -4458,9 +4460,27 @@ class Canvas(QGraphicsView):
         self._selchg_emit_pending = False
         self.selectionChangedSig.emit()
 
-    def _refresh_resize_handles(self) -> None:
+    def _refresh_resize_handles(self, now: bool = False) -> None:
         """Show box-resize grips when exactly one resizable shape is selected
-        and we're not in vertex-edit mode; otherwise hide them."""
+        and we're not in vertex-edit mode; otherwise hide them.
+
+        Every selected item reports its own selection change, and sizing the
+        grips for a group scans the whole selection -- so a burst of changes
+        (a group of 2000 selected by one click took 48 s) is settled once:
+        batched selections refresh at their end, and any other burst of a
+        multi-selection once, on the next event-loop turn."""
+        if not now and (self._sel_batch or len(self._selected_shapes) > 2):
+            if not self._sel_batch and not self._grips_pending:
+                self._grips_pending = True
+                QTimer.singleShot(0, self._flush_grips)
+            return
+        self._refresh_grips()
+        if now:
+            self._show_selection_rotate()     # settled: place it right away
+        else:
+            self._queue_selection_rotate()
+
+    def _refresh_grips(self) -> None:
         if self._edit_owner is not None:
             self.clear_resize_handles()
             return
@@ -4472,7 +4492,6 @@ class Canvas(QGraphicsView):
         if len(self._selected_shapes) <= 2:
             self._selected_shapes = {it for it in self._selected_shapes
                                      if _alive(it) and it.isSelected()}
-        self._queue_selection_rotate()
         if len(self._selected_shapes) == 1:
             it = next(iter(self._selected_shapes))
             if it.resize_extents() is not None:
@@ -4483,6 +4502,23 @@ class Canvas(QGraphicsView):
             self.show_resize_handles(primary, group=members)
             return
         self.clear_resize_handles()
+
+    def _flush_grips(self) -> None:
+        self._grips_pending = False
+        self._refresh_resize_handles(now=True)
+
+    def _set_selected_many(self, items, want: bool = True) -> None:
+        """Select / deselect ``items`` as ONE change: the grips are worked
+        out once at the end, not once per item."""
+        self._sel_batch += 1
+        try:
+            for it in items:
+                if _alive(it) and it.isSelected() != want:
+                    it.setSelected(want)
+        finally:
+            self._sel_batch -= 1
+        if not self._sel_batch:
+            self._refresh_resize_handles(now=True)
 
     def _queue_selection_rotate(self) -> None:
         # once per burst of selection changes, not once per selected item
@@ -5232,17 +5268,13 @@ class Canvas(QGraphicsView):
                 members = [it for it in self.scene_obj.items()
                            if getattr(self._item_model(it), "group_id",
                                       None) == gid]
-            for it in members:
-                if it.isSelected() != want:
-                    it.setSelected(want)
+            self._set_selected_many(members, want)
             return
         if not item.isSelected() or not gid:
             return
-        for it in self.scene_obj.items():
-            mm = self._item_model(it)
-            if (mm is not None and getattr(mm, "group_id", None) == gid
-                    and not it.isSelected()):
-                it.setSelected(True)
+        self._set_selected_many([
+            it for it in self.scene_obj.items()
+            if getattr(self._item_model(it), "group_id", None) == gid])
 
     def select_group_of(self, item) -> None:
         """On pressing a grouped item, select the whole group (itself included)
@@ -5264,10 +5296,9 @@ class Canvas(QGraphicsView):
         gid = getattr(m, "group_id", None) if m is not None else None
         if not gid:
             return
-        for it in self.scene_obj.items():
-            mm = self._item_model(it)
-            if mm is not None and getattr(mm, "group_id", None) == gid:
-                it.setSelected(True)
+        self._set_selected_many([
+            it for it in self.scene_obj.items()
+            if getattr(self._item_model(it), "group_id", None) == gid])
 
     # -- grid -----------------------------------------------------------
     def set_dark_theme(self, dark: bool) -> None:

@@ -234,6 +234,21 @@ class PropertiesPanel(QWidget):
         fs.addRow("Backstitch", self.backstitch)
         fs.addRow("Symmetry", self.symmetry)
         fs.addRow("Corners", self.corner_style)
+        # which edges are sewn (set by right-clicking an edge on the canvas)
+        self.edges_label = QLabel("all")
+        self.edges_reset = QPushButton("Stitch all")
+        self.edges_reset.setToolTip(
+            "Sew every edge again. To leave an edge unsewn (a pocket's open "
+            "mouth), right-click that edge on the canvas → Don't stitch this "
+            "edge.")
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self.edges_label, 1)
+        row.addWidget(self.edges_reset)
+        self.edges_row = QWidget()
+        self.edges_row.setLayout(row)
+        fs.addRow("Edges sewn", self.edges_row)
+        self.edges_reset.clicked.connect(self._stitch_all_edges)
         root.addWidget(self.g_stitch)
 
         self.readout = QLabel("")
@@ -405,6 +420,7 @@ class PropertiesPanel(QWidget):
             self.g_stitch.setTitle("Seam stitching")
             self.g_stitch.setChecked(True)
             self._load_stitch(st)
+        self._sync_edges_row()
         self._loading = False
         self._update_readout()
 
@@ -486,6 +502,29 @@ class PropertiesPanel(QWidget):
         self.slit_len.setValue(g.slit_length)
         self.slit_angle.setValue(g.slit_angle)
         self._sync_hole_vis()
+
+    def _stitch_all_edges(self):
+        it = self._item
+        if isinstance(it, ShapeItem) and _alive(it):
+            self.canvas.stitch_all_edges([it])
+            self.show_selection([it])
+
+    def _sync_edges_row(self):
+        """'Edges sewn: 3 of 4' with its reset button, only when a stitched
+        shape leaves some edges unsewn."""
+        it = self._item
+        show = False
+        if isinstance(it, ShapeItem) and _alive(it):
+            from leathercad.shapes import stitched_edge_flags
+            m = it.model
+            st = m.stitch
+            if (st is not None and st.enabled and not m.baked_holes
+                    and getattr(m, "stitch_edges", None) is not None):
+                flags = stitched_edge_flags(m)
+                if not all(flags):
+                    self.edges_label.setText(f"{sum(flags)} of {len(flags)}")
+                    show = True
+        self._stitch_form.setRowVisible(self.edges_row, show)
 
     def _load_stitch(self, st: StitchSettings):
         self.pitch.setValue(st.pitch_mm)
@@ -676,6 +715,7 @@ class PropertiesPanel(QWidget):
             it.line.settings.inset = 0.0
         self._sync_hole_vis()
         self._stitch_form.setRowVisible(self.row_spacing, self.rows.currentIndex() == 1)
+        self._sync_edges_row()
         self.canvas.refresh_item(it)
         self._update_readout()
 

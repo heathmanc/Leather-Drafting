@@ -634,6 +634,34 @@ def inset_path_with_corners(path, dist: float, corners: Sequence[Vec2]):
     return pts, out, (arcs if pts else [])
 
 
+def inset_path_images(path, dist: float, vertices: Sequence[Vec2]):
+    """Where each of ``vertices`` (source vertices of ``path``, local coords)
+    lands on the stitch line of ``inset_path_with_corners(path, dist, ..)``:
+    the mitre / tangent point made from that vertex, or ``None`` if it isn't
+    an outline vertex or the trim removed it. Lets a caller cut the stitch
+    line exactly where one source edge hands over to the next."""
+    src = path.flatten()
+    ring = _unique_ring(src)
+    if not path.closed or dist <= _EPS or len(ring) < 3:
+        return [Vec2(v.x, v.y) for v in vertices]          # no inset: itself
+    sign = 1.0 if signed_area(ring) > 0 else -1.0
+    raw, dirs, starts, _arcs = _offset_path_raw(path, dist, sign)
+    if len(raw) < 3 or _runs_backwards(raw, dirs):
+        return [None] * len(vertices)
+    new_pts = _remove_inverted_loops(raw, dirs, ring, dist)
+
+    def key(v):
+        return (round(v.x, 6), round(v.y, 6))
+    kept = {key(p) for p in new_pts}
+    mitre = {key(v): p for vs, p in zip(starts, raw)
+             for v in (vs if isinstance(vs, list) else [vs]) if v is not None}
+    out = []
+    for v in vertices:
+        m = mitre.get(key(v))
+        out.append(m if (m is not None and key(m) in kept) else None)
+    return out
+
+
 def offset_closed(points: Sequence[Vec2], dist: float) -> List[Vec2]:
     """Offset a closed outline by ``dist`` mm: ``dist`` > 0 grows the shape
     OUTWARD (seam/glue allowance), ``dist`` < 0 shrinks it inward. Returns a

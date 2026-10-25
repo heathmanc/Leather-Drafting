@@ -95,6 +95,8 @@ def _shape_to_dict(sh: Shape) -> dict:
         "fold_dir": sh.fold_dir,
         "fold_angle": sh.fold_angle,
     }
+    if sh.stitch_edges is not None:
+        base["stitch_edges"] = [bool(e) for e in sh.stitch_edges]
     if isinstance(sh, Rectangle):
         base.update(width=sh.width, height=sh.height,
                     corner_radius=sh.corner_radius)
@@ -146,6 +148,8 @@ def _shape_from_dict(d: dict) -> Shape:
         group_id=d.get("group_id"),
         fold_dir=d.get("fold_dir", ""),
         fold_angle=d.get("fold_angle", 90.0),
+        stitch_edges=([bool(e) for e in d["stitch_edges"]]
+                      if d.get("stitch_edges") is not None else None),
     )
     if "shape_id" in d:
         common["shape_id"] = d["shape_id"]

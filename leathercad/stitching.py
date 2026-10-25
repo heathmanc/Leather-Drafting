@@ -772,6 +772,37 @@ def flip_symmetry(points: List[Vec2], axis: str, center: Optional[Vec2] = None,
     return unmatched == 0, max_off, unmatched
 
 
+def edge_runs(n: int, edges, closed: bool):
+    """Maximal runs of kept edges of an ``n``-segment path under the per-edge
+    mask ``edges`` (True = stitched), as ``(first, last)`` segment indices;
+    a run of a closed path may wrap (last < first). ``None`` means the mask
+    keeps everything (or is unusable)."""
+    if edges is None or len(edges) != n or all(edges):
+        return None
+    if not any(edges):
+        return []
+    runs = []
+    i = 0
+    if closed:
+        # start scanning just after a skipped edge so a wrapping run is one run
+        i = next(k for k in range(n) if not edges[k]) + 1
+    seen = 0
+    while seen < n:
+        k = i % n
+        if edges[k]:
+            start = k
+            while seen < n and edges[i % n]:
+                i += 1
+                seen += 1
+            runs.append((start, (i - 1) % n))
+        else:
+            i += 1
+            seen += 1
+        if not closed and i >= n:
+            break
+    return runs
+
+
 def holes_for_shape(shape) -> StitchResult:
     """World-space holes for a shape, computed on its LOCAL outline then
     transformed. Baked holes are transformed directly. Used by export and the
@@ -784,19 +815,26 @@ def holes_for_shape(shape) -> StitchResult:
     st = getattr(shape, "stitch", None)
     if not (st and st.enabled):
         return StitchResult()
-    res = stitch_shape_path(shape.local_path(), st)
+    res = stitch_shape_path(shape.local_path(), st,
+                            getattr(shape, "stitch_edges", None))
     res.holes = [Hole(t.apply(h.point), t.apply_dir(h.tangent)) for h in res.holes]
     return res
 
 
-def stitch_shape_path(path: Path, settings) -> StitchResult:
+def stitch_shape_path(path: Path, settings, edges=None) -> StitchResult:
     """Holes for a shape's own ``Path`` (local coordinates). Prefer this over
     ``stitch_polyline`` whenever the path is at hand: the stitch line is then
     inset from the true lines and arcs (exact straights, exact corner radii)
-    and holes on arcs sit on the true circle -- see ``stitch_polyline``."""
+    and holes on arcs sit on the true circle -- see ``stitch_polyline``.
+
+    ``edges`` -- one flag per ``path.segments`` entry, False for an edge that
+    isn't sewn (a pocket's open mouth). The stitch line is still the inset
+    of the whole outline; it is just cut where a skipped edge begins and
+    ends, and each remaining run is sewn as its own open seam, ending with
+    a hole at the inset corner."""
     return stitch_polyline([Vec2(p.x, p.y) for p in path.flatten()],
                            list(path.corner_points), path.closed, settings,
-                           path=path)
+                           path=path, edges=edges)
 
 
 # ---------------------------------------------------------------------------
@@ -841,9 +879,11 @@ _CACHE_MAX = 512
 _stitch_cache: "OrderedDict" = None  # created lazily below
 
 
-def _cache_key(points, corner_points, closed, settings, exact=False):
+def _cache_key(points, corner_points, closed, settings, exact=False,
+               edges=None):
     return (
         bool(exact),
+        tuple(bool(e) for e in edges) if edges is not None else None,
         tuple((round(p.x, 6), round(p.y, 6)) for p in points),
         tuple((round(p.x, 6), round(p.y, 6)) for p in (corner_points or [])),
         bool(closed),
@@ -866,7 +906,8 @@ def _copy_result(res: StitchResult) -> StitchResult:
 
 
 def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
-                    settings, path: Optional[Path] = None) -> StitchResult:
+                    settings, path: Optional[Path] = None,
+                    edges=None) -> StitchResult:
     """Distribute holes on a world-space polyline using ``StitchSettings``.
 
     ``corner_points`` are geometric points where a hole must be forced (e.g.
@@ -888,12 +929,14 @@ def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
     if _stitch_cache is None:
         from collections import OrderedDict
         _stitch_cache = OrderedDict()
-    key = _cache_key(points, corner_points, closed, settings, path is not None)
+    key = _cache_key(points, corner_points, closed, settings, path is not None,
+                     edges if path is not None else None)
     hit = _stitch_cache.get(key)
     if hit is not None:
         _stitch_cache.move_to_end(key)
         return _copy_result(hit)
-    res = _stitch_polyline_impl(points, corner_points, closed, settings, path)
+    res = _stitch_polyline_impl(points, corner_points, closed, settings, path,
+                                edges)
     _stitch_cache[key] = _copy_result(res)
     while len(_stitch_cache) > _CACHE_MAX:
         _stitch_cache.popitem(last=False)
@@ -902,17 +945,17 @@ def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
 
 def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
                           closed: bool, settings,
-                          path: Optional[Path] = None) -> StitchResult:
-    from .offset import inset_with_corners, inset_path_with_corners
+                          path: Optional[Path] = None,
+                          edges=None) -> StitchResult:
+    from .offset import (inset_with_corners, inset_path_with_corners,
+                         inset_path_images)
 
     pts = list(points)
     if closed and len(pts) >= 2 and (pts[0] - pts[-1]).length() > 1e-9:
         pts.append(pts[0])       # a closed ring must include its closing edge
     corner_points = list(corner_points or [])
     arcs: list = []
-
-    def done(res: StitchResult) -> StitchResult:
-        return _apply_rows(_snap_to_arcs(res, arcs), settings)
+    inset = 0.0
 
     if path is not None:
         inset = settings.inset if (closed and settings.inset) else 0.0
@@ -928,13 +971,99 @@ def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
         if len(pts) < 3:          # piece narrower than twice the inset
             return StitchResult(closed=closed)
 
+    runs = (edge_runs(len(path.segments), edges, closed)
+            if path is not None else None)
+    if runs is not None:
+        # Some edges aren't sewn: cut the stitch line where each kept run
+        # starts and ends (the images of those source vertices on the inset
+        # ring) and sew every run as its own open seam.
+        if not runs:
+            return StitchResult(closed=False)
+        poly = Polyline(pts)
+        if poly.length <= _EPS:
+            return StitchResult(closed=False)
+        segs = path.segments
+        verts = []
+        for a, b in runs:
+            verts += [segs[a].start(), segs[b].end()]
+        images = inset_path_images(path, max(0.0, inset), verts)
+        cor_s = [(poly.nearest_arclength(cp), cp) for cp in corner_points]
+        out = StitchResult(closed=False)
+        for k, (a, b) in enumerate(runs):
+            ia = images[2 * k] if images[2 * k] is not None else verts[2 * k]
+            ib = (images[2 * k + 1] if images[2 * k + 1] is not None
+                  else verts[2 * k + 1])
+            s0, s1 = poly.nearest_arclength(ia), poly.nearest_arclength(ib)
+            whole = closed and len(runs) == 1 and abs(s1 - s0) < 1e-6
+            run_pts = (list(poly.points) if whole
+                       else _sub_polyline(poly, s0, s1, closed))
+            if len(run_pts) < 2:
+                continue
+            rpoly = Polyline(run_pts)
+            run_corners = [cp for s, cp in cor_s
+                           if _within_run(s, s0, s1, poly.length, closed)]
+            res = _distribute(rpoly, run_corners, False, settings, arcs,
+                              rpoly.length)
+            out.holes += res.holes
+            out.pitches += res.pitches
+        return _apply_rows(out, settings)
+
     if closed and getattr(settings, "start_offset", 0.0):
         pts = _rotate_closed_ring(pts, settings.start_offset)
 
     poly = Polyline(pts)
     if poly.length <= _EPS:
         return StitchResult(closed=closed)
+    return _apply_rows(_distribute(poly, corner_points, closed, settings,
+                                   arcs, poly.length), settings)
+
+
+def _within_run(s: float, s0: float, s1: float, total: float,
+                closed: bool) -> bool:
+    """Is arc-length ``s`` strictly inside the run s0 -> s1 (forward)?"""
+    eps = 1e-6
+    if closed and s1 <= s0 + eps:
+        return s > s0 + eps or s < s1 - eps          # the run wraps
+    return s0 + eps < s < s1 - eps
+
+
+def _sub_polyline(poly: "Polyline", s0: float, s1: float,
+                  closed: bool) -> List[Vec2]:
+    """The vertices of ``poly`` from arc-length ``s0`` forward to ``s1``
+    (wrapping past the end of a closed ring), ends included."""
     total = poly.length
+    if closed and s1 <= s0 + 1e-9:
+        s1 += total
+    out = [poly.point_at(s0 % total if closed else s0)]
+    cum = poly.cum
+    n = len(poly.points)
+    k = 0
+    while True:                           # vertices strictly inside (s0, s1)
+        i = k % (n - 1) if closed else k
+        if not closed and i >= n:
+            break
+        s = cum[i] + total * (k // (n - 1) if closed else 0)
+        if s >= s1 - 1e-9:
+            break
+        if s > s0 + 1e-9:
+            out.append(poly.points[i])
+        k += 1
+        if k > 4 * n:
+            break
+    end = poly.point_at(s1 % total if closed else min(s1, total))
+    if (end - out[-1]).length() > 1e-9:
+        out.append(end)
+    return out
+
+
+def _distribute(poly: "Polyline", corner_points: List[Vec2], closed: bool,
+                settings, arcs, total: float) -> StitchResult:
+    """Place holes along ``poly`` (already the stitch line): the fitting
+    proper, snapped onto ``arcs``. Rows are the caller's."""
+
+    def done(res: StitchResult) -> StitchResult:
+        return _snap_to_arcs(res, arcs)
+
     if total > _MAX_HOLES * settings.pitch_mm:
         # never a real seam: a runaway stitch line (see offset.MITER_LIMIT)
         # would otherwise be marched hole by hole with the UI frozen
@@ -982,7 +1111,7 @@ def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
             bad = _gap_badness(res, settings.pitch_mm)
             if best_bad is None or bad < best_bad:
                 best, best_bad = res, bad
-        return _apply_rows(best, settings)   # already snapped
+        return best                           # already snapped
 
     res = _march_corner_style(poly, cor, settings, want, closed, fit,
                               total, symmetric, axis_forced)

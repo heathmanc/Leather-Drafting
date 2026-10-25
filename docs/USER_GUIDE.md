@@ -404,6 +404,19 @@ panel also shows the selected piece's area.
 
 ---
 
+### Leaving an edge unsewn (a pocket mouth)
+
+A pocket's top edge is an open mouth — it isn't stitched. **Right-click that
+edge → Don't stitch this edge.** The holes now stop at the inset corner on
+either side of it (the last hole sits where the stitch line turns the corner,
+as a hand-sewn pocket does), and the unsewn edge shows a loose dotted line
+in the stitch colour so it's clear the gap is deliberate. Any number of edges
+can be unsewn; on a rounded rectangle each corner arc is an edge of its own,
+so you can stop before or after the corner. Properties shows **Edges sewn:
+3 of 4** with a **Stitch all** button, and *right-click → Stitch all edges*
+does the same. The pattern of holes on the sewn edges is unchanged, so a
+mating piece stitched all the way round still registers hole for hole.
+
 ## 8. Precision drawing: snapping and guides
 
 Two independent toggles in the top toolbar:

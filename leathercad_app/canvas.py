@@ -1879,6 +1879,25 @@ class Canvas(QGraphicsView):
         a_fold = menu.addAction("Unmark fold line" if is_fold
                                 else "Mark as fold line")
         a_fold.setEnabled(line_like)
+        # which edge of a stitched piece was right-clicked: sew it or not
+        edge_item, edge_idx, edge_on = None, None, True
+        if (isinstance(owner, ShapeItem) and owner.model.stitch is not None
+                and owner.model.stitch.enabled and not owner.model.baked_holes):
+            from leathercad.shapes import segment_index_at, stitched_edge_flags
+            wp = self.mapToScene(event.pos())
+            edge_idx = segment_index_at(owner.model, Vec2(wp.x(), wp.y()),
+                                        12.0 / max(self._zoom, 1e-6))
+            if edge_idx is not None:
+                edge_item = owner
+                edge_on = stitched_edge_flags(owner.model)[edge_idx]
+        a_edge = menu.addAction("Stitch this edge" if not edge_on
+                                else "Don't stitch this edge")
+        a_edge.setEnabled(edge_item is not None)
+        a_alledges = menu.addAction("Stitch all edges")
+        a_alledges.setEnabled(bool(
+            shapes and any(getattr(i.model, "stitch_edges", None) is not None
+                           and not all(i.model.stitch_edges)
+                           for i in shapes)))
         menu.addSeparator()
         a_union = menu.addAction("Union (merge shapes)")
         a_union.setEnabled(len(shapes) >= 2)
@@ -1914,6 +1933,10 @@ class Canvas(QGraphicsView):
                 self.offset_selected(dist)
         elif chosen is a_fold:
             self.toggle_fold_line(shapes[0])
+        elif chosen is a_edge:
+            self.toggle_stitch_edge(edge_item, edge_idx)
+        elif chosen is a_alledges:
+            self.stitch_all_edges(shapes)
         elif chosen is a_union:
             self.boolean_selected("union")
         elif chosen is a_subtract:
@@ -3072,6 +3095,39 @@ class Canvas(QGraphicsView):
                  f"(assumes {thickness_mm:g} mm total leather stack and "
                  f"{tail_mm:g} mm needle tails per run — cut generously)"]
         return "\n".join(rows)
+
+    def toggle_stitch_edge(self, item, idx: int) -> None:
+        """Sew / don't sew edge ``idx`` of a stitched piece. The holes stop
+        at the inset corner where an unsewn edge begins -- a pocket's open
+        mouth, a flap edge that's folded, not stitched."""
+        from leathercad.shapes import stitched_edge_flags
+        m = item.model
+        flags = stitched_edge_flags(m)
+        if not (0 <= idx < len(flags)):
+            return
+        flags[idx] = not flags[idx]
+        m.stitch_edges = None if all(flags) else flags
+        self.refresh_item(item)
+        self.geometryMovedSig.emit()
+        n_on = sum(flags)
+        self.statusMessage.emit(
+            "Stitching all edges again" if all(flags) else
+            f"Stitching {n_on} of {len(flags)} edges — right-click an edge "
+            "to change it, or 'Stitch all edges'")
+        self.commitRequested.emit()
+
+    def stitch_all_edges(self, items) -> None:
+        changed = False
+        for it in items:
+            if getattr(it.model, "stitch_edges", None) is not None:
+                it.model.stitch_edges = None
+                it.sync_from_model()
+                changed = True
+        if changed:
+            self.update_dimensions()
+            self.geometryMovedSig.emit()
+            self.documentChangedSig.emit()
+            self.commitRequested.emit()
 
     def toggle_fold_line(self, item) -> None:
         """Mark / unmark an open line as a fold (score) line for the 3D
@@ -4705,8 +4761,9 @@ class Canvas(QGraphicsView):
         if sh.baked_holes:
             local = [h.point for h in sh.baked_holes]
         elif sh.stitch and sh.stitch.enabled:
-            local = [h.point for h in stitch_shape_path(sh.local_path(),
-                                                        sh.stitch).holes]
+            local = [h.point for h in stitch_shape_path(
+                sh.local_path(), sh.stitch,
+                getattr(sh, "stitch_edges", None)).holes]
         else:
             return "This shape has no stitch holes to check."
         if not local:

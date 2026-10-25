@@ -924,6 +924,7 @@ class ShapeItem(QGraphicsItem):
         self.model = shape
         self.canvas = canvas
         self._outline: QPolygonF = QPolygonF()
+        self._skipped = QPainterPath()
         self._holes: Optional[StitchResult] = None
         self._holes_path: Optional[QPainterPath] = None
         self._holes_pts: Optional[QPolygonF] = None
@@ -955,6 +956,19 @@ class ShapeItem(QGraphicsItem):
         oriented = [t.apply_dir(p) for p in local]
         self._outline = _qpoly(oriented)
         self._closed = path.closed
+        # the edges that aren't sewn, for a dotted marker over them
+        self._skipped = QPainterPath()
+        mask = getattr(self.model, "stitch_edges", None)
+        st0 = self.model.stitch
+        if (mask is not None and len(mask) == len(path.segments)
+                and st0 is not None and st0.enabled and not all(mask)):
+            for flag, seg in zip(mask, path.segments):
+                if flag:
+                    continue
+                pts = [t.apply_dir(q) for q in [seg.start()] + seg.flatten()]
+                self._skipped.moveTo(pts[0].x, pts[0].y)
+                for q in pts[1:]:
+                    self._skipped.lineTo(q.x, q.y)
 
         # snap targets from REAL geometry (Fusion / LightBurn style): endpoints,
         # edge/arc midpoints, arc & shape centres and circle quadrants -- not
@@ -982,7 +996,8 @@ class ShapeItem(QGraphicsItem):
             self._holes = StitchResult(holes=oriented)
         elif st is not None and st.enabled and recompute_holes:
             # from the true lines/arcs: exact inset, holes on the real arcs
-            res = stitch_shape_path(path, st)
+            res = stitch_shape_path(path, st,
+                                    getattr(self.model, "stitch_edges", None))
             self._hole_locals = [Vec2(h.point.x, h.point.y) for h in res.holes]
             # orient holes into the pre-translation frame
             oriented_holes = [Hole(t.apply_dir(h.point), t.apply_dir(h.tangent))
@@ -1068,6 +1083,19 @@ class ShapeItem(QGraphicsItem):
         painter.setBrush(Qt.NoBrush)
         if outline_vis and self._outline.size() >= 2:
             painter.drawPolyline(self._outline)
+        if (outline_vis and holes_vis and not self._skipped.isEmpty()
+                and (selected or self.canvas is None
+                     or getattr(self.canvas, "show_skipped_edges", True))):
+            # an unsewn edge: a loose dotted line in the stitch colour, so
+            # it's clear the holes stop there on purpose
+            sp = QPen(QColor(self.canvas.layer_color("Stitch"))
+                      if self.canvas else QColor("#0066ff"))
+            sp.setCosmetic(True)
+            sp.setWidthF(w + 1.5)
+            sp.setStyle(Qt.DotLine)
+            painter.setPen(sp)
+            painter.drawPath(self._skipped)
+            painter.setPen(pen)
 
         # holes
         if holes_vis and self._holes and self._holes.count:

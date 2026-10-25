@@ -80,6 +80,10 @@ class Shape:
     # shape instead of being computed from ``stitch`` -- the "grouped" state.
     # Each entry is a stitching.Hole. Never redistributed.
     baked_holes: Optional[list] = None
+    # Which edges carry stitching: one flag per ``local_path().segments``
+    # entry, False for an edge that isn't sewn (a pocket's open mouth). None
+    # (or a list of the wrong length) stitches every edge.
+    stitch_edges: Optional[List[bool]] = None
     # A construction/guide line: drawn dashed, used only as a snap/alignment
     # reference, never cut or exported.
     construction: bool = False
@@ -210,9 +214,37 @@ def copy_shape_attrs(src, dst, *, holes: bool = False):
         if hasattr(src, name):
             setattr(dst, name, getattr(src, name))
     dst.stitch = copy.deepcopy(src.stitch)
+    if getattr(src, "stitch_edges", None) is not None:
+        dst.stitch_edges = list(src.stitch_edges)   # ignored if it no longer fits
     if holes:
         dst.baked_holes = copy.deepcopy(src.baked_holes)
     return dst
+
+
+def segment_index_at(sh, world: Vec2, tol: float):
+    """Index of the edge of ``sh`` (a ``local_path().segments`` entry) that
+    passes within ``tol`` mm of world point ``world``, or None."""
+    t = sh.transform
+    local = t.inverse_apply(world)
+    best, best_d = None, tol
+    for i, seg in enumerate(sh.local_path().segments):
+        pts = [seg.start()] + seg.flatten()
+        for a, b in zip(pts, pts[1:]):
+            ab = b - a
+            d2 = ab.length_sq()
+            k = 0.0 if d2 < 1e-12 else max(0.0, min(1.0, (local - a).dot(ab) / d2))
+            d = (a + ab * k - local).length()
+            if d < best_d:
+                best, best_d = i, d
+    return best
+
+
+def stitched_edge_flags(sh) -> List[bool]:
+    """The per-edge stitching flags of ``sh``, sized to its current path
+    (every edge on when it has no usable mask)."""
+    n = len(sh.local_path().segments)
+    m = getattr(sh, "stitch_edges", None)
+    return list(m) if (m is not None and len(m) == n) else [True] * n
 
 
 @dataclass

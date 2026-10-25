@@ -177,3 +177,74 @@ def test_array_grid_and_circular():
     c2.array_circular(4, 0, 0, 360, True)
     pts2 = {(round(x.point.x), round(x.point.y)) for x in doc2.holes}
     assert pts2 == {(20, 0), (0, 20), (-20, 0), (0, -20)}
+
+
+# ---------------------------------------------------------------------------
+# Inside-out loops: a corner tighter than the offset used to tie a small
+# backwards loop into the ring (the stitch marcher then piled holes into it).
+# ---------------------------------------------------------------------------
+def _rounded_rect_pts(w, h, r):
+    from leathercad.shapes import Rectangle
+    return Rectangle(width=w, height=h, corner_radius=r).local_path().flatten()
+
+
+def test_inset_past_a_tight_fillet_gives_a_clean_mitred_corner():
+    from leathercad.offset import offset_closed_inward, _self_crossings
+    for inset in (3.5, 8.0):
+        ring = offset_closed_inward(_rounded_rect_pts(80, 50, 3.0), inset)
+        assert _self_crossings(ring[:-1]) == []
+        # the r=3 corner shrunk past its radius -> a sharp inset corner
+        hx, hy = 40 - inset, 25 - inset
+        near = [p for p in ring if p.x > hx - 1 and p.y > hy - 1]
+        assert near and all(abs(p.x - hx) < 1e-6 and abs(p.y - hy) < 1e-6
+                            for p in near)
+
+
+def test_outward_offset_of_a_tight_concave_fillet_has_no_loop():
+    from leathercad.offset import _self_crossings
+    from leathercad.shapes import Polygon
+    pts = Polygon(points=[Vec2(0, 0), Vec2(60, 0), Vec2(60, 20), Vec2(20, 20),
+                          Vec2(20, 50), Vec2(0, 50)],
+                  corner_radius=1.0).local_path().flatten()
+    out = offset_closed(pts, 4.0)
+    assert _self_crossings(out[:-1]) == []
+
+
+def test_inset_wider_than_the_piece_has_no_stitch_line():
+    from leathercad.offset import offset_closed_inward
+    sq = [Vec2(0, 0), Vec2(5, 0), Vec2(5, 5), Vec2(0, 5)]
+    assert offset_closed_inward(sq, 3.0) == []
+
+
+def test_kerf_offset_never_drops_a_tiny_cut():
+    # a collapse keeps the raw miter ring: export must not lose a cut outline
+    sq = [Vec2(0, 0), Vec2(1, 0), Vec2(1, 1), Vec2(0, 1)]
+    assert len(offset_closed(sq, -2.0)) >= 4
+
+
+def test_rippled_edge_trims_fast_and_clean():
+    # a scalloped edge whose ripples are far tighter than the offset: every
+    # ripple ties a loop (thousands of crossings) -- this took ~45 s with
+    # loop-at-a-time removal and still left crossings behind
+    import math
+    import time
+    from leathercad.offset import offset_closed_inward, _self_crossings
+    n, waves, amp = 4000, 120, 2.0
+    pts = [Vec2((60 + amp * math.sin(waves * 2 * math.pi * i / n))
+                * math.cos(2 * math.pi * i / n),
+                (60 + amp * math.sin(waves * 2 * math.pi * i / n)) * 0.7
+                * math.sin(2 * math.pi * i / n)) for i in range(n)]
+    for d in (3.5, 8.0):
+        t0 = time.perf_counter()
+        ring = offset_closed_inward(pts, d)
+        assert time.perf_counter() - t0 < 5.0
+        assert len(ring) > 3 and _self_crossings(ring[:-1]) == []
+
+
+def test_ellipse_narrower_than_twice_the_inset_has_no_stitch_line():
+    # folds into a ring whose backwards edges never cross each other
+    from leathercad.offset import offset_closed_inward
+    from leathercad.shapes import Ellipse
+    pts = Ellipse(rx=6.5, ry=4.0).local_path().flatten()
+    assert offset_closed_inward(pts, 5.0) == []
+    assert len(offset_closed_inward(pts, 3.0)) > 3

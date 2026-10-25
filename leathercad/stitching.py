@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
 
 from .geometry import Vec2, distance
+from .offset import signed_area
 from .path import Path, DEFAULT_FLATNESS
 
 _EPS = 1e-9
@@ -242,7 +243,14 @@ def fit_pitch_for_count(poly: Polyline, n_intervals: int, start_s: float,
             lo = mid
         else:
             hi = mid
-    return 0.5 * (lo + hi)
+    # Converged only if the band closed on the end. A span whose chord from
+    # the start rises then falls (it runs out to a tip and back) has no
+    # monotonic residual; the band then shrinks onto the tip, not the end,
+    # and handing that pitch back put a stray hole on the tip.
+    mid = 0.5 * (lo + hi)
+    if abs(residual(mid)) < max(tol, 1e-3 * span):
+        return mid
+    return None
 
 
 def _best_fit_span(poly: Polyline, target_pitch: float, start_s: float,
@@ -285,9 +293,19 @@ def _best_fit_span(poly: Polyline, target_pitch: float, start_s: float,
         within.sort()
         return within[0][1], within[0][2]
     if symmetric_fallback and allc:
-        allc.sort()
-        return allc[0][1], allc[0][2]
+        # Nothing fits the iron: take the closest count, but never one that
+        # squeezes holes under the minimum spacing while a sparser count
+        # exists -- holes a bit far apart just look sparse; holes much too
+        # close bridge and tear, and on a small straddled arc read as a
+        # cluster in the corner.
+        floor = _MIN_FIT_PITCH * target_pitch
+        roomy = [c for c in allc if c[1] >= floor]
+        best = min(roomy or allc)
+        return best[1], best[2]
     return target_pitch, None  # caller falls back to plain marching
+
+
+_COS_45 = math.cos(math.radians(45.0))
 
 
 def _span_is_arc(poly: Polyline, a: float, span_len: float, total: float,
@@ -307,7 +325,25 @@ def _span_is_arc(poly: Polyline, a: float, span_len: float, total: float,
         p = poly.point_at((a + span_len * k / 8.0) % total)
         dev = abs((p.x - pa.x) * chord.y - (p.y - pa.y) * chord.x) / length
         max_dev = max(max_dev, dev)
-    return max_dev > tol
+    if max_dev <= tol:
+        return False
+    # A flattened fillet turns a little at every vertex; a span that turns
+    # sharply at ONE vertex has a real corner inside it instead (a corner
+    # anchor projected onto the wrong edge of a thin inset arm) and must not
+    # be given the symmetric rounded-corner treatment.
+    pts, cum = poly.points, poly.cum
+    lo, hi = a % total, (a % total) + span_len
+    ring = (pts[0] - pts[-1]).length() < 1e-9
+    for i in range(0 if ring else 1, len(pts) - 1):
+        s = cum[i]
+        if not (lo < s < hi or lo < s + total < hi):
+            continue
+        d1 = pts[i] - pts[i - 1 if i else -2]   # the seam's predecessor
+        d2 = pts[i + 1] - pts[i]
+        l1, l2 = d1.length(), d2.length()
+        if l1 > _EPS and l2 > _EPS and d1.dot(d2) < l1 * l2 * _COS_45:
+            return False
+    return True
 
 
 def _plan_corners(poly: Polyline, cor: List[float], settings, style=None):
@@ -329,8 +365,10 @@ def _plan_corners(poly: Polyline, cor: List[float], settings, style=None):
         (a hole sits on it), ``straddle`` forces an odd count (the apex stays
         bare), ``auto`` takes whatever count best matches the iron.
 
-    Returns ``(forced, straddle)``: the set of arc-lengths that must be holes,
-    and the set of ``(a, b)`` arc spans whose fit must be forced odd.
+    Returns ``(forced, straddle, key)``: the set of arc-lengths that must be
+    holes, the set of ``(a, b)`` arc spans whose fit must be forced odd, and the
+    subset of ``forced`` that marks a corner itself (sharp corners and arc
+    apexes, as opposed to tangent points) -- see ``_space_anchors``.
     """
     total = poly.length
     p = settings.pitch_mm
@@ -340,17 +378,26 @@ def _plan_corners(poly: Polyline, cor: List[float], settings, style=None):
         style = "tangent"          # concrete default (see _fit_corner_style)
     # Merge near-coincident anchors (e.g. a corner whose inset collapsed the arc
     # to a point when the inset >= the radius) so it becomes one hole, not two
-    # stacked on top of each other.
+    # stacked on top of each other. The hole goes in the MIDDLE of the cluster:
+    # a collapsed fillet's two tangent points straddle the sharp inset corner,
+    # and keeping either one put the hole just past the corner, where the
+    # chord march coming round the other side then overshot by a whole pitch.
     merge = min(0.3, 0.1 * p)
     cor_sorted = sorted({c % total for c in cor})
-    cor_set: List[float] = []
+    clusters: List[List[float]] = []
     for c in cor_sorted:
-        if not cor_set or (c - cor_set[-1]) > merge:
-            cor_set.append(c)
-    if len(cor_set) >= 2 and (total - cor_set[-1] + cor_set[0]) <= merge:
-        cor_set.pop()          # last wraps onto the first -- same point
+        if not clusters or (c - clusters[-1][-1]) > merge:
+            clusters.append([c])
+        else:
+            clusters[-1].append(c)
+    if (len(clusters) >= 2
+            and (total - clusters[-1][-1] + clusters[0][0]) <= merge):
+        # last cluster wraps onto the first -- unroll it past ``total``
+        clusters[0] = clusters.pop() + [c + total for c in clusters[0]]
+    cor_set = sorted(((cl[0] + cl[-1]) / 2.0) % total for cl in clusters)
     forced: set = set()
     straddle: set = set()
+    key: set = set()
     used: set = set()
     m = len(cor_set)
     for i in range(m):
@@ -371,21 +418,97 @@ def _plan_corners(poly: Polyline, cor: List[float], settings, style=None):
                 forced |= {a, b, apex}
             else:
                 forced.add(apex)
+            key.add(apex)
         elif style == "straddle":
             if chord_tt >= p * 0.98:
                 forced |= {a, b}
                 straddle.add((a, b))
             else:
                 forced.add(apex)          # too tight to straddle -> apex hole
+                key.add(apex)
         else:  # tangent (the anchor-both-tangent-points strategy)
             if chord_tt >= p * 0.98:
                 forced |= {a, b}          # arc fitted on its own (symmetric)
             else:
                 forced.add(apex)          # tight corner -> single apex hole
+                key.add(apex)
     for c in cor_set:
         if c not in used:                 # a genuine sharp corner
             forced.add(c)
-    return forced, straddle
+            key.add(c)
+    return forced, straddle, key
+
+
+# Two forced holes may never sit closer than this fraction of the pitch. Corner
+# planning alone keeps its anchors >= ~0.95 pitch apart, but anchors from
+# *neighbouring* features can still land on top of each other: two fillets
+# joined by a 1.5 mm straight, a symmetry-axis crossing next to a corner, or an
+# imported curve whose every flattened vertex counts as a sharp corner. Each
+# such anchor used to force its own hole, packing a cluster into the corner.
+_MIN_ANCHOR_SEP = 0.75
+# A span fitted with no count inside the iron's tolerance never squeezes its
+# holes closer than this fraction of the pitch while a sparser count exists.
+_MIN_FIT_PITCH = 0.6
+
+
+def _space_anchors(anchors, total: float, closed: bool, min_sep: float,
+                   rank) -> List[float]:
+    """Thin ``anchors`` (arc-lengths) so no two are closer than ``min_sep``.
+
+    Anchors are grouped into runs whose consecutive gaps are all < ``min_sep``;
+    each run keeps its most important members (lowest ``rank(s)``: 0 must stay,
+    e.g. an open path's ends or a symmetry crossing; 1 a corner proper, 1.5 a
+    reflex one; 2 a tangent point), nearest the run's centre first, skipping any too close to
+    one already kept. A run that is just two tangent points (say the ends of
+    a short straight between two fillets) is replaced by their midpoint, so a
+    mirror-image shape stays symmetric. Runs never interact, so isolated
+    anchors are untouched.
+    """
+    pts = sorted(set(anchors))
+    if len(pts) < 2 or min_sep <= 0:
+        return pts
+
+    def gap(a, b):                    # forward distance a -> b
+        return (b - a) % total if closed else b - a
+
+    m = len(pts)
+    start = 0
+    if closed:
+        # open the ring at its widest gap so no run straddles the seam (if
+        # even that is < min_sep the whole ring is one run, which is fine)
+        start = max(range(m), key=lambda i: gap(pts[i - 1], pts[i]))
+    order = pts[start:] + pts[:start]
+    runs, run = [], [order[0]]
+    for s in order[1:]:
+        if gap(run[-1], s) < min_sep:
+            run.append(s)
+        else:
+            runs.append(run)
+            run = [s]
+    runs.append(run)
+
+    def dist(a, b):
+        d = abs(a - b)
+        return min(d, total - d) if closed else d
+
+    out: List[float] = []
+    for run in runs:
+        if len(run) == 1:
+            out.append(run[0])
+            continue
+        centre = (run[0] + gap(run[0], run[-1]) / 2.0)
+        if closed:
+            centre %= total
+        cand = sorted(run, key=lambda s: (rank(s), dist(s, centre)))
+        if (len(run) == 2 and rank(run[0]) == rank(run[1]) == 2
+                and len(runs) > 1):
+            cand = [centre] + cand    # mirror tangent pair -> their midpoint
+        kept: List[float] = []
+        for s in cand:
+            if rank(s) == 0 or all(dist(s, k) >= min_sep for k in kept):
+                kept.append(s)
+        out.extend(kept)
+    return sorted(s % total if closed else s for s in out)
 
 
 # ---------------------------------------------------------------------------
@@ -496,8 +619,15 @@ def march_chord_n(poly: Polyline, pitch: float, n_steps: int, start_s: float,
             break
         cur_s, cur_pt = nxt
         result.append(cur_s)
-    # Snap the final hole exactly onto the span end for a clean corner.
-    result[-1] = end_s
+    # Snap the final hole exactly onto the span end for a clean corner -- but
+    # only when it is already nearly there. If the march stopped short (the
+    # fitted pitch just failed to reach), overwriting would silently delete
+    # that hole (or, after zero steps, the span's START hole), leaving a gap of
+    # two pitches; append the end instead.
+    if len(result) > 1 and end_s - result[-1] < 0.5 * pitch:
+        result[-1] = end_s
+    else:
+        result.append(end_s)
     return result
 
 
@@ -703,12 +833,18 @@ def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
 
 def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
                           closed: bool, settings) -> StitchResult:
-    from .offset import offset_closed_inward
+    from .offset import inset_with_corners
 
     pts = list(points)
+    corner_points = list(corner_points or [])
 
     if closed and settings.inset and settings.inset > 0:
-        pts = offset_closed_inward(pts, settings.inset)
+        # the corners come back as the inset ring's own corners (see
+        # inset_with_corners), so they sit exactly on the stitch line
+        pts, corner_points = inset_with_corners(pts, settings.inset,
+                                                corner_points)
+        if len(pts) < 3:          # piece narrower than twice the inset
+            return StitchResult(closed=closed)
 
     if closed and getattr(settings, "start_offset", 0.0):
         pts = _rotate_closed_ring(pts, settings.start_offset)
@@ -787,11 +923,28 @@ def _march_corner_style(poly: Polyline, cor: List[float], settings, style: str,
     result. Works on a private rotation of ``poly`` so candidates don't
     interfere."""
     straddle: set = set()
+    min_sep = _MIN_ANCHOR_SEP * settings.pitch_mm
     if closed:
         # Plan corner holes: single apex hole on tight radii (no cramming),
         # a fitted arc span on generous ones. See _plan_corners.
-        forced, straddle = _plan_corners(poly, cor, settings, style)
+        forced, straddle, key = _plan_corners(poly, cor, settings, style)
         forced |= axis_forced
+        orient = 1.0 if signed_area(poly.points) > 0 else -1.0
+        step = min(0.05, 0.01 * settings.pitch_mm)
+
+        def rank(s):
+            if s in axis_forced:
+                return 0
+            if s not in key:
+                return 2                  # a tangent point
+            # of two crowded corners keep the convex one: it is what reads
+            # as the shape's corner, and a span tip-to-tip fits cleanly where
+            # one notch-to-notch runs out to the tip and back
+            t0 = poly.tangent_at((s - step) % total)
+            t1 = poly.tangent_at((s + step) % total)
+            return 1 if t0.cross(t1) * orient >= 0 else 1.5
+
+        forced = set(_space_anchors(forced, total, True, min_sep, rank))
         # The span machinery needs a hole at arc-length 0. The final hole set is
         # invariant to which corner we start at (each span is fitted from its own
         # geometry), so for a plain shape just rotate 0 onto the first corner;
@@ -804,9 +957,21 @@ def _march_corner_style(poly: Polyline, cor: List[float], settings, style: str,
                 forced = {(s - rot) % total for s in forced}
                 straddle = {((a - rot) % total, (b - rot) % total)
                             for (a, b) in straddle}
+        # A stitch ring too small for two holes the minimum spacing apart
+        # (a tiny piece whose inset left a ring of a millimetre or two)
+        # takes a single hole rather than a knot of them.
+        xs = [q.x for q in poly.points]
+        ys = [q.y for q in poly.points]
+        if math.hypot(max(xs) - min(xs), max(ys) - min(ys)) < min_sep:
+            return _result_from_positions(poly, [0.0], [settings.pitch_mm],
+                                          closed)
         corners_for_anchors = sorted(forced)
     else:
-        corners_for_anchors = sorted(set(cor))
+        # the path's two ends always anchor, so they outrank any corner
+        ends = {0.0, total}
+        corners_for_anchors = [s for s in _space_anchors(
+            set(cor) | ends, total, False, min_sep,
+            lambda s: 0 if s in ends else 1) if s not in ends]
 
     anchors = _anchors_from(corners_for_anchors, total, closed, fit)
     if anchors is None:

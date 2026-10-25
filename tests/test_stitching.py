@@ -204,3 +204,153 @@ def test_collinear_node_insert_does_not_shift_stitches():
     # the inserted collinear node did not become a corner -- still 4 corners
     assert len(a.local_path().corner_points) == 4
     assert len(b.local_path().corner_points) == 4
+
+
+# ---------------------------------------------------------------------------
+# No clusters of holes in corners (shape -> Stitch used to pack a handful of
+# holes into one corner for some radius / inset / corner-style combinations).
+# ---------------------------------------------------------------------------
+def _shape_gaps(shape, **kw):
+    from leathercad.stitching import stitch_polyline
+    from leathercad.stitchsettings import StitchSettings
+    st = StitchSettings()
+    for k, v in kw.items():
+        setattr(st, k, v)
+    path = shape.local_path()
+    res = stitch_polyline(path.flatten(), list(path.corner_points),
+                          path.closed, st)
+    pts = [h.point for h in res.holes]
+    n = len(pts)
+    rng = range(n) if path.closed else range(n - 1)
+    return pts, [(pts[i] - pts[(i + 1) % n]).length() for i in rng], st
+
+
+@pytest.mark.parametrize("w,h,r,inset", [
+    (80, 50, 3.0, 3.5),           # fillet just under the default inset
+    (80, 50, 3.0, 8.0),           # ...and well under a wide inset
+    (20, 15, 2.7, 3.5),           # what the Rounded tool draws at this size
+    (80, 50, 0.5, 5.0),
+])
+def test_fillet_tighter_than_inset_gets_one_corner_hole(w, h, r, inset):
+    from leathercad.shapes import Rectangle
+    pts, gaps, st = _shape_gaps(Rectangle(width=w, height=h, corner_radius=r),
+                                inset=inset)
+    assert min(gaps) >= 0.75 * st.pitch_mm
+    # the stitch line has a sharp corner there, and exactly one hole on it
+    cx, cy = w / 2 - inset, h / 2 - inset
+    at_corner = [p for p in pts if abs(p.x - cx) < 0.5 and abs(p.y - cy) < 0.5]
+    assert len(at_corner) == 1
+
+
+@pytest.mark.parametrize("style", ["auto", "midpoint", "straddle"])
+def test_fillets_joined_by_a_short_straight_do_not_crowd(style):
+    from leathercad.shapes import Polygon
+    # 45-degree corners with r=15: the fillets nearly meet, leaving a 1.5 mm
+    # straight whose two tangent points each used to force a hole
+    tri = Polygon(points=[Vec2(0, 0), Vec2(60, 0), Vec2(20, 40)],
+                  corner_radius=15.0)
+    for inset in (0.0, 3.5):
+        _, gaps, st = _shape_gaps(tri, inset=inset, corner_style=style)
+        assert min(gaps) >= 0.6 * st.pitch_mm
+
+
+@pytest.mark.parametrize("r,inset", [(4.0, 0.0), (6.0, 2.0)])
+def test_straddle_on_a_small_arc_stretches_rather_than_squeezes(r, inset):
+    from leathercad.shapes import Rectangle
+    _, gaps, st = _shape_gaps(Rectangle(width=80, height=50, corner_radius=r),
+                              inset=inset, corner_style="straddle")
+    assert min(gaps) >= 0.75 * st.pitch_mm
+
+
+def test_imported_curve_with_a_corner_at_every_vertex_does_not_crowd():
+    from leathercad.shapes import Polygon
+    # a DXF polyline curve, ~1 mm per segment, turning >1 deg per vertex so
+    # every vertex counts as a sharp corner
+    pts = []
+    for i in range(240):
+        t = 2 * math.pi * i / 240
+        rr = 40 + 4 * math.sin(5 * t)
+        pts.append(Vec2(rr * math.cos(t), rr * 0.7 * math.sin(t)))
+    _, gaps, st = _shape_gaps(Polygon(points=pts))
+    assert min(gaps) >= 0.6 * st.pitch_mm
+    assert max(gaps) <= 1.5 * st.pitch_mm
+
+
+def test_open_zigzag_keeps_its_ends_and_does_not_crowd():
+    from leathercad.shapes import Polygon
+    zig = Polygon(points=[Vec2(i * 2.0, (i % 2) * 1.5) for i in range(30)],
+                  close_path=False)
+    pts, gaps, st = _shape_gaps(zig)
+    assert min(gaps) >= 0.6 * st.pitch_mm
+    assert (pts[0] - Vec2(0, 0)).length() < 1e-6
+    assert (pts[-1] - Vec2(58, 1.5)).length() < 1e-6
+
+
+def test_space_anchors_keeps_corners_and_symmetry():
+    from leathercad.stitching import _space_anchors
+    total = 100.0
+    # a lone anchor is never touched; a corner (rank 1) beats a tangent (2)
+    out = _space_anchors([10.0, 50.0, 51.0], total, True, 3.0,
+                         lambda s: 1 if s == 51.0 else 2)
+    assert out == [10.0, 51.0]
+    # a mirror-image pair of equal rank collapses to its midpoint
+    out = _space_anchors([10.0, 49.0, 51.0], total, True, 3.0, lambda s: 2)
+    assert out == [10.0, 50.0]
+    # rank 0 (open-path ends, symmetry crossings) always stays
+    out = _space_anchors([0.0, 1.0, 30.0], 30.0, False, 3.0,
+                         lambda s: 0 if s in (0.0, 30.0) else 1)
+    assert out == [0.0, 30.0]
+    # runs wrap across the seam of a closed ring
+    out = _space_anchors([99.0, 1.0, 50.0], total, True, 3.0, lambda s: 2)
+    assert out == [0.0, 50.0]
+
+
+def _star(points=8, r_out=15.0, ratio=0.45, **kw):
+    from leathercad.shapes import Polygon
+    pts = [Vec2((r_out if i % 2 == 0 else r_out * ratio)
+                * math.cos(math.pi * i / points),
+                (r_out if i % 2 == 0 else r_out * ratio)
+                * math.sin(math.pi * i / points)) for i in range(2 * points)]
+    return Polygon(points=pts, **kw)
+
+
+def test_thin_arm_corners_land_on_their_own_inset_vertices():
+    # the inset of an inner corner of a thin arm moves far inward; projecting
+    # the corner to the NEAREST point of the inset ring put its hole part-way
+    # along the neighbouring edge and left the real inset corner bare
+    pts, gaps, st = _shape_gaps(_star(), inset=2.0)
+    assert len(pts) == 16
+    assert max(gaps) - min(gaps) < 0.05
+
+
+def test_fillet_equal_to_inset_keeps_its_tip_hole():
+    # r == inset collapses each fillet to a sharp tip; keeping one of its two
+    # tangent anchors (rather than their middle) put the hole just past the
+    # tip and the march round the other side skipped a whole pitch
+    _, gaps, st = _shape_gaps(_star(5, 30.0, corner_radius=2.0),
+                              inset=2.0, pitch_mm=2.7)
+    assert max(gaps) <= 1.25 * st.pitch_mm
+
+
+def test_star_collapsed_to_a_tiny_star_stitches_its_tips():
+    pts, gaps, st = _shape_gaps(_star(), inset=3.5)
+    assert len(pts) == 8                       # one per tip, none crammed
+    assert max(gaps) - min(gaps) < 0.05
+
+
+def test_ring_too_small_for_two_holes_gets_one():
+    from leathercad.shapes import Ellipse, Rectangle
+    pts, _, _ = _shape_gaps(Ellipse(rx=4, ry=4), inset=3.5, pitch_mm=2.7)
+    assert len(pts) == 1
+    pts, _, _ = _shape_gaps(Rectangle(width=8, height=8), inset=5.0)
+    assert pts == []                           # no stitch line fits at all
+
+
+def test_march_chord_n_never_drops_the_span_start():
+    from leathercad.stitching import march_chord_n
+    poly = Polyline([Vec2(0, 0), Vec2(10, 0)])
+    # a pitch the march can't take even once: both ends must still be holes
+    assert march_chord_n(poly, 50.0, 1, 0.0, 4.0) == [0.0, 4.0]
+    # stopping one step short appends the end instead of overwriting a hole
+    assert march_chord_n(poly, 3.0, 2, 0.0, 9.5) == pytest.approx(
+        [0.0, 3.0, 6.0, 9.5])

@@ -4895,7 +4895,17 @@ class Canvas(QGraphicsView):
             return
         shape_item = shapes[0]
         sh = shape_item.model
+        had_holes = bool(sh.baked_holes)
         baked = list(sh.baked_holes) if sh.baked_holes else []
+        if not baked and sh.stitch is not None and sh.stitch.enabled:
+            # Attached holes take over from live stitching, so carry the
+            # stitching's own holes across first -- attaching one hole used to
+            # leave the piece with just that hole, its seam gone.
+            live = holes_for_shape(sh)
+            baked = [Hole(sh.transform.inverse_apply(h.point),
+                          sh.transform.inverse_apply_dir(h.tangent))
+                     for h in live.holes]
+            had_holes = bool(baked)
         for h in holes:
             local = sh.transform.inverse_apply(h.hole.point)
             tan = sh.transform.inverse_apply_dir(h.hole.tangent)
@@ -4906,13 +4916,24 @@ class Canvas(QGraphicsView):
         # baked holes render in the shape's stitch STYLE, so adopt the grouped
         # holes' style (round / slit + sizes) -- otherwise slit holes baked
         # into a round-stitched shape would come out round, and vice versa.
+        # (Only when the piece had no holes of its own: its stitching keeps
+        # its style -- one style covers all of a piece's holes.)
         h0 = holes[0].hole
         if sh.stitch is None:
             sh.stitch = StitchSettings(enabled=False)
-        sh.stitch.hole_style = h0.hole_style
-        sh.stitch.hole_diameter = h0.hole_diameter
-        sh.stitch.slit_length = h0.slit_length
-        sh.stitch.slit_angle = h0.slit_angle
+        if not had_holes:
+            from leathercad.holes import mirrored_slit_angle
+            sh.stitch.hole_style = h0.hole_style
+            sh.stitch.hole_diameter = h0.hole_diameter
+            sh.stitch.slit_length = h0.slit_length
+            # a mirrored piece draws its slits slanted the other way: store
+            # the angle so they come out slanting as the loose holes did
+            sh.stitch.slit_angle = mirrored_slit_angle(h0.slit_angle,
+                                                       sh.transform.mirror_x)
+        elif h0.hole_style != sh.stitch.hole_style:
+            self.statusMessage.emit(
+                "Attached — the holes take this piece's "
+                f"{sh.stitch.hole_style} style")
         shape_item.sync_from_model()
         self.scene_obj.clearSelection()
         shape_item.setSelected(True)

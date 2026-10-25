@@ -2693,6 +2693,55 @@ def test_exploding_a_mirrored_piece_keeps_its_slit_slant(qapp):
     assert slits() == before
 
 
+def test_attaching_holes_keeps_the_pieces_stitching(qapp):
+    """Attach holes replaced a stitched piece's own holes with just the
+    attached ones and overwrote its hole style; on a mirrored piece an
+    explode-then-attach round trip turned every slit the other way."""
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    from leathercad.holes import LooseHole
+    from leathercad.export import collect
+    from leathercad.stitching import holes_for_shape
+    win = MainWindow(Document())
+    c = win.canvas
+    item = c.add_shape(Rectangle(width=60, height=40, layer="Cut",
+                                 stitch=StitchSettings(pitch_mm=4.0, inset=3.0,
+                                                       hole_diameter=1.2)))
+    n0 = holes_for_shape(item.model).count
+    win.doc.holes.append(LooseHole(point=Vec2(0, 0), hole_diameter=3.0))
+    c.rebuild()
+    for i in c.scene_obj.items():
+        if c._item_model(i) is not None:
+            i.setSelected(True)
+    c.group_selected()
+    sh = win.doc.shapes[0]
+    assert holes_for_shape(sh).count == n0 + 1
+    assert sh.stitch.hole_diameter == 1.2
+
+    # mirrored slits: explode, then attach back -- slants unchanged
+    win2 = MainWindow(Document())
+    c2 = win2.canvas
+    it2 = c2.add_shape(Rectangle(
+        width=40, height=30, layer="Cut", transform=Transform(mirror_x=True),
+        stitch=StitchSettings(pitch_mm=4.0, inset=3.0, hole_style="slit",
+                              slit_angle=30.0)))
+
+    def slits():
+        return sorted((round(h.point.x, 6), round(h.point.y, 6),
+                       round(st.slit_angle, 6))
+                      for res, st, _c in collect(win2.doc)[1]
+                      for h in res.holes)
+    before = slits()
+    c2.scene_obj.clearSelection()
+    it2.setSelected(True)
+    c2.ungroup_selected()
+    for i in c2.scene_obj.items():
+        if c2._item_model(i) is not None:
+            i.setSelected(True)
+    c2.group_selected()
+    assert slits() == before
+
+
 def test_exploded_stitching_stays_in_its_group(qapp):
     """Explode stitching -> holes made ungrouped holes, so the next drag of
     the (duplicated) piece left them behind."""

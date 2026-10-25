@@ -169,6 +169,29 @@ def test_extend_line_to_outline(qapp):
     assert abs(after.x - before.x) < 1e-6
 
 
+def test_extend_an_arc_end_along_its_tangent(qapp):
+    """Extending a path that ends in an arc moved the arc's end node, so the
+    arc re-bent through its old midpoint (R10 became R64.8). It now carries
+    on along the tangent as a new straight edge and the arc stays put."""
+    import math
+    from leathercad.shapes import EditablePath, Edge, arc_through
+    doc = Document()
+    doc.add_shape(Rectangle(width=100, height=10, layer="Cut",
+                            transform=Transform(x=0, y=55)))   # wall at y=50
+    s45 = math.sqrt(0.5)
+    ep = EditablePath(nodes=[Vec2(0, 0), Vec2(10, 10)],
+                      edges=[Edge("arc", mid=Vec2(10 * s45, 10 - 10 * s45))],
+                      closed=False, layer="Cut")
+    doc.add_shape(ep)
+    win = _win(doc)
+    win.canvas._do_extend(Vec2(10, 10))
+    assert [(round(p.x, 6), round(p.y, 6)) for p in ep.nodes] == [
+        (0, 0), (10, 10), (10, 50)]
+    assert [e.kind for e in ep.edges] == ["arc", "line"]
+    _c, r, *_ = arc_through(ep.nodes[0], ep.edges[0].mid, ep.nodes[1])
+    assert abs(r - 10.0) < 1e-9
+
+
 # ---------------------------------------------------------------------------
 # Adding a node on an arc or bezier (double-click while node-editing). It used
 # to work on straight edges only; arcs/beziers were refused.

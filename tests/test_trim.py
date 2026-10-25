@@ -103,3 +103,17 @@ def test_intersection_arclengths_reports_crossings():
     s, total = intersection_arclengths(seg, cut)
     assert abs(total - 100) < 1e-6
     assert [round(x, 1) for x in s] == [25.0, 80.0]
+
+
+def test_trim_cuts_an_arc_exactly_where_the_cutter_crosses():
+    # crossings were found on the flattened arc and projected back by angle:
+    # a cutter grazing a circle left the trimmed end ~0.9 mm short
+    circle = [("arc", [V(50, 0), V(0, 50), V(-50, 0)]),
+              ("arc", [V(-50, 0), V(0, -50), V(50, 0)])]
+    for y in (49.9, 45.0):
+        res = trim(circle, [[V(-60, y), V(60, y)]], V(0, 50), closed=True)
+        ends = [res[0][0][1][0], res[0][-1][1][-1]]
+        want = math.sqrt(50 ** 2 - y ** 2)
+        assert sorted(round(e.x, 9) for e in ends) == [round(-want, 9),
+                                                        round(want, 9)]
+        assert all(abs(e.y - y) < 1e-9 for e in ends)

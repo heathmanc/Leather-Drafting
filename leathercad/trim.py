@@ -100,6 +100,32 @@ def _frac_along(dang: float, sweep: float) -> float:
     return dd / sweep if abs(sweep) > _EPS else 0.0
 
 
+def _arc_hits(piece: "_Piece", c0: Vec2, c1: Vec2) -> List[float]:
+    """Fractions along an arc piece where segment c0-c1 meets its circle."""
+    d = c1 - c0
+    f = c0 - piece.center
+    a = d.dot(d)
+    if a <= _EPS:
+        return []
+    b = 2.0 * f.dot(d)
+    c = f.dot(f) - piece.r * piece.r
+    disc = b * b - 4.0 * a * c
+    if disc < 0.0:
+        return []
+    root = math.sqrt(disc)
+    out = []
+    for t in ((-b - root) / (2.0 * a), (-b + root) / (2.0 * a)):
+        if -1e-9 <= t <= 1.0 + 1e-9:
+            x = c0 + d * t
+            ang = math.atan2(x.y - piece.center.y, x.x - piece.center.x)
+            frac = _frac_along(ang - piece.ang0, piece.sweep)
+            if frac > 1.0 and abs(frac * abs(piece.sweep) - 2 * math.pi) < 1e-9:
+                frac = 0.0                       # the start, wrapped round
+            if -1e-9 <= frac <= 1.0 + 1e-9:
+                out.append(min(1.0, max(0.0, frac)))
+    return out
+
+
 def _seg_intersect(a1: Vec2, a2: Vec2, b1: Vec2, b2: Vec2) -> Optional[Vec2]:
     """Proper intersection point of segments a1a2 and b1b2, or None."""
     r = a2 - a1
@@ -127,12 +153,18 @@ def intersection_arclengths(segments: Sequence[Segment],
     edges = _cutter_edges(cutters)
     hits: List[float] = []
     for pi, p in enumerate(pieces):
-        fl = p.flatten(flatness)
-        for j in range(len(fl) - 1):
+        if p.center is not None:
+            # an arc: solve each cutter edge against the TRUE circle -- a
+            # crossing found on the flattened arc and projected back by angle
+            # landed up to ~0.9 mm short where a cutter grazes the arc
             for (c0, c1) in edges:
-                x = _seg_intersect(fl[j], fl[j + 1], c0, c1)
-                if x is not None:
-                    hits.append(cum[pi] + p.frac_of(x) * p.length)
+                for f in _arc_hits(p, c0, c1):
+                    hits.append(cum[pi] + f * p.length)
+            continue
+        for (c0, c1) in edges:
+            x = _seg_intersect(p.a, p.b, c0, c1)
+            if x is not None:
+                hits.append(cum[pi] + p.frac_of(x) * p.length)
     # A cut line drawn to END on the outline counts as touching it even when
     # it stops a hair short: a field rounded to 4 decimals, or a move, can
     # leave it 0.0001 mm off, invisible yet enough to miss a strict crossing.

@@ -2765,8 +2765,35 @@ class Canvas(QGraphicsView):
         pts = sh.points if isinstance(sh, (Polygon, PathShape)) else sh.nodes
         t = sh.transform
         end = t.apply(pts[idx])
-        nb = t.apply(pts[1] if idx == 0 else pts[-2])
-        d = Vec2(end.x - nb.x, end.y - nb.y)
+        # An end that is an arc or a curve carries on along its TANGENT as a
+        # new straight edge. Moving its end node instead re-bent the curve
+        # through the old midpoint / handles (an R10 arc became R64.8).
+        curved = None
+        if isinstance(sh, EditablePath) and sh.edges:
+            from leathercad.shapes import arc_through
+            ei = 0 if idx == 0 else len(sh.nodes) - 2
+            e = sh.edges[ei]
+            a, b = sh.nodes[ei], sh.nodes[ei + 1]
+            tip = a if idx == 0 else b
+            arc = (arc_through(a, e.mid, b)
+                   if e.kind == "arc" and e.mid is not None else None)
+            if arc is not None:
+                # exact: square to the radius, the way the arc is running
+                c, _r, _a0, _a1, ccw = arc
+                rad = tip - c
+                tan = Vec2(-rad.y, rad.x) if ccw else Vec2(rad.y, -rad.x)
+                curved = t.apply_dir(tan if idx else tan * -1.0)
+            elif e.kind == "bezier" and e.c1 is not None and e.c2 is not None:
+                # a cubic leaves its end along the line from its handle
+                for h in ((e.c1, e.c2, b) if idx == 0 else (e.c2, e.c1, a)):
+                    if (tip - h).length() > 1e-9:
+                        curved = t.apply_dir(tip - h)
+                        break
+        if curved is not None:
+            d = curved
+        else:
+            nb = t.apply(pts[1] if idx == 0 else pts[-2])
+            d = Vec2(end.x - nb.x, end.y - nb.y)
         if d.length() < 1e-9:
             return
         d = d.normalized()
@@ -2788,7 +2815,16 @@ class Canvas(QGraphicsView):
             self.statusMessage.emit(
                 "Nothing to extend to in that direction")
             return
-        pts[idx] = t.inverse_apply(hit)
+        if curved is not None:
+            from leathercad.shapes import Edge
+            if idx == 0:
+                sh.nodes.insert(0, t.inverse_apply(hit))
+                sh.edges.insert(0, Edge("line"))
+            else:
+                sh.nodes.append(t.inverse_apply(hit))
+                sh.edges.append(Edge("line"))
+        else:
+            pts[idx] = t.inverse_apply(hit)
         it.sync_from_model()
         self.statusMessage.emit(f"Extended {hit_d:.1f} mm to the outline")
         self.documentChangedSig.emit()

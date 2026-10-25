@@ -2334,7 +2334,15 @@ class Canvas(QGraphicsView):
     def _member_baseline(self, it):
         """Snapshot the scalable state of one group member for absolute
         (baseline-relative) rescaling during the drag."""
-        from leathercad.shapes import Rectangle, Ellipse, Polygon
+        import copy
+        from leathercad.shapes import (Rectangle, Ellipse, Polygon, PathShape,
+                                        EditablePath)
+        if isinstance(it, HoleItem):
+            return {"pt": it.hole.point}
+        if isinstance(it, StitchLineItem):
+            it._bake_move()
+            return {"pts": list(it.line.points),
+                    "cps": list(it.line.corner_points)}
         m = it.model
         base = {"x": m.transform.x, "y": m.transform.y}
         if isinstance(it, TextItem):
@@ -2348,8 +2356,13 @@ class Canvas(QGraphicsView):
         elif isinstance(m, Ellipse):        # Circle is an Ellipse subclass
             base["rx"] = m.rx
             base["ry"] = m.ry
-        elif isinstance(m, Polygon):
-            base["points"] = [Vec2(p.x, p.y) for p in m.points]
+        elif isinstance(m, (Polygon, PathShape, EditablePath)):
+            # node shapes scale through WORLD space, so a rotated member
+            # stretches along the group's axes, not its own
+            base["t"] = copy.deepcopy(m.transform)
+            base["geom"] = copy.deepcopy(
+                (m.nodes, m.edges) if isinstance(m, EditablePath) else m.points)
+            base["corner_radius"] = getattr(m, "corner_radius", 0.0)
         return base
 
     def _begin_group_resize(self, primary) -> None:
@@ -2357,20 +2370,27 @@ class Canvas(QGraphicsView):
             self._resize_group_base = None
             return
         pc, ph = self._primary_box_world(primary)
-        members = [(it, self._member_baseline(it))
-                   for it in self._resize_group if _alive(it)]
+        # every member of the group -- seams and loose holes too, not only
+        # the selected outlines -- so nothing is left behind by a stretch
+        gid = primary.model.group_id
+        group = [it for it in self._live if it is not primary and _alive(it)
+                 and gid is not None
+                 and getattr(self._item_model(it), "group_id", None) == gid]
+        members = [(it, self._member_baseline(it)) for it in group]
         self._resize_group_base = (pc, ph, members)
 
     def _end_group_resize(self) -> None:
         # crisp re-bake of any scaled labels now that the drag has landed
-        for it in self._resize_group:
+        base = self._resize_group_base
+        for it in ([i for i, _b in base[2]] if base else self._resize_group):
             if _alive(it):
                 it.sync_from_model()
         self._resize_group_base = None
 
     def _apply_group_resize(self, primary) -> None:
+        import copy
         import math
-        from leathercad.shapes import Rectangle, Ellipse, Polygon
+        from leathercad.shapes import Rectangle, Ellipse, EditablePath
         if self._resize_group_base is None:
             self._begin_group_resize(primary)
             return
@@ -2379,8 +2399,20 @@ class Canvas(QGraphicsView):
         sx = phx1 / phx0 if phx0 > 1e-9 else 1.0
         sy = phy1 / phy0 if phy0 > 1e-9 else 1.0
         s_uni = math.sqrt(max(sx * sy, 1e-9))
+        def scaled(p):
+            return Vec2(pc1x + (p.x - pc0x) * sx, pc1y + (p.y - pc0y) * sy)
+
         for it, base in members:
             if not _alive(it):
+                continue
+            if isinstance(it, HoleItem):
+                it.hole.point = scaled(base["pt"])
+                it.sync_from_model()
+                continue
+            if isinstance(it, StitchLineItem):
+                it.line.points = [scaled(q) for q in base["pts"]]
+                it.line.corner_points = [scaled(q) for q in base["cps"]]
+                it.sync_from_model()
                 continue
             m = it.model
             if isinstance(it, TextItem):
@@ -2407,8 +2439,24 @@ class Canvas(QGraphicsView):
                 elif isinstance(m, Ellipse):
                     m.rx = base["rx"] * sx
                     m.ry = base["ry"] * sy
-                elif isinstance(m, Polygon):
-                    m.points = [Vec2(p.x * sx, p.y * sy) for p in base["points"]]
+                elif "geom" in base:
+                    bt, t = base["t"], m.transform
+
+                    def remap(p):
+                        return t.inverse_apply(scaled(bt.apply(p)))
+                    if isinstance(m, EditablePath):
+                        nodes, edges = copy.deepcopy(base["geom"])
+                        m.nodes = [remap(p) for p in nodes]
+                        for e in edges:
+                            for attr in ("mid", "c1", "c2"):
+                                q = getattr(e, attr)
+                                if q is not None:
+                                    setattr(e, attr, remap(q))
+                        m.edges = edges
+                    else:
+                        m.points = [remap(p) for p in base["geom"]]
+                    if base["corner_radius"]:
+                        m.corner_radius = base["corner_radius"] * min(sx, sy)
             it.sync_from_model(recompute_holes=False)
 
     # -- tracked scene item lifetime -----------------------------------

@@ -2536,6 +2536,75 @@ def test_group_rotates_as_one_piece(qapp):
     assert sorted(where(m) for m in _all_models(c)) == sorted(start.values())
 
 
+def test_group_resize_stretches_every_member(qapp):
+    """Stretching a group scaled its rectangles but only shifted a line drawn
+    across it (so it no longer met the edges) and left its seams and loose
+    holes where they were."""
+    import math
+    from PySide6.QtCore import QPointF, QEvent, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import ResizeHandle
+    from leathercad.document import Document
+    from leathercad.shapes import PathShape
+    from leathercad.holes import LooseHole
+    from leathercad.stitchline import StitchLine
+    doc = Document()
+    doc.add_shape(Rectangle(width=100, height=100, layer="Cut"))
+    doc.add_shape(PathShape(points=[Vec2(-50, 0), Vec2(50, 0)], layer="Cut",
+                            transform=Transform(rotation=30.0)))
+    doc.holes.append(LooseHole(point=Vec2(40, 40)))
+    doc.add_stitch_line(StitchLine(points=[Vec2(-40, -40), Vec2(40, -40)]))
+    win = MainWindow(doc)
+    win.show()
+    c = win.canvas
+    c.rebuild()
+    c.snap_to_grid = c.snap_to_nodes = False
+    for i in c.scene_obj.items():
+        if c._item_model(i) is not None:
+            i.setSelected(True)
+    c.make_group()
+    c.scene_obj.clearSelection()
+    rect = [i for i in c.scene_obj.items()
+            if getattr(c._item_model(i), "kind", "") == "rectangle"][0]
+    c.press_select(rect)
+    grip = [h for h in c._resize_handles
+            if isinstance(h, ResizeHandle) and h.grip == (1, 0)][0]
+    line0 = [Vec2(p.x, p.y) for p in doc.shapes[1].world_polyline()[0]]
+    vpw = c.viewport()
+
+    def ev(kind, x, y, btns=Qt.LeftButton):
+        pt = QPointF(c.mapFromScene(QPointF(x, y)))
+        btn = Qt.NoButton if kind == QEvent.MouseMove else Qt.LeftButton
+        QApplication.sendEvent(vpw, QMouseEvent(kind, pt, vpw.mapToGlobal(pt),
+                                                btn, btns, Qt.NoModifier))
+        qapp.processEvents()
+    gx, gy = grip.pos().x(), grip.pos().y()
+    ev(QEvent.MouseButtonPress, gx, gy)
+    ev(QEvent.MouseMove, gx + 25, gy)
+    ev(QEvent.MouseMove, gx + 50, gy)
+    ev(QEvent.MouseButtonRelease, gx + 50, gy, Qt.NoButton)
+    d = win.doc
+    r = [s for s in d.shapes if s.kind == "rectangle"][0]
+    left = r.transform.x - r.width / 2
+    sx = r.width / 100.0
+    assert sx > 1.4
+
+    def mapped(p):                 # the stretch: left edge pinned at -50
+        return (left + (p.x + 50) * sx, p.y)
+    line = [s for s in d.shapes if s is not r][0].world_polyline()[0]
+    for a, b in zip(line, line0):
+        assert math.dist((a.x, a.y), mapped(b)) < 1e-6
+    assert math.dist((d.holes[0].point.x, d.holes[0].point.y),
+                     mapped(Vec2(40, 40))) < 1e-6
+    seam = d.stitch_lines[0].points
+    assert math.dist((seam[1].x, seam[1].y), mapped(Vec2(40, -40))) < 1e-6
+    win.undo()
+    assert win.doc.holes[0].point == Vec2(40, 40)
+    assert win.doc.stitch_lines[0].points[1] == Vec2(40, -40)
+
+
 def test_rotate_command_turns_a_mixed_selection(qapp):
     import math
     from leathercad_app.items import SelectionRotateHandle

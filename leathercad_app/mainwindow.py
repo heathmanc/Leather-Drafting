@@ -678,8 +678,16 @@ class MainWindow(QMainWindow):
         self._add(em, "Nest on sheet…", "Ctrl+Shift+N", self._nest_dialog)
         self._add(em, "Parameters…", "Ctrl+Shift+P", self._params_dialog)
         em.addSeparator()
-        self._add(em, "Card pocket stack…", None, self._gen_card_pockets)
-        self._add(em, "Zipper opening…", None, self._gen_zipper)
+        gm = em.addMenu("Generate")
+        self._add(gm, "Card pocket stack…", None, self._gen_card_pockets)
+        self._add(gm, "Zipper opening…", None, self._gen_zipper)
+        self._add(gm, "Strap / belt…", None, self._gen_strap)
+        self._add(gm, "Box gusset…", None, self._gen_box_gusset)
+        self._add(gm, "Curved gusset…", None, self._gen_curved_gusset)
+        self._add(gm, "Bifold wallet…", None, self._gen_bifold)
+        self._add(gm, "Key tab…", None, self._gen_key_tab)
+        self._add(gm, "Hemmed pocket (folded edge)…", None, self._gen_hem)
+        self._add(em, "Fold allowance…", None, self._fold_allowance)
         em.addSeparator()
         self._add(em, "Union (merge shapes)", "Ctrl+U",
                   lambda: self.canvas.boolean_selected("union"))
@@ -1312,6 +1320,252 @@ class MainWindow(QMainWindow):
                                     stitch_offset=offset.value())
         self.canvas.insert_generated(shapes=[slot], stitch_lines=[ring],
                                      group=True)
+
+    # -- generic generator dialog --------------------------------------
+    def _gen_dialog(self, title, hint, fields):
+        """A settings-remembering form. ``fields``: (key, label, kind, default,
+        extra, tip) with kind 'mm' (extra = (lo, hi)), 'int' (extra = (lo, hi)),
+        'choice' (extra = [(label, data), ...]) or 'bool'. Returns {key:
+        value} or None."""
+        from PySide6.QtWidgets import (QDialog, QFormLayout, QDialogButtonBox,
+                                       QVBoxLayout, QLabel, QCheckBox)
+        from .mathspin import MathSpinBox
+        from . import units as U
+        s = self._settings()
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        lay = QVBoxLayout(dlg)
+        lab = QLabel(hint)
+        lab.setWordWrap(True)
+        lay.addWidget(lab)
+        form = QFormLayout()
+        widgets = {}
+        for key, label, kind, default, extra, tip in fields:
+            skey = "gen_" + key
+            if kind == "mm":
+                w = MathSpinBox()
+                w.setRange(extra[0], extra[1])
+                w.setDecimals(2)
+                w.physical = True
+                U.register_spin(w)
+                w.setValue(s.value(skey, default, type=float))
+            elif kind == "int":
+                w = NoWheelSpinBox()
+                w.setRange(extra[0], extra[1])
+                w.setValue(int(s.value(skey, default, type=int)))
+            elif kind == "choice":
+                w = NoWheelComboBox()
+                for lbl, data in extra:
+                    w.addItem(lbl, data)
+                cur = s.value(skey, default)
+                i = w.findData(cur)
+                w.setCurrentIndex(i if i >= 0 else 0)
+            else:
+                w = QCheckBox()
+                w.setChecked(bool(s.value(skey, default, type=bool)))
+            w.setToolTip(tip)
+            form.addRow(label, w)
+            widgets[key] = (kind, w)
+        lay.addLayout(form)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                              | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return None
+        out = {}
+        for key, (kind, w) in widgets.items():
+            v = (w.value() if kind in ("mm", "int") else
+                 w.currentData() if kind == "choice" else w.isChecked())
+            s.setValue("gen_" + key, v)
+            out[key] = v
+        return out
+
+    def _gen_strap(self):
+        from leathercad.generators import strap
+        v = self._gen_dialog(
+            "Strap / belt",
+            "A strap with the tip you choose, an optional buckle-tongue slot "
+            "and turn-back fold at the buckle end, and a ladder of sizing "
+            "holes from the tip. Everything lands grouped.",
+            [("strap_len", "Length", "mm", 1050.0, (20, 5000), "Tip to buckle end"),
+             ("strap_w", "Width", "mm", 38.0, (3, 300), "Strap width"),
+             ("strap_tip", "Tip", "choice", "round",
+              [("Round", "round"), ("English point", "point"),
+               ("Square", "square")], "Shape of the free end"),
+             ("strap_buckle", "Buckle end", "choice", "square",
+              [("Square", "square"), ("Round", "round")], ""),
+             ("strap_slot", "Tongue slot length (0 = none)", "mm", 40.0,
+              (0, 200), "Length of the buckle-tongue slot along the strap"),
+             ("strap_slot_w", "Tongue slot width", "mm", 5.0, (1, 30), ""),
+             ("strap_slot_at", "Slot centre from buckle end", "mm", 50.0,
+              (0, 1000), ""),
+             ("strap_fold", "Turn-back fold from buckle end (0 = none)", "mm",
+              90.0, (0, 1000), "Where the strap folds back round the buckle"),
+             ("strap_holes", "Sizing holes", "int", 5, (0, 30), ""),
+             ("strap_pitch", "Hole spacing", "mm", 25.0, (3, 200), ""),
+             ("strap_hole_d", "Hole diameter", "mm", 4.5, (1, 30),
+              "Oval holes are 1.8x this long"),
+             ("strap_first", "First hole from tip", "mm", 90.0, (5, 1000), ""),
+             ("strap_oval", "Oval holes", "bool", False, None, ""),
+             ("strap_stitch", "Stitch the edges", "bool", False, None, "")])
+        if v:
+            self.canvas.insert_generated(shapes=strap(
+                v["strap_len"], v["strap_w"], v["strap_tip"], v["strap_buckle"],
+                v["strap_slot"], v["strap_slot_w"], v["strap_slot_at"],
+                v["strap_fold"], v["strap_holes"], v["strap_pitch"],
+                v["strap_hole_d"], v["strap_first"], v["strap_oval"],
+                v["strap_stitch"]), group=True)
+
+    def _gen_box_gusset(self):
+        from leathercad.generators import box_gusset
+        v = self._gen_dialog(
+            "Box gusset",
+            "One strip up one side of the bag, across the bottom and up the "
+            "other side, with fold lines at the bottom corners. Its length is "
+            "2 × height + width of the body it joins.",
+            [("gus_w", "Body width", "mm", 200.0, (10, 2000), ""),
+             ("gus_h", "Body height", "mm", 150.0, (10, 2000), ""),
+             ("gus_d", "Gusset depth (bag depth)", "mm", 60.0, (5, 500), ""),
+             ("gus_seam", "Stitch inset", "mm", 3.5, (1, 20), ""),
+             ("gus_stitch", "Stitched", "bool", True, None, "")])
+        if v:
+            self.canvas.insert_generated(shapes=box_gusset(
+                v["gus_w"], v["gus_h"], v["gus_d"], v["gus_seam"],
+                v["gus_stitch"]), group=True)
+
+    def _gen_curved_gusset(self):
+        from leathercad.generators import curved_gusset
+        v = self._gen_dialog(
+            "Curved gusset",
+            "A gusset strip for a body with rounded bottom corners: its length "
+            "is the sides + bottom + the two quarter circles, with marks where "
+            "each curve starts and ends. Stitch both at the same pitch and run "
+            "Check seam mates.",
+            [("cg_w", "Body width", "mm", 200.0, (10, 2000), ""),
+             ("cg_h", "Body height", "mm", 150.0, (10, 2000), ""),
+             ("cg_r", "Body corner radius", "mm", 40.0, (0, 500), ""),
+             ("cg_d", "Gusset depth", "mm", 60.0, (5, 500), ""),
+             ("cg_seam", "Stitch inset", "mm", 3.5, (1, 20), ""),
+             ("cg_stitch", "Stitched", "bool", True, None, "")])
+        if v:
+            self.canvas.insert_generated(shapes=curved_gusset(
+                v["cg_w"], v["cg_h"], v["cg_r"], v["cg_d"], v["cg_seam"],
+                v["cg_stitch"]), group=True)
+
+    def _gen_bifold(self):
+        from leathercad.generators import bifold_wallet
+        v = self._gen_dialog(
+            "Bifold wallet",
+            "Every piece of a classic bifold: outer shell with its spine fold, "
+            "a bill-pocket liner, and a stepped card-pocket stack for each "
+            "side, laid out in a row.",
+            [("bf_cw", "Card width", "mm", 85.6, (20, 200), "Bank card: 85.6"),
+             ("bf_ch", "Card height", "mm", 54.0, (20, 200), "Bank card: 54"),
+             ("bf_n", "Card pockets per side", "int", 3, (1, 8), ""),
+             ("bf_reveal", "Reveal step", "mm", 10.0, (4, 40), ""),
+             ("bf_margin", "Side margin", "mm", 6.0, (3, 30), ""),
+             ("bf_r", "Corner radius", "mm", 6.0, (0, 30), ""),
+             ("bf_bill", "Bill pocket height", "mm", 90.0, (60, 150), "")])
+        if v:
+            self.canvas.insert_generated(shapes=bifold_wallet(
+                v["bf_cw"], v["bf_ch"], v["bf_n"], v["bf_reveal"],
+                v["bf_margin"], v["bf_r"], v["bf_bill"]))
+
+    def _gen_key_tab(self):
+        from leathercad.generators import key_tab
+        v = self._gen_dialog(
+            "Key tab",
+            "A fold-over tab for a split ring: it folds in half at the middle "
+            "with a rivet / Chicago-screw hole through both ends.",
+            [("kt_w", "Width", "mm", 20.0, (5, 100), ""),
+             ("kt_len", "Length (flat)", "mm", 80.0, (20, 400), ""),
+             ("kt_slot", "Ring slot at the fold (0 = none)", "mm", 0.0, (0, 60),
+              "For a D-ring or a wide split ring"),
+             ("kt_rivet", "Rivet hole diameter", "mm", 3.0, (1, 10), ""),
+             ("kt_from", "Rivet hole from each end", "mm", 10.0, (3, 100), ""),
+             ("kt_tip", "End shape", "choice", "round",
+              [("Round", "round"), ("Square", "square")], "")])
+        if v:
+            self.canvas.insert_generated(shapes=key_tab(
+                v["kt_w"], v["kt_len"], v["kt_slot"], v["kt_rivet"],
+                v["kt_from"], v["kt_tip"]), group=True)
+
+    def _gen_hem(self):
+        from leathercad.generators import hemmed_pocket
+        v = self._gen_dialog(
+            "Hemmed pocket",
+            "A pocket whose top edge folds over: cut taller by the hem plus "
+            "the fold's bend allowance, with a fold line where the hem turns "
+            "and stitching on the three sewn edges only.",
+            [("hp_w", "Width", "mm", 100.0, (10, 1000), ""),
+             ("hp_h", "Finished height", "mm", 60.0, (10, 1000), ""),
+             ("hp_hem", "Hem depth", "mm", 12.0, (3, 100), ""),
+             ("hp_r", "Corner radius", "mm", 5.0, (0, 30), ""),
+             ("hp_seam", "Stitch inset", "mm", 3.5, (1, 20), ""),
+             ("hp_t", "Leather thickness", "mm", 1.5, (0.3, 8), "")])
+        if v:
+            self.canvas.insert_generated(shapes=hemmed_pocket(
+                v["hp_w"], v["hp_h"], v["hp_hem"], v["hp_r"], v["hp_seam"],
+                3.85, v["hp_t"]), group=True)
+
+    def _fold_allowance(self):
+        """Lengthen the selected piece(s) across their fold lines by each
+        fold's bend allowance, so a piece drawn finished-size cuts true."""
+        from leathercad.folds import folds_crossing, fold_allowance
+        from leathercad_app.items import ShapeItem
+        c = self.canvas
+        sel = [it for it in c.selected_items() if isinstance(it, ShapeItem)]
+        folds_all = [s for s in self.doc.shapes if s.is_fold_line]
+        pieces = [it for it in sel if not it.model.is_fold_line
+                  and it.model.local_path().closed]
+        picked_folds = [it.model for it in sel if it.model.is_fold_line]
+        targets = []
+        for it in pieces:
+            fl = folds_crossing(it.model, picked_folds or folds_all)
+            if fl:
+                targets.append((it, fl))
+        if not targets:
+            QMessageBox.information(
+                self, "Fold allowance",
+                "Select a closed piece that a fold line crosses (right-click "
+                "a line across it → Mark as fold line first). Each fold then "
+                "adds its bend allowance to the piece.")
+            return
+        v = self._gen_dialog(
+            "Fold allowance",
+            "Each fold line adds angle × (inside radius + ½ thickness) to the "
+            "piece: the flap side slides away from the fold and the crease "
+            "moves to the middle of the bend. A 180° fold in 2 mm leather "
+            f"adds {fold_allowance(180, 2.0):.2f} mm.",
+            [("fa_t", "Leather thickness", "mm", 2.0, (0.2, 10), ""),
+             ("fa_r", "Inside bend radius (0 = sharp crease)", "mm", 0.0,
+              (0, 20), "Dial up for a rolled or padded edge")])
+        if not v:
+            return
+        from leathercad.folds import apply_fold_allowance
+        c._suppress_commit = True
+        total = 0.0
+        n = 0
+        for it, fl in targets:
+            res = apply_fold_allowance(self.doc, it.model, fl, v["fa_t"],
+                                       v["fa_r"])
+            if not res:
+                continue
+            new = res[-1][2]
+            if new is not it.model:              # converted to nodes: swap in
+                idx = self.doc.shapes.index(it.model)
+                self.doc.shapes[idx] = new
+                c._remove_item(it)
+                c._add_item(ShapeItem(new, c))
+            total += sum(a for _f, a, _p in res)
+            n += len(res)
+        c._suppress_commit = False
+        c.rebuild()
+        self.canvas._emit_commit()
+        self.statusBar().showMessage(
+            f"Fold allowance: {n} fold(s), {total:.2f} mm added in all", 6000)
 
     def _params_dialog(self):
         """Edit the document's named parameters (usable in any numeric field);

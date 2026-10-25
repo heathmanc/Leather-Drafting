@@ -458,6 +458,30 @@ ring shows the keep-out when the part is selected; **Properties → Stitch
 keep-out** changes it (0 removes it), and **right-click → Stitch keep-out…**
 gives *any* shape one, so a hole you drew yourself works the same way.
 
+### Fold allowance
+
+Leather bends round a radius, so a piece that folds needs to be cut
+**longer** than it measures finished — by *angle × (inside radius + ½
+thickness)* per fold (3.1 mm for a 180° fold in 2 mm leather). Draw the
+piece finished-size, mark the crease (right-click a line across it → **Mark
+as fold line**), select the piece and choose **Edit → Fold allowance…**.
+Give it the thickness (and an inside radius for a rolled edge) and the
+flap side slides away from the fold by the allowance, taking any holes,
+seams and hardware on it along; the fold line moves to the middle of the
+bend zone. The 3D fold preview uses the same allowance.
+
+### Generators
+
+**Edit → Generate** drafts whole parts from a few numbers, grouped and
+placed at the view centre: **Card pocket stack**, **Zipper opening**,
+**Strap / belt** (round, English-point or square tip, buckle-tongue slot,
+turn-back fold, hole ladder), **Box gusset** and **Curved gusset** (strip
+length worked out from the body, with corner folds or curve marks),
+**Bifold wallet** (shell, spine fold, bill liner and a pocket stack per
+side), **Key tab** (fold-over ring tab with rivet holes) and **Hemmed
+pocket** (folded top edge: cut taller by the hem plus its bend allowance,
+mouth left unsewn). Every dialog remembers your last values.
+
 ## 8. Precision drawing: snapping and guides
 
 Two independent toggles in the top toolbar:

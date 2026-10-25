@@ -23,6 +23,8 @@ from .geometry import Vec2
 from .shapes import arc_through
 
 _EPS = 1e-9
+# How close (mm) a cut line's loose end must come to an outline to cut it.
+TOUCH_TOL = 0.05
 
 Segment = Tuple[str, List[Vec2]]
 
@@ -131,6 +133,16 @@ def intersection_arclengths(segments: Sequence[Segment],
                 x = _seg_intersect(fl[j], fl[j + 1], c0, c1)
                 if x is not None:
                     hits.append(cum[pi] + p.frac_of(x) * p.length)
+    # A cut line drawn to END on the outline counts as touching it even when
+    # it stops a hair short: a field rounded to 4 decimals, or a move, can
+    # leave it 0.0001 mm off, invisible yet enough to miss a strict crossing.
+    for poly in cutters:
+        if len(poly) < 2 or (poly[0] - poly[-1]).length() <= _EPS:
+            continue                                  # closed: no loose ends
+        for end in (poly[0], poly[-1]):
+            s, d = _nearest(pieces, cum, end)
+            if d <= TOUCH_TOL:
+                hits.append(s)
     return _dedup(sorted(hits), max(0.02, 1e-4 * total)), total
 
 
@@ -266,6 +278,26 @@ def _project(pieces, cum, target):
                 best_d = d
                 best_s = cum[pi] + p.frac_of(proj) * p.length
     return best_s
+
+
+def _nearest(pieces, cum, target):
+    """(arc-length, distance) of the point on the entity nearest ``target``,
+    measured on the true lines and arcs rather than their flattening."""
+    best_s, best_d = 0.0, float("inf")
+    for pi, p in enumerate(pieces):
+        if p.center is None:
+            f = p.frac_of(target)
+            q = p.a.lerp(p.b, f)
+        else:
+            ang = math.atan2(target.y - p.center.y, target.x - p.center.x)
+            f = _frac_along(ang - p.ang0, p.sweep)
+            if f > 1.0:                       # off the sweep: nearer end
+                f = 0.0 if (target - p.a).length() < (target - p.b).length() else 1.0
+            q = p.point_at(f)
+        d = (q - target).length()
+        if d < best_d:
+            best_d, best_s = d, cum[pi] + f * p.length
+    return best_s, best_d
 
 
 def _walk(pieces, cum, total, start, length):

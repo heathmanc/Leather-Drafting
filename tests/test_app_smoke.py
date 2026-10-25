@@ -9,6 +9,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from leathercad.geometry import Vec2  # noqa: E402
 from leathercad.shapes import Rectangle, Transform  # noqa: E402
 from leathercad.stitchsettings import StitchSettings  # noqa: E402
 
@@ -123,6 +124,59 @@ def test_geometry_fields_keep_four_decimals(qapp):
     gaps = [(a.point - b.point).length() for a, b in
             zip(item._holes.holes, item._holes.holes[1:])]
     assert gaps and max(abs(g - 5.0) for g in gaps) < 2e-5
+
+
+def test_editing_one_field_leaves_the_others_exact(qapp):
+    # Every panel edit wrote ALL fields back from their rounded display, so
+    # changing the layer moved a shape at x=604.113938 to 604.1139 -- a
+    # 0.00005 mm gap that stopped Trim seeing the lines drawn to meet it --
+    # and snapped a 12.345 deg rotation (or a line's angle) to 1 decimal.
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    from leathercad.shapes import PathShape
+
+    win = MainWindow(Document())
+    props = win.properties
+    rect = win.canvas.add_shape(Rectangle(
+        width=171.06563, height=196.06561, corner_radius=10.53284,
+        transform=Transform(x=604.1139381, y=-76.0086097, rotation=12.345),
+        layer="Cut"))
+    props.show_selection([rect])
+    props.g_stitch.setChecked(True)               # an unrelated edit
+    t, m = rect.model.transform, rect.model
+    assert (t.x, t.y, t.rotation) == (604.1139381, -76.0086097, 12.345)
+    assert (m.width, m.height, m.corner_radius) == (171.06563, 196.06561,
+                                                    10.53284)
+    props.pos_x.setValue(600.0)                   # a real edit still applies
+    props.pos_x.editingFinished.emit()
+    assert t.x == 600.0 and t.y == -76.0086097
+
+    line = win.canvas.add_shape(PathShape(
+        points=[Vec2(0, 0), Vec2(30.123456, 17.654321)], layer="Cut"))
+    props.show_selection([line])
+    props.g_stitch.setChecked(True)
+    p1 = line.model.transform.apply(line.model.points[1])
+    assert (p1.x, p1.y) == (30.123456, 17.654321)
+
+
+def test_trim_cuts_at_a_line_ending_a_hair_short(qapp):
+    # The user's duplicated pocket: the scoop line ends 0.00005 mm inside the
+    # outline, so Trim saw no crossing and took the whole outline.
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+    from leathercad.shapes import PathShape
+
+    win = MainWindow(Document())
+    c = win.canvas
+    c.add_shape(Rectangle(width=100, height=100, layer="Cut"))
+    cut = c.add_shape(PathShape(
+        points=[Vec2(-49.99995, 20), Vec2(49.99995, 20)], layer="Cut"))
+    c._do_trim(Vec2(0, 50))                       # the edge beyond the line
+    outlines = [s for s in c.doc.shapes if s is not cut.model]
+    assert len(outlines) == 1
+    pts = outlines[0].world_polyline()[0]
+    assert max(p.y for p in pts) <= 20 + 1e-6     # top gone, sides end at 20
+    assert min(p.y for p in pts) == -50
 
 
 def test_align_left(qapp):

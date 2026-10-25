@@ -29,6 +29,20 @@ def test_trim_open_line_keeps_far_side():
     assert (ax, bx) == (0.0, 40.0)
 
 
+def test_cut_line_ending_a_hair_short_still_cuts():
+    # A line drawn to end on the outline can stop 0.0001 mm short after a
+    # rounded move; it must still cut. A real gap must not.
+    sq = [("line", [V(0, 0), V(100, 0)]), ("line", [V(100, 0), V(100, 100)]),
+          ("line", [V(100, 100), V(0, 100)]), ("line", [V(0, 100), V(0, 0)])]
+    near = [[V(0.00005, 60), V(99.99995, 60)]]
+    res = trim(sq, near, V(50, 100), closed=True)
+    assert res is not None and len(res) == 1
+    ys = [p.y for _k, pts in res[0] for p in pts]
+    assert max(ys) <= 60 + 1e-6
+    hits, _ = intersection_arclengths(sq, [[V(0.5, 60), V(99.5, 60)]])
+    assert hits == []
+
+
 def test_trim_open_line_middle_splits_in_two():
     seg = [("line", [V(0, 0), V(100, 0)])]
     cut = [[V(30, -5), V(30, 5)], [V(70, -5), V(70, 5)]]

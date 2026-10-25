@@ -48,6 +48,17 @@ def _spin(lo, hi, step=1.0, decimals=2, suffix=" mm") -> QDoubleSpinBox:
     return s
 
 
+def _kept(spin, cur: float) -> float:
+    """The spinbox's value, or ``cur`` unchanged if the box still shows ``cur``
+    as loaded. _apply writes every field back whenever any one changes; without
+    this, editing (say) the layer would snap the position to the 4-decimal
+    display and nudge the shape off whatever was drawn to meet it."""
+    step = 0.5 * 10.0 ** -spin.decimals()
+    if abs(spin.value() - round(cur, spin.decimals())) < step:
+        return cur
+    return spin.value()
+
+
 def _is_line(sh) -> bool:
     """A straight 2-point open path (a line or construction line)."""
     return (isinstance(sh, PathShape) and len(sh.points) == 2
@@ -633,9 +644,7 @@ class PropertiesPanel(QWidget):
             return
         if isinstance(it, ShapeItem) and it.model.baked_holes:
             sh = it.model
-            sh.transform.x = self.pos_x.value()
-            sh.transform.y = self.pos_y.value()
-            sh.transform.rotation = self.rot.value()
+            self._apply_transform(sh)
             sh.transform.mirror_x = self.mirror.isChecked()
             sh.opacity = self.opacity.value() / 100.0
             sh.layer = self.layer_combo.currentData() or sh.layer
@@ -650,9 +659,7 @@ class PropertiesPanel(QWidget):
             return
         if isinstance(it, ShapeItem):
             sh = it.model
-            sh.transform.x = self.pos_x.value()
-            sh.transform.y = self.pos_y.value()
-            sh.transform.rotation = self.rot.value()
+            self._apply_transform(sh)
             sh.transform.mirror_x = self.mirror.isChecked()
             sh.opacity = self.opacity.value() / 100.0
             sh.layer = self.layer_combo.currentData() or sh.layer
@@ -673,22 +680,34 @@ class PropertiesPanel(QWidget):
         self.canvas.refresh_item(it)
         self._update_readout()
 
+    def _apply_transform(self, sh):
+        t = sh.transform
+        t.x = _kept(self.pos_x, t.x)
+        t.y = _kept(self.pos_y, t.y)
+        t.rotation = _kept(self.rot, t.rotation)
+
     def _apply_shape_geometry(self, sh):
         if isinstance(sh, Rectangle):
-            sh.width = self.w.value()
-            sh.height = self.h.value()
-            sh.corner_radius = self.corner.value()
+            sh.width = _kept(self.w, sh.width)
+            sh.height = _kept(self.h, sh.height)
+            sh.corner_radius = _kept(self.corner, sh.corner_radius)
         elif isinstance(sh, (Circle, Ellipse)):
-            sh.rx = self.rx.value()
-            sh.ry = self.ry.value()
+            sh.rx = _kept(self.rx, sh.rx)
+            sh.ry = _kept(self.ry, sh.ry)
         elif isinstance(sh, Polygon):
-            sh.corner_radius = self.poly_radius.value()
+            sh.corner_radius = _kept(self.poly_radius, sh.corner_radius)
         elif _is_line(sh):
             import math
             from leathercad.geometry import Vec2
             p0 = sh.transform.apply(sh.points[0])       # keep the first point
-            length = self.line_len.value()
-            ang = math.radians(self.line_angle.value())
+            p1 = sh.transform.apply(sh.points[1])
+            cur_len = math.hypot(p1.x - p0.x, p1.y - p0.y)
+            cur_ang = math.degrees(math.atan2(p1.y - p0.y, p1.x - p0.x))
+            length = _kept(self.line_len, cur_len)
+            deg = _kept(self.line_angle, cur_ang)
+            if length == cur_len and deg == cur_ang:
+                return                      # untouched: leave the end exact
+            ang = math.radians(deg)
             p1 = Vec2(p0.x + length * math.cos(ang),
                       p0.y + length * math.sin(ang))
             sh.points[1] = sh.transform.inverse_apply(p1)

@@ -1068,6 +1068,13 @@ class Canvas(QGraphicsView):
         """Snap a dragged shape so one of its nodes lands on a nearby node."""
         if not self.snap_to_nodes or self._snap_cache is None:
             return value
+        # Only the item the mouse is actually dragging snaps. Positions set by
+        # code -- the scene rebuild after undo/redo, align/distribute, typed
+        # coordinates -- must land exactly where they are put: with stale drag
+        # state left behind, a rebuild used to pull parts onto old snap
+        # targets, so undo put them "where they never were".
+        if self.scene_obj.mouseGrabberItem() is not item:
+            return value
         gd = self._group_drag
         if gd is not None and item is not gd["leader"]:
             return value          # members are driven from the leader (below)
@@ -2351,6 +2358,9 @@ class Canvas(QGraphicsView):
     # -- document <-> scene --------------------------------------------
     def rebuild(self) -> None:
         """Rebuild all items from the document (after open/load)."""
+        # any drag in flight refers to items about to be freed: drop its state
+        # so nothing placed below is snapped against stale targets
+        self.end_move_snap()
         self.scene_obj.clearSelection()   # drop selection before freeing items
         self.selectionChangedSig.emit()   # let panels release their item refs
         self.scene_obj.clear()

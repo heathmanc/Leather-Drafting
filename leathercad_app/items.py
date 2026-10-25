@@ -171,6 +171,9 @@ class VertexHandle(QGraphicsItem):
             painter.drawRect(QRectF(-s, -s, 2 * s, 2 * s))
 
     def mousePressEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            event.ignore()      # right-click: the context menu, never a drag
+            return
         if (event.modifiers() & Qt.AltModifier) and self.canvas is not None:
             self.canvas.delete_node(self)           # Alt-click removes the node
             event.accept()
@@ -299,6 +302,11 @@ class ResizeHandle(QGraphicsItem):
         # Drive the resize by hand (below) instead of Qt's ItemIsMovable move --
         # the default mouseMoveEvent also drags every *selected* item, which
         # would translate the shape we're resizing. Just grab the mouse here.
+        if event.button() != Qt.LeftButton:
+            # a right-click's release goes to the context menu: arming a
+            # resize (and its snapping) here would leave it armed for good
+            event.ignore()
+            return
         self._dragged = False
         if self.canvas is not None:
             self.canvas._active_resize = self
@@ -718,7 +726,10 @@ class TextItem(QGraphicsItem):
     def mousePressEvent(self, event):
         if self.canvas is not None:
             self.canvas.press_select(self, event)   # select this (+group) only
-            self.canvas.begin_move_snap(self)
+            # only a left press starts a move: a right-click's release goes to
+            # the context menu, so a drag armed here would never be ended
+            if event.button() == Qt.LeftButton:
+                self.canvas.begin_move_snap(self)
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -872,7 +883,10 @@ class HoleItem(QGraphicsItem):
     def mousePressEvent(self, event):
         if self.canvas is not None:
             self.canvas.press_select(self, event)   # select this (+group) only
-            self.canvas.begin_move_snap(self)
+            # only a left press starts a move: a right-click's release goes to
+            # the context menu, so a drag armed here would never be ended
+            if event.button() == Qt.LeftButton:
+                self.canvas.begin_move_snap(self)
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -1090,7 +1104,10 @@ class ShapeItem(QGraphicsItem):
     def mousePressEvent(self, event):
         if self.canvas is not None:
             self.canvas.press_select(self, event)   # select this (+group) only
-            self.canvas.begin_move_snap(self)
+            # only a left press starts a move: a right-click's release goes to
+            # the context menu, so a drag armed here would never be ended
+            if event.button() == Qt.LeftButton:
+                self.canvas.begin_move_snap(self)
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -1458,6 +1475,9 @@ class RotateHandle(QGraphicsItem):
 
     def mousePressEvent(self, event):
         import math
+        if event.button() != Qt.LeftButton:
+            event.ignore()      # right-click: the context menu, never a spin
+            return
         o = self._origin()
         sp = event.scenePos()
         self._start_ang = math.degrees(math.atan2(sp.y() - o.y, sp.x() - o.x))

@@ -257,8 +257,10 @@ def test_drag_snap_grid_still_snaps_exactly(qapp):
              if getattr(s, "model", None) is not None and s is not it]
     target = other[0].model.transform        # drag so centres coincide
     c.begin_move_snap(it)
+    it.grabMouse()   # a real drag: the mouse holds the item
     res = c.snap_move(it, QPointF(target.x - 0.9 / c._zoom,
                                   target.y + 0.9 / c._zoom))
+    it.ungrabMouse()
     c.end_move_snap()
     assert abs(res.x() - target.x) < 1e-6    # locked onto the other centre
     assert abs(res.y() - target.y) < 1e-6

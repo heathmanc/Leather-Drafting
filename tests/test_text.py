@@ -411,6 +411,7 @@ def test_text_is_a_snap_target_and_snaps_by_its_box():
     c.scene_obj.clearSelection()
     txt.setSelected(True)
     c.begin_move_snap(txt)
+    txt.grabMouse()   # a real drag: the mouse holds the item
     off = txt._snap_offsets[0]                       # bring a box handle ~0.4mm off
     req = QPointF(corner.x - off.x + 0.3, corner.y - off.y + 0.3)
     snapped = c.snap_move(txt, req)
@@ -419,4 +420,5 @@ def test_text_is_a_snap_target_and_snaps_by_its_box():
               for o in txt._snap_offsets]
     # a box handle came to rest exactly on one of the rect's nodes
     assert any(near(p, rn) for p in landed for rn in rect_nodes)
+    txt.ungrabMouse()
     c.end_move_snap()

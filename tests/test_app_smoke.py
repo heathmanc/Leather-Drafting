@@ -551,12 +551,14 @@ def test_magnetic_node_snap_on_move(qapp):
     b = c.add_shape(Rectangle(width=20, height=20, transform=Transform(x=100, y=100), layer="Cut"))
     c.scene_obj.clearSelection(); b.setSelected(True)
     c.begin_move_snap(b)
+    b.grabMouse()   # a real drag: the mouse holds the item
     # dragging B so its +10,+10 corner nears A's corner (30,20) snaps exactly
     res = c.snap_move(b, QPointF(20.6, 10.5))
     assert abs(res.x() - 20) < 1e-6 and abs(res.y() - 10) < 1e-6
     # far away: unchanged (free movement)
     res2 = c.snap_move(b, QPointF(300, 300))
     assert (res2.x(), res2.y()) == (300, 300)
+    b.ungrabMouse()
     c.end_move_snap()
     assert c._snap_cache is None
 
@@ -1360,6 +1362,7 @@ def test_circle_drag_locks_center(qapp):
                  if getattr(it, "model", None) is circ)
     assert getattr(citem, "_center_snap_priority", False) is True
     c.begin_move_snap(citem)
+    citem.grabMouse()   # a real drag: the mouse holds the item
     # rect corner is at (50, 50); nudging the centre there must lock the centre
     res = c.snap_move(citem, QPointF(49.6, 49.6))
     assert round(res.x(), 2) == 50.0 and round(res.y(), 2) == 50.0
@@ -1386,6 +1389,7 @@ def test_loose_hole_drag_snaps_center(qapp):
                  if getattr(it, "hole", None) is hole)
     assert getattr(hitem, "_center_snap_priority", False) is True
     c.begin_move_snap(hitem)
+    hitem.grabMouse()   # a real drag: the mouse holds the item
     res = c.snap_move(hitem, QPointF(49.6, 49.6))   # toward the (50, 50) corner
     assert round(res.x(), 2) == 50.0 and round(res.y(), 2) == 50.0
 
@@ -2229,6 +2233,92 @@ def test_double_click_through_resize_grips_edits_the_curve(qapp):
         Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
     assert c._edit_owner is it                         # node-edit entered
     assert any(getattr(h.node, "is_ctrl", False) for h in c._handles)
+
+
+def _undo_rig(qapp):
+    from PySide6.QtCore import QPointF, QEvent, Qt, QTimer
+    from PySide6.QtGui import QMouseEvent, QContextMenuEvent
+    from PySide6.QtWidgets import QApplication, QMenu
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app import canvas as cm
+    from leathercad.document import Document
+    from leathercad.shapes import Rectangle, Transform
+
+    doc = Document()
+    for k in range(4):        # a row of parts 3 mm apart: within snap range
+        doc.add_shape(Rectangle(width=30, height=20, layer="Cut",
+                                transform=Transform(x=k * 33.0, y=0)))
+    win = MainWindow(doc)
+    win.show()
+    qapp.processEvents()
+    c = win.canvas
+    c.tool = cm.SELECT
+    vpw = c.viewport()
+
+    def send(kind, x, y, btn=Qt.LeftButton, btns=Qt.LeftButton):
+        pt = QPointF(c.mapFromScene(QPointF(x, y)))
+        QApplication.sendEvent(vpw, QMouseEvent(kind, pt, vpw.mapToGlobal(pt),
+                                                btn, btns, Qt.NoModifier))
+        qapp.processEvents()
+
+    def drag(x0, y0, x1, y1):
+        send(QEvent.MouseButtonPress, x0, y0)
+        for t in (0.25, 0.5, 0.75, 1.0):
+            send(QEvent.MouseMove, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t,
+                 Qt.NoButton, Qt.LeftButton)
+        send(QEvent.MouseButtonRelease, x1, y1, Qt.LeftButton, Qt.NoButton)
+
+    def right_click(x, y):
+        # the context menu takes the release, as in the real app
+        QTimer.singleShot(50, lambda: [m.close() for m in
+                                       QApplication.topLevelWidgets()
+                                       if isinstance(m, QMenu) and m.isVisible()])
+        send(QEvent.MouseButtonPress, x, y, Qt.RightButton, Qt.RightButton)
+        pt = c.mapFromScene(QPointF(x, y))
+        QApplication.sendEvent(vpw, QContextMenuEvent(
+            QContextMenuEvent.Mouse, pt, vpw.mapToGlobal(pt)))
+        qapp.processEvents()
+
+    def positions():
+        return sorted((round(s.transform.x, 6), round(s.transform.y, 6))
+                      for s in win.doc.shapes)
+    return win, c, drag, right_click, positions
+
+
+def test_undo_after_a_right_click_puts_parts_back_exactly(qapp):
+    """Undo/redo restore EXACT positions. A right-click on a part (or one of
+    its resize grips) used to arm drag snapping that the context menu's
+    release never disarmed; the undo's scene rebuild then snapped parts onto
+    stale targets -- here x=33 came back as x=36, a place it had never been."""
+    win, c, drag, right_click, positions = _undo_rig(qapp)
+    states = [positions()]
+    drag(15, 10, 15, 50)
+    states.append(positions())
+    drag(48, 10, 48, -40)
+    states.append(positions())
+    right_click(48, -40)              # lands on the moved part's resize grip
+    assert c._snap_cache is None      # nothing left armed
+    win.undo()
+    assert positions() == states[1]
+    win.undo()
+    assert positions() == states[0]
+    win.redo()
+    assert positions() == states[1]
+
+
+def test_code_placed_parts_never_snap(qapp):
+    """Only the item the mouse is dragging snaps; a part moved by code lands
+    exactly where it's put even if drag state was somehow left behind."""
+    from PySide6.QtCore import QPointF
+    from leathercad_app.items import ShapeItem
+    win, c, _drag, _rc, _pos = _undo_rig(qapp)
+    items = sorted((i for i in c.scene_obj.items() if isinstance(i, ShapeItem)),
+                   key=lambda i: i.model.transform.x)
+    c.begin_move_snap(items[0])       # stale drag state, no mouse grab
+    assert c._snap_cache is not None
+    items[1].setPos(QPointF(34.0, 0.0))   # 1 mm from snapping onto part 0
+    assert (items[1].model.transform.x, items[1].model.transform.y) == (34.0, 0.0)
+    c.end_move_snap()
 
 
 def _multi_click(c, pts):

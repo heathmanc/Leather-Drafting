@@ -309,8 +309,10 @@ point-by-point:
 * **Green dots** — bezier control handles. Drag to reshape the curve (these
   move freely, no snapping).
 
-* **Add a node**: double-click anywhere on a straight edge — a new vertex
-  appears right there (arcs already have their midpoint handle).
+* **Add a node**: double-click anywhere on an edge — straight, arc or
+  bezier — and a new vertex appears right there. The edge is split into two
+  of the same kind, so the outline doesn't move: an arc becomes two arcs on
+  the same circle (each with its own orange midpoint), a bezier two beziers.
 * **Delete a node**: **Alt-click** it. Alt-clicking an arc's orange midpoint
   handle straightens that arc into a line. Shapes keep their minimum point
   count, so you can't delete a triangle down to nothing.

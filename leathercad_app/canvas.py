@@ -2478,23 +2478,19 @@ class Canvas(QGraphicsView):
                     return False
                 sh.points.insert(i + 1, proj)
             elif isinstance(sh, EditablePath):
-                n = len(sh.nodes)
-                best = (None, None, float("inf"))
-                for i, e in enumerate(sh.edges):
-                    if e.kind != "line":
-                        continue          # arcs/beziers have their own handles
-                    a, b = sh.nodes[i], sh.nodes[(i + 1) % n]
-                    _idx, proj, d = self._nearest_segment([a, b], False, local)
-                    if proj is not None and d < best[2]:
-                        best = (i, proj, d)
-                i, proj, d = best
-                if i is None or d > thr:
-                    self.statusMessage.emit(
-                        "Add nodes on straight edges (arcs already have a "
-                        "midpoint handle)")
+                from leathercad.modify import nearest_on_edge, split_edge_at
+                # any edge -- line, arc or bezier -- split where you clicked,
+                # keeping its kind so the outline stays exactly as it was
+                best = None
+                for i in range(len(sh.edges)):
+                    f, _q, d = nearest_on_edge(sh, i, local)
+                    if best is None or d < best[2]:
+                        best = (i, f, d)
+                if best is None or best[2] > thr:
                     return False
-                sh.nodes.insert(i + 1, proj)
-                sh.edges.insert(i, Edge("line"))
+                if not split_edge_at(sh, best[0], best[1]):
+                    self.statusMessage.emit("There's already a node there")
+                    return False
             else:
                 return False
         else:

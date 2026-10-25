@@ -422,6 +422,45 @@ def _apply_blend(ep: EditablePath, plan) -> None:
     ep.edges[:] = new_edges
 
 
+def nearest_on_edge(ep: EditablePath, i: int, p: Vec2):
+    """``(f, point, distance)``: the point of edge ``i`` (line, arc or bezier,
+    on its TRUE geometry) closest to ``p``, as parameter f in [0, 1]."""
+    n = len(ep.nodes)
+    a, b = ep.nodes[i], ep.nodes[(i + 1) % n]
+    kind, pt = _edge_eval(a, b, ep.edges[i])
+    if kind == "line":
+        ab = b - a
+        L2 = ab.dot(ab)
+        f = 0.0 if L2 < 1e-24 else max(0.0, min(1.0, (p - a).dot(ab) / L2))
+    else:
+        steps = 64
+        f = min((j / steps for j in range(steps + 1)),
+                key=lambda t: (pt(t) - p).length())
+        f = _refine_param(ep, i, max(0.0, f - 1.0 / steps),
+                          min(1.0, f + 1.0 / steps), p)
+    q = pt(f)
+    return f, q, (q - p).length()
+
+
+def split_edge_at(ep: EditablePath, i: int, f: float) -> bool:
+    """Add a node on edge ``i`` at parameter ``f``, splitting the edge into
+    two of the SAME kind so the outline doesn't move: a line into two lines,
+    an arc into two arcs on the same circle, a bezier into two (de
+    Casteljau). False if that point is (practically) an existing node."""
+    n = len(ep.nodes)
+    a, b = ep.nodes[i], ep.nodes[(i + 1) % n]
+    e = ep.edges[i]
+    _kind, pt = _edge_eval(a, b, e)
+    q = pt(f)
+    if (q - a).length() < 1e-3 or (q - b).length() < 1e-3:
+        return False
+    head = _split_edge(a, b, e, f, "head")
+    tail = _split_edge(a, b, e, f, "tail")
+    ep.nodes.insert(i + 1, q)
+    ep.edges[i:i + 1] = [head, tail]
+    return True
+
+
 def chamfer_vertex(ep: EditablePath, i: int, setback: float) -> bool:
     """Bevel vertex ``i``: cut it back ``setback`` mm along both edges."""
     frame = _corner_frame(ep, i)

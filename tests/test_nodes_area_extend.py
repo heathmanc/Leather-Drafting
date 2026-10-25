@@ -55,7 +55,7 @@ def test_insert_node_on_polygon_edge(qapp):
     assert not c.insert_node_at(Vec2(200, 200))      # nowhere near an edge
 
 
-def test_insert_node_on_editablepath_line_only(qapp):
+def test_insert_node_on_editablepath_lines_and_curves(qapp):
     doc = Document()
     ep = EditablePath.from_bezier([Vec2(0, 0), Vec2(40, 0)],
                                   [Vec2(10, 10), Vec2(10, -10)], closed=False)
@@ -73,7 +73,13 @@ def test_insert_node_on_editablepath_line_only(qapp):
     assert c.insert_node_at(Vec2(60, 0))             # on the straight edge
     assert len(ep.nodes) == 4
     assert [e.kind for e in ep.edges] == ["bezier", "line", "line"]
-    assert not c.insert_node_at(Vec2(20, 8))         # on the bezier: refused
+    # on the bezier: split into two beziers tracing the same curve
+    from leathercad.modify import nearest_on_edge
+    _f, on_curve, _d = nearest_on_edge(ep, 0, Vec2(20, 4))
+    assert c.insert_node_at(on_curve)
+    assert [e.kind for e in ep.edges] == ["bezier", "bezier", "line", "line"]
+    assert (ep.nodes[1] - on_curve).length() < 1e-9
+    assert not c.insert_node_at(Vec2(20, 30))        # nowhere near an edge
 
 
 # -- delete nodes --------------------------------------------------------------
@@ -161,3 +167,81 @@ def test_extend_line_to_outline(qapp):
     c._do_extend(Vec2(before.x, before.y))
     after = line.transform.apply(line.points[0])
     assert abs(after.x - before.x) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# Adding a node on an arc or bezier (double-click while node-editing). It used
+# to work on straight edges only; arcs/beziers were refused.
+# ---------------------------------------------------------------------------
+def test_split_arc_keeps_the_same_circle():
+    import math
+    from leathercad.geometry import Vec2
+    from leathercad.shapes import EditablePath, Edge, arc_through
+    from leathercad.modify import nearest_on_edge, split_edge_at
+    ep = EditablePath(nodes=[Vec2(-30, 0), Vec2(30, 0)],
+                      edges=[Edge("arc", mid=Vec2(0, 30))], closed=False)
+    click = Vec2(30 * math.cos(math.radians(60)) + 0.2,
+                 30 * math.sin(math.radians(60)))      # a little off the arc
+    f, q, d = nearest_on_edge(ep, 0, click)
+    assert abs(q.length() - 30) < 1e-9 and d < 0.3
+    assert split_edge_at(ep, 0, f)
+    assert [e.kind for e in ep.edges] == ["arc", "arc"]
+    assert (ep.nodes[1] - q).length() < 1e-12
+    for k in range(2):
+        c, r, *_ = arc_through(ep.nodes[k], ep.edges[k].mid, ep.nodes[k + 1])
+        assert c.length() < 1e-9 and abs(r - 30) < 1e-9
+    # the far end of the arc is where it was: the outline is unchanged
+    assert ep.nodes[0] == Vec2(-30, 0) and ep.nodes[2] == Vec2(30, 0)
+
+
+def test_split_bezier_traces_the_same_curve():
+    from leathercad.geometry import Vec2
+    from leathercad.shapes import EditablePath
+    from leathercad.modify import split_edge_at, _edge_eval
+    ep = EditablePath.from_bezier([Vec2(-30, 0), Vec2(30, 0)],
+                                  [Vec2(10, 25), Vec2(10, -25)], closed=False)
+    _k, orig = _edge_eval(ep.nodes[0], ep.nodes[1], ep.edges[0])
+    assert split_edge_at(ep, 0, 0.3)
+    assert [e.kind for e in ep.edges] == ["bezier", "bezier"]
+    _k, h = _edge_eval(ep.nodes[0], ep.nodes[1], ep.edges[0])
+    _k, t = _edge_eval(ep.nodes[1], ep.nodes[2], ep.edges[1])
+    for j in range(11):
+        u = j / 10
+        assert (h(u) - orig(0.3 * u)).length() < 1e-9
+        assert (t(u) - orig(0.3 + 0.7 * u)).length() < 1e-9
+
+
+def test_no_duplicate_node_on_an_existing_one():
+    from leathercad.geometry import Vec2
+    from leathercad.shapes import EditablePath, Edge
+    from leathercad.modify import split_edge_at
+    ep = EditablePath(nodes=[Vec2(-30, 0), Vec2(30, 0)],
+                      edges=[Edge("arc", mid=Vec2(0, 30))], closed=False)
+    assert not split_edge_at(ep, 0, 0.0) and not split_edge_at(ep, 0, 1.0)
+    assert len(ep.nodes) == 2
+
+
+def test_canvas_double_click_adds_a_node_on_an_arc(qapp=None):
+    import math
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.items import ShapeItem
+    from leathercad.document import Document
+    from leathercad.geometry import Vec2
+    from leathercad.shapes import EditablePath, Edge, Transform
+    ep = EditablePath(nodes=[Vec2(-30, 0), Vec2(30, 0)],
+                      edges=[Edge("arc", mid=Vec2(0, 30))], closed=False,
+                      transform=Transform(x=5, y=5), layer="Cut")
+    doc = Document()
+    doc.add_shape(ep)
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    it = [i for i in c.scene_obj.items() if isinstance(i, ShapeItem)][0]
+    c.enter_vertex_edit(it)
+    p = Vec2(5 + 30 * math.cos(math.radians(120)), 5 + 30 * math.sin(math.radians(120)))
+    assert c.insert_node_at(p)
+    assert [e.kind for e in it.model.edges] == ["arc", "arc"]
+    assert len(it.model.nodes) == 3

@@ -354,3 +354,94 @@ def test_march_chord_n_never_drops_the_span_start():
     # stopping one step short appends the end instead of overwriting a hole
     assert march_chord_n(poly, 3.0, 2, 0.0, 9.5) == pytest.approx(
         [0.0, 3.0, 6.0, 9.5])
+
+
+# ---------------------------------------------------------------------------
+# Exact stitch line: inset from the true lines/arcs, holes on the true arcs.
+# A 191.0656 x 171.0656 R10.5328 rectangle, 4 mm inset, 5 mm iron: straights
+# 170 / 150 and corner arcs R6.5328 x 90 deg, every gap 5.000 -- walking a
+# 2-prong iron round the corner lands each tooth on the arc.
+# ---------------------------------------------------------------------------
+_R_EXACT = 4.0 + 5.0 / (2.0 * math.sin(math.radians(22.5)))   # 10.532815
+
+
+def _exact_rect_holes(w, h, r, **kw):
+    from leathercad.shapes import Rectangle
+    from leathercad.stitching import stitch_shape_path
+    from leathercad.stitchsettings import StitchSettings
+    st = StitchSettings()
+    st.inset, st.pitch_mm = 4.0, 5.0
+    for k, v in kw.items():
+        setattr(st, k, v)
+    res = stitch_shape_path(Rectangle(width=w, height=h,
+                                      corner_radius=r).local_path(), st)
+    pts = [hl.point for hl in res.holes]
+    n = len(pts)
+    return pts, [(pts[i] - pts[(i + 1) % n]).length() for i in range(n)]
+
+
+@pytest.mark.parametrize("style", ["auto", "midpoint", "tangent"])
+def test_walked_corner_pitch_is_exact(style):
+    w, h = 170 + 2 * _R_EXACT, 150 + 2 * _R_EXACT
+    pts, gaps = _exact_rect_holes(w, h, _R_EXACT, corner_style=style)
+    assert len(pts) == 136
+    assert max(abs(g - 5.0) for g in gaps) < 1e-6
+    cx, cy, r = w / 2 - _R_EXACT, h / 2 - _R_EXACT, _R_EXACT - 4.0
+    corner = [p for p in pts if abs(p.x) >= cx - 1e-9 and abs(p.y) >= cy - 1e-9]
+    assert len(corner) == 12                   # 3 per corner, apex included
+    for p in corner:                           # every one ON the true arc
+        assert abs(math.hypot(abs(p.x) - cx, abs(p.y) - cy) - r) < 1e-9
+
+
+def test_four_decimal_entry_is_within_a_hundredth_of_a_micron():
+    _, gaps = _exact_rect_holes(191.0656, 171.0656, 10.5328)
+    assert max(abs(g - 5.0) for g in gaps) < 2e-5
+
+
+def test_two_decimal_entry_still_walks_cleanly():
+    # what the panel used to allow: corners within 0.003 mm of the iron
+    _, gaps = _exact_rect_holes(191.06, 171.06, 10.53)
+    assert 4.997 < min(gaps) and max(gaps) < 5.00001
+
+
+def test_exact_inset_keeps_straights_and_arcs_true():
+    from leathercad.offset import inset_path_with_corners
+    from leathercad.shapes import Rectangle
+    w, h = 170 + 2 * _R_EXACT, 150 + 2 * _R_EXACT
+    path = Rectangle(width=w, height=h, corner_radius=_R_EXACT).local_path()
+    pts, corners, arcs = inset_path_with_corners(path, 4.0,
+                                                 list(path.corner_points))
+    edges = sorted((pts[i + 1] - pts[i]).length() for i in range(len(pts) - 1))
+    assert edges[-4:] == pytest.approx([150, 150, 170, 170], abs=1e-9)
+    assert len(arcs) == 4
+    for c, r, _a0, sweep in arcs:
+        assert r == pytest.approx(_R_EXACT - 4.0, abs=1e-12)
+        assert abs(sweep) == pytest.approx(math.pi / 2, abs=1e-12)
+        assert (abs(c.x), abs(c.y)) == pytest.approx((85.0, 75.0), abs=1e-9)
+    # the eight tangent points carry over exactly onto the stitch line
+    assert len(corners) == 8
+    r = _R_EXACT - 4.0
+    assert {(round(abs(c.x), 9), round(abs(c.y), 9)) for c in corners} == {
+        (85.0, round(75.0 + r, 9)), (round(85.0 + r, 9), 75.0)}
+
+
+def test_holes_for_shape_uses_the_exact_stitch_line():
+    from leathercad.shapes import Rectangle, Transform
+    from leathercad.stitching import holes_for_shape, stitch_shape_path
+    from leathercad.stitchsettings import StitchSettings
+    st = StitchSettings(inset=4.0, pitch_mm=5.0)
+    sh = Rectangle(width=170 + 2 * _R_EXACT, height=150 + 2 * _R_EXACT,
+                   corner_radius=_R_EXACT, stitch=st,
+                   transform=Transform(x=10, y=20))
+    world = holes_for_shape(sh).holes
+    local = stitch_shape_path(sh.local_path(), st).holes
+    assert len(world) == len(local)
+    for a, b in zip(world, local):
+        assert (a.point.x - 10, a.point.y - 20) == pytest.approx(
+            (b.point.x, b.point.y), abs=1e-9)
+
+
+def test_fit_on_one_straight_edge_is_exact():
+    from leathercad.stitching import fit_pitch_for_count
+    poly = Polyline([Vec2(0, 0), Vec2(170, 0)])
+    assert fit_pitch_for_count(poly, 34, 0.0, 170.0) == 5.0

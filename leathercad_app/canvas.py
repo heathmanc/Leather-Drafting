@@ -25,7 +25,8 @@ from leathercad.shapes import (Rectangle, Ellipse, Circle, Polygon, PathShape,
 from leathercad.stitchsettings import StitchSettings
 from leathercad.stitchline import StitchLine
 from leathercad.holes import LooseHole
-from leathercad.stitching import stitch_polyline, Hole, StitchResult, flip_symmetry
+from leathercad.stitching import (stitch_shape_path, holes_for_shape, Hole,
+                                  StitchResult, flip_symmetry)
 from .items import (ShapeItem, StitchLineItem, VertexHandle, HoleItem,
                     ResizeHandle, RotateHandle, DimensionItem, TextItem,
                     bake_text_contours)
@@ -4077,10 +4078,8 @@ class Canvas(QGraphicsView):
         if sh.baked_holes:
             local = [h.point for h in sh.baked_holes]
         elif sh.stitch and sh.stitch.enabled:
-            path = sh.local_path()
-            res = stitch_polyline([Vec2(p.x, p.y) for p in path.flatten()],
-                                  list(path.corner_points), path.closed, sh.stitch)
-            local = [h.point for h in res.holes]
+            local = [h.point for h in stitch_shape_path(sh.local_path(),
+                                                        sh.stitch).holes]
         else:
             return "This shape has no stitch holes to check."
         if not local:
@@ -4108,7 +4107,8 @@ class Canvas(QGraphicsView):
                 for h in sh.baked_holes])
             return res, (sh.stitch or StitchSettings())
         if sh.stitch and sh.stitch.enabled:
-            return stitch_polyline(*sh.world_polyline(), sh.stitch), sh.stitch
+            # the same holes the canvas draws (local fit, then transformed)
+            return holes_for_shape(sh), sh.stitch
         return None, None
 
     def ungroup_selected(self) -> None:

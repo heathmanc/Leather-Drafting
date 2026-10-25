@@ -64,6 +64,7 @@ class MathSpinBox(QDoubleSpinBox):
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
+        self.trim_zeros = False     # show 191.06, not 191.0600
         self.last_expr = None
         self._user_edited = False
         self.lineEdit().textEdited.connect(self._mark_edited)
@@ -80,6 +81,14 @@ class MathSpinBox(QDoubleSpinBox):
         self.last_expr = None
         self._user_edited = False
         super().setValue(v)
+
+    def textFromValue(self, v: float) -> str:   # noqa: N802
+        text = super().textFromValue(v)
+        if self.trim_zeros:
+            point = self.locale().decimalPoint()
+            if point in text:
+                text = text.rstrip("0").rstrip(point)
+        return text
 
     def validate(self, text: str, pos: int):
         # accept anything while typing; valueFromText decides on commit

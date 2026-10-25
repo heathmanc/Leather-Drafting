@@ -37,7 +37,7 @@ def _outline_hit_shape(poly: QPolygonF, closed: bool = False) -> QPainterPath:
 from leathercad.geometry import Vec2
 from leathercad.shapes import Shape
 from leathercad.stitchline import StitchLine
-from leathercad.stitching import stitch_polyline, StitchResult, Hole
+from leathercad.stitching import stitch_shape_path, StitchResult, Hole
 from leathercad.holes import LooseHole
 
 
@@ -964,9 +964,8 @@ class ShapeItem(QGraphicsItem):
                         for h in self.model.baked_holes]
             self._holes = StitchResult(holes=oriented)
         elif st is not None and st.enabled and recompute_holes:
-            _, corner_pts, closed = self._local_geometry()
-            res = stitch_polyline([Vec2(p.x, p.y) for p in local],
-                                  corner_pts, closed, st)
+            # from the true lines/arcs: exact inset, holes on the real arcs
+            res = stitch_shape_path(path, st)
             self._hole_locals = [Vec2(h.point.x, h.point.y) for h in res.holes]
             # orient holes into the pre-translation frame
             oriented_holes = [Hole(t.apply_dir(h.point), t.apply_dir(h.tangent))
@@ -1005,11 +1004,6 @@ class ShapeItem(QGraphicsItem):
         self.setOpacity(max(0.05, min(1.0, self.model.opacity)))
         self._recompute_bounds()
         self.update()
-
-    def _local_geometry(self):
-        path = self.model.local_path()
-        pts = path.flatten()
-        return pts, list(path.corner_points), path.closed
 
     def _recompute_bounds(self) -> None:
         r = self._outline.boundingRect()

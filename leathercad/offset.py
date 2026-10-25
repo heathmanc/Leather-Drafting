@@ -404,9 +404,18 @@ def inset_with_corners(points: Sequence[Vec2], dist: float,
         return list(points), list(corners)
     sign = 1.0 if signed_area(ring) > 0 else -1.0  # +1 for CCW
     raw, dirs, starts = _mitred_offset(ring, dist, sign)
+    return _trim_inset(raw, dirs, starts, ring, dist, corners)
+
+
+def _trim_inset(raw: List[Vec2], dirs: List[Vec2], starts, src: List[Vec2],
+                dist: float, corners: Sequence[Vec2]):
+    """Shared tail of the insets: trim the raw ring and carry ``corners`` onto
+    it. ``starts[k]`` is the source vertex raw vertex k was made from, or a
+    list of them (several merge into one where an arc collapsed to a point;
+    none inside an offset arc). Returns ``(closed ring, corners)``."""
     if len(raw) < 3 or _runs_backwards(raw, dirs):
         return [], []                 # too narrow for this inset
-    new_pts = _remove_inverted_loops(raw, dirs, ring, dist)
+    new_pts = _remove_inverted_loops(raw, dirs, src, dist)
     if len(new_pts) < 3:
         return [], []
 
@@ -417,7 +426,8 @@ def inset_with_corners(points: Sequence[Vec2], dist: float,
 
     kept = {key(p) for p in new_pts}
     raw_keys = {key(p) for p in raw}
-    mitre = {key(v): p for v, p in zip(starts, raw)}
+    mitre = {key(v): p for vs, p in zip(starts, raw)
+             for v in (vs if isinstance(vs, list) else [vs])}
     out: List[Vec2] = []
     for c in corners:
         m = mitre.get(key(c))
@@ -437,6 +447,149 @@ def inset_with_corners(points: Sequence[Vec2], dist: float,
             out.append(p)
     new_pts.append(new_pts[0])
     return new_pts, out
+
+
+# Inset arcs are flattened this finely (sagitta, mm) so holes marched along
+# them sit within a micron of the true curve before being snapped onto it.
+ARC_FLATNESS = 1e-3
+
+
+def _offset_path_raw(path, move: float, sign: float):
+    """Offset ``path`` segment by segment along the inward normal by ``move``
+    (mm), flattening only AFTER offsetting: a line shifts sideways, an arc
+    stays concentric with radius r -/+ move. Joins that were smooth stay
+    smooth; sharp joins are mitred. (Offsetting the flattened polyline
+    instead mitres every arc chord, which pulls each straight short and
+    bends the corner arcs -- a 4 mm inset of an R10.53 corner came out
+    R~6.55 over 91.8 degrees with straights 0.24 mm short.)
+
+    An arc tighter than ``move`` comes out with a negative radius -- running
+    backwards, which the trim removes like any swallowtail. Bezier segments
+    are flattened first and offset chord by chord.
+
+    Returns ``(points, dirs, starts, arcs)`` as for ``_mitred_offset``, plus
+    the offset arcs ``(centre, radius, start angle, sweep)`` with radius > 0.
+    """
+    from .path import Arc, Line, DEFAULT_FLATNESS
+    pieces = []           # [pts, dirs (per edge), source vertex of pts[0]]
+    arcs = []
+    for seg in path.segments:
+        if isinstance(seg, Line):
+            d = seg.p1 - seg.p0
+            L = d.length()
+            if L < _EPS:
+                continue
+            u = d * (1.0 / L)
+            nrm = Vec2(-u.y, u.x) * (move * sign)
+            pieces.append([[seg.p0 + nrm, seg.p1 + nrm], [u], seg.p0])
+        elif isinstance(seg, Arc):
+            sweep = seg._sweep()
+            if abs(sweep) < 1e-12 or seg.radius <= _EPS:
+                continue
+            turn = 1.0 if sweep > 0 else -1.0
+            r2 = seg.radius - move * sign * turn
+            rr = max(abs(r2), 1e-6)
+            ratio = max(-1.0, min(1.0, 1.0 - ARC_FLATNESS / rr))
+            step = max(2.0 * math.acos(ratio) if ratio < 1.0 else math.pi,
+                       1e-4)
+            n = max(1, int(math.ceil(abs(sweep) / step)))
+            c = seg.center
+            angs = [seg.a0 + sweep * i / n for i in range(n + 1)]
+            pts = [Vec2(c.x + r2 * math.cos(a), c.y + r2 * math.sin(a))
+                   for a in angs]
+            dirs = []
+            for i in range(n):
+                am = 0.5 * (angs[i] + angs[i + 1])
+                dirs.append(Vec2(-math.sin(am), math.cos(am)) * turn)
+            if r2 > _EPS:
+                arcs.append((c, r2, seg.a0, sweep))
+            pieces.append([pts, dirs, seg.start()])
+        else:                                   # bezier: chord by chord
+            fl = [seg.start()] + seg.flatten(DEFAULT_FLATNESS)
+            for a, b in zip(fl, fl[1:]):
+                d = b - a
+                L = d.length()
+                if L < _EPS:
+                    continue
+                u = d * (1.0 / L)
+                nrm = Vec2(-u.y, u.x) * (move * sign)
+                pieces.append([[a + nrm, b + nrm], [u], a])
+    m = len(pieces)
+    closed = path.closed
+    # join neighbours: shared point if they already meet, else a mitre
+    for i in range(m if closed else m - 1):
+        A, B = pieces[i], pieces[(i + 1) % m]
+        a_end, b_start = A[0][-1], B[0][0]
+        if (a_end - b_start).length() < 1e-9:
+            B[0][0] = a_end
+        else:
+            x = _line_intersection(A[0][-2], A[0][-1], B[0][0], B[0][1])
+            if x is not None:
+                A[0][-1] = x
+                B[0][0] = x
+    raw: List[Vec2] = []
+    dirs: List[Vec2] = []
+    starts: list = []
+    for i, (pts, pdirs, src) in enumerate(pieces):
+        nxt = pieces[(i + 1) % m][0][0] if (closed or i + 1 < m) else None
+        for j in range(len(pts) - 1):
+            raw.append(pts[j])
+            dirs.append(pdirs[j])
+            starts.append([src] if j == 0 else [])
+        if nxt is None or pts[-1] is not nxt:       # a gap (parallel join)
+            raw.append(pts[-1])
+            if nxt is not None:
+                g = nxt - pts[-1]
+                dirs.append(g * (1.0 / g.length()) if g.length() > _EPS
+                            else pdirs[-1])
+            else:
+                dirs.append(pdirs[-1])
+            starts.append([])
+    # merge coincident neighbours (an arc whose radius equals the offset
+    # collapses to a point): keep the first, take the later outgoing edge
+    out_p: List[Vec2] = []
+    out_d: List[Vec2] = []
+    out_s: list = []
+    for p, d, s_ in zip(raw, dirs, starts):
+        if out_p and (p - out_p[-1]).length() < 1e-9:
+            out_d[-1] = d
+            out_s[-1] = out_s[-1] + s_
+            continue
+        out_p.append(p)
+        out_d.append(d)
+        out_s.append(s_)
+    while closed and len(out_p) > 1 and (out_p[-1] - out_p[0]).length() < 1e-9:
+        out_s[0] = out_s[0] + out_s[-1]
+        out_p.pop()
+        out_d.pop()
+        out_s.pop()
+    return out_p, out_d, out_s, arcs
+
+
+def inset_path_with_corners(path, dist: float, corners: Sequence[Vec2]):
+    """``inset_with_corners`` computed from the path's true segments rather
+    than its flattened polyline (see ``_offset_path_raw``): straights keep
+    their exact length and arcs their exact centre, radius and sweep.
+
+    Returns ``(points, corners, arcs)``: the stitch line (a closed ring with
+    its first point repeated when ``path`` is closed; ``[]`` if nothing fits),
+    the corners carried onto it, and the stitch line's arcs as
+    ``(centre, radius, start angle, sweep)`` -- holes landing on one of those
+    are snapped onto the true circle by the stitcher. ``dist`` <= 0 (or an
+    open path) just flattens the path, arcs finely."""
+    src = path.flatten()
+    ring = _unique_ring(src)
+    if len(ring) < 3 and path.closed:
+        return list(src), list(corners), []
+    if not path.closed or dist <= _EPS:
+        pts, _d, _s, arcs = _offset_path_raw(path, 0.0, 1.0)
+        if path.closed and pts:
+            pts = pts + [pts[0]]
+        return pts, list(corners), arcs
+    sign = 1.0 if signed_area(ring) > 0 else -1.0  # +1 for CCW
+    raw, dirs, starts, arcs = _offset_path_raw(path, dist, sign)
+    pts, out = _trim_inset(raw, dirs, starts, ring, dist, corners)
+    return pts, out, (arcs if pts else [])
 
 
 def offset_closed(points: Sequence[Vec2], dist: float) -> List[Vec2]:

@@ -94,6 +94,37 @@ def test_undo_redo(qapp):
     assert all(s.width != 88.0 for s in win.doc.shapes)
 
 
+def test_geometry_fields_keep_four_decimals(qapp):
+    # A 2-decimal field rounded R10.5328 to R10.53 on the next panel reload,
+    # and any later edit wrote the rounded value back -- too coarse to hit an
+    # exact pitch round a corner.
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad.document import Document
+
+    win = MainWindow(Document())
+    item = win.canvas.add_shape(Rectangle(
+        width=191.06, height=171.06, corner_radius=10.53,
+        stitch=StitchSettings(pitch_mm=5.0, inset=4.0), layer="Cut"))
+    props = win.properties
+    props.show_selection([item])
+    assert props.w.text() == "191.06 mm"          # no trailing zeros
+    for field, v in ((props.w, 191.0656), (props.h, 171.0656),
+                     (props.corner, 10.5328)):
+        field.setValue(v)
+        field.editingFinished.emit()
+    m = item.model
+    assert (m.width, m.height, m.corner_radius) == (191.0656, 171.0656, 10.5328)
+    # reload the panel, then edit something else: nothing gets re-rounded
+    props.show_selection([item])
+    assert props.corner.text() == "10.5328 mm"
+    props.pos_x.setValue(12.5)
+    props.pos_x.editingFinished.emit()
+    assert (m.width, m.height, m.corner_radius) == (191.0656, 171.0656, 10.5328)
+    gaps = [(a.point - b.point).length() for a, b in
+            zip(item._holes.holes, item._holes.holes[1:])]
+    assert gaps and max(abs(g - 5.0) for g in gaps) < 2e-5
+
+
 def test_align_left(qapp):
     from leathercad_app.mainwindow import MainWindow
     from leathercad.document import Document

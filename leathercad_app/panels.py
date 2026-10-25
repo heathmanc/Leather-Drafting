@@ -28,12 +28,20 @@ except Exception:  # pragma: no cover
         return obj is not None
 
 
+# Geometry fields keep 4 decimals (0.1 micron): a QDoubleSpinBox rounds every
+# value -- typed or computed from an expression -- to its decimals, and 2 was
+# not enough to hit an exact pitch round a corner (R10.5328 came out R10.53).
+# Trailing zeros are hidden, so 191.06 still reads 191.06, not 191.0600.
+_GEOM_DECIMALS = 4
+
+
 def _spin(lo, hi, step=1.0, decimals=2, suffix=" mm") -> QDoubleSpinBox:
     from .mathspin import MathSpinBox
     s = MathSpinBox()
     s.setRange(lo, hi)
     s.setSingleStep(step)
     s.setDecimals(decimals)
+    s.trim_zeros = decimals > 2
     s.setSuffix(suffix)
     s.setButtonSymbols(QAbstractSpinBox.NoButtons)
     s.setKeyboardTracking(False)
@@ -80,8 +88,8 @@ class PropertiesPanel(QWidget):
         # Transform
         self.g_transform = QGroupBox("Transform")
         f = QFormLayout(self.g_transform)
-        self.pos_x = _spin(-100000, 100000, 1.0)
-        self.pos_y = _spin(-100000, 100000, 1.0)
+        self.pos_x = _spin(-100000, 100000, 1.0, _GEOM_DECIMALS)
+        self.pos_y = _spin(-100000, 100000, 1.0, _GEOM_DECIMALS)
         self.rot = _spin(-360, 360, 1.0, 1, " °")
         self.mirror = QCheckBox("Mirror (laser from back)")
         f.addRow("X", self.pos_x)
@@ -93,9 +101,9 @@ class PropertiesPanel(QWidget):
         # Rectangle geometry
         self.g_rect = QGroupBox("Rectangle")
         fr = QFormLayout(self.g_rect)
-        self.w = _spin(0.1, 100000, 1.0)
-        self.h = _spin(0.1, 100000, 1.0)
-        self.corner = _spin(0.0, 100000, 0.5)
+        self.w = _spin(0.1, 100000, 1.0, _GEOM_DECIMALS)
+        self.h = _spin(0.1, 100000, 1.0, _GEOM_DECIMALS)
+        self.corner = _spin(0.0, 100000, 0.5, _GEOM_DECIMALS)
         fr.addRow("Width", self.w)
         fr.addRow("Height", self.h)
         fr.addRow("Corner radius", self.corner)
@@ -104,8 +112,8 @@ class PropertiesPanel(QWidget):
         # Ellipse geometry
         self.g_ellipse = QGroupBox("Ellipse")
         fe = QFormLayout(self.g_ellipse)
-        self.rx = _spin(0.1, 100000, 1.0)
-        self.ry = _spin(0.1, 100000, 1.0)
+        self.rx = _spin(0.1, 100000, 1.0, _GEOM_DECIMALS)
+        self.ry = _spin(0.1, 100000, 1.0, _GEOM_DECIMALS)
         fe.addRow("Radius X", self.rx)
         fe.addRow("Radius Y", self.ry)
         root.addWidget(self.g_ellipse)
@@ -113,7 +121,7 @@ class PropertiesPanel(QWidget):
         # Polygon geometry
         self.g_poly = QGroupBox("Polygon")
         fp = QFormLayout(self.g_poly)
-        self.poly_radius = _spin(0.0, 100000, 0.5)
+        self.poly_radius = _spin(0.0, 100000, 0.5, _GEOM_DECIMALS)
         self.poly_info = QLabel("-")
         fp.addRow("Corner radius", self.poly_radius)
         fp.addRow("Points", self.poly_info)
@@ -122,7 +130,7 @@ class PropertiesPanel(QWidget):
         # Line geometry (a 2-point path): length + angle, first point pinned
         self.g_line = QGroupBox("Line")
         fl = QFormLayout(self.g_line)
-        self.line_len = _spin(0.01, 100000, 1.0)
+        self.line_len = _spin(0.01, 100000, 1.0, _GEOM_DECIMALS)
         self.line_angle = _spin(-360, 360, 1.0, 1, " °")
         fl.addRow("Length", self.line_len)
         fl.addRow("Angle", self.line_angle)

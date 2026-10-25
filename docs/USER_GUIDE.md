@@ -264,7 +264,9 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
   new size automatically.
 * **Resize exactly**: type in the Properties fields. Both stay in sync.
   **Every number field does math**: type `105/2 + 3`, `4*25.4`, or even
-  `1in` / `3cm` and it evaluates on Enter.
+  `1in` / `3cm` and it evaluates on Enter. Position, size and radius fields
+  hold **4 decimals** (0.0001 mm) — enough to set a corner radius that makes
+  the holes land exactly one pitch apart around the corner.
 * **Parameters** (`Ctrl+Shift+P`) — Fusion-style named values. Define
   `strap_w = 20` once in Edit → **Parameters…**, then type `strap_w` (or
   `strap_w*2+5`) into any numeric field. A field set from a parameter stays
@@ -332,7 +334,7 @@ disappear).
 |---|---|
 | **Punch** | The cutting-edge style, which sets the hole **shape**: **Round** (round holes), **Oblique** (a flat, shallow-slanted slit), **French** (a fine, steeper slanted slit — the Blanchard look), **Diamond** (a diamond / lozenge, angled like the awl). Round → circle; oblique/french → a slit at that slant; diamond → a true diamond, on screen and in the SVG/DXF export. |
 | **Pitch** | The stitch spacing — the standard ladder (2.0…5.0 mm), each shown with its SPI, since pitch is what irons are sold by and it's the same across makers. Pick **Custom…** to reveal a **Pitch (mm)** box and type any value (accepts math, e.g. `25.4/7`). Default 3.85 mm ≈ 6.6 SPI. |
-| **Inset from edge** | How far the stitch line sits in from the cut edge. Default 3.5 mm. Where a corner is rounder than the inset is deep (say a 3 mm fillet with a 3.5 mm inset), the stitch line turns that corner sharply with one hole on it. A piece too small for the stitch line to go all the way round gets a single hole, and one narrower than twice the inset gets none. |
+| **Inset from edge** | How far the stitch line sits in from the cut edge. Default 3.5 mm. The stitch line is the true offset of the outline: straights keep their length, and a rounded corner of radius R becomes an arc of radius R − inset on the same centre, with every hole on that arc exactly one pitch (straight-line) from the last — so a walked pricking iron lands each tooth on the line. Where a corner is rounder than the inset is deep (say a 3 mm fillet with a 3.5 mm inset), the stitch line turns that corner sharply with one hole on it. A piece too small for the stitch line to go all the way round gets a single hole, and one narrower than twice the inset gets none. |
 | **Fit** | How holes are fitted to the path. **auto** picks *closed* for closed outlines, *endpoints* for open ones — the pitch is nudged (≤ 12 %) so whole holes land on every corner and both ends. **none** marches at the *exact* pitch and lets the last hole fall wherever it lands. |
 | **Hole ø** | *Round only* — a round hole carries its own diameter (independent of spacing). Pick a common size (0.8 / 1.0 / 1.2 / 1.5 mm) or choose **Custom…** to type your own. Hidden for the slit styles, whose hole size comes from the tooth and scales with pitch (tune it with **Slit length / Slit angle**). |
 | **Rows** | **2 (double)** adds a second parallel row (aligned rungs) for saddle-stitched straps; set **Row spacing**. |

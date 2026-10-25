@@ -134,6 +134,8 @@ def _next_chord(poly: Polyline, center: Vec2, cur_s: float, pitch: float,
     seg_start_s = cur_s
     idx = i
     n = len(pts)
+    cx, cy = center.x, center.y
+    inside = pitch * pitch * (1.0 - 1e-9)
     while idx < n - 1:
         a = seg_start_pt
         b = pts[idx + 1]
@@ -141,6 +143,16 @@ def _next_chord(poly: Polyline, center: Vec2, cur_s: float, pitch: float,
         if b_s > end_s:
             b = poly.point_at(end_s)
             b_s = end_s
+        # A segment ending strictly inside the circle can't exit it (the exit
+        # root lies past its end) -- skip the full test. On a finely
+        # flattened arc most segments of a step are like this.
+        if (b.x - cx) ** 2 + (b.y - cy) ** 2 < inside:
+            if b_s >= end_s:
+                return None
+            seg_start_pt = b
+            seg_start_s = b_s
+            idx += 1
+            continue
         t = _circle_forward_t(a, b, center, pitch)
         if t is not None:
             q = a.lerp(b, t)
@@ -202,7 +214,7 @@ def _march_n_final_s(poly: Polyline, pitch: float, n_steps: int,
 
 
 def fit_pitch_for_count(poly: Polyline, n_intervals: int, start_s: float,
-                        end_s: float, tol: float = 1e-4) -> Optional[float]:
+                        end_s: float, tol: float = 1e-7) -> Optional[float]:
     """Find the chord pitch so ``n_intervals`` steps land exactly on ``end_s``.
 
     Returns the pitch, or None if no pitch in a sensible band works.
@@ -210,6 +222,11 @@ def fit_pitch_for_count(poly: Polyline, n_intervals: int, start_s: float,
     if n_intervals < 1:
         return None
     span = end_s - start_s
+    if span <= _EPS:
+        return None
+    # A span on one straight edge needs no search: chord == arc length.
+    if poly.seg_index_at(start_s) == poly.seg_index_at(end_s - 1e-9):
+        return span / n_intervals
     nominal = span / n_intervals
     lo = nominal * 0.4
     hi = nominal * 1.05  # chord pitch is always <= arc pitch
@@ -234,15 +251,33 @@ def fit_pitch_for_count(poly: Polyline, n_intervals: int, start_s: float,
         r_hi = residual(hi)
         if not (r_lo >= 0 >= r_hi):
             return None
+    # Illinois false position: the residual is close to linear in the pitch,
+    # so this converges in a handful of marches where plain bisection took
+    # ~30. A trial that can't complete its steps (the sentinel) falls back to
+    # a bisection step.
+    side = 0
     for _ in range(80):
-        mid = 0.5 * (lo + hi)
+        if r_hi > -1e17 and r_lo != r_hi:
+            mid = (lo * r_hi - hi * r_lo) / (r_hi - r_lo)
+            if not lo < mid < hi:
+                mid = 0.5 * (lo + hi)
+        else:
+            mid = 0.5 * (lo + hi)
         r = residual(mid)
         if abs(r) < tol:
             return mid
         if r > 0:
-            lo = mid
+            lo, r_lo = mid, r
+            if side > 0 and r_hi > -1e17:
+                r_hi *= 0.5
+            side = 1
         else:
-            hi = mid
+            hi, r_hi = mid, r
+            if side < 0:
+                r_lo *= 0.5
+            side = -1
+        if hi - lo < 1e-15:
+            break
     # Converged only if the band closed on the end. A span whose chord from
     # the start rises then falls (it runs out to a tip and back) has no
     # monotonic residual; the band then shrinks onto the tip, not the end,
@@ -255,7 +290,7 @@ def fit_pitch_for_count(poly: Polyline, n_intervals: int, start_s: float,
 
 def _best_fit_span(poly: Polyline, target_pitch: float, start_s: float,
                    end_s: float, max_dev: float, parity: Optional[str] = None,
-                   symmetric_fallback: bool = False):
+                   symmetric_fallback: bool = False, memo: Optional[dict] = None):
     """Choose an integer hole count for one span and return (pitch, n).
 
     Prefers a count whose pitch stays within ``max_dev`` of the target. If none
@@ -264,10 +299,23 @@ def _best_fit_span(poly: Polyline, target_pitch: float, start_s: float,
     arc must place its holes *symmetrically* even when no count hits the pitch
     exactly, so we never drop back to a lopsided plain march there. ``parity``
     ('odd') forces an even pair to straddle a bare apex.
+
+    ``memo`` caches results for one stitch: ``auto`` fits the same spans for
+    every corner style, each on its own rotation of the ring, so the key is
+    the span's geometry (its end points and length), not its arc-lengths.
     """
     span = end_s - start_s
     if span <= _EPS:
         return target_pitch, 0
+    if memo is not None:
+        pa, pb = poly.point_at(start_s), poly.point_at(end_s)
+        key = (round(pa.x, 9), round(pa.y, 9), round(pb.x, 9), round(pb.y, 9),
+               round(span, 9), target_pitch, max_dev, parity,
+               symmetric_fallback)
+        if key not in memo:
+            memo[key] = _best_fit_span(poly, target_pitch, start_s, end_s,
+                                       max_dev, parity, symmetric_fallback)
+        return memo[key]
     n0 = max(1, int(round(span / target_pitch)))
 
     def ok_parity(n: int) -> bool:
@@ -735,12 +783,19 @@ def holes_for_shape(shape) -> StitchResult:
     st = getattr(shape, "stitch", None)
     if not (st and st.enabled):
         return StitchResult()
-    path = shape.local_path()
-    pts = path.flatten()
-    res = stitch_polyline([Vec2(p.x, p.y) for p in pts],
-                          list(path.corner_points), path.closed, st)
+    res = stitch_shape_path(shape.local_path(), st)
     res.holes = [Hole(t.apply(h.point), t.apply_dir(h.tangent)) for h in res.holes]
     return res
+
+
+def stitch_shape_path(path: Path, settings) -> StitchResult:
+    """Holes for a shape's own ``Path`` (local coordinates). Prefer this over
+    ``stitch_polyline`` whenever the path is at hand: the stitch line is then
+    inset from the true lines and arcs (exact straights, exact corner radii)
+    and holes on arcs sit on the true circle -- see ``stitch_polyline``."""
+    return stitch_polyline([Vec2(p.x, p.y) for p in path.flatten()],
+                           list(path.corner_points), path.closed, settings,
+                           path=path)
 
 
 # ---------------------------------------------------------------------------
@@ -780,8 +835,9 @@ _CACHE_MAX = 512
 _stitch_cache: "OrderedDict" = None  # created lazily below
 
 
-def _cache_key(points, corner_points, closed, settings):
+def _cache_key(points, corner_points, closed, settings, exact=False):
     return (
+        bool(exact),
         tuple((round(p.x, 6), round(p.y, 6)) for p in points),
         tuple((round(p.x, 6), round(p.y, 6)) for p in (corner_points or [])),
         bool(closed),
@@ -804,7 +860,7 @@ def _copy_result(res: StitchResult) -> StitchResult:
 
 
 def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
-                    settings) -> StitchResult:
+                    settings, path: Optional[Path] = None) -> StitchResult:
     """Distribute holes on a world-space polyline using ``StitchSettings``.
 
     ``corner_points`` are geometric points where a hole must be forced (e.g.
@@ -814,17 +870,24 @@ def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
     function the CAD document / export layer calls. Results are memoised
     (see ``_cache_key``); callers get an independent ``StitchResult`` whose
     ``holes``/``pitches`` lists are safe to replace.
+
+    ``path`` -- the ``Path`` that ``points`` was flattened from, when known --
+    makes the stitch line exact: it is inset segment by segment (a straight
+    stays its true length, a corner arc keeps its true centre, radius r - inset
+    and sweep), and every hole that lands on an arc of the stitch line is
+    snapped onto the true circle rather than left on a flattening chord. A
+    walked pricking iron then lands on the drawn line, at the drawn pitch.
     """
     global _stitch_cache
     if _stitch_cache is None:
         from collections import OrderedDict
         _stitch_cache = OrderedDict()
-    key = _cache_key(points, corner_points, closed, settings)
+    key = _cache_key(points, corner_points, closed, settings, path is not None)
     hit = _stitch_cache.get(key)
     if hit is not None:
         _stitch_cache.move_to_end(key)
         return _copy_result(hit)
-    res = _stitch_polyline_impl(points, corner_points, closed, settings)
+    res = _stitch_polyline_impl(points, corner_points, closed, settings, path)
     _stitch_cache[key] = _copy_result(res)
     while len(_stitch_cache) > _CACHE_MAX:
         _stitch_cache.popitem(last=False)
@@ -832,13 +895,24 @@ def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
 
 
 def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
-                          closed: bool, settings) -> StitchResult:
-    from .offset import inset_with_corners
+                          closed: bool, settings,
+                          path: Optional[Path] = None) -> StitchResult:
+    from .offset import inset_with_corners, inset_path_with_corners
 
     pts = list(points)
     corner_points = list(corner_points or [])
+    arcs: list = []
 
-    if closed and settings.inset and settings.inset > 0:
+    def done(res: StitchResult) -> StitchResult:
+        return _apply_rows(_snap_to_arcs(res, arcs), settings)
+
+    if path is not None:
+        inset = settings.inset if (closed and settings.inset) else 0.0
+        pts, corner_points, arcs = inset_path_with_corners(
+            path, max(0.0, inset), corner_points)
+        if closed and len(pts) < 3:   # piece narrower than twice the inset
+            return StitchResult(closed=closed)
+    elif closed and settings.inset and settings.inset > 0:
         # the corners come back as the inset ring's own corners (see
         # inset_with_corners), so they sit exactly on the stitch line
         pts, corner_points = inset_with_corners(pts, settings.inset,
@@ -860,8 +934,8 @@ def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
 
     if settings.mode == "arclength":
         positions = march_arclength(poly, settings.pitch_mm)
-        return _apply_rows(_result_from_positions(
-            poly, positions, [settings.pitch_mm], closed), settings)
+        return done(_result_from_positions(
+            poly, positions, [settings.pitch_mm], closed))
 
     # Symmetry: rotate so the outline starts at one axis crossing and anchor a
     # hole at the other. That splits the loop into the two mirror-image halves;
@@ -888,17 +962,54 @@ def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
     want = getattr(settings, "corner_style", "auto")
     if closed and want == "auto":
         best, best_bad = None, None
+        memo: dict = {}                     # span fits shared by the styles
         for style in ("tangent", "midpoint", "straddle"):
-            res = _march_corner_style(poly, cor, settings, style, closed, fit,
-                                      total, symmetric, axis_forced)
+            res = _snap_to_arcs(_march_corner_style(
+                poly, cor, settings, style, closed, fit, total, symmetric,
+                axis_forced, memo), arcs)
             bad = _gap_badness(res, settings.pitch_mm)
             if best_bad is None or bad < best_bad:
                 best, best_bad = res, bad
-        return _apply_rows(best, settings)
+        return _apply_rows(best, settings)   # already snapped
 
     res = _march_corner_style(poly, cor, settings, want, closed, fit,
                               total, symmetric, axis_forced)
-    return _apply_rows(res, settings)
+    return done(res)
+
+
+def _snap_to_arcs(res: StitchResult, arcs) -> StitchResult:
+    """Move holes that lie on a flattening chord of one of the stitch line's
+    ``arcs`` (centre, radius, start angle, sweep) out onto the true circle,
+    with the circle's tangent. A chord sits inside its arc by at most the
+    flattening sagitta, so only holes that close to an arc, within its sweep,
+    are touched -- straights and everything else stay put."""
+    if not arcs or not res.holes:
+        return res
+    from .offset import ARC_FLATNESS
+    tol = 2.0 * ARC_FLATNESS + 1e-9
+    out = []
+    for h in res.holes:
+        p = h.point
+        for c, r, a0, sweep in arcs:
+            v = p - c
+            d = v.length()
+            if d <= _EPS or not (r - tol <= d <= r + 1e-7):
+                continue
+            ang = math.atan2(v.y, v.x)
+            if sweep > 0:
+                inside = (ang - a0) % (2 * math.pi) <= sweep + 1e-9
+            else:
+                inside = (a0 - ang) % (2 * math.pi) <= -sweep + 1e-9
+            if not inside:
+                continue
+            u = v * (1.0 / d)
+            t = Vec2(-u.y, u.x)
+            if t.dot(h.tangent) < 0:
+                t = t * -1.0
+            h = Hole(c + u * r, t)
+            break
+        out.append(h)
+    return StitchResult(holes=out, pitches=res.pitches, closed=res.closed)
 
 
 def _gap_badness(res: "StitchResult", pitch: float):
@@ -917,7 +1028,8 @@ def _gap_badness(res: "StitchResult", pitch: float):
 
 def _march_corner_style(poly: Polyline, cor: List[float], settings, style: str,
                         closed: bool, fit: str, total: float, symmetric: bool,
-                        axis_forced: set) -> "StitchResult":
+                        axis_forced: set,
+                        memo: Optional[dict] = None) -> "StitchResult":
     """March the holes for one concrete corner ``style`` (tangent / midpoint /
     straddle). Extracted so ``auto`` can try each and pick the least-deviation
     result. Works on a private rotation of ``poly`` so candidates don't
@@ -991,7 +1103,7 @@ def _march_corner_style(poly: Polyline, cor: List[float], settings, style: str,
             parity = "odd"          # straddle: an even pair around a bare apex
         p_eff, n = _best_fit_span(poly, settings.pitch_mm, a, b,
                                   settings.max_dev, parity,
-                                  symmetric_fallback=closed)
+                                  symmetric_fallback=closed, memo=memo)
         if n is None:
             span_positions = march_chord(poly, settings.pitch_mm, a, b)
             pitches.append(settings.pitch_mm)

@@ -1000,8 +1000,13 @@ class ShapeItem(QGraphicsItem):
             self._holes = StitchResult(holes=oriented)
         elif st is not None and st.enabled and recompute_holes:
             # from the true lines/arcs: exact inset, holes on the real arcs
+            keep = None
+            if self.canvas is not None:
+                from leathercad.hardware import keepouts_for_shape
+                keep = keepouts_for_shape(self.model, self.canvas.doc) or None
             res = stitch_shape_path(path, st,
-                                    getattr(self.model, "stitch_edges", None))
+                                    getattr(self.model, "stitch_edges", None),
+                                    keep)
             self._hole_locals = [Vec2(h.point.x, h.point.y) for h in res.holes]
             # orient holes into the pre-translation frame
             oriented_holes = [Hole(t.apply_dir(h.point), t.apply_dir(h.tangent))
@@ -1087,6 +1092,18 @@ class ShapeItem(QGraphicsItem):
         painter.setBrush(Qt.NoBrush)
         if outline_vis and self._outline.size() >= 2:
             painter.drawPolyline(self._outline)
+        r_keep = float(getattr(self.model, "keepout", 0.0) or 0.0)
+        if r_keep > 0 and (selected or getattr(self.model, "hardware", "")):
+            # the stitch keep-out round a piece of hardware: a faint dashed
+            # ring, so it's clear why the holes stop short of it
+            kp = QPen(QColor(self.canvas.layer_color("Stitch"))
+                      if self.canvas else QColor("#0066ff"))
+            kp.setCosmetic(True)
+            kp.setWidthF(1.0)
+            kp.setStyle(Qt.DashLine)
+            painter.setPen(kp)
+            painter.drawEllipse(QPointF(0, 0), r_keep, r_keep)
+            painter.setPen(pen)
         if (outline_vis and holes_vis and not self._skipped.isEmpty()
                 and (selected or self.canvas is None
                      or getattr(self.canvas, "show_skipped_edges", True))):
@@ -1713,7 +1730,11 @@ class StitchLineItem(QGraphicsItem):
         self._base = Vec2(pts[0].x, pts[0].y) if pts else Vec2(0.0, 0.0)
         rel = [Vec2(p.x - self._base.x, p.y - self._base.y) for p in pts]
         self._poly = _qpoly(rel)
-        self._holes = self.line.result()
+        keep = None
+        if self.canvas is not None:
+            from leathercad.hardware import keepouts_near
+            keep = keepouts_near(pts, self.canvas.doc) or None
+        self._holes = self.line.result(keep)
         self._rel_holes = [Hole(Vec2(h.point.x - self._base.x,
                                      h.point.y - self._base.y), h.tangent)
                            for h in self._holes.holes]

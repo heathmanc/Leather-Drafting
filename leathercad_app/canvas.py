@@ -405,6 +405,7 @@ class Canvas(QGraphicsView):
         self._suspend_move_refresh = False   # set during bulk creates (duplicate)
         self._selrot_pending = False
         self._multi_toggle = None       # (item, was_selected) on Ctrl-press
+        self._had_keepouts = False
         self._sel_batch = 0             # >0 while selecting many at once
         self._grips_pending = False     # a deferred grip refresh is queued
         self.scene_obj.selectionChanged.connect(self._emit_selection_changed)
@@ -1893,6 +1894,10 @@ class Canvas(QGraphicsView):
         a_edge = menu.addAction("Stitch this edge" if not edge_on
                                 else "Don't stitch this edge")
         a_edge.setEnabled(edge_item is not None)
+        a_keep = menu.addAction("Stitch keep-out…")
+        a_keep.setEnabled(bool(shapes))
+        a_keep.setToolTip("Stitch holes keep this far from the shape's centre "
+                          "(hardware gets one automatically)")
         a_alledges = menu.addAction("Stitch all edges")
         a_alledges.setEnabled(bool(
             shapes and any(getattr(i.model, "stitch_edges", None) is not None
@@ -1937,6 +1942,16 @@ class Canvas(QGraphicsView):
             self.toggle_stitch_edge(edge_item, edge_idx)
         elif chosen is a_alledges:
             self.stitch_all_edges(shapes)
+        elif chosen is a_keep:
+            from PySide6.QtWidgets import QInputDialog
+            cur = max((float(getattr(i.model, "keepout", 0.0) or 0.0)
+                       for i in shapes), default=0.0)
+            r, ok = QInputDialog.getDouble(
+                self, "Stitch keep-out",
+                "Radius stitch holes keep clear of, about the shape's "
+                "centre (0 = none):", cur, 0.0, 500.0, 2)
+            if ok:
+                self.set_keepout(shapes, r)
         elif chosen is a_union:
             self.boolean_selected("union")
         elif chosen is a_subtract:
@@ -3081,13 +3096,13 @@ class Canvas(QGraphicsView):
         total = 0.0
         for it in pool:
             if isinstance(it, ShapeItem):
-                res = holes_for_shape(it.model)
+                res = holes_for_shape(it.model, self.doc)
                 if not res.count:
                     continue
                 st = it.model.stitch or StitchSettings()
                 name = it.model.name or type(it.model).__name__
             elif isinstance(it, StitchLineItem):
-                res = it.line.result()
+                res = it.line.result(self._seam_keepouts(it.line))
                 if not res.count:
                     continue
                 st = it.line.settings
@@ -3165,12 +3180,12 @@ class Canvas(QGraphicsView):
         picks = []
         for it in self.selected_items():
             if isinstance(it, ShapeItem):
-                res = holes_for_shape(it.model)
+                res = holes_for_shape(it.model, self.doc)
                 if res.count:
                     nm = it.model.name or type(it.model).__name__
                     picks.append((nm, res))
             elif isinstance(it, StitchLineItem):
-                res = it.line.result()
+                res = it.line.result(self._seam_keepouts(it.line))
                 if res.count:
                     picks.append((it.line.name or "Seam", res))
         if len(picks) != 2:
@@ -4269,7 +4284,39 @@ class Canvas(QGraphicsView):
 
     def _emit_commit(self) -> None:
         if not self._suppress_commit:
+            self._refresh_keepout_dependents()
             self.commitRequested.emit()
+
+    def _seam_keepouts(self, line):
+        from leathercad.hardware import keepouts_near
+        return keepouts_near(line.points, self.doc)
+
+    def _refresh_keepout_dependents(self) -> None:
+        """Hardware moved, placed or removed: re-stitch what keeps clear of
+        it. Cheap -- unchanged stitching comes straight from the cache."""
+        has = any(getattr(s, "keepout", 0.0) for s in self.doc.shapes)
+        if not has and not self._had_keepouts:
+            return
+        self._had_keepouts = has
+        for it in list(self._live):
+            if not _alive(it):
+                continue
+            if isinstance(it, ShapeItem):
+                st = it.model.stitch
+                if st is not None and st.enabled and not it.model.baked_holes:
+                    it.sync_from_model()
+            elif isinstance(it, StitchLineItem):
+                it.sync_from_model()
+
+    def set_keepout(self, items, radius: float) -> None:
+        """Give the selected shapes a stitch keep-out of ``radius`` mm about
+        their origin (0 removes it); nearby stitching re-flows round them."""
+        for it in items:
+            if isinstance(it, ShapeItem):
+                it.model.keepout = max(0.0, float(radius))
+                it.sync_from_model()
+        self.documentChangedSig.emit()
+        self._emit_commit()
 
     # -- align / distribute --------------------------------------------
     def _shape_items(self):
@@ -5027,7 +5074,7 @@ class Canvas(QGraphicsView):
             return res, (sh.stitch or StitchSettings())
         if sh.stitch and sh.stitch.enabled:
             # the same holes the canvas draws (local fit, then transformed)
-            return holes_for_shape(sh), sh.stitch
+            return holes_for_shape(sh, self.doc), sh.stitch
         return None, None
 
     @staticmethod
@@ -5070,7 +5117,7 @@ class Canvas(QGraphicsView):
                     it.sync_from_model()
             elif isinstance(it, StitchLineItem):
                 it._bake_move()              # holes go where the seam is drawn
-                res = it.line.result()
+                res = it.line.result(self._seam_keepouts(it.line))
                 if res.count:
                     made += self._explode(res, it.line.settings,
                                           it.line.group_id)
@@ -5457,7 +5504,7 @@ class Canvas(QGraphicsView):
             # Attached holes take over from live stitching, so carry the
             # stitching's own holes across first -- attaching one hole used to
             # leave the piece with just that hole, its seam gone.
-            live = holes_for_shape(sh)
+            live = holes_for_shape(sh, self.doc)
             baked = [Hole(sh.transform.inverse_apply(h.point),
                           sh.transform.inverse_apply_dir(h.tangent))
                      for h in live.holes]

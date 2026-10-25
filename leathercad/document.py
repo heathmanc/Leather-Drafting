@@ -97,6 +97,10 @@ def _shape_to_dict(sh: Shape) -> dict:
     }
     if sh.stitch_edges is not None:
         base["stitch_edges"] = [bool(e) for e in sh.stitch_edges]
+    if sh.hardware:
+        base["hardware"] = sh.hardware
+    if sh.keepout:
+        base["keepout"] = float(sh.keepout)
     if isinstance(sh, Rectangle):
         base.update(width=sh.width, height=sh.height,
                     corner_radius=sh.corner_radius)
@@ -150,6 +154,8 @@ def _shape_from_dict(d: dict) -> Shape:
         fold_angle=d.get("fold_angle", 90.0),
         stitch_edges=([bool(e) for e in d["stitch_edges"]]
                       if d.get("stitch_edges") is not None else None),
+        hardware=str(d.get("hardware", "") or ""),
+        keepout=float(d.get("keepout", 0.0) or 0.0),
     )
     if "shape_id" in d:
         common["shape_id"] = d["shape_id"]

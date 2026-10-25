@@ -69,11 +69,14 @@ class StitchLine:
         self.corner_points = [c for c in self.corner_points
                               if (c - old).length() >= 1e-6]
 
-    def result(self) -> StitchResult:
+    def result(self, keepouts=None) -> StitchResult:
+        """The seam's holes; ``keepouts`` -- world ``(centre, radius)`` circles
+        (hardware) the seam stops short of and resumes past."""
         if len(self.points) < 2:
             return StitchResult(closed=self.closed)
         return stitch_polyline(list(self.points), list(self.corner_points),
-                               self.closed, self.settings)
+                               self.closed, self.settings,
+                               keepouts=keepouts or None)
 
     def bounds(self):
         xs = [p.x for p in self.points]

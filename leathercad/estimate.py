@@ -98,15 +98,16 @@ def estimate_project(doc, *, thickness_mm: float = 3.0, tail_mm: float = 150.0,
             if closed and len(pts) >= 4:
                 rings.append(_ring(pts))
         # holes carried by the shape's stitching
-        res = holes_for_shape(sh)
+        res = holes_for_shape(sh, doc)
         if res.count:
             est.holes += res.count
             st = sh.stitch or StitchSettings()
             est.thread_mm += estimate_thread(res, st, thickness_mm,
                                              tail_mm)["thread_mm"]
 
+    from .hardware import keepouts_near
     for line in doc.stitch_lines:
-        res = line.result()
+        res = line.result(keepouts_near(line.points, doc))
         if not res.count:
             continue
         est.holes += res.count

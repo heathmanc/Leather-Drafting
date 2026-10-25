@@ -84,6 +84,11 @@ class Shape:
     # entry, False for an edge that isn't sewn (a pocket's open mouth). None
     # (or a list of the wrong length) stitches every edge.
     stitch_edges: Optional[List[bool]] = None
+    # Hardware: the catalogue key this cut was placed for (see hardware.py)
+    # and the radius (mm, about the shape's origin) stitch holes keep clear
+    # of -- 0 for none. Any shape can be given a keep-out.
+    hardware: str = ""
+    keepout: float = 0.0
     # A construction/guide line: drawn dashed, used only as a snap/alignment
     # reference, never cut or exported.
     construction: bool = False
@@ -210,7 +215,7 @@ def copy_shape_attrs(src, dst, *, holes: bool = False):
     frame). Returns ``dst``."""
     import copy
     for name in ("name", "layer", "opacity", "construction", "group_id",
-                 "fold_dir", "fold_angle"):
+                 "fold_dir", "fold_angle", "hardware", "keepout"):
         if hasattr(src, name):
             setattr(dst, name, getattr(src, name))
     dst.stitch = copy.deepcopy(src.stitch)

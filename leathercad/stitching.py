@@ -803,10 +803,12 @@ def edge_runs(n: int, edges, closed: bool):
     return runs
 
 
-def holes_for_shape(shape) -> StitchResult:
+def holes_for_shape(shape, doc=None) -> StitchResult:
     """World-space holes for a shape, computed on its LOCAL outline then
     transformed. Baked holes are transformed directly. Used by export and the
-    symmetry check so hole placement is consistent regardless of rotation."""
+    symmetry check so hole placement is consistent regardless of rotation.
+    With ``doc``, the stitching keeps clear of the document's hardware
+    keep-outs (see ``hardware.keepouts_for_shape``)."""
     t = shape.transform
     baked = getattr(shape, "baked_holes", None)
     if baked:
@@ -815,13 +817,18 @@ def holes_for_shape(shape) -> StitchResult:
     st = getattr(shape, "stitch", None)
     if not (st and st.enabled):
         return StitchResult()
+    keep = None
+    if doc is not None:
+        from .hardware import keepouts_for_shape
+        keep = keepouts_for_shape(shape, doc) or None
     res = stitch_shape_path(shape.local_path(), st,
-                            getattr(shape, "stitch_edges", None))
+                            getattr(shape, "stitch_edges", None), keep)
     res.holes = [Hole(t.apply(h.point), t.apply_dir(h.tangent)) for h in res.holes]
     return res
 
 
-def stitch_shape_path(path: Path, settings, edges=None) -> StitchResult:
+def stitch_shape_path(path: Path, settings, edges=None,
+                      keepouts=None) -> StitchResult:
     """Holes for a shape's own ``Path`` (local coordinates). Prefer this over
     ``stitch_polyline`` whenever the path is at hand: the stitch line is then
     inset from the true lines and arcs (exact straights, exact corner radii)
@@ -831,10 +838,14 @@ def stitch_shape_path(path: Path, settings, edges=None) -> StitchResult:
     isn't sewn (a pocket's open mouth). The stitch line is still the inset
     of the whole outline; it is just cut where a skipped edge begins and
     ends, and each remaining run is sewn as its own open seam, ending with
-    a hole at the inset corner."""
+    a hole at the inset corner.
+
+    ``keepouts`` -- ``[(local centre, radius)]`` circles (hardware) the stitch
+    line is cut out of: where it passes through one, the seam stops at the
+    circle's edge and starts again on the far side."""
     return stitch_polyline([Vec2(p.x, p.y) for p in path.flatten()],
                            list(path.corner_points), path.closed, settings,
-                           path=path, edges=edges)
+                           path=path, edges=edges, keepouts=keepouts)
 
 
 # ---------------------------------------------------------------------------
@@ -880,10 +891,12 @@ _stitch_cache: "OrderedDict" = None  # created lazily below
 
 
 def _cache_key(points, corner_points, closed, settings, exact=False,
-               edges=None):
+               edges=None, keepouts=None):
     return (
         bool(exact),
         tuple(bool(e) for e in edges) if edges is not None else None,
+        tuple((round(c.x, 6), round(c.y, 6), round(r, 6))
+              for c, r in keepouts) if keepouts else None,
         tuple((round(p.x, 6), round(p.y, 6)) for p in points),
         tuple((round(p.x, 6), round(p.y, 6)) for p in (corner_points or [])),
         bool(closed),
@@ -907,7 +920,7 @@ def _copy_result(res: StitchResult) -> StitchResult:
 
 def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
                     settings, path: Optional[Path] = None,
-                    edges=None) -> StitchResult:
+                    edges=None, keepouts=None) -> StitchResult:
     """Distribute holes on a world-space polyline using ``StitchSettings``.
 
     ``corner_points`` are geometric points where a hole must be forced (e.g.
@@ -930,13 +943,13 @@ def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
         from collections import OrderedDict
         _stitch_cache = OrderedDict()
     key = _cache_key(points, corner_points, closed, settings, path is not None,
-                     edges if path is not None else None)
+                     edges if path is not None else None, keepouts)
     hit = _stitch_cache.get(key)
     if hit is not None:
         _stitch_cache.move_to_end(key)
         return _copy_result(hit)
     res = _stitch_polyline_impl(points, corner_points, closed, settings, path,
-                                edges)
+                                edges, keepouts)
     _stitch_cache[key] = _copy_result(res)
     while len(_stitch_cache) > _CACHE_MAX:
         _stitch_cache.popitem(last=False)
@@ -946,7 +959,7 @@ def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
 def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
                           closed: bool, settings,
                           path: Optional[Path] = None,
-                          edges=None) -> StitchResult:
+                          edges=None, keepouts=None) -> StitchResult:
     from .offset import (inset_with_corners, inset_path_with_corners,
                          inset_path_images)
 
@@ -973,35 +986,63 @@ def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
 
     runs = (edge_runs(len(path.segments), edges, closed)
             if path is not None else None)
-    if runs is not None:
-        # Some edges aren't sewn: cut the stitch line where each kept run
-        # starts and ends (the images of those source vertices on the inset
-        # ring) and sew every run as its own open seam.
-        if not runs:
+    poly0 = Polyline(pts)
+    excl = (_keepout_intervals(poly0, keepouts, closed) if keepouts else [])
+    if runs is not None or excl:
+        # Some of the stitch line isn't sewn: edges the user left unsewn, and
+        # the stretches inside hardware keep-outs. Cut the line there and sew
+        # every remaining run as its own open seam (ending with a hole at
+        # the cut).
+        if runs == []:
             return StitchResult(closed=False)
-        poly = Polyline(pts)
-        if poly.length <= _EPS:
+        poly = poly0
+        total = poly.length
+        if total <= _EPS:
             return StitchResult(closed=False)
-        segs = path.segments
-        verts = []
-        for a, b in runs:
-            verts += [segs[a].start(), segs[b].end()]
-        images = inset_path_images(path, max(0.0, inset), verts)
+        spans = []                              # unwrapped (s0, s1), s1 > s0
+        if runs:
+            segs = path.segments
+            verts = []
+            for a, b in runs:
+                verts += [segs[a].start(), segs[b].end()]
+            images = inset_path_images(path, max(0.0, inset), verts)
+            for k, (a, b) in enumerate(runs):
+                ia = images[2 * k] if images[2 * k] is not None else verts[2 * k]
+                ib = (images[2 * k + 1] if images[2 * k + 1] is not None
+                      else verts[2 * k + 1])
+                s0, s1 = poly.nearest_arclength(ia), poly.nearest_arclength(ib)
+                if closed and (s1 <= s0 + 1e-6):
+                    s1 += total                 # wraps (or is the whole ring)
+                spans.append((s0, s1))
+        elif closed:
+            # the whole ring, opened where the first keep-out ends
+            start = excl[0][1] % total
+            spans.append((start, start + total))
+        else:
+            spans.append((0.0, total))
+        kept = _subtract_intervals(spans, excl, total if closed else None)
+        if not kept and not excl and closed and runs:
+            kept = spans
         cor_s = [(poly.nearest_arclength(cp), cp) for cp in corner_points]
         out = StitchResult(closed=False)
-        for k, (a, b) in enumerate(runs):
-            ia = images[2 * k] if images[2 * k] is not None else verts[2 * k]
-            ib = (images[2 * k + 1] if images[2 * k + 1] is not None
-                  else verts[2 * k + 1])
-            s0, s1 = poly.nearest_arclength(ia), poly.nearest_arclength(ib)
-            whole = closed and len(runs) == 1 and abs(s1 - s0) < 1e-6
-            run_pts = (list(poly.points) if whole
-                       else _sub_polyline(poly, s0, s1, closed))
+        for s0, s1 in kept:
+            if s1 - s0 <= 1e-6:
+                continue
+            whole = closed and not excl and abs((s1 - s0) - total) < 1e-6
+            if whole:
+                res = _distribute(poly, corner_points, True, settings, arcs,
+                                  total)
+                return _apply_rows(res, settings)
+            run_pts = _sub_polyline(poly, s0 % total if closed else s0,
+                                    s1 % total if closed else min(s1, total),
+                                    closed)
             if len(run_pts) < 2:
                 continue
             rpoly = Polyline(run_pts)
             run_corners = [cp for s, cp in cor_s
-                           if _within_run(s, s0, s1, poly.length, closed)]
+                           if _within_run(s, s0 % total if closed else s0,
+                                          s1 % total if closed else s1,
+                                          total, closed)]
             res = _distribute(rpoly, run_corners, False, settings, arcs,
                               rpoly.length)
             out.holes += res.holes
@@ -1016,6 +1057,76 @@ def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
         return StitchResult(closed=closed)
     return _apply_rows(_distribute(poly, corner_points, closed, settings,
                                    arcs, poly.length), settings)
+
+
+def _keepout_intervals(poly: "Polyline", keepouts, closed: bool):
+    """Arc-length intervals ``(a, b)`` of ``poly`` lying inside any keep-out
+    circle, merged, as plain numbers in [0, total] (an interval touching
+    both ends of a closed ring is reported as two pieces)."""
+    pts = poly.points
+    cum = poly.cum
+    raw = []
+    for c, r in keepouts:
+        inside = (pts[0] - c).length() < r
+        start = 0.0 if inside else None
+        for i in range(len(pts) - 1):
+            a, b = pts[i], pts[i + 1]
+            d = b - a
+            L2 = d.length_sq()
+            if L2 <= 1e-18:
+                continue
+            f = a - c
+            qa, qb, qc = L2, 2.0 * f.dot(d), f.dot(f) - r * r
+            disc = qb * qb - 4 * qa * qc
+            if disc <= 0:
+                continue
+            root = math.sqrt(disc)
+            for t in sorted(((-qb - root) / (2 * qa), (-qb + root) / (2 * qa))):
+                if 0.0 < t < 1.0:
+                    s = cum[i] + math.sqrt(L2) * t
+                    if inside:
+                        raw.append((start, s))
+                        inside, start = False, None
+                    else:
+                        inside, start = True, s
+        if inside:
+            raw.append((start, cum[-1]))
+    if not raw:
+        return []
+    raw.sort()
+    merged = [list(raw[0])]
+    for a, b in raw[1:]:
+        if a <= merged[-1][1] + 1e-9:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    return [(a, b) for a, b in merged if b - a > 1e-9]
+
+
+def _subtract_intervals(spans, excl, total):
+    """``spans`` (unwrapped, may run past ``total`` on a closed ring) minus
+    the exclusion intervals (in [0, total], repeated a turn later when the
+    ring wraps). Returns the leftover pieces, in order."""
+    cuts = list(excl)
+    if total is not None:
+        cuts += [(a + total, b + total) for a, b in excl]
+        cuts += [(a - total, b - total) for a, b in excl]
+    out = []
+    for s0, s1 in spans:
+        pieces = [(s0, s1)]
+        for a, b in cuts:
+            nxt = []
+            for p0, p1 in pieces:
+                if b <= p0 or a >= p1:
+                    nxt.append((p0, p1))
+                    continue
+                if a > p0:
+                    nxt.append((p0, a))
+                if b < p1:
+                    nxt.append((b, p1))
+            pieces = nxt
+        out += pieces
+    return out
 
 
 def _within_run(s: float, s0: float, s1: float, total: float,

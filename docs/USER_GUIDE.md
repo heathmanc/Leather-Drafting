@@ -432,6 +432,25 @@ so you can stop before or after the corner. Properties shows **Edges sewn:
 does the same. The pattern of holes on the sewn edges is unchanged, so a
 mating piece stitched all the way round still registers hole for hole.
 
+### Hardware and stitch keep-outs
+
+The **Parts library** (`Ctrl+3`) has a **Hardware** section: rivets, snaps
+(Line 16 / 20 / 24), Chicago screws, Sam Browne studs and their buttonhole,
+magnetic snaps, eyelets and grommets, buckle-tongue and belt slots, a turn
+lock, and ring footprints. Double-click one to place **the cut it needs** —
+the post hole, slot, prong slits or keyhole — on the Cut layer, grouped with
+a dashed construction circle showing the cap or flange **footprint** (never
+cut). The sizes are the common nominal ones; resize a hole like any shape.
+
+Each piece of hardware carries a **stitch keep-out**: a radius, about its
+centre, that stitch holes keep clear of (the footprint radius plus 1 mm).
+Drop a rivet on a stitched piece and the seam **stops at the keep-out's edge
+and starts again past it** — no hole ends up under a cap — on shapes and on
+drawn seams alike, and it re-flows as you drag the hardware about. A dashed
+ring shows the keep-out when the part is selected; **Properties → Stitch
+keep-out** changes it (0 removes it), and **right-click → Stitch keep-out…**
+gives *any* shape one, so a hole you drew yourself works the same way.
+
 ## 8. Precision drawing: snapping and guides
 
 Two independent toggles in the top toolbar:

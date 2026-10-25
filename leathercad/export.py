@@ -62,7 +62,7 @@ def collect(doc: Document, kerf: float = 0.0):
             pts, corners, closed = sh.world_polyline()
             outlines.append((pts, color))
             cuttable.append(bool(closed) and role == "cut" and len(pts) >= 4)
-        res = holes_for_shape(sh) if holes_shown else None
+        res = holes_for_shape(sh, doc) if holes_shown else None
         if res is not None and res.count:
             style = sh.stitch or StitchSettings()
             # a mirrored piece reverses the slant sense of slit/diamond holes;
@@ -89,7 +89,8 @@ def collect(doc: Document, kerf: float = 0.0):
     for sl in doc.stitch_lines:
         if not shown(sl.layer):
             continue
-        res = sl.result()
+        from .hardware import keepouts_near
+        res = sl.result(keepouts_near(sl.points, doc))
         if res.count:
             stitches.append((res, sl.settings, stitch_color))
 

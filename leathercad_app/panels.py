@@ -177,6 +177,12 @@ class PropertiesPanel(QWidget):
         self.opacity.setRange(10, 100)
         fa.addRow("Layer", self.layer_combo)
         fa.addRow("Opacity", self.opacity)
+        self.keepout = _spin(0.0, 500.0, 0.5, 2)
+        self.keepout.setToolTip(
+            "Stitch holes keep this far from the shape's centre: the cap or "
+            "flange of a piece of hardware plus clearance. 0 = none.")
+        fa.addRow("Stitch keep-out", self.keepout)
+        self._appear_form = fa
         root.addWidget(self.g_appear)
 
         # Stitching
@@ -268,6 +274,8 @@ class PropertiesPanel(QWidget):
                     self.slit_angle):
             wdg.valueChanged.connect(self._apply)
             wdg.editingFinished.connect(self._commit)
+        self.keepout.valueChanged.connect(self._apply)
+        self.keepout.editingFinished.connect(self._commit)
         self.row_spacing.valueChanged.connect(self._apply)
         self.row_spacing.editingFinished.connect(self._commit)
         self.backstitch.valueChanged.connect(self._apply)
@@ -403,6 +411,12 @@ class PropertiesPanel(QWidget):
 
         if is_shape:
             sh = it.model
+            self.keepout.setValue(float(getattr(sh, "keepout", 0.0) or 0.0))
+            # shown for hardware (or anything already given one); any shape
+            # can get one from right-click -> Stitch keep-out…
+            self._appear_form.setRowVisible(
+                self.keepout, bool(getattr(sh, "hardware", ""))
+                or float(getattr(sh, "keepout", 0.0) or 0.0) > 0)
             self.pos_x.setValue(sh.transform.x)
             self.pos_y.setValue(sh.transform.y)
             self.rot.setValue(sh.transform.rotation)
@@ -809,6 +823,9 @@ class PropertiesPanel(QWidget):
             self._apply_transform(sh)
             sh.opacity = self.opacity.value() / 100.0
             sh.layer = self.layer_combo.currentData() or sh.layer
+            if self.keepout in self._dirty:
+                sh.keepout = self.keepout.value()
+                self.canvas._refresh_keepout_dependents()
             self._apply_shape_geometry(sh)
             self._record_bindings(sh)
             if self.g_stitch.isChecked():

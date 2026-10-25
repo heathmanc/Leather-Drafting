@@ -64,6 +64,14 @@ class PartsPanel(QWidget):
             for name, key in rows:
                 self._leaf(cat, name, "builtin:" + key,
                            "Built-in size template — double-click to place")
+        # hardware: the cut each fitting needs, with its stitch keep-out
+        from leathercad import hardware
+        for title, rows in hardware.categories():
+            cat = self._category("Hardware · " + title)
+            for name, key in rows:
+                self._leaf(cat, name, "hw:" + key,
+                           "Hardware — double-click to place the hole / slot "
+                           "it needs; stitching keeps clear of it")
         # the user's own saved parts
         my = self._category(MY_PARTS)
         parts = partslib.list_parts(self.base_dir)
@@ -106,6 +114,9 @@ class PartsPanel(QWidget):
         if p.startswith("builtin:"):
             from . import builtin_parts
             shapes, texts = builtin_parts.build_builtin(p[len("builtin:"):])
+        elif p.startswith("hw:"):
+            from leathercad import hardware
+            shapes, texts = hardware.build(p[len("hw:"):])
         else:
             shapes, texts = partslib.load_part_full(p)
         self.canvas.place_shapes(shapes, texts)
@@ -114,9 +125,9 @@ class PartsPanel(QWidget):
         p = self._current_data()
         if not p:
             return
-        if p.startswith("builtin:"):
+        if p.startswith("builtin:") or p.startswith("hw:"):
             QMessageBox.information(self, "Parts library",
-                                    "Built-in size templates can't be deleted.")
+                                    "Built-in parts can't be deleted.")
             return
         partslib.delete_part(p)
         self.reload()

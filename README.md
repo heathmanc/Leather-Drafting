@@ -144,7 +144,7 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Measure** | Measure tool (`Q`) — click two (snapped) points for a live **length / angle / dx / dy** readout in the status bar |
 | **Dimension** | Dimension tool (`D`) — click two points to drop a permanent **dimension annotation** (extension lines, arrows, measured length). Snap the ends onto a shape and the dimension **tracks it**: move or resize the shape and the length updates. Annotations only — never cut or exported |
 | **Group (move together)** | select two or more items (holes, shapes, seams) → **Group** (`Ctrl+G`) — they share a group and move as one unit; clicking any member selects the whole group. **Ungroup** (`Ctrl+Shift+G`) breaks it apart. Survives save/undo |
-| **Attach holes to shape** | *Attach holes to shape* (`Ctrl+Shift+A`) bakes loose holes into a single shape so they ride with it for cross-piece registration; *Explode stitching → holes* turns a shape's stitching back into individual, deletable holes |
+| **Attach holes to shape** | *Attach holes to shape* (`Ctrl+Shift+A`) bakes loose holes into a single shape so they ride with it for cross-piece registration; *Explode stitching → holes* turns a shape's stitching back into individual, deletable holes (they stay in the piece's move-group) |
 | **Right-click menu** | Group / Ungroup / Attach holes / Convert to nodes / Duplicate / Delete on the selection |
 | **Radius corners** | select a rectangle/polygon, set *Corner radius* in Properties |
 | **Iron & holes** | per shape: pick an iron (mm or SPI), inset, round or slanted-slit holes, single or **double row** (saddle stitch) + backstitch, live hole count + spacing readout |

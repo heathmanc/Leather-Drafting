@@ -426,7 +426,9 @@ extra construction.
 
 * **Trim** (`X`) — click the part of an outline you want gone; it is cut back
   to where it crosses other geometry, like Fusion 360 / LightBurn trim. The
-  doomed piece highlights red on hover. Arcs survive trimming as arcs.
+  doomed piece highlights red on hover. Arcs survive trimming as arcs. A
+  line drawn to end on an outline counts as meeting it even if it stops a
+  hair short (up to 0.05 mm).
 * **Break apart** (`Ctrl+B`) — explode a shape into its individual edges
   (lines and arcs), each independently movable.
 * **Join / weld** (`Ctrl+J`) — select several touching segments and weld them

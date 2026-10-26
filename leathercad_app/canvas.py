@@ -1407,7 +1407,8 @@ class Canvas(QGraphicsView):
             elif self.tool == TEXT:
                 self._place_text(pos)
             elif self.tool in (MEASURE, DIMENSION):
-                # two clicks: first sets the start, second finishes.
+                # two clicks: first sets the start, second finishes (or, with
+                # Drag to draw on, a press-drag-release does it in one)
                 if self._start is None:
                     self._start = pos
                     self._preview = QGraphicsPathItem()
@@ -1416,15 +1417,8 @@ class Canvas(QGraphicsView):
                     self._preview.setPen(pen)
                     self.scene_obj.addItem(self._preview)
                 else:
-                    start = self._start
-                    self._start = None
-                    self._clear_preview()
                     self._suppress_next_release = True
-                    if self.tool == MEASURE:
-                        self._show_measure(start, pos)
-                    else:
-                        self._add_dimension(start, pos)
-                    self._hide_snap_marker()
+                    self._finish_measure_like(pos)
             elif self.tool in _DRAG_TOOLS:
                 if not self.drag_to_draw and self._start is not None:
                     # click-to-place: this is the second click -> finish. Swallow
@@ -1435,9 +1429,10 @@ class Canvas(QGraphicsView):
                     self._start = None
                     self._clear_preview()
                     self._suppress_next_release = True
-                    self._finalize_drag(start, pos)
+                    made = self._finalize_drag(start, pos)
                     self._hide_snap_marker()
-                    self.statusMessage.emit("")
+                    if made:               # keep a refusal ("too thin") visible
+                        self.statusMessage.emit("")
                 else:
                     # begin (drag-mode press, or first click of click-to-place)
                     self._start = pos
@@ -1460,9 +1455,22 @@ class Canvas(QGraphicsView):
         return (f"length {U.fmt(dist)}   ∠ {ang:.1f}°   "
                 f"(dx {U.fmt_num(dx)}, dy {U.fmt_num(dy)})")
 
+    def _finish_measure_like(self, pos: QPointF) -> None:
+        """Second point of a Measure / Dimension: report or create it."""
+        start = self._start
+        self._start = None
+        self._clear_preview()
+        if self.tool == MEASURE:
+            self._show_measure(start, pos)
+        else:
+            self._add_dimension(start, pos)
+        self._hide_snap_marker()
+
     def _show_measure(self, a: QPointF, b: QPointF) -> None:
-        self.statusMessage.emit(self._measure_text(a, b))
+        # drop back to Select FIRST: its hint used to overwrite the result in
+        # the same click, so the distance was only ever readable while hovering
         self.toolFinished.emit()
+        self.statusMessage.emit(self._measure_text(a, b))
 
     def _add_dimension(self, a: QPointF, b: QPointF) -> None:
         from leathercad.dimension import Dimension
@@ -1470,11 +1478,33 @@ class Canvas(QGraphicsView):
                         offset=8.0, layer="Dimension",
                         a_ref=self._dim_attach(a), b_ref=self._dim_attach(b))
         self.doc.dimensions.append(dim)
-        self._add_item(DimensionItem(dim, self))
-        self.statusMessage.emit(self._measure_text(a, b))
+        item = self._add_item(DimensionItem(dim, self))
+        self.scene_obj.clearSelection()         # selected, like any new object
+        item.setSelected(True)
         self.documentChangedSig.emit()
         self._emit_commit()
         self.toolFinished.emit()
+        self.statusMessage.emit(self._measure_text(a, b)
+                                + "   (arrow keys nudge the dimension)")
+
+    def cancel_in_progress(self) -> None:
+        """Abandon whatever the current tool has half-drawn: a first corner,
+        polygon / seam / pen points, arc or calibration clicks, and their
+        dashed previews. Used when the tool changes under them."""
+        self._cancel_poly()
+        self._cancel_pen()
+        self._cancel_multi()
+        self._cal_pts = []
+        self._start = None
+        self._clear_preview()
+        self._hide_snap_marker()
+
+    def take_last_created(self):
+        """The item the last tool action created (and forget it) -- what a
+        finished tool hands the Properties panel to focus."""
+        item = getattr(self, "_last_created", None)
+        self._last_created = None
+        return item if (item is not None and _alive(item)) else None
 
     def _dim_attach(self, world: QPointF):
         """If ``world`` sits on a shape's snap node, return (shape_id, u, v) --
@@ -1539,6 +1569,7 @@ class Canvas(QGraphicsView):
         item = self._add_item(TextItem(tx, self))
         self.scene_obj.clearSelection()
         item.setSelected(True)
+        self._last_created = item
         self.documentChangedSig.emit()
         self._emit_commit()
         self.toolFinished.emit()
@@ -1757,13 +1788,25 @@ class Canvas(QGraphicsView):
         # In drag mode, releasing finishes the shape. In click-to-place mode the
         # release after the first click does nothing (the second click finishes).
         if (self.drag_to_draw and self._preview is not None
-                and self._start is not None):
+                and self._start is not None and self.tool in _DRAG_TOOLS):
             self.scene_obj.removeItem(self._preview)
             self._preview = None
-            self._finalize_drag(self._start, pos)
+            made = self._finalize_drag(self._start, pos)
             self._start = None
             self._hide_snap_marker()
-            self.statusMessage.emit("")
+            if made:                        # keep a refusal ("too thin") visible
+                self.statusMessage.emit("")
+            event.accept()
+            return
+        if (self.drag_to_draw and self._start is not None
+                and self.tool in (MEASURE, DIMENSION)):
+            # Measure / Dimension used to be impossible with Drag to draw on:
+            # the release fell into the shape finaliser and threw the start
+            # away. A real drag finishes here; a plain click waits for the
+            # second click, as the hint says.
+            dx, dy = pos.x() - self._start.x(), pos.y() - self._start.y()
+            if math.hypot(dx, dy) > 4.0 / max(self._zoom, 1e-6):
+                self._finish_measure_like(pos)
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -2123,16 +2166,21 @@ class Canvas(QGraphicsView):
             self._preview = None
 
     # -- finalize creation ---------------------------------------------
-    def _finalize_drag(self, a: QPointF, b: QPointF) -> None:
+    def _finalize_drag(self, a: QPointF, b: QPointF) -> bool:
+        """Create the shape for a two-point tool. False when the input was
+        refused (then the status line says why and must be left alone)."""
         w, h = abs(b.x() - a.x()), abs(b.y() - a.y())
         if w < 1 and h < 1:
-            return
+            self.statusMessage.emit(
+                "Too small to be a shape — the two points are on top of "
+                "each other")
+            return False
         if self.tool in (RECT, ROUNDED, ELLIPSE, SLOT) and (w < 0.5 or h < 0.5):
             # a flat box -- a shape with no height (and stitch holes!) --
             # comes from a mis-click along a line, not from wanting it
             self.statusMessage.emit(
                 "Too thin to be a shape — drag out both a width and a height")
-            return
+            return False
         cx, cy = (a.x() + b.x()) / 2, (a.y() + b.y()) / 2
         if self.tool == RECT:
             sh = Rectangle(width=w, height=h,
@@ -2166,9 +2214,10 @@ class Canvas(QGraphicsView):
                            layer=self._current_layer)
             sh.construction = True
         else:
-            return
+            return False
         self.add_shape(sh)
         self.toolFinished.emit()
+        return True
 
     def _place_hole(self, pos: QPointF) -> None:
         d = self.hole_tool_diameter
@@ -2179,10 +2228,39 @@ class Canvas(QGraphicsView):
 
     def _finalize_poly(self) -> None:
         pts = list(self._poly_pts)
+        # a double-click on the last vertex repeats it; identical neighbours
+        # add nothing to the shape (and gave a zero-length seam)
+        dedup: list = []
+        for p in pts:
+            if not dedup or math.hypot(p.x() - dedup[-1].x(),
+                                       p.y() - dedup[-1].y()) > 1e-6:
+                dedup.append(p)
+        pts = dedup
+        if not pts:
+            self._poly_pts = []
+            self._clear_preview()
+            return
+        degenerate = len(pts) < (3 if self.tool == POLYGON else 2)
+        if self.tool == POLYGON and not degenerate:
+            area = 0.0
+            for i in range(len(pts)):
+                a, b = pts[i], pts[(i + 1) % len(pts)]
+                area += a.x() * b.y() - b.x() * a.y()
+            degenerate = abs(area) < 1.0             # all in a line
+        if degenerate:
+            # too little to make the shape: keep what was clicked and say so
+            # (a 2-point "polygon" was a zero-area outline with doubled holes,
+            # a repeated click a zero-length seam)
+            self._poly_pts = pts
+            self._update_poly_preview(pts[-1])
+            self.statusMessage.emit(
+                "A polygon needs three corners that aren't in a line — keep "
+                "clicking, or Esc to cancel" if self.tool == POLYGON else
+                "Two different points are needed — keep clicking, or Esc to "
+                "cancel")
+            return
         self._poly_pts = []
         self._clear_preview()
-        if len(pts) < 2:
-            return
         if self.tool == POLYGON:
             cx = sum(p.x() for p in pts) / len(pts)
             cy = sum(p.y() for p in pts) / len(pts)
@@ -2559,6 +2637,8 @@ class Canvas(QGraphicsView):
             base["geom"] = copy.deepcopy(
                 (m.nodes, m.edges) if isinstance(m, EditablePath) else m.points)
             base["corner_radius"] = getattr(m, "corner_radius", 0.0)
+        if getattr(m, "baked_holes", None):
+            base["baked"] = copy.deepcopy(m.baked_holes)   # they stretch too
         return base
 
     def _begin_group_resize(self, primary) -> None:
@@ -2640,21 +2720,40 @@ class Canvas(QGraphicsView):
                 m.transform.x = ncx - lc0x * s_uni
                 m.transform.y = ncy - lc0y * s_uni
             else:
+                from leathercad.shapes import map_baked_holes
                 o = scaled(Vec2(base["x"], base["y"]))
                 m.transform.x, m.transform.y = o.x, o.y
                 mx, my = axes_for(m)
+                if "baked" in base:
+                    m.baked_holes = copy.deepcopy(base["baked"])
                 if isinstance(m, Rectangle):
                     m.width = base["width"] * mx
                     m.height = base["height"] * my
                     m.corner_radius = base["corner_radius"] * min(sx, sy)
+                    map_baked_holes(m, lambda p: Vec2(p.x * mx, p.y * my),
+                                    lambda v: Vec2(v.x * mx, v.y * my))
                 elif isinstance(m, Ellipse):
-                    m.rx = base["rx"] * mx
-                    m.ry = base["ry"] * my
+                    if isinstance(m, Circle):
+                        k = math.sqrt(max(mx * my, 1e-9))
+                        m.rx = m.ry = base["rx"] * k
+                        map_baked_holes(m, lambda p: Vec2(p.x * k, p.y * k),
+                                        lambda v: v)
+                    else:
+                        m.rx = base["rx"] * mx
+                        m.ry = base["ry"] * my
+                        map_baked_holes(m, lambda p: Vec2(p.x * mx, p.y * my),
+                                        lambda v: Vec2(v.x * mx, v.y * my))
                 elif "geom" in base:
                     bt, t = base["t"], m.transform
 
                     def remap(p):
                         return t.inverse_apply(scaled(bt.apply(p)))
+
+                    def remap_dir(v):
+                        w = bt.apply_dir(v)
+                        return t.inverse_apply_dir(
+                            scaled(Vec2(pc0x + w.x, pc0y + w.y))
+                            - Vec2(pc1x, pc1y))
                     if isinstance(m, EditablePath):
                         nodes, edges = copy.deepcopy(base["geom"])
                         m.nodes = [remap(p) for p in nodes]
@@ -2668,6 +2767,7 @@ class Canvas(QGraphicsView):
                         m.points = [remap(p) for p in base["geom"]]
                     if base["corner_radius"]:
                         m.corner_radius = base["corner_radius"] * min(sx, sy)
+                    map_baked_holes(m, remap, remap_dir)
             it.sync_from_model(recompute_holes=False)
 
     # -- tracked scene item lifetime -----------------------------------
@@ -3314,15 +3414,26 @@ class Canvas(QGraphicsView):
         from leathercad.stitching import Polyline
         sel = list(self.selected_items())
         rail = None
+
+        def rail_rank(it):
+            # a construction guide is the rail; failing one, the longest
+            # open path (two plain lines used to pick whichever was drawn
+            # first, so a 100 mm edge got copied along a 10 mm stub)
+            m = it.model
+            return (1 if getattr(m, "construction", False) else 0,
+                    Polyline([Vec2(p.x, p.y)
+                              for p in m.world_polyline()[0]]).length)
+
         for it in sel:
             m = self._item_model(it)
             if isinstance(it, ShapeItem) and not m.local_path().closed \
                     and len(m.world_polyline()[0]) >= 2:
-                if rail is None or (getattr(m, "construction", False)
-                                    and not getattr(rail.model, "construction",
-                                                    False)):
+                if rail is None or rail_rank(it) > rail_rank(rail):
                     rail = it
         if rail is None or count < 1:
+            self.statusMessage.emit(
+                "Copy along path: select the pieces AND an open path or "
+                "guide to copy them along")
             return False
         others = [it for it in sel if it is not rail]
         if not others:
@@ -3342,6 +3453,7 @@ class Canvas(QGraphicsView):
             stations = ([0.0] if count == 1 else
                         [poly.length * i / (count - 1) for i in range(count)])
         made = []
+        skipped = 0
         self._suppress_commit = True
         self._suspend_move_refresh = True
         try:
@@ -3351,6 +3463,10 @@ class Canvas(QGraphicsView):
                 if follow:
                     tg = poly.tangent_at(min(s, poly.length - 1e-6))
                     ang = math.degrees(math.atan2(tg.y, tg.x))
+                if (math.hypot(p.x - c0[0], p.y - c0[1]) < 0.05
+                        and abs(ang) < 1e-6):
+                    skipped += 1          # a clone exactly on the original:
+                    continue              # an invisible double cut
                 groups = {}
                 for it in others:
                     m = self._clone_item(it, translate=(p.x - c0[0], p.y - c0[1]),
@@ -3362,6 +3478,12 @@ class Canvas(QGraphicsView):
             self._suspend_move_refresh = False
             self._suppress_commit = False
         self._finish_array(made)
+        n_copies = len(stations) - skipped
+        self.statusMessage.emit(
+            f"Copied {len(others)} item(s) {n_copies} times along the "
+            f"{'guide' if getattr(rail.model, 'construction', False) else 'path'}"
+            + (" — the copy that would have landed on the original was "
+               "skipped" if skipped else ""))
         return True
 
     def toggle_stitch_edge(self, item, idx: int) -> None:
@@ -3567,6 +3689,11 @@ class Canvas(QGraphicsView):
             return
         remap_stitch_edges(ep, edges_before)
         it.sync_from_model()
+        if not it.isSelected():
+            # a polygon just became an editable path: keep it the selection
+            # so Properties doesn't go blank mid-workflow
+            self.scene_obj.clearSelection()
+            it.setSelected(True)
         self._fillet_done_msg(chamfer, done)
         self.documentChangedSig.emit()
         self._emit_commit()
@@ -3743,6 +3870,32 @@ class Canvas(QGraphicsView):
                 "Select two or more CLOSED shapes for a boolean operation")
             return
         ordered.sort(key=lambda x: x[0])          # bottom-most first
+
+        # Shapes that don't even come near the subject take no part: a far
+        # cutter used to be deleted anyway, a far shape unioned lost its
+        # stitching, and intersecting two separate pieces deleted both.
+        def bbox(ring):
+            return (min(p.x for p in ring), min(p.y for p in ring),
+                    max(p.x for p in ring), max(p.y for p in ring))
+
+        def touches(b1, b2, slack=0.05):
+            return not (b1[2] < b2[0] - slack or b2[2] < b1[0] - slack
+                        or b1[3] < b2[1] - slack or b2[3] < b1[1] - slack)
+
+        subject_box = bbox(ordered[0][2])
+        far = [o for o in ordered[1:] if not touches(subject_box, bbox(o[2]))]
+        if far:
+            names = {"union": "merge", "difference": "subtract",
+                     "intersection": "intersect"}
+            if len(far) == len(ordered) - 1:
+                self.statusMessage.emit(
+                    f"Nothing to {names.get(op, op)}: the shapes don't "
+                    "overlap or touch the bottom one")
+                return
+            ordered = [o for o in ordered if o not in far]
+            self.statusMessage.emit(
+                f"{len(far)} shape(s) don't touch the bottom one and were "
+                "left alone")
         base = ordered[0][1].model
         result = combine(op, [ring for _i, _it, ring in ordered])
         # Which result vertices are real corners: the inputs' own corners
@@ -3816,12 +3969,19 @@ class Canvas(QGraphicsView):
             first_item.setSelected(True)
         self.documentChangedSig.emit()
         self._emit_commit()
+        verb = {"union": "Merged", "difference": "Subtracted",
+                "intersection": "Intersected"}.get(op, op)
+        self.statusMessage.emit(
+            f"{verb} {len(ordered)} shapes into {len(made)}"
+            + (f" (the shapes that didn't touch were left alone)" if far
+               else ""))
 
     def add_shape(self, shape) -> ShapeItem:
         self.doc.add_shape(shape)
         item = self._add_item(ShapeItem(shape, self))
         self.scene_obj.clearSelection()
         item.setSelected(True)
+        self._last_created = item
         self.documentChangedSig.emit()
         self._emit_commit()
         return item
@@ -3833,6 +3993,7 @@ class Canvas(QGraphicsView):
         # typing into Properties edited the wrong object
         self.scene_obj.clearSelection()
         item.setSelected(True)
+        self._last_created = item
         self.documentChangedSig.emit()
         self._emit_commit()
         return item
@@ -4170,9 +4331,14 @@ class Canvas(QGraphicsView):
             self._offset_preview.setZValue(997)
             self.scene_obj.addItem(self._offset_preview)
         self._offset_preview.setPath(path)
-        side = "outward" if dist > 0 else "inward"
+        if self._offset_closed:
+            side = "outward" if dist > 0 else "inward"
+        else:
+            side = "to the right of travel" if dist > 0 else "to the left of travel"
+        what = ("another guide" if getattr(self._offset_item.model, "construction",
+                                           False) else "a copy")
         self.statusMessage.emit(
-            f"Offset {abs(dist):.2f} mm {side} · click to place · "
+            f"Offset {abs(dist):.2f} mm {side} · click to place {what} · "
             f"Enter = type an exact distance · Esc cancels")
 
     def _commit_offset(self, dist: Optional[float] = None) -> None:
@@ -4593,7 +4759,13 @@ class Canvas(QGraphicsView):
     def nudge_selected(self, dx: float, dy: float) -> None:
         """Move the selection (with its groups) by (dx, dy) mm."""
         items = self._selection_with_groups()
+        # dimensions have no group / model but can be nudged off the line
+        # they measure
+        items += [it for it in self.selected_items()
+                  if isinstance(it, DimensionItem) and _alive(it)]
         if not items or (abs(dx) < 1e-12 and abs(dy) < 1e-12):
+            if not items:
+                self.statusMessage.emit("Select something to move")
             return
         self._bake_seams(items)
         self._suspend_move_refresh = True
@@ -4613,9 +4785,12 @@ class Canvas(QGraphicsView):
         ``pivot`` (default: the selection's centre). Sizes, positions, holes,
         seams and labels all scale; stitch pitch and inset are physical and
         stay as set."""
+        from leathercad.shapes import map_baked_holes, scale_baked_holes
         sy = sx if sy is None else sy
         items = self._selection_with_groups()
         if not items or sx <= 0 or sy <= 0:
+            if not items:
+                self.statusMessage.emit("Select something to scale")
             return
         self._bake_seams(items)
         b = self._unit_bounds(items)          # model bounds, not pen margins
@@ -4626,6 +4801,9 @@ class Canvas(QGraphicsView):
 
         def scaled(p):
             return Vec2(px + (p.x - px) * sx, py + (p.y - py) * sy)
+
+        def scaled_dir(v):
+            return Vec2(v.x * sx, v.y * sy)
 
         self._suspend_move_refresh = True
         try:
@@ -4653,6 +4831,10 @@ class Canvas(QGraphicsView):
                         # one stretches along the page axes like the rest
                         def remap(p):
                             return t.inverse_apply(scaled(t.apply(p)))
+
+                        def remap_dir(v):
+                            return t.inverse_apply_dir(
+                                scaled_dir(t.apply_dir(v)))
                         if isinstance(m, EditablePath):
                             m.nodes = [remap(p) for p in m.nodes]
                             for e in m.edges:
@@ -4664,6 +4846,7 @@ class Canvas(QGraphicsView):
                             m.points = [remap(p) for p in m.points]
                         if getattr(m, "corner_radius", 0.0):
                             m.corner_radius *= min(sx, sy)
+                        map_baked_holes(m, remap, remap_dir)   # holes ride along
                         it.sync_from_model()
                         continue
                     # parametric: size in its own frame, origin through world
@@ -4673,6 +4856,11 @@ class Canvas(QGraphicsView):
                     ly = sx * s + sy * c
                     o = scaled(Vec2(t.x, t.y))
                     t.x, t.y = o.x, o.y
+                    if isinstance(m, Circle):
+                        k = math.sqrt(lx * ly)
+                        scale_baked_holes(m, k, k)
+                    else:
+                        scale_baked_holes(m, lx, ly)   # attached holes too
                     if isinstance(m, Rectangle):
                         m.width *= lx
                         m.height *= ly
@@ -4701,6 +4889,7 @@ class Canvas(QGraphicsView):
         items = [it for it in self._selection_with_groups()
                  if it not in exclude]
         if not items:
+            self.statusMessage.emit("Select something to flip")
             return
         self._bake_seams(items)
         b = self._unit_bounds(items)
@@ -4792,15 +4981,16 @@ class Canvas(QGraphicsView):
         units, order = {}, []
         for it in self.selected_items():
             m = self._item_model(it)
-            if m is None:
+            if m is None and not isinstance(it, DimensionItem):
                 continue
             gid = getattr(m, "group_id", None)
             if gid:
                 key = ("g", gid)
-            elif isinstance(it, (ShapeItem, TextItem)):
-                key = ("i", id(it))
             else:
-                continue              # a loose hole / seam isn't an object
+                # an ungrouped outline, label, loose hole, seam or dimension
+                # is its own unit (holes and seams used to be skipped, so
+                # Align moved the outlines and left the seam behind)
+                key = ("i", id(it))
             if key not in units:
                 units[key] = []
                 order.append(key)
@@ -4831,6 +5021,10 @@ class Canvas(QGraphicsView):
                 for c in it.model.world_contours():
                     xs += [p.x for p in c]
                     ys += [p.y for p in c]
+            elif isinstance(it, DimensionItem):
+                for p in (it.dim.p1, it.dim.p2):
+                    xs.append(p.x)
+                    ys.append(p.y)
         if not xs:
             return None
         return min(xs), min(ys), max(xs), max(ys)
@@ -4850,12 +5044,21 @@ class Canvas(QGraphicsView):
                 ln.points = [Vec2(p.x + dx, p.y + dy) for p in ln.points]
                 ln.corner_points = [Vec2(p.x + dx, p.y + dy)
                                     for p in ln.corner_points]
+            elif isinstance(it, DimensionItem):
+                # a free dimension can be nudged off the line it measures;
+                # one attached to shapes re-anchors on them again later
+                d = it.dim
+                d.p1 = Vec2(d.p1.x + dx, d.p1.y + dy)
+                d.p2 = Vec2(d.p2.x + dx, d.p2.y + dy)
             it.sync_from_model()
 
     def align_selected(self, mode: str) -> None:
         units = [(u, self._unit_bounds(u)) for u in self._arrange_units()]
         units = [(u, b) for u, b in units if b is not None]
         if len(units) < 2:
+            self.statusMessage.emit(
+                "Align needs two or more things selected (a group counts "
+                "as one)")
             return
         horiz = mode in ("left", "hcenter", "right")
         lo, hi = (0, 2) if horiz else (1, 3)
@@ -4890,6 +5093,9 @@ class Canvas(QGraphicsView):
         units = [(u, self._unit_bounds(u)) for u in self._arrange_units()]
         units = [(u, b) for u, b in units if b is not None]
         if len(units) < 3:
+            self.statusMessage.emit(
+                "Distribute needs three or more things selected (the outer "
+                "two stay put)")
             return
         lo, hi = (0, 2) if horizontal else (1, 3)
 
@@ -4988,6 +5194,8 @@ class Canvas(QGraphicsView):
         items = self._rotatable_selection()
         box = self._selection_box(items)
         if box is None or abs(deg) < 1e-12:
+            if box is None:
+                self.statusMessage.emit("Select something to rotate")
             return
         pivot = (box.center().x(), box.center().y())
         self._apply_rotation(self._rotation_baseline(items), pivot, deg)
@@ -5375,6 +5583,12 @@ class Canvas(QGraphicsView):
                 m.setSelected(True)
             self.documentChangedSig.emit()
             self._emit_commit()
+            self.statusMessage.emit(
+                f"Exploded into {len(made)} loose holes — move or delete them "
+                "one by one; Ctrl+Shift+A attaches them to a piece again")
+        else:
+            self.statusMessage.emit(
+                "Nothing to explode: the selection has no stitch holes")
 
     def _explode(self, res, style, group_id=None, mirrored=False):
         """Loose holes for ``res``. ``group_id`` keeps them in the group of
@@ -5607,6 +5821,13 @@ class Canvas(QGraphicsView):
             self.documentChangedSig.emit()
             self.selectionChangedSig.emit()
             self._emit_commit()
+            self.statusMessage.emit(
+                f"Broke {len(shapes) + len(texts)} into {len(made)} pieces "
+                "(stitch holes are loose holes now)")
+        else:
+            self.statusMessage.emit(
+                "Nothing to break apart: single lines and text with no "
+                "outlines stay as they are")
 
     # -- join / weld segments back into a continuous path --------------
     def join_selected(self, tol: float = 0.6) -> None:
@@ -5640,9 +5861,18 @@ class Canvas(QGraphicsView):
                     segs.append((wpts[0], wpts[1], "line", None))
         made = []
         remaining = segs
+        welded = False
         while remaining:
             chain, remaining = _chain_segments(remaining, tol)
+            welded = welded or len(chain) > 1
             made.append(_path_from_chain(chain, tol, layer))
+        if not welded and len(made) == len(shapes):
+            # no two ends met: nothing changes (rebuilding the same pieces
+            # under new ids pushed an undo step that undid nothing)
+            self.statusMessage.emit(
+                f"Nothing to join: no two ends meet within {tol:g} mm — "
+                "move the pieces so their ends touch")
+            return
         # the welded path is still what its pieces were: a guide, a fold, a
         # group member -- and stitched if they were (Join dropped stitching)
         first = shapes[0].model
@@ -5817,6 +6047,9 @@ class Canvas(QGraphicsView):
                 m.group_id = gid
         self.documentChangedSig.emit()
         self._emit_commit()
+        self.statusMessage.emit(
+            f"Grouped {len(sel)} items — they now select and move together "
+            "(Ctrl+Shift+G ungroups)")
 
     def ungroup_group(self) -> None:
         """Clear move-group membership from the selected items' groups."""
@@ -5824,13 +6057,17 @@ class Canvas(QGraphicsView):
                 if self._item_model(it) is not None}
         gids.discard(None)
         if not gids:
+            self.statusMessage.emit("Nothing selected is in a group")
             return
+        n = 0
         for it in self.scene_obj.items():
             m = self._item_model(it)
             if m is not None and getattr(m, "group_id", None) in gids:
                 m.group_id = None
+                n += 1
         self.documentChangedSig.emit()
         self._emit_commit()
+        self.statusMessage.emit(f"Ungrouped {n} items")
 
     def selection_has_group(self) -> bool:
         return any(getattr(self._item_model(it), "group_id", None)

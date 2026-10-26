@@ -627,6 +627,11 @@ class StitchResult:
     #            None = one continuous run.
     rows: int = 1
     runs: Optional[List[int]] = None
+    # explicit (row, [hole indices]) sequences when the rows are not simple
+    # aligned pairs -- a double row whose offset row was thinned at corners
+    layout: Optional[List[Tuple[int, List[int]]]] = None
+    # a one-line caveat for the readout (e.g. symmetry could not be met)
+    note: str = ""
 
     @property
     def points(self) -> List[Vec2]:
@@ -640,6 +645,9 @@ class StitchResult:
         """Index lists of the holes a needle visits in order: one list per
         run and per row (``row`` 0/1 picks one row of a double row). Gaps
         between runs and across the rows are never a stitch."""
+        if self.layout is not None:
+            return [list(seq) for r, seq in self.layout
+                    if (row is None or r == row) and len(seq) >= 2]
         n = len(self.holes)
         step = max(1, int(self.rows or 1))
         bounds = sorted({0, *(self.runs or [])} | {n})
@@ -1010,7 +1018,11 @@ def _copy_result(res: StitchResult) -> StitchResult:
     # (items.py maps them through the shape transform), so the cached
     # master must never be handed out directly.
     return StitchResult(holes=list(res.holes), pitches=list(res.pitches),
-                        closed=res.closed)
+                        closed=res.closed, rows=res.rows,
+                        runs=list(res.runs) if res.runs else None,
+                        layout=([(r, list(s)) for r, s in res.layout]
+                                if res.layout else None),
+                        note=res.note)
 
 
 def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
@@ -1289,29 +1301,22 @@ def _distribute(poly: "Polyline", corner_points: List[Vec2], closed: bool,
         return done(_result_from_positions(
             poly, positions, [settings.pitch_mm], closed))
 
-    # Symmetry: rotate so the outline starts at one axis crossing and anchor a
-    # hole at the other. That splits the loop into the two mirror-image halves;
-    # each is fitted deterministically, so the holes come out flip-symmetric.
     sym = getattr(settings, "symmetry", "none")
-    symmetric = closed and sym in ("vertical", "horizontal")
-    axis_forced: set = set()
-    if symmetric:
-        crossings = _axis_crossings(poly, sym)
-        if len(crossings) >= 2:
-            poly = Polyline(_rotate_closed_ring(list(poly.points), crossings[0]))
-            total = poly.length
-            other = [s for s in _axis_crossings(poly, sym) if s > 1e-6]
-            if other:
-                axis_forced.add(other[0])
-        else:
-            symmetric = False
-
-    cor = [poly.nearest_arclength(cp) for cp in (corner_points or [])]
-
-    # ``auto`` means "whichever corner strategy the iron marches with the least
-    # pitch deviation" -- try each concrete strategy and keep the best. For open
-    # paths or an explicit style there is nothing to choose.
     want = getattr(settings, "corner_style", "auto")
+    if closed and sym in ("vertical", "horizontal"):
+        return _distribute_symmetric(poly, corner_points, settings, arcs,
+                                     total, fit, sym, want)
+    return _fit_ring(poly, corner_points, settings, arcs, total, fit, want,
+                     closed, False, set())
+
+
+def _fit_ring(poly: "Polyline", corner_points, settings, arcs, total: float,
+              fit: str, want: str, closed: bool, symmetric: bool,
+              axis_forced: set) -> StitchResult:
+    """One complete fit of ``poly``: the corner-style search for ``auto``
+    (whichever concrete strategy the iron marches with the least pitch
+    deviation), or the one style asked for. Snapped onto ``arcs``."""
+    cor = [poly.nearest_arclength(cp) for cp in (corner_points or [])]
     if closed and want == "auto":
         best, best_bad = None, None
         memo: dict = {}                     # span fits shared by the styles
@@ -1323,10 +1328,60 @@ def _distribute(poly: "Polyline", corner_points: List[Vec2], closed: bool,
             if best_bad is None or bad < best_bad:
                 best, best_bad = res, bad
         return best                           # already snapped
+    return _snap_to_arcs(_march_corner_style(
+        poly, cor, settings, want, closed, fit, total, symmetric, axis_forced),
+        arcs)
 
-    res = _march_corner_style(poly, cor, settings, want, closed, fit,
-                              total, symmetric, axis_forced)
-    return done(res)
+
+def _distribute_symmetric(poly: "Polyline", corner_points, settings, arcs,
+                          total: float, fit: str, sym: str,
+                          want: str) -> StitchResult:
+    """Flip-symmetric holes about the ring's vertical / horizontal axis.
+
+    The plain fit is taken first: on a symmetric outline it usually IS
+    symmetric already (corners anchor mirror-image spans), and forcing anchors
+    onto it only moved the pitch away from the iron. Otherwise two symmetric
+    arrangements are tried -- a hole ON each axis crossing, and a pair
+    straddling each crossing half a pitch either side -- and the one closer
+    to the pitch wins. An outline that is not itself symmetric about the axis
+    cannot be sewn symmetrically; it gets the plain fit and says so.
+    """
+    p = settings.pitch_mm
+    plain = _fit_ring(poly, corner_points, settings, arcs, total, fit, want,
+                      True, False, set())
+    if flip_symmetry(plain.points, sym)[0]:
+        return plain
+    crossings = _axis_crossings(poly, sym)
+    cands: List[StitchResult] = []
+    if len(crossings) >= 2:
+        # (a) a hole on each crossing: start the ring at one, force the other
+        ring = Polyline(_rotate_closed_ring(list(poly.points), crossings[0]))
+        other = [s for s in _axis_crossings(ring, sym) if s > 1e-6]
+        if other:
+            cands.append(_fit_ring(ring, corner_points, settings, arcs,
+                                   ring.length, fit, want, True, True,
+                                   {other[0]}))
+        # (b) a pair around each crossing: start half a pitch before one, and
+        # force holes a pitch on, and half a pitch either side of the other
+        ring = Polyline(_rotate_closed_ring(list(poly.points),
+                                            (crossings[0] - p / 2.0) % total))
+        tb = ring.length
+        xs = sorted(_axis_crossings(ring, sym))
+        if len(xs) >= 2:
+            a = min(xs, key=lambda s: abs(s - p / 2.0))
+            rest = [s for s in xs if abs(s - a) > 1e-6]
+            if rest:
+                b = rest[0]
+                forced = {(a + p / 2.0) % tb, (b - p / 2.0) % tb,
+                          (b + p / 2.0) % tb}
+                cands.append(_fit_ring(ring, corner_points, settings, arcs, tb,
+                                       fit, want, True, True, forced))
+    good = [c for c in cands if c.count and flip_symmetry(c.points, sym)[0]]
+    if good:
+        return min(good, key=lambda r: _gap_badness(r, p))
+    plain.note = (f"not {sym}ly symmetric: the outline itself isn't, so the "
+                  f"plain fit is used")
+    return plain
 
 
 def _snap_to_arcs(res: StitchResult, arcs) -> StitchResult:
@@ -1472,25 +1527,152 @@ def _march_corner_style(poly: Polyline, cor: List[float], settings, style: str,
 
 
 def _apply_rows(result: StitchResult, settings) -> StitchResult:
-    """Expand to a second parallel row of holes for saddle stitching.
+    """Add the second row of holes of a saddle-stitched double row.
 
-    Each hole becomes two, offset by +/- row_spacing/2 along the seam normal,
-    at the same tangential position (aligned rungs).
+    The fitted holes stay where they are -- on the stitch line, at the inset
+    the user set -- and the second row sits ``row_spacing`` further IN on a
+    closed outline (so the outer row never creeps toward the cut edge the way
+    a +/- half split did), or half the spacing either side of a drawn seam,
+    which has no inside. Along a straight the rows are rung-aligned. At a
+    corner the offset hole goes to the mitre of the two offset edges (each
+    row turns on its own line instead of kinking), and an offset row that
+    would pinch there -- the inside of a turn is shorter -- is thinned so no
+    two of its holes come closer than three-quarters of the pitch. The rows
+    are therefore stored as explicit sequences (``layout``), row 0 first.
     """
     rows = getattr(settings, "rows", 1)
     if rows <= 1 or not result.holes:
         return result
-    half = getattr(settings, "row_spacing", 3.0) / 2.0
-    doubled: List[Hole] = []
-    for h in result.holes:
-        n = h.tangent.perp()
-        doubled.append(Hole(h.point + n * half, h.tangent))
-        doubled.append(Hole(h.point - n * half, h.tangent))
-    result.holes = doubled
+    spacing = getattr(settings, "row_spacing", 3.0)
+    pitch = getattr(settings, "pitch_mm", 3.85)
+    pts = result.points
+    closed = result.closed
+    inward = 1.0                 # a CCW ring's interior is left of travel
+    if closed and len(pts) >= 3 and signed_area(pts) < 0:
+        inward = -1.0
+
+    def left(d: Vec2):
+        length = d.length()
+        return Vec2(-d.y / length, d.x / length) if length > 1e-12 else None
+
+    runs = result.sequences()            # per run (rows is still 1 here)
+    normals: List = [None] * len(pts)    # (bisector normal, mitre factor)
+    for seq in runs:
+        n = len(seq)
+        for k, i in enumerate(seq):
+            prev_i = seq[k - 1] if k > 0 else (seq[-1] if closed else None)
+            next_i = seq[k + 1] if k < n - 1 else (seq[0] if closed else None)
+            n_in = left(pts[i] - pts[prev_i]) if prev_i is not None else None
+            n_out = left(pts[next_i] - pts[i]) if next_i is not None else None
+            if n_in is None and n_out is None:
+                continue
+            if n_in is None or n_out is None:
+                normals[i] = ((n_in or n_out), 1.0)
+                continue
+            s = n_in + n_out
+            if s.length() < 1e-9:            # a hairpin: no mitre to speak of
+                normals[i] = (n_in, 1.0)
+                continue
+            nb = s * (1.0 / s.length())
+            # the mitre point of the two offset lines lies along the
+            # bisector at spacing / cos(half the turn); cap very sharp turns
+            normals[i] = (nb, 1.0 / max(nb.dot(n_in), 0.5))
+
+    def offset_row(seq: List[int], sign_dist: float) -> List[Hole]:
+        """The run's holes pushed sideways by ``sign_dist`` (mitred at the
+        corners), then re-divided evenly between the corners: the inside of
+        a turn is shorter and the outside longer, so rung-for-rung copies
+        pinched or stretched there. Corner holes stay put, so both rows turn
+        the corner together; along a straight of unchanged length the count
+        -- and the rungs -- stay the same."""
+        q = []
+        for i in seq:
+            h = result.holes[i]
+            nb, scale = (normals[i] if normals[i] is not None
+                         else (h.tangent.perp(), 1.0))
+            q.append(h.point + nb * (sign_dist * scale))
+        anchors = [k for k, i in enumerate(seq)
+                   if normals[i] is not None and normals[i][1] > 1.02]
+        return _even_row(q, anchors, closed, pitch)
+
+    holes: List[Hole] = []
+    layout: List[Tuple[int, List[int]]] = []
+    for seq in runs:
+        if closed:
+            rows_here = [[result.holes[i] for i in seq],      # on the stitch line
+                         offset_row(seq, inward * spacing)]
+        else:
+            rows_here = [offset_row(seq, spacing / 2.0),
+                         offset_row(seq, -spacing / 2.0)]
+        for r, row in enumerate(rows_here):
+            start = len(holes)
+            holes.extend(row)
+            layout.append((r, list(range(start, start + len(row)))))
+    # row 0 first, then row 1 (the layout keeps each run's sequence)
+    order = sorted(range(len(layout)), key=lambda k: layout[k][0])
+    reholes: List[Hole] = []
+    relayout: List[Tuple[int, List[int]]] = []
+    for k in order:
+        r, idxs = layout[k]
+        start = len(reholes)
+        reholes.extend(holes[i] for i in idxs)
+        relayout.append((r, list(range(start, start + len(idxs)))))
+    result.holes = reholes
     result.rows = 2
-    if result.runs:
-        result.runs = [2 * r for r in result.runs]
+    result.runs = None
+    result.layout = relayout
     return result
+
+
+def _even_row(q: List[Vec2], anchors: List[int], closed: bool,
+              pitch: float) -> List[Hole]:
+    """Holes along the polyline ``q`` (an offset copy of a fitted row) with
+    the ``anchors`` (indices into q: corner holes) kept where they are and
+    each stretch between consecutive anchors divided evenly at the whole
+    count nearest ``pitch`` -- never closer than three-quarters of it."""
+    n = len(q)
+    if n == 0:
+        return []
+    if n == 1:
+        return [Hole(q[0], Vec2(1.0, 0.0))]
+    anchors = sorted(set(anchors))
+    if not anchors:
+        anchors = [0] if closed else [0, n - 1]
+    elif not closed:
+        anchors = sorted(set(anchors) | {0, n - 1})
+    spans = list(zip(anchors, anchors[1:]))
+    if closed:
+        spans.append((anchors[-1], anchors[0] + n))
+    out: List[Hole] = []
+    for a, b in spans:
+        seg = [q[k % n] for k in range(a, b + 1)]
+        cum = [0.0]
+        for u, v in zip(seg, seg[1:]):
+            cum.append(cum[-1] + (v - u).length())
+        length = cum[-1]
+        if length <= 1e-9:
+            continue
+        m = max(1, int(round(length / pitch)))
+        if m > 1 and length / m < _MIN_ANCHOR_SEP * pitch:
+            m -= 1
+        for j in range(m):                     # j = 0 is the span's own anchor
+            s = length * j / m
+            k = 1
+            while k < len(cum) - 1 and cum[k] <= s:
+                k += 1
+            u, v = seg[k - 1], seg[k]
+            d = v - u
+            dl = d.length()
+            f = 0.0 if cum[k] - cum[k - 1] <= 1e-12 else \
+                (s - cum[k - 1]) / (cum[k] - cum[k - 1])
+            tangent = d * (1.0 / dl) if dl > 1e-12 else Vec2(1.0, 0.0)
+            out.append(Hole(u + d * f, tangent))
+    if not closed:
+        u, v = q[-2], q[-1]
+        d = v - u
+        dl = d.length()
+        out.append(Hole(q[-1], d * (1.0 / dl) if dl > 1e-12 else Vec2(1.0, 0.0)))
+    return out
 
 
 def _anchors_from(corners: List[float], total: float, closed: bool,

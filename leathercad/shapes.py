@@ -381,15 +381,33 @@ class PathShape(Shape):
 
     def local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:
         pts = self.points
-        if len(pts) < 2:
+        n = len(pts)
+        if n < 2:
             return Path()
+
+        def is_corner(i: int) -> bool:
+            # a real turn anchors a stitch hole (a drawn or joined path's
+            # corners used to get none); the generous tolerance keeps the
+            # facets of a traced curve from each counting as one
+            if not self.close_path and (i == 0 or i == n - 1):
+                return False             # open ends anchor on their own
+            return _is_real_corner(pts[(i - 1) % n], pts[i], pts[(i + 1) % n],
+                                   tol_deg=_PATH_CORNER_DEG)
+
         b = PathBuilder()
         b.move_to(pts[0].x, pts[0].y)
-        for p in pts[1:]:
-            b.line_to(p.x, p.y)
+        for i in range(1, n):
+            b.line_to(pts[i].x, pts[i].y, corner=is_corner(i))
         if self.close_path:
-            b.close(corner=False)
+            b.close(corner=is_corner(0))
         return b.build(flatness)
+
+
+# A vertex of a free path or an editable path counts as a corner when the
+# outline turns more than this. Polygons use 1 degree (a node dropped on a
+# straight edge must not shift the holes); paths come from the pen, from
+# joins and from imports whose flattened curves turn a few degrees a vertex.
+_PATH_CORNER_DEG = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -402,14 +420,89 @@ def _is_real_corner(a: Vec2, b: Vec2, c: Vec2, tol_deg: float = 1.0) -> bool:
     force a stitch hole -- otherwise the stitch pattern shifts even though the
     outline did not change.
     """
-    v0 = b - a
-    v1 = c - b
+    return _is_turn(b - a, c - b, tol_deg)
+
+
+def _is_turn(v0: Vec2, v1: Vec2, tol_deg: float) -> bool:
+    """True if travel direction ``v0`` turns into ``v1`` by more than
+    ``tol_deg`` (a zero-length direction counts as a turn)."""
     l0 = v0.length()
     l1 = v1.length()
     if l0 < 1e-9 or l1 < 1e-9:
         return True
     cosang = max(-1.0, min(1.0, (v0.x * v1.x + v0.y * v1.y) / (l0 * l1)))
     return math.degrees(math.acos(cosang)) > tol_deg
+
+
+def _arc_end_tangents(a: Vec2, mid: Vec2, nb: Vec2):
+    """Travel directions at the start and end of the arc a -> mid -> nb, or
+    None when the three points are collinear."""
+    arc = arc_through(a, mid, nb)
+    if arc is None:
+        return None
+    c, _r, a0, a1, ccw = arc
+    sgn = 1.0 if ccw else -1.0
+    t0 = Vec2(-math.sin(a0), math.cos(a0)) * sgn
+    t1 = Vec2(-math.sin(a1), math.cos(a1)) * sgn
+    return t0, t1
+
+
+def _edge_dir_out(a: Vec2, nb: Vec2, edge) -> Vec2:
+    """Direction an edge leaves its start node ``a`` in."""
+    if edge.kind == "bezier" and edge.c1 is not None:
+        d = edge.c1 - a
+        if d.length() > 1e-9:
+            return d
+        if edge.c2 is not None and (edge.c2 - a).length() > 1e-9:
+            return edge.c2 - a
+    if edge.kind == "arc" and edge.mid is not None:
+        t = _arc_end_tangents(a, edge.mid, nb)
+        if t is not None:
+            return t[0]
+    return nb - a
+
+
+def _edge_dir_in(a: Vec2, nb: Vec2, edge) -> Vec2:
+    """Direction an edge arrives at its end node ``nb`` in."""
+    if edge.kind == "bezier" and edge.c2 is not None:
+        d = nb - edge.c2
+        if d.length() > 1e-9:
+            return d
+        if edge.c1 is not None and (nb - edge.c1).length() > 1e-9:
+            return nb - edge.c1
+    if edge.kind == "arc" and edge.mid is not None:
+        t = _arc_end_tangents(a, edge.mid, nb)
+        if t is not None:
+            return t[1]
+    return nb - a
+
+
+def map_baked_holes(sh, fpoint, fdir) -> None:
+    """Move a shape's attached holes through ``fpoint`` (and their tangents
+    through ``fdir``, re-normalised) -- for an edit that changes the
+    outline's size, which must carry the holes along or the seam ends up
+    somewhere else than the inset says."""
+    holes = getattr(sh, "baked_holes", None)
+    if not holes:
+        return
+    from .stitching import Hole
+    out = []
+    for h in holes:
+        t = fdir(h.tangent)
+        length = t.length()
+        t = t * (1.0 / length) if length > 1e-12 else h.tangent
+        out.append(Hole(fpoint(h.point), t))
+    sh.baked_holes = out
+
+
+def scale_baked_holes(sh, fx: float, fy: float, cx: float = 0.0,
+                      cy: float = 0.0) -> None:
+    """Scale attached holes by (fx, fy) about the local point (cx, cy)."""
+    if abs(fx - 1.0) < 1e-12 and abs(fy - 1.0) < 1e-12:
+        return
+    map_baked_holes(sh,
+                    lambda p: Vec2(cx + (p.x - cx) * fx, cy + (p.y - cy) * fy),
+                    lambda v: Vec2(v.x * fx, v.y * fy))
 
 
 def _filleted_polygon(pts: Sequence[Vec2], radius: float, closed: bool,
@@ -544,22 +637,41 @@ class EditablePath(Shape):
         b = PathBuilder()
         b.move_to(self.nodes[0].x, self.nodes[0].y)
         m = len(self.edges)
+
+        def is_corner(j: int) -> bool:
+            """Node ``j`` is a corner when the edge arriving and the edge
+            leaving point different ways -- a pen click, a joined corner, a
+            fillet's neighbours. Smooth joins (collinear handles, an arc met
+            tangentially) and open ends are not."""
+            if not self.closed and (j == 0 or j == n - 1):
+                return False
+            e_in = self.edges[(j - 1) % m]
+            e_out = self.edges[j % m]
+            d_in = _edge_dir_in(self.nodes[(j - 1) % n], self.nodes[j], e_in)
+            d_out = _edge_dir_out(self.nodes[j], self.nodes[(j + 1) % n], e_out)
+            return _is_turn(d_in, d_out, _PATH_CORNER_DEG)
+
         for i in range(m):
             a = self.nodes[i]
-            nb = self.nodes[(i + 1) % n]
+            j = (i + 1) % n
+            nb = self.nodes[j]
             edge = self.edges[i]
+            # the closing node is tagged by close(), not by its last edge
+            tag_end = j != 0 or not self.closed
             if edge.kind == "arc" and edge.mid is not None:
                 arc = arc_through(a, edge.mid, nb)
                 if arc is not None:
                     c, r, a0, a1, ccw = arc
-                    b.arc_to(c.x, c.y, a0, a1, ccw)
+                    b.arc_to(c.x, c.y, a0, a1, ccw)   # tangent points anchor
                     continue
             if edge.kind == "bezier" and edge.c1 is not None and edge.c2 is not None:
                 b.cubic_to(edge.c1.x, edge.c1.y, edge.c2.x, edge.c2.y, nb.x, nb.y)
+                if tag_end and is_corner(j):
+                    b.corner()
                 continue
-            b.line_to(nb.x, nb.y)
+            b.line_to(nb.x, nb.y, corner=tag_end and is_corner(j))
         if self.closed:
-            b.close(corner=False)
+            b.close(corner=is_corner(0))
         return b.build(flatness)
 
     # -- constructors that keep arcs -----------------------------------

@@ -93,11 +93,13 @@ _TIPS = {
     "slit_len": "Length of each slit / diamond (the tooth size). Rescaled "
                 "when you pick a pitch preset; a typed value stays.",
     "slit_angle": "Slant of each slit / diamond off the stitch line.",
-    "rows": ("2 (double) adds a second parallel row of holes, aligned rung "
-             "for rung, for a saddle-stitched strap. The two rows sit half "
-             "the row spacing either side of the stitch line."),
-    "row_spacing": ("Distance between the two rows. Keep it under twice the "
-                    "inset or the outer row reaches the cut edge."),
+    "rows": ("2 (double) adds a second row of holes for a saddle-stitched "
+             "strap, rung-aligned along the straights. On a closed outline "
+             "the fitted row stays at the inset and the second row sits the "
+             "row spacing further in; a drawn seam gets a row either side. "
+             "Where the inner row would pinch at a corner it is thinned, "
+             "never closer than ¾ of the pitch."),
+    "row_spacing": "Distance between the two rows.",
     "backstitch": ("Marks N holes at each END of an open run as the "
                    "backstitch zone — markers only, no extra holes are cut. "
                    "A closed outline has no ends, so it is not offered there."),
@@ -362,6 +364,10 @@ class PropertiesPanel(QWidget):
         self.mirror.stateChanged.connect(self._apply_commit)
         self.opacity.valueChanged.connect(self._apply)
         self.opacity.sliderReleased.connect(self._commit)
+        # a keyboard step or a click in the groove is a finished edit too --
+        # only a handle drag waits for the release
+        self.opacity.valueChanged.connect(self._opacity_stepped)
+        self._focus_pending = False
         self.layer_combo.currentIndexChanged.connect(self._apply_commit)
         self.fit.currentIndexChanged.connect(self._apply_commit)
         self.g_stitch.toggled.connect(self._apply_commit)
@@ -416,16 +422,21 @@ class PropertiesPanel(QWidget):
                     f"<b>{len(items)} items selected</b> — a field you change "
                     "applies to all of them"
                     + (f" ({n_sh} shapes)" if n_sh != len(items) else ""))
+                self._focus_pending = False
                 return
         if len(items) != 1:
             self._item = None
             self.setEnabled(False)
             self.readout.setText(
                 f"{len(items)} items selected" if items else "No selection")
+            self._focus_pending = False
             return
         self._item = items[0]
         self.setEnabled(True)
         self._populate()
+        if self._focus_pending:
+            self._focus_pending = False
+            self.focus_primary_dimension()
 
     def _populate(self):
         self._loading = True
@@ -816,6 +827,20 @@ class PropertiesPanel(QWidget):
         if not self._loading and _alive(self._item):
             self.committed.emit()
 
+    def _opacity_stepped(self):
+        if not self.opacity.isSliderDown():
+            self._commit()
+
+    def request_focus_after_show(self):
+        """The next time a selection is shown, put the keyboard in its primary
+        size field. A tool that has just finished asks for this: the panel is
+        rebuilt a moment later (selection changes are coalesced), and focusing
+        now landed on whatever widget survived the rebuild -- the Layer combo,
+        where the next arrow key changed the new piece's layer."""
+        self._focus_pending = True
+        if _alive(self._item) and self.isEnabled():
+            self.focus_primary_dimension()
+
     def _apply_commit(self):
         self._apply()
         self._commit()
@@ -951,6 +976,12 @@ class PropertiesPanel(QWidget):
             if self.keepout in self._dirty:
                 sh.keepout = self.keepout.value()
                 self.canvas._refresh_keepout_dependents()
+            elif (float(getattr(sh, "keepout", 0.0) or 0.0) > 0
+                  and self._dirty & {self.pos_x, self.pos_y, self.rot,
+                                     self.mirror}):
+                # a snap moved by typing its position: the pieces under it
+                # re-stitch now, not at the next unrelated click
+                self.canvas._refresh_keepout_dependents()
             self._apply_shape_geometry(sh)
             self._record_bindings(sh)
             if self.g_stitch.isChecked():
@@ -994,23 +1025,34 @@ class PropertiesPanel(QWidget):
                 spin.blockSignals(False)
 
     def _apply_shape_geometry(self, sh):
+        from leathercad.shapes import scale_baked_holes
+
+        def ratio(new, old):
+            return new / old if old > 1e-9 else 1.0
+
+        # attached holes follow a typed size, like the outline does
         if isinstance(sh, Rectangle):
-            sh.width = _kept(self.w, sh.width)
-            sh.height = _kept(self.h, sh.height)
+            w = _kept(self.w, sh.width)
+            h = _kept(self.h, sh.height)
+            scale_baked_holes(sh, ratio(w, sh.width), ratio(h, sh.height))
+            sh.width, sh.height = w, h
             sh.corner_radius = _kept(self.corner, sh.corner_radius)
         elif isinstance(sh, Circle):
             r = _kept(self.circ_r, sh.rx)
             d = _kept(self.circ_d, 2.0 * sh.rx)
             if r == sh.rx and d != 2.0 * sh.rx:
                 r = d / 2.0                    # the diameter box was edited
+            scale_baked_holes(sh, ratio(r, sh.rx), ratio(r, sh.rx))
             sh.rx = sh.ry = r                  # one radius, always round
             for spin, v in ((self.circ_r, r), (self.circ_d, 2.0 * r)):
                 spin.blockSignals(True)        # keep the twin box in step
                 spin.setValue(v)
                 spin.blockSignals(False)
         elif isinstance(sh, Ellipse):
-            sh.rx = _kept(self.rx, sh.rx)
-            sh.ry = _kept(self.ry, sh.ry)
+            rx = _kept(self.rx, sh.rx)
+            ry = _kept(self.ry, sh.ry)
+            scale_baked_holes(sh, ratio(rx, sh.rx), ratio(ry, sh.ry))
+            sh.rx, sh.ry = rx, ry
         elif isinstance(sh, Polygon):
             sh.corner_radius = _kept(self.poly_radius, sh.corner_radius)
         elif _is_line(sh):
@@ -1137,13 +1179,21 @@ class PropertiesPanel(QWidget):
                       else it.line.settings)
                 pitch = float(getattr(st, "pitch_mm", 0.0) or 0.0)
                 worst = res.worst_deviation(pitch) if pitch > 0 else 0.0
-                if worst > 0.12:
+                if getattr(st, "fit", "auto") == "none" and res.closed:
+                    # exact pitch: the one odd gap is the one the user asked
+                    # for -- name it instead of calling the iron a misfit
+                    txt += (f"<br>exact pitch: the floating closing gap is "
+                            f"{U.fmt(min(gaps))}")
+                elif worst > 0.12:
                     # the fitter takes the nearest whole-hole count; when
                     # none is within the iron's tolerance, say so -- a user
                     # would otherwise read a grey number and cut
                     txt += (f"<br><span style='color:#c0392b'>⚠ no hole "
                             f"count fits this iron here: a gap is "
                             f"{worst * 100:.0f} % off pitch</span>")
+                if getattr(res, "note", ""):
+                    txt += (f"<br><span style='color:#c0392b'>⚠ {res.note}"
+                            "</span>")
             self.readout.setText(txt + area_line)
         else:
             self.readout.setText("No holes" + area_line)

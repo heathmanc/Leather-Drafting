@@ -66,7 +66,11 @@ def test_cache_key_covers_position_settings():
     finer = StitchSettings(pitch_mm=2.0, inset=3.0)
     assert stitch_polyline(SQUARE, CORNERS, True, finer).count > n0
     two_rows = StitchSettings(pitch_mm=3.0, inset=3.0, rows=2)
-    assert stitch_polyline(SQUARE, CORNERS, True, two_rows).count == 2 * n0
+    res = stitch_polyline(SQUARE, CORNERS, True, two_rows)
+    # the fitted row plus an inner row fitted on its own, shorter line
+    assert res.rows == 2 and len(res.sequences()) == 2
+    assert len(res.sequences(row=0)[0]) == n0
+    assert 0.8 * n0 <= len(res.sequences(row=1)[0]) < n0
 
 
 def test_cache_ignores_appearance_settings():

@@ -980,7 +980,15 @@ class MainWindow(QMainWindow):
 
     # -- slots ----------------------------------------------------------
     def _set_tool(self, mode):
+        changed = self.canvas.tool != mode
         self.canvas.tool = mode
+        if changed:
+            # whatever the previous tool had half-drawn is abandoned -- its
+            # first corner used to become the next tool's first click, and its
+            # dashed preview stayed on screen until an undo
+            self.canvas.cancel_in_progress()
+        if mode != canvas_mod.SELECT:
+            self.canvas._last_created = None
         # Every tool that places a point gets the high-contrast crosshair so the
         # cursor stays visible (and precise) over a tracing photo; Select keeps
         # the arrow for grabbing/dragging.
@@ -1022,8 +1030,10 @@ class MainWindow(QMainWindow):
             m.SLOT: "Slot: click two opposite corners of a rounded slot",
             m.PEN: "Pen: click for corners, click-drag for curves · "
                    "double-click / Enter / right-click to finish",
-            m.DIMENSION: "Dimension: click two points to measure · click again "
-                         "to place the label",
+            m.DIMENSION: "Dimension: click two points to measure · snap onto "
+                         "a shape and the dimension follows it · click the "
+                         "points in the other order to flip it to the other "
+                         "side",
             m.MEASURE: "Measure: click two points to read the distance",
             m.TEXT: "Text: click to place, then type in Properties",
             m.TRIM: "Trim: click the part of an outline to cut back to where it "
@@ -1061,8 +1071,10 @@ class MainWindow(QMainWindow):
 
     def _tool_finished(self):
         self._select_mode(canvas_mod.SELECT)
-        # let the user type an exact size for the shape just created
-        self.properties.focus_primary_dimension()
+        # let the user type an exact size for the shape just created (the
+        # panel shows it a moment later; Measure creates nothing to size)
+        if self.canvas.take_last_created() is not None:
+            self.properties.request_focus_after_show()
 
     def _selection_changed(self):
         self.properties.show_selection(self.canvas.selected_items())

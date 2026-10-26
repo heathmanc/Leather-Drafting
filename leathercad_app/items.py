@@ -103,21 +103,25 @@ def _qpoly(points: List[Vec2]) -> QPolygonF:
 
 
 def _paint_backstitch(painter, result, settings) -> None:
-    """Ring the reinforcement holes at each end of an OPEN seam."""
+    """Ring the reinforcement holes at each end of every OPEN run -- a seam,
+    or each separately sewn stretch of a piece with unsewn edges or
+    keep-outs -- in every row."""
     if settings is None or result is None or result.closed:
         return
     n = getattr(settings, "backstitch", 0)
     if n <= 0 or not result.holes:
         return
-    mult = 2 if getattr(settings, "rows", 1) == 2 else 1
-    k = min(n * mult, len(result.holes))
     ring = QPen(QColor(220, 40, 40), 0)
     ring.setCosmetic(True)
     painter.setPen(ring)
     painter.setBrush(Qt.NoBrush)
-    marked = list(result.holes[:k]) + list(result.holes[-k:])
-    for h in marked:
-        painter.drawEllipse(QPointF(h.point.x, h.point.y), 1.4, 1.4)
+    seqs = (result.sequences() if hasattr(result, "sequences")
+            else [list(range(len(result.holes)))])
+    for seq in seqs:
+        k = min(n, len(seq))
+        for i in list(seq[:k]) + list(seq[-k:]):
+            h = result.holes[i]
+            painter.drawEllipse(QPointF(h.point.x, h.point.y), 1.4, 1.4)
 
 
 class VertexHandle(QGraphicsItem):
@@ -1353,18 +1357,28 @@ class ShapeItem(QGraphicsItem):
     def set_resize_extents(self, hx: float, hy: float) -> None:
         from leathercad.shapes import (Rectangle, Circle, Ellipse, Polygon,
                                         PathShape, EditablePath)
+        from leathercad.shapes import scale_baked_holes
         sh = self.model
         hx = max(0.5, hx)
         hy = max(0.5, hy)
+        # attached holes ride along with the outline (they used to stay put,
+        # leaving the seam 20 mm inside a stretched piece)
         if isinstance(sh, Rectangle):
+            scale_baked_holes(sh, 2.0 * hx / sh.width if sh.width > 1e-9 else 1.0,
+                              2.0 * hy / sh.height if sh.height > 1e-9 else 1.0)
             sh.width, sh.height = 2.0 * hx, 2.0 * hy
             return
         if isinstance(sh, Circle):
             # a circle stays round: follow the axis being pulled (the larger
             # of the two meant an edge grip could only ever grow it)
-            sh.rx = sh.ry = hx if abs(hx - sh.rx) >= abs(hy - sh.ry) else hy
+            r = hx if abs(hx - sh.rx) >= abs(hy - sh.ry) else hy
+            f = r / sh.rx if sh.rx > 1e-9 else 1.0
+            scale_baked_holes(sh, f, f)
+            sh.rx = sh.ry = r
             return
         if isinstance(sh, Ellipse):
+            scale_baked_holes(sh, hx / sh.rx if sh.rx > 1e-9 else 1.0,
+                              hy / sh.ry if sh.ry > 1e-9 else 1.0)
             sh.rx, sh.ry = hx, hy
             return
         box = self._resize_box()
@@ -1377,6 +1391,7 @@ class ShapeItem(QGraphicsItem):
         def scaled(p):
             return Vec2(cx + sx * (p.x - cx), cy + sy * (p.y - cy))
 
+        scale_baked_holes(sh, sx, sy, cx, cy)
         if isinstance(sh, EditablePath):
             sh.nodes = [scaled(p) for p in sh.nodes]
             for e in sh.edges:

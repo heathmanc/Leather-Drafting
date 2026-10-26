@@ -39,34 +39,47 @@ def estimate_thread(res, settings, thickness_mm: float = 3.0,
     n = res.count
     if n == 0:
         return {"seam_mm": 0.0, "holes": 0, "rows": 1, "thread_mm": 0.0}
-    rows = int(getattr(settings, "rows", 1) or 1)
     closed = bool(getattr(res, "closed", False))
     pts = res.points
-
-    if rows == 2 and n >= 4:
-        # holes come as aligned pairs across the two rows; walk the seam along
-        # the pair midpoints, and sew each row as its own run
-        mids = [Vec2((pts[i].x + pts[i + 1].x) / 2.0,
-                     (pts[i].y + pts[i + 1].y) / 2.0)
-                for i in range(0, n - 1, 2)]
-        seam = _polyline_len(mids, closed)
-        row_holes = n // 2
-        runs = 2
-    else:
-        seam = _polyline_len(pts, closed)
-        row_holes = n
-        runs = 1
-        rows = 1
-
-    # a closed seam has as many gaps as holes; an open one, one fewer
-    per_gap = seam / max(row_holes - (0 if closed else 1), 1)
     bs = int(getattr(settings, "backstitch", 0) or 0)
-    per_run = 2.0 * seam + 2.0 * row_holes * thickness_mm + 2.0 * tail_mm
-    if bs:
-        ends = 1 if closed else 2
-        per_run += ends * bs * (2.0 * per_gap + 2.0 * thickness_mm)
-    return {"seam_mm": seam * runs, "holes": n, "rows": rows,
-            "thread_mm": per_run * runs}
+
+    # Every separately sewn run -- each row of a double row, and each stretch
+    # of a piece sewn in pieces (an unsewn edge, a hardware keep-out) -- gets
+    # its own tails and its own backstitch ends. The result says how the
+    # holes are laid out; a bare list of holes is one run.
+    want_rows = int(getattr(settings, "rows", 1) or 1)
+    if (getattr(res, "layout", None) is None and getattr(res, "rows", 1) == 1
+            and want_rows == 2 and n >= 4):
+        # a bare hole list the caller says is a double row: aligned pairs
+        # (row A, row B) per station, the way rows used to be stored
+        seqs = [list(range(0, n, 2)), list(range(1, n, 2))]
+        rows = 2
+    elif hasattr(res, "sequences"):
+        seqs = res.sequences()
+        rows = max(1, int(getattr(res, "rows", 1) or 1))
+    else:                                    # pragma: no cover - old callers
+        seqs = [list(range(n))]
+        rows = 1
+    if not seqs:                             # a lone hole: tails only
+        return {"seam_mm": 0.0, "holes": n, "rows": rows,
+                "thread_mm": 2.0 * thickness_mm + 2.0 * tail_mm}
+
+    seam_total = 0.0
+    thread = 0.0
+    for seq in seqs:
+        run_pts = [pts[i] for i in seq]
+        seam = _polyline_len(run_pts, closed)
+        holes = len(seq)
+        # a closed seam has as many gaps as holes; an open one, one fewer
+        per_gap = seam / max(holes - (0 if closed else 1), 1)
+        per_run = 2.0 * seam + 2.0 * holes * thickness_mm + 2.0 * tail_mm
+        if bs:
+            ends = 1 if closed else 2
+            per_run += ends * bs * (2.0 * per_gap + 2.0 * thickness_mm)
+        seam_total += seam
+        thread += per_run
+    return {"seam_mm": seam_total, "holes": n, "rows": rows,
+            "thread_mm": thread}
 
 
 def format_length(mm: float) -> str:

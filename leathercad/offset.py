@@ -754,6 +754,11 @@ def offset_shape(shape, dist: float):
                            close_path=False, transform=Transform(x=cx, y=cy),
                            layer=shape.layer)
     sh.shape_id = _next_id("shape")
+    # the copy is still what its source was: offsetting a construction guide
+    # gives another guide (it used to give a real cut line across the sheet)
+    for attr in ("construction", "opacity", "name"):
+        if hasattr(shape, attr) and hasattr(sh, attr):
+            setattr(sh, attr, getattr(shape, attr))
     return sh
 
 

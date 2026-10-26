@@ -232,7 +232,7 @@ Hold **Shift** while placing any line-like point to lock the segment to
 | **Trim** | `X` | Click the piece of an outline you want gone (red preview on hover). |
 | **Fillet / chamfer corner** | `6` | Set the **radius** and **Round / Chamfer** mode in the toolbar box, then click any corner of a polygon/path to round or bevel it with a true arc — rounding blends into curved sides (arcs, beziers, trimmed ellipses). |
 | **Extend to intersection** | `7` | Click the **end** of a line/path: it grows until it meets the next outline or guide (the opposite of Trim). |
-| **Offset outline** | `8` | Click a shape, then move the cursor **inside or outside** it — a dashed preview follows with the live distance in the status bar. Click to place the offset copy, or press **Enter** to type an exact distance. Circles offset to true circles and rounded rectangles keep proper rounded corners. |
+| **Offset outline** | `8` | Click a shape, then move the cursor **inside or outside** it — a dashed preview follows with the live distance in the status bar. Click to place the offset copy, or press **Enter** to type an exact distance. Circles offset to true circles and rounded rectangles keep proper rounded corners. The copy is what its source was: offsetting a construction guide gives another guide, never a cut line. |
 | **Text** | `A` | Click to place engraved lettering. |
 | **Measure** | `Q` | Two clicks; length/angle/dx/dy in the status bar. |
 | **Dimension** | `D` | Two clicks; a permanent dimension annotation. |
@@ -323,7 +323,9 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
   Loose holes sitting inside the shape are mirrored with it.
   Edit → *Check back-to-back symmetry…* verifies the hole sets line up.
 * **Align / Distribute**: the Arrange menu aligns edges/centres and spaces
-  items evenly.
+  items evenly. A group moves as one unit; an ungrouped seam, loose hole or
+  dimension is a unit of its own. With too little selected the status bar
+  says so.
 
 ### Node editing
 
@@ -367,7 +369,7 @@ disappear).
 | **Inset from edge** | How far the stitch line sits in from the cut edge. Default 3.5 mm. The stitch line is the true offset of the outline: straights keep their length, and a rounded corner of radius R becomes an arc of radius R − inset on the same centre, with every hole on that arc exactly one pitch (straight-line) from the last — so a walked pricking iron lands each tooth on the line. Where a corner is rounder than the inset is deep (say a 3 mm fillet with a 3.5 mm inset), the stitch line turns that corner sharply with one hole on it. A piece too small for the stitch line to go all the way round gets a single hole, and one narrower than twice the inset gets none. |
 | **Fit** | How holes are fitted to the path. **Fit to corners & ends** (the default) nudges the pitch to the nearest whole-hole count so a hole lands on every corner and on both ends of an open seam; on most shapes that moves the pitch a few percent, and the readout always shows how far. **Exact pitch** marches at precisely the pitch and lets the last gap fall wherever it lands — the readout includes that closing gap. (Older files' *endpoints* / *closed* settings load as the fitted mode: the engine reads the path's own closedness.) |
 | **Hole ø** | *Round only* — a round hole carries its own diameter (independent of spacing). Pick a common size (0.8 / 1.0 / 1.2 / 1.5 mm) or choose **Custom…** to type your own. Hidden for the slit styles, whose hole size comes from the tooth and scales with pitch (tune it with **Slit length / Slit angle**). |
-| **Rows** | **2 (double)** adds a second parallel row (aligned rungs) for saddle-stitched straps; set **Row spacing**. The two rows sit half the row spacing either side of the stitch line, so keep the spacing under twice the inset or the outer row reaches the cut edge. |
+| **Rows** | **2 (double)** adds a second row for saddle-stitched straps, rung-aligned along the straights; set **Row spacing**. On a closed outline the fitted row stays exactly at the inset and the second row sits the row spacing further **in**, so the outer row never creeps toward the cut edge; a drawn seam gets a row either side of the line. At a corner each row turns on its own line, and where the inner row would pinch it is thinned — never closer than ¾ of the pitch. |
 | **Backstitch** | Marks N holes at each **end of an open run** as the backstitch zone (markers only — you sew back through existing holes). A closed outline has no ends, so the field is only offered on seams, open paths and pieces with an unsewn edge. |
 | **Symmetry** | Force the hole set to be mirror-symmetric about the shape's **vertical** or **horizontal** axis, so a flipped piece lines up back-to-back. Closed outlines only, and only an outline that is itself symmetric about that axis can comply — on any other shape the fit just gets worse (watch the readout). |
 | **Corners** | How holes sit on a rounded corner's arc (closed outlines only): **auto** tries each strategy and keeps the one whose chord spacing strays least from your pitch, **midpoint** = force a hole on the apex, **straddle** = force a pair around a bare apex when that fits without crowding. Tight corners always collapse to a single apex hole, and two corner holes are never forced closer than ¾ of the pitch — a corner too short to straddle at that spacing is fitted freely instead. No cramming. |
@@ -546,7 +548,10 @@ extra construction.
   the bottom shape's layer and stitching (holes re-fit to the new outline).
   Subtracting a shape that sits *fully inside* leaves it as a cutout ring —
   which is exactly what the laser needs. Shapes that merely share an edge
-  (no overlap) can't be merged — overlap them slightly first.
+  (no overlap) can't be merged — overlap them slightly first. A selected
+  shape that doesn't come near the bottom one takes no part and is left
+  exactly as it was (the status bar says so); if none of them touch, nothing
+  happens.
 * **Array** (`Ctrl+Shift+R`) — repeat the selection in a **grid**
   (rows × columns at spacings) or a **circle** (count around a centre,
   optionally rotating each copy), or **along a path**: select the pieces

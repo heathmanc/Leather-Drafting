@@ -700,7 +700,9 @@ def offset_shape(shape, dist: float):
     if abs(dist) < _EPS:
         return None
 
-    if isinstance(shape, Circle):
+    if isinstance(shape, Circle) and abs(shape.rx - shape.ry) <= 1e-9:
+        # (a 'circle' whose radii were pulled apart is offset as the oval it
+        # really is, below -- not re-rounded to one of its radii)
         r = shape.rx + dist
         if r <= _EPS:                                  # collapses -> refuse
             return None

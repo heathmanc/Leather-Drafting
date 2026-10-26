@@ -252,6 +252,82 @@ def stitched_edge_flags(sh) -> List[bool]:
     return list(m) if (m is not None and len(m) == n) else [True] * n
 
 
+def edge_mask_snapshot(sh):
+    """What an edit that may change ``sh``'s edge count must take BEFORE it
+    runs so the sewn / unsewn edges survive it (see ``remap_stitch_edges``):
+    ``(segments, flags)``, or None when every edge is sewn anyway."""
+    m = getattr(sh, "stitch_edges", None)
+    if m is None or all(m):
+        return None
+    segs = sh.local_path().segments
+    if len(m) != len(segs):
+        return None
+    return segs, list(m)
+
+
+def _polyline_dist(pts: List[Vec2], q: Vec2) -> float:
+    best = float("inf")
+    for a, b in zip(pts, pts[1:]):
+        ab = b - a
+        d2 = ab.length_sq()
+        k = 0.0 if d2 < 1e-12 else max(0.0, min(1.0, (q - a).dot(ab) / d2))
+        d = (a + ab * k - q).length()
+        if d < best:
+            best = d
+    return best
+
+
+def _samples_along(pts: List[Vec2], n: int) -> List[Vec2]:
+    """``n`` points spread evenly along the inside of a polyline (never its
+    very ends, which it shares with its neighbours)."""
+    if len(pts) < 2:
+        return list(pts)
+    cum = [0.0]
+    for a, b in zip(pts, pts[1:]):
+        cum.append(cum[-1] + (b - a).length())
+    total = cum[-1]
+    if total <= 1e-12:
+        return [pts[0]]
+    out = []
+    for k in range(n):
+        s = total * (k + 0.5) / n
+        i = 1
+        while i < len(cum) - 1 and cum[i] < s:
+            i += 1
+        a, b = pts[i - 1], pts[i]
+        seg = cum[i] - cum[i - 1]
+        f = 0.0 if seg <= 1e-12 else (s - cum[i - 1]) / seg
+        out.append(a + (b - a) * f)
+    return out
+
+
+def remap_stitch_edges(sh, snapshot) -> bool:
+    """After a node insert / delete / fillet / node conversion changed the
+    edges of ``sh``, carry its sewn / unsewn flags over by WHERE each new
+    edge lies on the old outline: an edge is sewn if any part of it ran along
+    a sewn edge. Both halves of a split edge keep its flag, an edge merging a
+    sewn and an unsewn one is sewn, and the arc a fillet puts between two
+    edges follows them. Without this the mask no longer fitted the edge
+    count and was silently ignored -- a pocket mouth sewn shut by adding one
+    node elsewhere. Returns True when a mask was carried over."""
+    if snapshot is None:
+        return False
+    old_segs, old_flags = snapshot
+    old_pl = [[s.start()] + s.flatten() for s in old_segs]
+    flags: List[bool] = []
+    for seg in sh.local_path().segments:
+        pts = [seg.start()] + seg.flatten()
+        sewn = False
+        for q in _samples_along(pts, 5):
+            k = min(range(len(old_pl)), key=lambda i: _polyline_dist(old_pl[i], q))
+            if old_flags[k]:
+                sewn = True
+                break
+        flags.append(sewn)
+    sh.stitch_edges = None if all(flags) else flags
+    return True
+
+
 @dataclass
 class Polygon(Shape):
     points: List[Vec2] = field(default_factory=list)

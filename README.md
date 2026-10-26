@@ -40,9 +40,9 @@ does as you rotate it around a curve.
 
 ![chord vs arc-length spacing](docs/spacing_comparison.svg)
 
-It also nudges the pitch a few percent (within a limit you set) so a whole number
-of holes lands cleanly on **every corner** and on **both ends** of an open seam —
-the thing leatherworkers do by hand.
+It also nudges the pitch to the nearest whole-hole count so holes land cleanly
+on **every corner** and on **both ends** of an open seam — the thing
+leatherworkers do by hand — and the readout tells you how far it had to move.
 
 On a **rounded corner** the holes come out **symmetric about the arc's
 midpoint** — either a stitch sitting right on the 45° apex or an even pair
@@ -150,7 +150,7 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Attach holes to shape** | *Attach holes to shape* (`Ctrl+Shift+A`) bakes loose holes into a single shape so they ride with it for cross-piece registration; *Explode stitching → holes* turns a shape's stitching back into individual, deletable holes (they stay in the piece's move-group) |
 | **Right-click menu** | Group / Ungroup / Attach holes / Convert to nodes / Duplicate / Delete on the selection |
 | **Radius corners** | select a rectangle/polygon, set *Corner radius* in Properties |
-| **Iron & holes** | per shape: pick an iron (mm or SPI), inset, round or slanted-slit holes, single or **double row** (saddle stitch) + backstitch, live hole count + spacing readout |
+| **Iron & holes** | per shape: pick an iron from the standard mm ladder (SPI shown) or type any pitch (`25.4/7` works), inset, round or slanted-slit holes, single or **double row** (saddle stitch) + backstitch on open runs, live hole count + spacing readout |
 | **Corner holes** | rounded-corner holes are always **symmetric about the arc midpoint**. Stitching → *Corners*: `auto` (best count for your iron), `midpoint` (a hole on the apex), `straddle` (an even pair around it) |
 | **Back-to-back symmetry** | Stitching → *Symmetry* (vertical/horizontal) forces flip-symmetric holes; Edit → *Check back-to-back symmetry* validates that a flipped piece lines up |
 | **Make back piece** | Edit → *Make back piece* (`Ctrl+M`), or right-click → *Make back piece (mirror)* — drops a mirror-image copy whose holes stay registered with the front so the two stitch together back-to-back |
@@ -230,14 +230,14 @@ Beyond drawing and stitching, Stitch Hero covers the rest of a real bench workfl
 
 | | |
 |---|---|
-| **Fillet / chamfer corners** | Per corner, a **round** (fillet arc) or a **bevel** (straight chamfer) — set the radius or setback in Properties |
+| **Fillet / chamfer corners** | Per corner, a **round** (fillet arc) or a **bevel** (straight chamfer) — set the radius or setback in the toolbar box, then click corners |
 | **Boolean ops** | **Union**, **difference** and **intersect** on closed shapes — cut windows and card slots straight out of a panel |
 | **Offset / seam allowance** | Grow or shrink an outline by a fixed amount for a true seam allowance |
 | **Import SVG / DXF** | Bring existing vector drawings in as fully editable shapes — paths, arcs and colours map onto layers |
 | **Tracing image** | *View → Tracing image*: drop a photo or scan behind the canvas, **calibrate it to real millimetres** (two clicks + a known distance), fade it, and trace over it with the normal tools |
 | **Nest on sheet** | Shape-aware nesting packs your pieces onto a leather sheet; each piece's slots, holes and seams travel with it |
 | **Kerf compensation** | On export, closed **cut** outlines are compensated for the beam — outer edges grow by kerf/2 and inner cut-outs shrink — so parts come out drawn-size |
-| **Job estimate** | Leather area used (with waste), a rough laser run-time, and — when you feed it prices — a leather / thread / laser **cost** breakdown |
+| **Job estimate** | Piece and hole counts, thread, cut / score / engrave travel, leather area used (with waste), and — when you feed it prices — a leather / thread **cost** breakdown |
 | **Thread estimate** | Saddle-stitch thread length for a piece, from its holes, stack thickness and tail allowance |
 | **Seam-mate check** | Verify that pieces sharing a seam actually line up hole-for-hole before you cut |
 | **Parts library** | Save any selection to a personal parts library and drop it into any document |
@@ -361,7 +361,7 @@ examples/  tests/  docs/
 - [x] Place, calibrate and trace over a raster reference image
 - [x] Kerf compensation on cut outlines
 - [x] Nest pattern pieces onto a leather sheet
-- [x] Job estimate (leather area + waste, laser run-time, optional cost)
+- [x] Job estimate (leather area + waste, travel lengths, optional cost)
 - [x] Thread-length estimate + seam-mate check
 - [x] Parts library, starter templates, and parametric generators
 - [x] Dark theme, autosave & crash recovery

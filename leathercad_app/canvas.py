@@ -1929,18 +1929,27 @@ class Canvas(QGraphicsView):
         a_fold.setEnabled(line_like)
         # which edge of a stitched piece was right-clicked: sew it or not
         edge_item, edge_idx, edge_on = None, None, True
+        edge_tip = ""
         if (isinstance(owner, ShapeItem) and owner.model.stitch is not None
                 and owner.model.stitch.enabled and not owner.model.baked_holes):
             from leathercad.shapes import segment_index_at, stitched_edge_flags
-            wp = self.mapToScene(event.pos())
-            edge_idx = segment_index_at(owner.model, Vec2(wp.x(), wp.y()),
-                                        12.0 / max(self._zoom, 1e-6))
-            if edge_idx is not None:
-                edge_item = owner
-                edge_on = stitched_edge_flags(owner.model)[edge_idx]
+            if isinstance(owner.model, Ellipse):      # Circle too
+                # the rim is one edge drawn as dozens of facets: toggling one
+                # facet opens a 2 mm gap, not a quarter of the ring
+                edge_tip = ("A circle's rim is a single edge. Convert it to "
+                            "nodes first (Ctrl+K) to sew it in parts.")
+            else:
+                wp = self.mapToScene(event.pos())
+                edge_idx = segment_index_at(owner.model, Vec2(wp.x(), wp.y()),
+                                            12.0 / max(self._zoom, 1e-6))
+                if edge_idx is not None:
+                    edge_item = owner
+                    edge_on = stitched_edge_flags(owner.model)[edge_idx]
         a_edge = menu.addAction("Stitch this edge" if not edge_on
                                 else "Don't stitch this edge")
         a_edge.setEnabled(edge_item is not None)
+        if edge_tip:
+            a_edge.setToolTip(edge_tip)
         a_keep = menu.addAction("Stitch keep-out…")
         a_keep.setEnabled(bool(shapes))
         a_keep.setToolTip("Stitch holes keep this far from the shape's centre "
@@ -2788,8 +2797,10 @@ class Canvas(QGraphicsView):
                 return False
             pts.insert(i + 1, proj)
         elif isinstance(it, ShapeItem):
+            from leathercad.shapes import edge_mask_snapshot, remap_stitch_edges
             sh = it.model
             local = sh.transform.inverse_apply(world)
+            edges_before = edge_mask_snapshot(sh)   # unsewn edges survive
             if isinstance(sh, (Polygon, PathShape)):
                 closed = bool(getattr(sh, "close_path", False))
                 i, proj, d = self._nearest_segment(sh.points, closed, local)
@@ -2815,6 +2826,7 @@ class Canvas(QGraphicsView):
                     return False
             else:
                 return False
+            remap_stitch_edges(sh, edges_before)
         else:
             return False
         it.sync_from_model()
@@ -2841,8 +2853,10 @@ class Canvas(QGraphicsView):
                       key=lambda i: (pts[i] - world).length())
             it.line.remove_point(idx)
         elif isinstance(it, ShapeItem):
+            from leathercad.shapes import edge_mask_snapshot, remap_stitch_edges
             sh = it.model
             local = sh.transform.inverse_apply(world)
+            edges_before = edge_mask_snapshot(sh)   # unsewn edges survive
             if isinstance(sh, (Polygon, PathShape)):
                 closed = bool(getattr(sh, "close_path", False))
                 if len(sh.points) <= (3 if closed else 2):
@@ -2890,6 +2904,7 @@ class Canvas(QGraphicsView):
                         sh.edges[idx - 1] = Edge("line")
             else:
                 return False
+            remap_stitch_edges(sh, edges_before)
         else:
             return False
         it.sync_from_model()
@@ -3203,10 +3218,13 @@ class Canvas(QGraphicsView):
         """Remove node ``idx`` of the path being edited, keeping the outline's
         character (two arcs on a circle stay one arc, curves stay curved)."""
         from leathercad.modify import remove_node
+        from leathercad.shapes import edge_mask_snapshot, remap_stitch_edges
         ep = item.model
+        edges_before = edge_mask_snapshot(ep)
         if not remove_node(ep, idx):
             self.statusMessage.emit("Can't remove any more nodes")
             return
+        remap_stitch_edges(ep, edges_before)   # unsewn edges survive
         item.sync_from_model()
         self.enter_vertex_edit(item)
         self.statusMessage.emit("Node removed")
@@ -3417,10 +3435,11 @@ class Canvas(QGraphicsView):
         counts = []
         for name, res in picks:
             gaps = res.chord_spacings()
-            length = sum(gaps)
+            length = res.seam_length()          # along one row, every run
             counts.append(res.count)
             if gaps:
-                out.append(f"{name}:  {res.count} holes ·"
+                rows = " (2 rows)" if getattr(res, "rows", 1) == 2 else ""
+                out.append(f"{name}:  {res.count} holes{rows} ·"
                            f" seam ≈ {length:.1f} mm ·"
                            f" spacing {min(gaps):.2f}–{max(gaps):.2f} mm")
             else:
@@ -3495,7 +3514,9 @@ class Canvas(QGraphicsView):
         if not self.fillet_radius:
             self.fillet_radius = 6.0              # sane default, never a popup
 
+        from leathercad.shapes import edge_mask_snapshot, remap_stitch_edges
         sh = it.model
+        edges_before = edge_mask_snapshot(sh)     # unsewn edges survive
         ep_probe = to_editable(sh)
         if (ep_probe is not None and ep_probe is not sh
                 and getattr(sh, "corner_radius", 0.0) > 1e-9):
@@ -3544,6 +3565,7 @@ class Canvas(QGraphicsView):
                 "There's no corner to round there (it's an open end, or the "
                 "outline already runs smoothly through that point)")
             return
+        remap_stitch_edges(ep, edges_before)
         it.sync_from_model()
         self._fillet_done_msg(chamfer, done)
         self.documentChangedSig.emit()
@@ -4288,6 +4310,8 @@ class Canvas(QGraphicsView):
             sh.corner_radius = v
         elif field == "rx" and hasattr(sh, "rx"):
             sh.rx = v
+            if isinstance(sh, Circle):          # a circle has ONE radius
+                sh.ry = v
         elif field == "ry" and hasattr(sh, "ry"):
             sh.ry = v
         elif field == "pitch" and sh.stitch is not None:

@@ -363,28 +363,31 @@ disappear).
 | Setting | What it does |
 |---|---|
 | **Punch** | The cutting-edge style, which sets the hole **shape**: **Round** (round holes), **Oblique** (a flat, shallow-slanted slit), **French** (a fine, steeper slanted slit — the Blanchard look), **Diamond** (a diamond / lozenge, angled like the awl). Round → circle; oblique/french → a slit at that slant; diamond → a true diamond, on screen and in the SVG/DXF export. |
-| **Pitch** | The stitch spacing — the standard ladder (2.0…5.0 mm), each shown with its SPI, since pitch is what irons are sold by and it's the same across makers. Pick **Custom…** to reveal a **Pitch (mm)** box and type any value (accepts math, e.g. `25.4/7`). Default 3.85 mm ≈ 6.6 SPI. |
+| **Pitch** | The stitch spacing — the standard ladder (2.0…5.0 mm), each shown with its SPI, since pitch is what irons are sold by and it's the same across makers. Pick **Custom…** to reveal an **Exact pitch** box and type any value (accepts math, e.g. `25.4/7`). The exact box also stays visible whenever the stored pitch isn't one of the presets, so a typed 3.86 is never shown as plain "3.85". Default 3.85 mm ≈ 6.6 SPI. |
 | **Inset from edge** | How far the stitch line sits in from the cut edge. Default 3.5 mm. The stitch line is the true offset of the outline: straights keep their length, and a rounded corner of radius R becomes an arc of radius R − inset on the same centre, with every hole on that arc exactly one pitch (straight-line) from the last — so a walked pricking iron lands each tooth on the line. Where a corner is rounder than the inset is deep (say a 3 mm fillet with a 3.5 mm inset), the stitch line turns that corner sharply with one hole on it. A piece too small for the stitch line to go all the way round gets a single hole, and one narrower than twice the inset gets none. |
-| **Fit** | How holes are fitted to the path. **auto** picks *closed* for closed outlines, *endpoints* for open ones — the pitch is nudged (≤ 12 %) so whole holes land on every corner and both ends. **none** marches at the *exact* pitch and lets the last hole fall wherever it lands. |
+| **Fit** | How holes are fitted to the path. **Fit to corners & ends** (the default) nudges the pitch to the nearest whole-hole count so a hole lands on every corner and on both ends of an open seam; on most shapes that moves the pitch a few percent, and the readout always shows how far. **Exact pitch** marches at precisely the pitch and lets the last gap fall wherever it lands — the readout includes that closing gap. (Older files' *endpoints* / *closed* settings load as the fitted mode: the engine reads the path's own closedness.) |
 | **Hole ø** | *Round only* — a round hole carries its own diameter (independent of spacing). Pick a common size (0.8 / 1.0 / 1.2 / 1.5 mm) or choose **Custom…** to type your own. Hidden for the slit styles, whose hole size comes from the tooth and scales with pitch (tune it with **Slit length / Slit angle**). |
-| **Rows** | **2 (double)** adds a second parallel row (aligned rungs) for saddle-stitched straps; set **Row spacing**. |
-| **Backstitch** | Marks N holes at each end of an open seam as the backstitch zone (markers only — you sew back through existing holes). |
-| **Symmetry** | Force the hole set to be mirror-symmetric about the shape's **vertical** or **horizontal** axis, so a flipped piece lines up back-to-back. |
-| **Corners** | How holes sit on a rounded corner's arc: **auto** tries each strategy and keeps the one whose chord spacing strays least from your pitch, **midpoint** = force a hole on the apex, **straddle** = force a pair around a bare apex. Tight corners always collapse to a single apex hole, and two corner holes are never forced closer than ¾ of the pitch (e.g. two fillets joined by a very short straight) — no cramming. |
+| **Rows** | **2 (double)** adds a second parallel row (aligned rungs) for saddle-stitched straps; set **Row spacing**. The two rows sit half the row spacing either side of the stitch line, so keep the spacing under twice the inset or the outer row reaches the cut edge. |
+| **Backstitch** | Marks N holes at each **end of an open run** as the backstitch zone (markers only — you sew back through existing holes). A closed outline has no ends, so the field is only offered on seams, open paths and pieces with an unsewn edge. |
+| **Symmetry** | Force the hole set to be mirror-symmetric about the shape's **vertical** or **horizontal** axis, so a flipped piece lines up back-to-back. Closed outlines only, and only an outline that is itself symmetric about that axis can comply — on any other shape the fit just gets worse (watch the readout). |
+| **Corners** | How holes sit on a rounded corner's arc (closed outlines only): **auto** tries each strategy and keeps the one whose chord spacing strays least from your pitch, **midpoint** = force a hole on the apex, **straddle** = force a pair around a bare apex when that fits without crowding. Tight corners always collapse to a single apex hole, and two corner holes are never forced closer than ¾ of the pitch — a corner too short to straddle at that spacing is fitted freely instead. No cramming. |
 
 The **readout** at the bottom shows the hole count, the min–max chord spacing
-(these should hug your pitch), and the effective pitch per span.
+(these should hug your pitch — it is measured the way the needle travels: per
+row, per run and round the closing gap of a loop), and the effective pitch per
+span. When no whole-hole count comes within 12 % of your iron on some span, the
+readout says so in red: that piece wants a different size or pitch.
 
 ### Quoting a whole job
 
 **Edit → Job estimate (cut summary)…** rolls the entire pattern up into the
 numbers you quote and cut with, in one dialog: piece count, total stitch
 holes, thread needed, **cut / score / engrave** travel lengths (split by layer
-role), leather used by the parts vs. their footprint (**layout waste %**), an
-optional **laser run-time** from your cutting feed rate, and — if you enter
-prices — a **leather + thread + laser cost** breakdown with a total. Every
-input (leather stack, needle tail, feed rate, hide yield, prices) is
-remembered; leave any price at 0 to hide its cost line.
+role), leather used by the parts vs. their footprint (**layout waste %**), and
+— if you enter prices — a **leather + thread cost** breakdown with a total.
+Every input (leather stack, needle tail, hide yield, prices) is remembered;
+leave any price at 0 to hide its cost line. (Laser run-time depends on your
+machine's settings, so it is left to the laser software.)
 
 ### Seam mates — will these two pieces sew together?
 
@@ -608,8 +611,9 @@ extra construction.
   shape and the dimension follows and re-measures. Dimensions are annotations
   only — never cut, never exported.
 * **Text** (`A`) — click, type your text: the glyph outlines are baked to real
-  paths on the **Engrave** layer and export as engrave polylines. (Text is
-  baked at creation; to change it, delete and re-place.)
+  paths on the **Engrave** layer and export as engrave polylines. Select the
+  text later to change its string, font, size or tracking in Properties → Text;
+  the outlines re-bake as you type.
 
 ---
 
@@ -893,9 +897,16 @@ It's in a **move-group** — that's the point of `Ctrl+G`. Select it and press
 `Ctrl+Shift+G` to ungroup.
 
 **The Fit dropdown seems to do nothing.**
-`auto`, `endpoints` and `closed` genuinely coincide on many shapes (auto just
-picks the right one). Compare against **none**, which marches at the raw
-pitch: the last gap will usually differ.
+It has two settings. **Fit to corners & ends** is the default and is what you
+want almost always; **Exact pitch** marches at the raw pitch and lets the
+closing gap float — switch between them and watch the readout's min–max
+spacing. (Older versions listed `endpoints` and `closed` as well; they were
+the same thing as the fitted mode on every shape, so they are gone.)
+
+**Corners / Symmetry are greyed out, or Inset / Backstitch are missing.**
+They only apply where the engine can use them: Inset, Corners and Symmetry on
+a **closed** outline, Backstitch on the two ends of an **open** run (a seam, an
+open path, or a piece with an unsewn edge). The tooltip on each says so.
 
 **Zoomed way out, my stitch holes look like square dots.**
 Intended: once a hole is smaller than about two pixels on screen it is drawn

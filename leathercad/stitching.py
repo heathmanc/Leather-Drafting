@@ -470,7 +470,13 @@ def _plan_corners(poly: Polyline, cor: List[float], settings, style=None):
         elif style == "straddle":
             if chord_tt >= p * 0.98:
                 forced |= {a, b}
-                straddle.add((a, b))
+                # Straddling needs an odd number of steps round the arc. On
+                # an arc between ~1.1 and ~2.6 pitches long the only odd
+                # counts are 1 (a huge gap) or 3 (holes crammed to ~60 % of
+                # the pitch): neither is sewable, so the arc is fitted
+                # freely instead -- the apex gets a hole, the pitch holds.
+                if _straddle_step(arc_len, chord_tt, p) >= _MIN_ANCHOR_SEP * p:
+                    straddle.add((a, b))
             else:
                 forced.add(apex)          # too tight to straddle -> apex hole
                 key.add(apex)
@@ -495,8 +501,46 @@ def _plan_corners(poly: Polyline, cor: List[float], settings, style=None):
 # such anchor used to force its own hole, packing a cluster into the corner.
 _MIN_ANCHOR_SEP = 0.75
 # A span fitted with no count inside the iron's tolerance never squeezes its
-# holes closer than this fraction of the pitch while a sparser count exists.
-_MIN_FIT_PITCH = 0.6
+# holes closer than this fraction of the pitch while a sparser count exists --
+# the same three-quarters the guide promises for corner holes.
+_MIN_FIT_PITCH = 0.75
+
+
+def _arc_sweep(chord: float, arc_len: float) -> float:
+    """Sweep angle (radians) of a circular arc from its chord and length:
+    solves sin(t/2)/(t/2) = chord/arc_len by bisection."""
+    if arc_len <= _EPS or chord >= arc_len * (1 - 1e-12):
+        return 0.0
+    ratio = max(0.0, chord / arc_len)
+    lo, hi = 1e-9, 2 * math.pi - 1e-9
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        if math.sin(mid / 2) / (mid / 2) > ratio:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def _straddle_step(arc_len: float, chord: float, pitch: float) -> float:
+    """The chord step the fitter will use when it is made to put an ODD number
+    of steps round a corner arc (so a pair straddles a bare apex): the odd
+    count nearest the pitch, as ``_best_fit_span`` chooses it. Returns the
+    step in mm -- below three-quarters of the pitch the holes would cram."""
+    if arc_len <= _EPS or pitch <= _EPS:
+        return 0.0
+    sweep = _arc_sweep(chord, arc_len)
+    radius = arc_len / sweep if sweep > 1e-9 else 0.0
+
+    def step(n: int) -> float:
+        if radius > 0:
+            return 2.0 * radius * math.sin(sweep / (2.0 * n))
+        return arc_len / n
+
+    n0 = max(1, int(round(arc_len / pitch)))
+    cands = [n for n in range(max(1, n0 - 3), n0 + 4) if n % 2 == 1]
+    best = min(cands, key=lambda n: abs(step(n) - pitch))
+    return step(best)
 
 
 def _space_anchors(anchors, total: float, closed: bool, min_sep: float,
@@ -574,6 +618,15 @@ class StitchResult:
     # Effective pitch(es) actually used, per fitted span, in mm.
     pitches: List[float] = field(default_factory=list)
     closed: bool = False
+    # How ``holes`` is laid out, so readouts and estimates can walk the seam
+    # the way the needle does:
+    #   rows  -- 1, or 2 when every hole comes as an aligned pair (outer,
+    #            inner) across the two rows of a saddle stitch;
+    #   runs  -- start indices of each separately sewn run when the piece is
+    #            stitched in pieces (an unsewn edge, a hardware keep-out).
+    #            None = one continuous run.
+    rows: int = 1
+    runs: Optional[List[int]] = None
 
     @property
     def points(self) -> List[Vec2]:
@@ -583,10 +636,52 @@ class StitchResult:
     def count(self) -> int:
         return len(self.holes)
 
+    def sequences(self, row: Optional[int] = None) -> List[List[int]]:
+        """Index lists of the holes a needle visits in order: one list per
+        run and per row (``row`` 0/1 picks one row of a double row). Gaps
+        between runs and across the rows are never a stitch."""
+        n = len(self.holes)
+        step = max(1, int(self.rows or 1))
+        bounds = sorted({0, *(self.runs or [])} | {n})
+        bounds = [b for b in bounds if 0 <= b <= n]
+        out = []
+        for a, b in zip(bounds, bounds[1:]):
+            for r in range(step):
+                if row is not None and r != row:
+                    continue
+                seq = list(range(a + r, b, step))
+                if len(seq) >= 2:
+                    out.append(seq)
+        return out
+
     def chord_spacings(self) -> List[float]:
-        """Straight-line distance between consecutive holes (sanity check)."""
+        """Straight-line distance between consecutive holes of each stitch
+        run, per row -- including the closing gap of a closed loop (the one
+        an unfitted march leaves short)."""
         pts = self.points
-        return [distance(pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
+        gaps: List[float] = []
+        for seq in self.sequences():
+            gaps += [distance(pts[i], pts[j]) for i, j in zip(seq, seq[1:])]
+            if self.closed and len(seq) > 2:
+                gaps.append(distance(pts[seq[-1]], pts[seq[0]]))
+        return gaps
+
+    def seam_length(self) -> float:
+        """Length of the seam along one row, summed over its runs."""
+        pts = self.points
+        total = 0.0
+        for seq in self.sequences(row=0):
+            total += sum(distance(pts[i], pts[j]) for i, j in zip(seq, seq[1:]))
+            if self.closed and len(seq) > 2:
+                total += distance(pts[seq[-1]], pts[seq[0]])
+        return total
+
+    def worst_deviation(self, pitch: float) -> float:
+        """Largest fractional error of any chord gap against ``pitch``."""
+        gaps = self.chord_spacings()
+        if not gaps or pitch <= 0:
+            return 0.0
+        return max(abs(g - pitch) / pitch for g in gaps)
 
 
 def stitch_path(path: Path, pitch: float, *, mode: str = "chord",
@@ -1025,6 +1120,7 @@ def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
             kept = spans
         cor_s = [(poly.nearest_arclength(cp), cp) for cp in corner_points]
         out = StitchResult(closed=False)
+        starts: List[int] = []
         for s0, s1 in kept:
             if s1 - s0 <= 1e-6:
                 continue
@@ -1045,8 +1141,12 @@ def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
                                           total, closed)]
             res = _distribute(rpoly, run_corners, False, settings, arcs,
                               rpoly.length)
+            if res.holes:
+                starts.append(len(out.holes))
             out.holes += res.holes
             out.pitches += res.pitches
+        if len(starts) > 1:
+            out.runs = starts
         return _apply_rows(out, settings)
 
     if closed and getattr(settings, "start_offset", 0.0):
@@ -1387,6 +1487,9 @@ def _apply_rows(result: StitchResult, settings) -> StitchResult:
         doubled.append(Hole(h.point + n * half, h.tangent))
         doubled.append(Hole(h.point - n * half, h.tangent))
     result.holes = doubled
+    result.rows = 2
+    if result.runs:
+        result.runs = [2 * r for r in result.runs]
     return result
 
 

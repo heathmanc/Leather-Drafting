@@ -249,7 +249,7 @@ def test_every_stitching_control_recomputes_the_pattern():
     # auto-spaced shape: geometry AND appearance controls both redraw
     assert changes(shp, lambda: _pick(p.pitch_combo, 3.0))
     assert changes(shp, lambda: p.inset.setValue(6.0))
-    assert changes(shp, lambda: p.fit.setCurrentText("none"))
+    assert changes(shp, lambda: p.fit.setCurrentIndex(1))     # exact pitch
     assert changes(shp, lambda: p.punch_style.setCurrentText("Diamond"))
     assert changes(shp, lambda: p.slit_angle.setValue(12))
     assert changes(shp, lambda: p.slit_len.setValue(2.5))

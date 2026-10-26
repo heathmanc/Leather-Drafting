@@ -163,7 +163,14 @@ def _shape_from_dict(d: dict) -> Shape:
         sh = Rectangle(width=d.get("width", 50), height=d.get("height", 30),
                        corner_radius=d.get("corner_radius", 0.0), **common)
     elif kind == "circle":
-        sh = Circle(rx=d.get("rx", 20), ry=d.get("ry", d.get("rx", 20)), **common)
+        rx, ry = d.get("rx", 20), d.get("ry", d.get("rx", 20))
+        if abs(rx - ry) > 1e-9:
+            # an older Properties panel could pull a circle's two radii apart:
+            # load it as the oval it is, so nothing re-rounds it behind the
+            # user's back
+            sh = Ellipse(rx=rx, ry=ry, **common)
+        else:
+            sh = Circle(rx=rx, ry=ry, **common)
     elif kind == "ellipse":
         sh = Ellipse(rx=d.get("rx", 25), ry=d.get("ry", 15), **common)
     elif kind == "polygon":

@@ -135,13 +135,16 @@ class VertexHandle(QGraphicsItem):
         self._dragged = False
         self._shift = False
         self._drag_start = None      # node world pos when the drag began
+        # Place the handle BEFORE it reports geometry changes: with the flag
+        # already set, this first setPos ran itemChange -> _sync_owner, which
+        # threw away the owner's stitch holes on merely entering node edit.
+        self.setPos(node.world.x, node.world.y)
         self.setFlags(
             QGraphicsItem.ItemIsMovable
             | QGraphicsItem.ItemSendsGeometryChanges
             | QGraphicsItem.ItemIgnoresTransformations
         )
         self.setZValue(2000)
-        self.setPos(node.world.x, node.world.y)
 
     def boundingRect(self) -> QRectF:
         s = self.SIZE + 4      # generous hit area so nodes are easy to grab

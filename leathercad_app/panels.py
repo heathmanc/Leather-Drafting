@@ -64,6 +64,59 @@ def _kept(spin, cur: float) -> float:
     return spin.value()
 
 
+# Tooltips for the stitch controls: what each one does, in the words of the
+# guide's table, so the panel itself says what an option will and won't do.
+_TIPS = {
+    "punch": ("The pricking-iron style, which sets the hole SHAPE:\n"
+              "Round = round holes (pick a diameter below).\n"
+              "Oblique = a flat, shallow-slanted slit (≈ 22°).\n"
+              "French = a finer, steeper slit (≈ 42°) — the Blanchard look; "
+              "same slit, different default length and slant.\n"
+              "Diamond = a lozenge, angled like the awl."),
+    "pitch_combo": ("Stitch spacing — the standard iron ladder, each with its "
+                    "SPI. Pick Custom… to type any value (math works: "
+                    "25.4/7)."),
+    "pitch": ("The exact pitch in use. Shown whenever the stored value is not "
+              "one of the presets."),
+    "inset": ("How far the stitch line sits in from the cut edge. The holes "
+              "follow the true offset of the outline, so a rounded corner "
+              "stays concentric. Closed outlines only — a drawn seam or an "
+              "open path IS the stitch line."),
+    "fit": ("Fit to corners & ends: the pitch is nudged to the nearest "
+            "whole-hole count so a hole lands on every corner and both ends "
+            "(check the readout for how far it moved).\n"
+            "Exact pitch: march at precisely the pitch and let the last gap "
+            "fall where it may."),
+    "hole_dia_combo": ("Round holes only — the hole's own diameter, "
+                       "independent of the spacing. Custom… to type one."),
+    "hole_dia": "The exact hole diameter in use.",
+    "slit_len": "Length of each slit / diamond (the tooth size). Rescaled "
+                "when you pick a pitch preset; a typed value stays.",
+    "slit_angle": "Slant of each slit / diamond off the stitch line.",
+    "rows": ("2 (double) adds a second parallel row of holes, aligned rung "
+             "for rung, for a saddle-stitched strap. The two rows sit half "
+             "the row spacing either side of the stitch line."),
+    "row_spacing": ("Distance between the two rows. Keep it under twice the "
+                    "inset or the outer row reaches the cut edge."),
+    "backstitch": ("Marks N holes at each END of an open run as the "
+                   "backstitch zone — markers only, no extra holes are cut. "
+                   "A closed outline has no ends, so it is not offered there."),
+    "symmetry": ("Force the holes to be mirror-symmetric about the shape's "
+                 "vertical or horizontal centre axis so a flipped piece lines "
+                 "up back-to-back. Closed outlines only, and only an outline "
+                 "that is itself symmetric about that axis can comply — the "
+                 "readout widens when the fit had to give."),
+    "corners": ("How holes sit on a rounded corner's arc (closed outlines "
+                "only; every corner's holes stay symmetric about its apex):\n"
+                "auto — tries each strategy, keeps the one closest to your "
+                "pitch.\nmidpoint — a hole on the apex.\nstraddle — an even "
+                "pair around a bare apex, when that fits without crowding; "
+                "holes are never forced closer than ¾ of the pitch, so a "
+                "corner too short for that is fitted freely instead."),
+}
+_CLOSED_ONLY = "\n\nNot available here: this is an open path, not a closed outline."
+
+
 def _is_line(sh) -> bool:
     """A straight 2-point open path (a line or construction line)."""
     return (isinstance(sh, PathShape) and len(sh.points) == 2
@@ -135,6 +188,17 @@ class PropertiesPanel(QWidget):
         fe.addRow("Radius X", self.rx)
         fe.addRow("Radius Y", self.ry)
         root.addWidget(self.g_ellipse)
+
+        # Circle geometry: ONE radius (editing an ellipse's two radii on a
+        # circle quietly turned it into an oval that the grips, Scale and
+        # Offset then re-rounded in different ways)
+        self.g_circle = QGroupBox("Circle")
+        fc = QFormLayout(self.g_circle)
+        self.circ_r = _spin(0.05, 100000, 1.0, _GEOM_DECIMALS)
+        self.circ_d = _spin(0.1, 200000, 1.0, _GEOM_DECIMALS)
+        fc.addRow("Radius", self.circ_r)
+        fc.addRow("Diameter", self.circ_d)
+        root.addWidget(self.g_circle)
 
         # Polygon geometry
         self.g_poly = QGroupBox("Polygon")
@@ -209,8 +273,12 @@ class PropertiesPanel(QWidget):
         self.hole_dia_combo = NoWheelComboBox()
         self._build_dia_combo()
         self.inset = _spin(0.0, 100, 0.5, _GEOM_DECIMALS)
+        # Two fits, because only two exist: the engine reads the path's own
+        # closedness, so the old 'endpoints' / 'closed' entries were the same
+        # thing as 'auto' on every shape (they still load as 'auto').
         self.fit = NoWheelComboBox()
-        self.fit.addItems(["auto", "endpoints", "closed", "none"])
+        self.fit.addItem("Fit to corners & ends", "auto")
+        self.fit.addItem("Exact pitch (last gap floats)", "none")
         self.hole_dia = _spin(0.1, 10, 0.1, _GEOM_DECIMALS)
         self.slit_len = _spin(0.2, 10, 0.1, _GEOM_DECIMALS)
         self.slit_angle = _spin(-89, 89, 1.0, 1, " °")
@@ -223,22 +291,26 @@ class PropertiesPanel(QWidget):
         self.backstitch.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.symmetry = NoWheelComboBox()
         self.symmetry.addItems(["none", "vertical", "horizontal"])
-        self.symmetry.setToolTip(
-            "Force flip-symmetric holes so a flipped piece lines up back-to-back")
         self.corner_style = NoWheelComboBox()
         self.corner_style.addItems(["auto", "midpoint", "straddle"])
-        self.corner_style.setToolTip(
-            "Rounded-corner holes are always symmetric about the arc midpoint.\n"
-            "auto: the arrangement with the least pitch deviation.\n"
-            "midpoint: force a hole on the corner apex.\n"
-            "straddle: force an even pair around the apex, none on it.")
+        for wdg, key in ((self.punch_style, "punch"),
+                         (self.pitch_combo, "pitch_combo"), (self.pitch, "pitch"),
+                         (self.inset, "inset"), (self.fit, "fit"),
+                         (self.hole_dia_combo, "hole_dia_combo"),
+                         (self.hole_dia, "hole_dia"), (self.slit_len, "slit_len"),
+                         (self.slit_angle, "slit_angle"), (self.rows, "rows"),
+                         (self.row_spacing, "row_spacing"),
+                         (self.backstitch, "backstitch"),
+                         (self.symmetry, "symmetry"),
+                         (self.corner_style, "corners")):
+            wdg.setToolTip(_TIPS[key])
         fs.addRow("Punch", self.punch_style)
         fs.addRow("Pitch", self.pitch_combo)
-        fs.addRow("Pitch (mm)", self.pitch)
+        fs.addRow("Exact pitch", self.pitch)        # the box shows its unit
         fs.addRow("Inset from edge", self.inset)
         fs.addRow("Fit", self.fit)
         fs.addRow("Hole ø", self.hole_dia_combo)
-        fs.addRow("Hole ø (mm)", self.hole_dia)
+        fs.addRow("Exact hole ø", self.hole_dia)
         fs.addRow("Slit length", self.slit_len)
         fs.addRow("Slit angle", self.slit_angle)
         fs.addRow("Rows", self.rows)
@@ -272,8 +344,8 @@ class PropertiesPanel(QWidget):
 
         # wire up: valueChanged does live preview; editingFinished commits undo
         for wdg in (self.pos_x, self.pos_y, self.rot, self.w, self.h,
-                    self.corner, self.rx, self.ry, self.poly_radius,
-                    self.line_len, self.line_angle,
+                    self.corner, self.rx, self.ry, self.circ_r, self.circ_d,
+                    self.poly_radius, self.line_len, self.line_angle,
                     self.pitch, self.inset, self.hole_dia, self.slit_len,
                     self.slit_angle):
             wdg.valueChanged.connect(self._apply)
@@ -337,7 +409,7 @@ class PropertiesPanel(QWidget):
                 self.setEnabled(True)
                 self._populate()
                 for g in (self.g_transform, self.g_rect, self.g_ellipse,
-                          self.g_poly, self.g_line, self.g_text):
+                          self.g_circle, self.g_poly, self.g_line, self.g_text):
                     g.setVisible(False)
                 n_sh = sum(isinstance(it, ShapeItem) for it in items)
                 self.readout.setText(
@@ -365,10 +437,12 @@ class PropertiesPanel(QWidget):
         is_baked = is_shape and bool(it.model.baked_holes)
         self.g_rect.setVisible(False)
         self.g_ellipse.setVisible(False)
+        self.g_circle.setVisible(False)
         self.g_poly.setVisible(False)
         self.g_line.setVisible(False)
         self.g_text.setVisible(is_text)
-        self.g_stitch.setVisible(not is_text)   # text has no stitch properties
+        # text and dimensions have no stitch properties
+        self.g_stitch.setVisible(not is_text and not isinstance(it, DimensionItem))
         self.g_appear.setVisible(is_shape)
         self.g_transform.setVisible(is_shape)
         # Auto-spaced shapes AND drawn seams expose the pitch / fit controls.
@@ -407,8 +481,7 @@ class PropertiesPanel(QWidget):
 
         # a dimension is a read-only annotation (no stitch/geometry properties)
         if isinstance(it, DimensionItem):
-            self.g_stitch.setCheckable(False)
-            self.g_stitch.setTitle("Dimension")
+            self._sync_edges_row()           # never a leftover 'Edges sewn'
             self._loading = False
             self._update_readout()
             return
@@ -434,7 +507,11 @@ class PropertiesPanel(QWidget):
                 self.w.setValue(sh.width)
                 self.h.setValue(sh.height)
                 self.corner.setValue(sh.corner_radius)
-            elif isinstance(sh, (Circle, Ellipse)):
+            elif isinstance(sh, Circle):
+                self.g_circle.setVisible(True)
+                self.circ_r.setValue(sh.rx)
+                self.circ_d.setValue(2.0 * sh.rx)
+            elif isinstance(sh, Ellipse):
                 self.g_ellipse.setVisible(True)
                 self.rx.setValue(sh.rx)
                 self.ry.setValue(sh.ry)
@@ -465,6 +542,7 @@ class PropertiesPanel(QWidget):
             self.g_stitch.setChecked(True)
             self._load_stitch(st)
         self._sync_edges_row()
+        self._sync_closed_rows()
         self._loading = False
         self._update_readout()
 
@@ -487,7 +565,10 @@ class PropertiesPanel(QWidget):
                 self.w.setValue(sh.width)
                 self.h.setValue(sh.height)
                 self.corner.setValue(sh.corner_radius)
-            elif isinstance(sh, (Circle, Ellipse)):
+            elif isinstance(sh, Circle):
+                self.circ_r.setValue(sh.rx)
+                self.circ_d.setValue(2.0 * sh.rx)
+            elif isinstance(sh, Ellipse):
                 self.rx.setValue(sh.rx)
                 self.ry.setValue(sh.ry)
             elif _is_line(sh):
@@ -501,6 +582,35 @@ class PropertiesPanel(QWidget):
         finally:
             self._loading = False
         self._update_readout()
+
+    def _sync_closed_rows(self):
+        """Offer only the options the engine will read for this item. Inset,
+        Corners and Symmetry act on a closed outline; Backstitch marks the two
+        ENDS of an open run. Each used to sit there live on every item,
+        changing nothing -- the 'useless dropdowns'."""
+        it = self._item
+        if not self._path_rows_vis or not _alive(it):
+            return
+        if isinstance(it, ShapeItem):
+            try:
+                path_closed = bool(it.model.local_path().closed)
+            except Exception:
+                path_closed = True
+            res = it._holes
+            self._stitch_form.setRowVisible(self.inset, path_closed)
+        elif isinstance(it, StitchLineItem):
+            path_closed = bool(it.line.closed)
+            res = getattr(it, "_holes", None)
+        else:
+            return
+        # an unsewn edge or a keep-out turns a closed outline into open runs
+        result_closed = (res.closed if (res is not None and res.count)
+                         else path_closed)
+        for wdg, key in ((self.corner_style, "corners"),
+                         (self.symmetry, "symmetry")):
+            wdg.setEnabled(path_closed)
+            wdg.setToolTip(_TIPS[key] + ("" if path_closed else _CLOSED_ONLY))
+        self._stitch_form.setRowVisible(self.backstitch, not result_closed)
 
     def _set_path_rows_visible(self, vis: bool):
         # every control that governs where holes GO (as opposed to how they
@@ -523,11 +633,22 @@ class PropertiesPanel(QWidget):
         self._stitch_form.setRowVisible(self.hole_dia_combo, not slit)
         self._stitch_form.setRowVisible(self.slit_len, slit)
         self._stitch_form.setRowVisible(self.slit_angle, slit)
-        pitch_custom = self.pitch_combo.currentData() is None
+        # The dropdown claims a value within 0.02 mm as its preset (25.4/7.5
+        # must read as the 7.5 SPI iron) -- but the exact box stays visible
+        # whenever the real number differs from the preset's label, so a
+        # typed 3.86 is never shown as plain "3.85".
+        pitch_custom = not self._matches_preset(self.pitch_combo,
+                                                self.pitch.value())
         self._stitch_form.setRowVisible(self.pitch,
                                         self._path_rows_vis and pitch_custom)
-        dia_custom = self.hole_dia_combo.currentData() is None
+        dia_custom = not self._matches_preset(self.hole_dia_combo,
+                                              self.hole_dia.value())
         self._stitch_form.setRowVisible(self.hole_dia, (not slit) and dia_custom)
+
+    @staticmethod
+    def _matches_preset(combo, value: float) -> bool:
+        data = combo.currentData()
+        return data is not None and abs(float(data) - value) < 5e-5
 
     def _load_punch(self, hole_style, punch_style, pitch):
         """Point the style + pitch selectors at a saved hole (shared by shapes,
@@ -573,8 +694,8 @@ class PropertiesPanel(QWidget):
     def _load_stitch(self, st: StitchSettings):
         self.pitch.setValue(st.pitch_mm)
         self.inset.setValue(st.inset)
-        i = self.fit.findText(st.fit)
-        self.fit.setCurrentIndex(i if i >= 0 else 0)
+        # 'endpoints' / 'closed' from older files are the fitted mode too
+        self.fit.setCurrentIndex(1 if st.fit == "none" else 0)
         self._load_punch(st.hole_style, getattr(st, "punch_style", ""),
                          st.pitch_mm)
         self.hole_dia.setValue(st.hole_diameter)
@@ -762,7 +883,7 @@ class PropertiesPanel(QWidget):
             self.pitch: ("pitch_mm", self.pitch.value),
             self.pitch_combo: ("pitch_mm", self.pitch.value),
             self.inset: ("inset", self.inset.value),
-            self.fit: ("fit", self.fit.currentText),
+            self.fit: ("fit", self.fit.currentData),
             self.hole_dia: ("hole_diameter", self.hole_dia.value),
             self.hole_dia_combo: ("hole_diameter", self.hole_dia.value),
             self.slit_len: ("slit_length", self.slit_len.value),
@@ -846,6 +967,7 @@ class PropertiesPanel(QWidget):
         self._stitch_form.setRowVisible(self.row_spacing, self.rows.currentIndex() == 1)
         self._sync_edges_row()
         self.canvas.refresh_item(it)
+        self._sync_closed_rows()          # after the refresh: runs may differ
         self._update_readout()
 
     def _apply_transform(self, sh):
@@ -876,7 +998,17 @@ class PropertiesPanel(QWidget):
             sh.width = _kept(self.w, sh.width)
             sh.height = _kept(self.h, sh.height)
             sh.corner_radius = _kept(self.corner, sh.corner_radius)
-        elif isinstance(sh, (Circle, Ellipse)):
+        elif isinstance(sh, Circle):
+            r = _kept(self.circ_r, sh.rx)
+            d = _kept(self.circ_d, 2.0 * sh.rx)
+            if r == sh.rx and d != 2.0 * sh.rx:
+                r = d / 2.0                    # the diameter box was edited
+            sh.rx = sh.ry = r                  # one radius, always round
+            for spin, v in ((self.circ_r, r), (self.circ_d, 2.0 * r)):
+                spin.blockSignals(True)        # keep the twin box in step
+                spin.setValue(v)
+                spin.blockSignals(False)
+        elif isinstance(sh, Ellipse):
             sh.rx = _kept(self.rx, sh.rx)
             sh.ry = _kept(self.ry, sh.ry)
         elif isinstance(sh, Polygon):
@@ -904,7 +1036,7 @@ class PropertiesPanel(QWidget):
         doc = self.canvas.doc
         pairs = [(self.pos_x, "x"), (self.pos_y, "y"), (self.rot, "rot"),
                  (self.w, "w"), (self.h, "h"), (self.corner, "corner"),
-                 (self.rx, "rx"), (self.ry, "ry"),
+                 (self.rx, "rx"), (self.ry, "ry"), (self.circ_r, "rx"),
                  (self.poly_radius, "corner"),
                  (self.pitch, "pitch"), (self.inset, "inset")]
         for spin, field in pairs:
@@ -928,7 +1060,7 @@ class PropertiesPanel(QWidget):
         # or Symmetry used to round a 25.4/7 pitch to 3.63
         st.pitch_mm = _kept(self.pitch, st.pitch_mm)
         st.inset = _kept(self.inset, st.inset)
-        st.fit = self.fit.currentText()
+        st.fit = self.fit.currentData() or "auto"
         st.punch_style = self.punch_style.currentData() or "round"
         st.hole_style = self._cur_hole_style
         st.hole_diameter = _kept(self.hole_dia, st.hole_diameter)
@@ -945,6 +1077,8 @@ class PropertiesPanel(QWidget):
         target = None
         if self.g_rect.isVisible():
             target = self.w
+        elif self.g_circle.isVisible():
+            target = self.circ_r
         elif self.g_ellipse.isVisible():
             target = self.rx
         elif self.g_poly.isVisible():
@@ -985,15 +1119,31 @@ class PropertiesPanel(QWidget):
                 area_line = f"<br>area {units.fmt_area(abs(signed_area(ring)))}"
         res = it._holes if isinstance(it, ShapeItem) else it.line.result()
         if res and res.count:
+            # chord_spacings walks the seam as the needle does: per row, per
+            # run, and round the closing gap of a loop (the one an exact-pitch
+            # march leaves short -- it used to be left out, so Fit = exact
+            # pitch read "3.85–3.85" over a 1 mm gap)
             gaps = res.chord_spacings()
             pitches = res.pitches or [0]
             txt = f"<b>{res.count} holes</b>"
             if gaps:                             # a lone hole has no spacing
                 from . import units as U
+                rows = f" ({res.rows} rows)" if getattr(res, "rows", 1) == 2 else ""
                 txt += (f"<br>chord spacing {U.fmt_num(min(gaps))}–"
-                        f"{U.fmt(max(gaps))}<br>effective pitch "
+                        f"{U.fmt(max(gaps))}{rows}<br>effective pitch "
                         f"{U.fmt_num(min(pitches), 3)}–"
                         f"{U.fmt(max(pitches), 3)}")
+                st = (it.model.stitch if isinstance(it, ShapeItem)
+                      else it.line.settings)
+                pitch = float(getattr(st, "pitch_mm", 0.0) or 0.0)
+                worst = res.worst_deviation(pitch) if pitch > 0 else 0.0
+                if worst > 0.12:
+                    # the fitter takes the nearest whole-hole count; when
+                    # none is within the iron's tolerance, say so -- a user
+                    # would otherwise read a grey number and cut
+                    txt += (f"<br><span style='color:#c0392b'>⚠ no hole "
+                            f"count fits this iron here: a gap is "
+                            f"{worst * 100:.0f} % off pitch</span>")
             self.readout.setText(txt + area_line)
         else:
             self.readout.setText("No holes" + area_line)

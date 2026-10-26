@@ -127,7 +127,8 @@ The user guide travels inside the app (Help → User guide still works).
 * **Layers panel** (right, `Ctrl+2`) — colour → laser-job mapping, visibility
   checkboxes, layer roles.
 * **Parts library** (right, `Ctrl+3`) — *your* reusable pieces, kept across
-  all documents: select shapes (and any lettering) → **Save selection…**, then
+  all documents: select shapes (with any lettering, drawn seams and loose
+  holes) → **Save selection…**, then
   double-click a part in any project to place it at the view centre (fresh
   copies every time). It also comes preloaded with **built-in size templates**,
   organised into categories — **US / Euro / UK currency**, **US coins** (round,
@@ -935,7 +936,7 @@ View → Reset panels.
 **Holes don't match my pricking iron.**
 Use the **Iron** preset dropdown rather than guessing a pitch, and check the
 readout: chord spacing (not arc spacing) is what matches iron teeth. Leave
-**Fit** on *auto* so corners get whole holes.
+**Fit** on *Fit to corners & ends* so corners get whole holes.
 
 **Where did my construction lines go in the export?**
 Construction lines, measurements and dimensions are drawing aids — they are

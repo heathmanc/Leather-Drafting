@@ -12,7 +12,9 @@ import re
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from leathercad.document import _shape_to_dict, _shape_from_dict
+from leathercad.document import (_shape_to_dict, _shape_from_dict,
+                                 _stitchline_to_dict, _stitchline_from_dict,
+                                 _hole_to_dict, _hole_from_dict)
 from leathercad.shapes import Shape, _next_id
 
 from .robustness import app_data_dir
@@ -50,10 +52,16 @@ def _part_path(name: str, base: Optional[str]) -> Path:
 
 
 def save_part(name: str, shapes: List[Shape], texts=None,
-              base: Optional[str] = None) -> Path:
+              base: Optional[str] = None, stitch_lines=None,
+              holes=None) -> Path:
+    """Write a part: its shapes, lettering, drawn seams and loose holes (the
+    last two used to be dropped silently, so a saved pocket lost its seam)."""
     payload = {"part": 1, "name": name,
                "shapes": [_shape_to_dict(s) for s in shapes],
-               "texts": [t.to_dict() for t in (texts or [])]}
+               "texts": [t.to_dict() for t in (texts or [])],
+               "stitch_lines": [_stitchline_to_dict(sl)
+                                for sl in (stitch_lines or [])],
+               "holes": [_hole_to_dict(h) for h in (holes or [])]}
     p = _part_path(name, base)
     p.write_text(json.dumps(payload, indent=1), encoding="utf-8")
     return p
@@ -78,6 +86,14 @@ def load_part(path: Path) -> List[Shape]:
 def load_part_full(path: Path):
     """The part's ``(shapes, texts)`` as fresh objects (new ids, no group ties).
     Texts are the size labels / lettering saved with the part."""
+    shapes, texts, _seams, _holes = load_part_all(path)
+    return shapes, texts
+
+
+def load_part_all(path: Path):
+    """Everything in a part as fresh objects: ``(shapes, texts, stitch_lines,
+    holes)``. Ids are new so nothing collides with the open document; group
+    ties are dropped (place the part, then group what you like)."""
     from leathercad.text import TextShape
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     shapes = []
@@ -89,7 +105,19 @@ def load_part_full(path: Path):
     texts = [TextShape.from_dict(d) for d in data.get("texts", [])]
     for t in texts:
         t.text_id = _next_id("text")
-    return shapes, texts
+    seams = []
+    for d in data.get("stitch_lines", []):
+        d = dict(d)
+        d.pop("line_id", None)              # a fresh id
+        sl = _stitchline_from_dict(d)
+        sl.group_id = None
+        seams.append(sl)
+    holes = []
+    for d in data.get("holes", []):
+        h = _hole_from_dict(d)
+        h.group_id = None
+        holes.append(h)
+    return shapes, texts, seams, holes
 
 
 def delete_part(path: Path) -> None:

@@ -29,6 +29,7 @@ from leathercad.stitchline import StitchLine
 from leathercad.holes import LooseHole
 from leathercad.stitching import (stitch_shape_path, holes_for_shape, Hole,
                                   StitchResult, flip_symmetry)
+from . import units as U
 from .items import (ShapeItem, StitchLineItem, VertexHandle, HoleItem,
                     ResizeHandle, RotateHandle, SelectionRotateHandle,
                     DimensionItem, TextItem,
@@ -1351,10 +1352,10 @@ class Canvas(QGraphicsView):
                     self._cal_pts = []
                     self._clear_preview()
                     self._hide_snap_marker()
-                    from PySide6.QtWidgets import QInputDialog
-                    real, ok = QInputDialog.getDouble(
+                    from .prompts import ask_length
+                    real, ok = ask_length(
                         self, "Calibrate tracing image",
-                        "Real distance between your two clicks (mm):",
+                        "Real distance between your two clicks",
                         100.0, 0.1, 5000.0, 2)
                     if ok and self.calibrate_underlay(p1, p2, real):
                         self.statusMessage.emit(
@@ -1709,7 +1710,7 @@ class Canvas(QGraphicsView):
             self._show_snap_marker(QPointF(raw.x(), raw.y()), "end")
             d = ((raw.x() - a.x()) ** 2 + (raw.y() - a.y()) ** 2) ** 0.5
             self.statusMessage.emit(
-                f"Calibrate: {d:.1f} mm on screen · click the SECOND point")
+                f"Calibrate: {U.fmt(d)} on screen · click the SECOND point")
             super().mouseMoveEvent(event)
             return
         pos = raw
@@ -1737,9 +1738,9 @@ class Canvas(QGraphicsView):
             h = abs(pos.y() - self._start.y())
             if self.tool in (CIRCLE,):
                 r = math.hypot(w, h)          # through the cursor
-                self.statusMessage.emit(f"r {r:.1f} mm   ø {2*r:.1f} mm")
+                self.statusMessage.emit(f"r {U.fmt(r)}   ø {U.fmt(2 * r)}")
             else:
-                self.statusMessage.emit(f"{w:.1f} × {h:.1f} mm")
+                self.statusMessage.emit(f"{U.fmt_num(w)} × {U.fmt(h)}")
         elif self.tool in _MULTI_TOOLS and self._multi_pts:
             self._update_multi_preview(pos)
             self.statusMessage.emit(_MULTI_HINT.get(
@@ -1759,7 +1760,8 @@ class Canvas(QGraphicsView):
             self._update_poly_preview(pos)
             last = self._poly_pts[-1]
             seg = ((pos.x() - last.x()) ** 2 + (pos.y() - last.y()) ** 2) ** 0.5
-            self.statusMessage.emit(f"segment {seg:.1f} mm   ({len(self._poly_pts)} pts)")
+            self.statusMessage.emit(
+                f"segment {U.fmt(seg)}   ({len(self._poly_pts)} pts)")
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -1874,6 +1876,8 @@ class Canvas(QGraphicsView):
             return
         # select the item under the cursor if it isn't already selected
         it = self.itemAt(event.pos())
+        if hasattr(it, "grip") and hasattr(it, "owner"):
+            it = it.owner          # a resize grip sits on the edge midpoint
         owner = it
         while owner is not None and not isinstance(
                 owner, (ShapeItem, StitchLineItem, HoleItem, TextItem)):
@@ -2054,13 +2058,14 @@ class Canvas(QGraphicsView):
         elif chosen is a_alledges:
             self.stitch_all_edges(shapes)
         elif chosen is a_keep:
-            from PySide6.QtWidgets import QInputDialog
+            from .prompts import ask_length
             cur = max((float(getattr(i.model, "keepout", 0.0) or 0.0)
                        for i in shapes), default=0.0)
-            r, ok = QInputDialog.getDouble(
-                self, "Stitch keep-out",
-                "Radius stitch holes keep clear of, about the shape's "
-                "centre (0 = none):", cur, 0.0, 500.0, 2)
+            r, ok = ask_length(
+                self, "Stitch keep-out", "Keep-out radius", cur, 0.0, 500.0, 2,
+                hint="Stitch holes keep this far from the shape's centre "
+                     "(the cap or flange of a piece of hardware plus "
+                     "clearance). 0 = none.")
             if ok:
                 self.set_keepout(shapes, r)
         elif chosen is a_union:
@@ -3040,8 +3045,9 @@ class Canvas(QGraphicsView):
             total_mm2 += a
             b = sh.bounds()
             rows.append(f"{sh.name or type(sh).__name__}:  "
-                        f"{b[2] - b[0]:.0f}×{b[3] - b[1]:.0f} mm · "
-                        f"{a / 100.0:.1f} cm²")
+                        f"{U.fmt_num(b[2] - b[0], 0 if not U.is_inches() else None)}"
+                        f"×{U.fmt(b[3] - b[1], 0 if not U.is_inches() else None)}"
+                        f" · {U.fmt_area(a)}")
         if not rows:
             return "No closed cut pieces to measure."
         cm2 = total_mm2 / 100.0
@@ -3154,7 +3160,7 @@ class Canvas(QGraphicsView):
         else:
             pts[idx] = t.inverse_apply(hit)
         it.sync_from_model()
-        self.statusMessage.emit(f"Extended {hit_d:.1f} mm to the outline")
+        self.statusMessage.emit(f"Extended {U.fmt(hit_d)} to the outline")
         self.documentChangedSig.emit()
         self._emit_commit()
 
@@ -3237,15 +3243,23 @@ class Canvas(QGraphicsView):
         self._emit_commit()
         return True
 
-    def place_shapes(self, shapes, texts=()) -> list:
-        """Add shapes (+ optional texts, e.g. a library template with a size
-        label) centred in the current view, as one undoable step, and select
-        them."""
+    def place_shapes(self, shapes, texts=(), stitch_lines=(), holes=()) -> list:
+        """Add shapes (+ optional texts, drawn seams and loose holes, e.g. a
+        saved part with its seam) centred in the current view, as one undoable
+        step, and select them."""
         shapes = list(shapes)
         texts = list(texts)
-        if not shapes and not texts:
+        stitch_lines = list(stitch_lines)
+        holes = list(holes)
+        if not shapes and not texts and not stitch_lines and not holes:
             return []
-        bs = [sh.bounds() for sh in shapes] or [t.bounds() for t in texts]
+        bs = [sh.bounds() for sh in shapes] + [t.bounds() for t in texts]
+        for sl in stitch_lines:
+            if sl.points:
+                bs.append((min(p.x for p in sl.points), min(p.y for p in sl.points),
+                           max(p.x for p in sl.points), max(p.y for p in sl.points)))
+        for h in holes:
+            bs.append((h.point.x, h.point.y, h.point.x, h.point.y))
         cx = (min(b[0] for b in bs) + max(b[2] for b in bs)) / 2.0
         cy = (min(b[1] for b in bs) + max(b[3] for b in bs)) / 2.0
         target = self.mapToScene(self.viewport().rect().center())
@@ -3262,6 +3276,15 @@ class Canvas(QGraphicsView):
             tx.transform.y += dy
             self.doc.texts.append(tx)
             items.append(self._add_item(TextItem(tx, self)))
+        for sl in stitch_lines:
+            sl.points = [Vec2(p.x + dx, p.y + dy) for p in sl.points]
+            sl.corner_points = [Vec2(p.x + dx, p.y + dy) for p in sl.corner_points]
+            self.doc.add_stitch_line(sl)
+            items.append(self._add_item(StitchLineItem(sl, self)))
+        for h in holes:
+            h.point = Vec2(h.point.x + dx, h.point.y + dy)
+            self.doc.add_hole(h)
+            items.append(self._add_item(HoleItem(h, self)))
         self._suppress_commit = False
         self.scene_obj.clearSelection()
         for it in items:
@@ -3700,17 +3723,20 @@ class Canvas(QGraphicsView):
 
     def _fillet_done_msg(self, chamfer: bool, used=True) -> None:
         asked = self.fillet_radius
+
+        def mm_or_in(v, spec="g"):
+            return U.fmt(v) if U.is_inches() else f"{v:{spec}} mm"
         if (not chamfer and not isinstance(used, bool)
                 and abs(used - asked) > 1e-3 * max(1.0, asked)):
             self.statusMessage.emit(
-                f"Filleted at {used:.2f} mm — the largest that fits this "
-                f"corner ({asked:g} mm needs more room along a side: past "
-                f"its middle, or past the end of a piece that doesn't "
+                f"Filleted at {mm_or_in(used, '.2f')} — the largest that fits "
+                f"this corner ({mm_or_in(asked)} needs more room along a side: "
+                f"past its middle, or past the end of a piece that doesn't "
                 f"continue end-to-end)")
             return
         self.statusMessage.emit(
             f"{'Chamfered' if chamfer else 'Filleted'} at "
-            f"{asked:g} mm — keep clicking corners "
+            f"{mm_or_in(asked)} — keep clicking corners "
             "(radius / mode in the toolbar)")
 
     def _fillet_open_path(self, sh):
@@ -4210,6 +4236,14 @@ class Canvas(QGraphicsView):
             self.documentChangedSig.emit()
             self._emit_commit()
 
+    def selection_size(self):
+        """(width, height) of the current selection's model bounds -- what
+        an array's default spacing is built from."""
+        b = self._unit_bounds([it for it in self.selected_items() if _alive(it)])
+        if b is None:
+            return 0.0, 0.0
+        return max(0.0, b[2] - b[0]), max(0.0, b[3] - b[1])
+
     def selection_center(self):
         """World centroid of the current selection's bounding box (array pivot
         default)."""
@@ -4231,11 +4265,10 @@ class Canvas(QGraphicsView):
         return 0.5 * (min(xs) + max(xs)), 0.5 * (min(ys) + max(ys))
 
     def _ask_offset_distance(self):
-        from PySide6.QtWidgets import QInputDialog
-        return QInputDialog.getDouble(
-            self, "Offset / seam allowance",
-            "Distance (mm)   —   positive = outward, negative = inward:",
-            3.0, -100.0, 100.0, 2)
+        from .prompts import ask_length
+        return ask_length(
+            self, "Offset / seam allowance", "Distance", 3.0, -100.0, 100.0, 2,
+            hint="Positive = outward (a seam allowance), negative = inward.")
 
     def offset_selected(self, dist: float) -> None:
         """Offset each selected shape's outline by ``dist`` mm (>0 outward / seam
@@ -4338,7 +4371,7 @@ class Canvas(QGraphicsView):
         what = ("another guide" if getattr(self._offset_item.model, "construction",
                                            False) else "a copy")
         self.statusMessage.emit(
-            f"Offset {abs(dist):.2f} mm {side} · click to place {what} · "
+            f"Offset {U.fmt(abs(dist))} {side} · click to place {what} · "
             f"Enter = type an exact distance · Esc cancels")
 
     def _commit_offset(self, dist: Optional[float] = None) -> None:
@@ -4364,10 +4397,12 @@ class Canvas(QGraphicsView):
     def _ask_offset_exact(self) -> None:
         """Enter while the Offset preview is live: type the exact distance."""
         from PySide6.QtWidgets import QInputDialog
-        d, ok = QInputDialog.getDouble(
-            self, "Offset outline",
-            "Distance (mm)   —   positive = outward, negative = inward:",
-            round(self._offset_dist, 2), -1000.0, 1000.0, 2)
+        from .prompts import ask_length
+        d, ok = ask_length(
+            self, "Offset outline", "Distance", round(self._offset_dist, 2),
+            -1000.0, 1000.0, 2,
+            hint="Positive = outward (right of travel on an open path), "
+                 "negative = inward.")
         if ok:
             self._commit_offset(d)
 
@@ -4634,8 +4669,8 @@ class Canvas(QGraphicsView):
 
         lines = [f"Placed {len(placements)} of {len(pieces)} piece"
                  f"{'s' if len(pieces) != 1 else ''} on the "
-                 f"{sheet_w:g} × {sheet_h:g} mm sheet.",
-                 f"Sheet blocked out (incl. {spacing:g} mm gaps): {used:.0%}."]
+                 f"{U.fmt_num(sheet_w)} × {U.fmt(sheet_h)} sheet.",
+                 f"Sheet blocked out (incl. {U.fmt(spacing)} gaps): {used:.0%}."]
         if unplaced:
             names = [pieces[k]['shapes'][0].model.name
                      or f"piece {k + 1}" for k in unplaced]
@@ -5509,7 +5544,7 @@ class Canvas(QGraphicsView):
             if ok:
                 return f"• {label}: SYMMETRIC ✓"
             return (f"• {label}: not symmetric — {un} of {len(local)} holes off "
-                    f"by up to {off:.2f} mm")
+                    f"by up to {U.fmt(off)}")
 
         return (f"Back-to-back / flip symmetry ({len(local)} holes):\n\n"
                 + line("vertical", "Flip left ↔ right") + "\n"

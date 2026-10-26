@@ -85,11 +85,13 @@ class PartsPanel(QWidget):
             my.addChild(hint)
 
     def save_selection(self, name: str | None = None):
-        from .items import TextItem
+        from .items import TextItem, StitchLineItem, HoleItem
         sel = self.canvas.selected_items()
         shapes = [it.model for it in sel if isinstance(it, ShapeItem)]
         texts = [it.model for it in sel if isinstance(it, TextItem)]
-        if not shapes and not texts:
+        seams = [it.line for it in sel if isinstance(it, StitchLineItem)]
+        holes = [it.hole for it in sel if isinstance(it, HoleItem)]
+        if not shapes and not texts and not seams and not holes:
             QMessageBox.information(self, "Parts library",
                                     "Select one or more shapes first.")
             return
@@ -99,9 +101,21 @@ class PartsPanel(QWidget):
             if not ok or not name.strip():
                 return
         import copy
+        for sl in seams:                     # where the seam is drawn now
+            item = next(it for it in sel
+                        if isinstance(it, StitchLineItem) and it.line is sl)
+            item._bake_move()
         partslib.save_part(name.strip(), copy.deepcopy(shapes),
-                           copy.deepcopy(texts), self.base_dir)
+                           copy.deepcopy(texts), self.base_dir,
+                           stitch_lines=copy.deepcopy(seams),
+                           holes=copy.deepcopy(holes))
         self.reload()
+        kinds = [f"{len(shapes)} shape(s)"] if shapes else []
+        kinds += [f"{len(texts)} label(s)"] if texts else []
+        kinds += [f"{len(seams)} seam(s)"] if seams else []
+        kinds += [f"{len(holes)} loose hole(s)"] if holes else []
+        self.canvas.statusMessage.emit(
+            f"Saved part “{name.strip()}”: " + ", ".join(kinds))
 
     def _current_data(self):
         it = self.tree.currentItem()
@@ -118,7 +132,9 @@ class PartsPanel(QWidget):
             from leathercad import hardware
             shapes, texts = hardware.build(p[len("hw:"):])
         else:
-            shapes, texts = partslib.load_part_full(p)
+            shapes, texts, seams, holes = partslib.load_part_all(p)
+            self.canvas.place_shapes(shapes, texts, seams, holes)
+            return
         self.canvas.place_shapes(shapes, texts)
 
     def delete_selected(self):

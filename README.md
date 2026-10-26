@@ -312,7 +312,7 @@ leathercad/            pure-Python model + engine (no dependencies)
   boolean.py           union / difference / intersection on polygons
   importers.py         import SVG & DXF as editable shapes
   nesting.py           pack pattern pieces onto a sheet
-  estimate.py          leather-area / run-time / cost job estimate
+  estimate.py          leather-area / travel-length / cost job estimate
   thread.py            saddle-stitch thread-length estimate
   templates.py         starter documents (card holder / belt / key fob …)
   generators.py        parametric part generators (card pockets, zippers)

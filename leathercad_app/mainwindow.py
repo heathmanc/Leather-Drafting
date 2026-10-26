@@ -20,9 +20,10 @@ from PySide6.QtWidgets import (
 from leathercad.document import Document
 from leathercad import export
 from . import canvas as canvas_mod
+from . import units as _units
 from .canvas import Canvas
 from .panels import PropertiesPanel, LayersPanel
-from .mathspin import NoWheelComboBox, NoWheelSpinBox
+from .mathspin import MathSpinBox, NoWheelComboBox, NoWheelSpinBox
 from .history import History
 from .icons import tool_icon
 
@@ -547,7 +548,8 @@ class MainWindow(QMainWindow):
         self.kerf_spin.setRange(0.0, 1.0)
         self.kerf_spin.setSingleStep(0.05)
         self.kerf_spin.setDecimals(2)
-        self.kerf_spin.setSuffix(" mm")
+        self.kerf_spin.physical = True          # shown in the display unit
+        _units.register_spin(self.kerf_spin)
         self.kerf_spin.setKeyboardTracking(False)
         self.kerf_spin.setToolTip(
             "Laser kerf compensation, applied on SVG/DXF export:\n"
@@ -573,7 +575,8 @@ class MainWindow(QMainWindow):
         self.fillet_spin = MathSpinBox()
         self.fillet_spin.setRange(0.1, 500.0)
         self.fillet_spin.setDecimals(2)
-        self.fillet_spin.setSuffix(" mm")
+        self.fillet_spin.physical = True        # shown in the display unit
+        _units.register_spin(self.fillet_spin)
         self.fillet_spin.setKeyboardTracking(False)
         self.fillet_spin.setToolTip("Corner radius (Round) / setback (Chamfer). "
                                     "Type a value, then click corners.")
@@ -900,19 +903,24 @@ class MainWindow(QMainWindow):
             "millimetres)" if U.is_inches() else "Showing millimetres", 4000)
 
     def _two_numbers(self, title, labels, defaults, suffixes=(" mm", " mm")):
-        """A small dialog for two numbers; (a, b) or None."""
-        from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFormLayout,
-                                       QDoubleSpinBox)
+        """A small dialog for two numbers; (a, b) or None. Fields do math
+        (``105/2``); a millimetre field is shown and typed in the display
+        unit and returns millimetres."""
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout
         dlg = QDialog(self)
         dlg.setWindowTitle(title)
         form = QFormLayout(dlg)
         spins = []
         for label, val, suf in zip(labels, defaults, suffixes):
-            sp = QDoubleSpinBox()
+            sp = MathSpinBox()
             sp.setRange(-100000.0, 100000.0)
             sp.setDecimals(4)
+            if suf == " mm":
+                sp.physical = True
+                _units.register_spin(sp)
+            else:
+                sp.setSuffix(suf)
             sp.setValue(val)
-            sp.setSuffix(suf)
             form.addRow(label, sp)
             spins.append(sp)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -1189,17 +1197,12 @@ class MainWindow(QMainWindow):
         dlg.setWindowTitle("Thread estimate")
         lay = QVBoxLayout(dlg)
         form = QFormLayout()
-        thick = MathSpinBox()
-        thick.setRange(0.2, 30.0)
-        thick.setDecimals(1)
-        thick.setSuffix(" mm")
-        thick.setValue(s.value("threadThickness", 3.0, type=float))
+        from .prompts import length_spin
+        thick = length_spin(0.2, 30.0, 1, s.value("threadThickness", 3.0,
+                                                   type=float))
         thick.setToolTip("TOTAL leather stack at the seam (all layers)")
-        tail = MathSpinBox()
-        tail.setRange(0.0, 1000.0)
-        tail.setDecimals(0)
-        tail.setSuffix(" mm")
-        tail.setValue(s.value("threadTail", 150.0, type=float))
+        tail = length_spin(0.0, 1000.0, 0, s.value("threadTail", 150.0,
+                                                    type=float))
         tail.setToolTip("Needle-grip allowance at EACH end of a run")
         form.addRow("Leather stack", thick)
         form.addRow("Needle tail", tail)
@@ -1235,12 +1238,10 @@ class MainWindow(QMainWindow):
         lay.addWidget(hint)
         form = QFormLayout()
 
+        from .prompts import length_spin
+
         def _spin(key, default, lo, hi, tip, dec=1):
-            sp = MathSpinBox()
-            sp.setRange(lo, hi)
-            sp.setDecimals(dec)
-            sp.setSuffix(" mm")
-            sp.setValue(s.value(key, default, type=float))
+            sp = length_spin(lo, hi, dec, s.value(key, default, type=float))
             sp.setToolTip(tip)
             return sp
 
@@ -1303,16 +1304,9 @@ class MainWindow(QMainWindow):
             size.addItem(f"{k}   ({ZIP_WINDOW[k]:g} mm window)", k)
         size.setCurrentIndex(max(0, size.findData(
             s.value("genZipSize", "#5", type=str))))
-        length = MathSpinBox()
-        length.setRange(30, 1000)
-        length.setDecimals(1)
-        length.setSuffix(" mm")
-        length.setValue(s.value("genZipLen", 150.0, type=float))
-        offset = MathSpinBox()
-        offset.setRange(1.5, 15)
-        offset.setDecimals(1)
-        offset.setSuffix(" mm")
-        offset.setValue(s.value("genZipOffset", 3.0, type=float))
+        from .prompts import length_spin
+        length = length_spin(30, 1000, 1, s.value("genZipLen", 150.0, type=float))
+        offset = length_spin(1.5, 15, 1, s.value("genZipOffset", 3.0, type=float))
         form.addRow("Zip size", size)
         form.addRow("Opening length", length)
         form.addRow("Stitch offset", offset)
@@ -1702,12 +1696,10 @@ class MainWindow(QMainWindow):
         lay.addWidget(hint)
         form = QFormLayout()
 
+        from .prompts import length_spin
+
         def _spin(key, default, lo, hi, tip):
-            sp = MathSpinBox()
-            sp.setRange(lo, hi)
-            sp.setDecimals(1)
-            sp.setSuffix(" mm")
-            sp.setValue(s.value(key, default, type=float))
+            sp = length_spin(lo, hi, 1, s.value(key, default, type=float))
             sp.setToolTip(tip)
             return sp
 
@@ -1760,7 +1752,11 @@ class MainWindow(QMainWindow):
             sp = MathSpinBox()
             sp.setRange(lo, hi)
             sp.setDecimals(dec)
-            sp.setSuffix(suffix)
+            if suffix == " mm":                 # a length: display unit
+                sp.physical = True
+                _units.register_spin(sp)
+            else:
+                sp.setSuffix(suffix)
             sp.setValue(s.value(key, default, type=float))
             if tip:
                 sp.setToolTip(tip)
@@ -1924,10 +1920,11 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Offset",
                                    "Select a shape to offset first.")
             return
-        dist, ok = QInputDialog.getDouble(
-            self, "Offset / seam allowance",
-            "Distance (mm)   —   positive = outward, negative = inward:",
-            3.0, -100.0, 100.0, 2)
+        from .prompts import ask_length
+        dist, ok = ask_length(
+            self, "Offset / seam allowance", "Distance", 3.0, -100.0, 100.0, 2,
+            hint="Positive = outward (a seam allowance), negative = inward. "
+                 "The copy stays what its source was: a guide gives a guide.")
         if ok:
             self.canvas.offset_selected(dist)
 
@@ -1937,7 +1934,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Array",
                                    "Select something to array first.")
             return
-        dlg = ArrayDialog(self, center=self.canvas.selection_center())
+        dlg = ArrayDialog(self, center=self.canvas.selection_center(),
+                          size=self.canvas.selection_size(),
+                          settings=self._settings())
         if dlg.exec() != ArrayDialog.Accepted:
             return
         mode, p = dlg.result_params()

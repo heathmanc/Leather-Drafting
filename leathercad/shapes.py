@@ -380,26 +380,17 @@ class PathShape(Shape):
     kind: str = "path"
 
     def local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:
-        pts = self.points
+        pts = _dedupe_points(self.points, self.close_path)
         n = len(pts)
         if n < 2:
             return Path()
-
-        def is_corner(i: int) -> bool:
-            # a real turn anchors a stitch hole (a drawn or joined path's
-            # corners used to get none); the generous tolerance keeps the
-            # facets of a traced curve from each counting as one
-            if not self.close_path and (i == 0 or i == n - 1):
-                return False             # open ends anchor on their own
-            return _is_real_corner(pts[(i - 1) % n], pts[i], pts[(i + 1) % n],
-                                   tol_deg=_PATH_CORNER_DEG)
-
+        flags = path_corner_flags(pts, self.close_path)
         b = PathBuilder()
         b.move_to(pts[0].x, pts[0].y)
         for i in range(1, n):
-            b.line_to(pts[i].x, pts[i].y, corner=is_corner(i))
+            b.line_to(pts[i].x, pts[i].y, corner=flags[i])
         if self.close_path:
-            b.close(corner=is_corner(0))
+            b.close(corner=flags[0])
         return b.build(flatness)
 
 
@@ -408,6 +399,50 @@ class PathShape(Shape):
 # straight edge must not shift the holes); paths come from the pen, from
 # joins and from imports whose flattened curves turn a few degrees a vertex.
 _PATH_CORNER_DEG = 10.0
+
+
+def _dedupe_points(pts: List[Vec2], closed: bool) -> List[Vec2]:
+    """``pts`` without consecutive repeats (a doubled vertex, the way some
+    SVG/DXF exporters write them, is no corner and no edge)."""
+    out: List[Vec2] = []
+    for p in pts:
+        if not out or (p - out[-1]).length() > 1e-9:
+            out.append(p)
+    if closed and len(out) >= 2 and (out[0] - out[-1]).length() <= 1e-9:
+        out.pop()
+    return out
+
+
+def path_corner_flags(pts: List[Vec2], closed: bool,
+                      tol_deg: float = _PATH_CORNER_DEG,
+                      sharp_deg: float = 55.0,
+                      flat_deg: float = 3.0) -> List[bool]:
+    """Which vertices of a free polyline are real corners (anchor a stitch
+    hole): a sharp turn (more than ``sharp_deg``), or an isolated kink of
+    more than ``tol_deg`` between two straight stretches. The gentle,
+    repeated turns of a traced or flattened curve -- and the tips of a
+    flattened ellipse -- are not corners. Open ends are never flagged (they
+    anchor on their own)."""
+    n = len(pts)
+    turns = [0.0] * n
+    for i in range(n):
+        if not closed and (i == 0 or i == n - 1):
+            continue
+        d0 = pts[i] - pts[(i - 1) % n]
+        d1 = pts[(i + 1) % n] - pts[i]
+        l0, l1 = d0.length(), d1.length()
+        if l0 < 1e-9 or l1 < 1e-9:
+            continue
+        cosang = max(-1.0, min(1.0, d0.dot(d1) / (l0 * l1)))
+        turns[i] = math.degrees(math.acos(cosang))
+    flags = []
+    for i in range(n):
+        t = turns[i]
+        before = turns[(i - 1) % n] if (closed or i > 0) else 0.0
+        after = turns[(i + 1) % n] if (closed or i < n - 1) else 0.0
+        flags.append(t > sharp_deg
+                     or (t > tol_deg and before < flat_deg and after < flat_deg))
+    return flags
 
 
 # ---------------------------------------------------------------------------

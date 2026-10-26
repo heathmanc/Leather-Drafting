@@ -628,8 +628,12 @@ class StitchResult:
     rows: int = 1
     runs: Optional[List[int]] = None
     # explicit (row, [hole indices]) sequences when the rows are not simple
-    # aligned pairs -- a double row whose offset row was thinned at corners
+    # aligned pairs -- a double row whose offset row was re-fitted on its own
     layout: Optional[List[Tuple[int, List[int]]]] = None
+    # +1 / -1 when the holes lie on a closed outline's stitch ring but are
+    # sewn as open runs (an unsewn edge, a keep-out): the ring's interior is
+    # to the left (+1) or right (-1) of travel. 0 = no inside (a drawn seam).
+    inward: float = 0.0
     # a one-line caveat for the readout (e.g. symmetry could not be met)
     note: str = ""
 
@@ -641,13 +645,15 @@ class StitchResult:
     def count(self) -> int:
         return len(self.holes)
 
-    def sequences(self, row: Optional[int] = None) -> List[List[int]]:
+    def sequences(self, row: Optional[int] = None,
+                  min_len: int = 2) -> List[List[int]]:
         """Index lists of the holes a needle visits in order: one list per
         run and per row (``row`` 0/1 picks one row of a double row). Gaps
-        between runs and across the rows are never a stitch."""
+        between runs and across the rows are never a stitch. Runs shorter
+        than ``min_len`` holes are left out (a lone hole has no stitch)."""
         if self.layout is not None:
             return [list(seq) for r, seq in self.layout
-                    if (row is None or r == row) and len(seq) >= 2]
+                    if (row is None or r == row) and len(seq) >= min_len]
         n = len(self.holes)
         step = max(1, int(self.rows or 1))
         bounds = sorted({0, *(self.runs or [])} | {n})
@@ -658,7 +664,7 @@ class StitchResult:
                 if row is not None and r != row:
                     continue
                 seq = list(range(a + r, b, step))
-                if len(seq) >= 2:
+                if len(seq) >= min_len:
                     out.append(seq)
         return out
 
@@ -993,6 +999,15 @@ _CACHE_MAX = 512
 _stitch_cache: "OrderedDict" = None  # created lazily below
 
 
+def set_cache_capacity(n_items: int) -> None:
+    """Size the fit cache for a document of ``n_items`` stitched outlines and
+    seams. The cache held 512 fits whatever the file: above 512 distinct
+    outlines every full pass (undo, a layer tick, export) missed on every
+    piece and refitted the whole file, 30 s at a time."""
+    global _CACHE_MAX
+    _CACHE_MAX = max(512, 2 * int(n_items))
+
+
 def _cache_key(points, corner_points, closed, settings, exact=False,
                edges=None, keepouts=None):
     return (
@@ -1022,7 +1037,7 @@ def _copy_result(res: StitchResult) -> StitchResult:
                         runs=list(res.runs) if res.runs else None,
                         layout=([(r, list(s)) for r, s in res.layout]
                                 if res.layout else None),
-                        note=res.note)
+                        inward=res.inward, note=res.note)
 
 
 def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
@@ -1159,6 +1174,9 @@ def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
             out.pitches += res.pitches
         if len(starts) > 1:
             out.runs = starts
+        if closed and len(poly.points) >= 3:
+            # the runs lie on a closed ring: a second row knows where "in" is
+            out.inward = 1.0 if signed_area(poly.points) > 0 else -1.0
         return _apply_rows(out, settings)
 
     if closed and getattr(settings, "start_offset", 0.0):
@@ -1351,6 +1369,10 @@ def _distribute_symmetric(poly: "Polyline", corner_points, settings, arcs,
                       True, False, set())
     if flip_symmetry(plain.points, sym)[0]:
         return plain
+    if fit == "none":
+        plain.note = ("Symmetry needs 'Fit to corners & ends': an exact-pitch "
+                      "march can't be mirrored")
+        return plain
     crossings = _axis_crossings(poly, sym)
     cands: List[StitchResult] = []
     if len(crossings) >= 2:
@@ -1530,85 +1552,50 @@ def _apply_rows(result: StitchResult, settings) -> StitchResult:
     """Add the second row of holes of a saddle-stitched double row.
 
     The fitted holes stay where they are -- on the stitch line, at the inset
-    the user set -- and the second row sits ``row_spacing`` further IN on a
-    closed outline (so the outer row never creeps toward the cut edge the way
-    a +/- half split did), or half the spacing either side of a drawn seam,
-    which has no inside. Along a straight the rows are rung-aligned. At a
-    corner the offset hole goes to the mitre of the two offset edges (each
-    row turns on its own line instead of kinking), and an offset row that
-    would pinch there -- the inside of a turn is shorter -- is thinned so no
-    two of its holes come closer than three-quarters of the pitch. The rows
-    are therefore stored as explicit sequences (``layout``), row 0 first.
+    the user set. The second row runs along the TRUE offset of that row:
+    ``row_spacing`` further in on a closed outline (also when the outline is
+    sewn in runs round an unsewn edge or a keep-out -- the ring still has an
+    inside), or half the spacing either side of a drawn seam, which has no
+    inside. Its holes are then fitted on their own: a hole on every sharp
+    corner of the offset line, the stretches between re-divided evenly at the
+    count nearest the pitch, never closer than three-quarters of it. Along a
+    straight of unchanged length that keeps the rungs aligned; round arcs and
+    corners -- shorter on the inside -- the inner row simply has fewer holes.
+    The rows are stored as explicit sequences (``layout``), row 0 first. A
+    piece too small for an inner row keeps its single row and says so.
     """
     rows = getattr(settings, "rows", 1)
     if rows <= 1 or not result.holes:
         return result
-    spacing = getattr(settings, "row_spacing", 3.0)
-    pitch = getattr(settings, "pitch_mm", 3.85)
-    pts = result.points
+    spacing = float(getattr(settings, "row_spacing", 3.0))
+    pitch = float(getattr(settings, "pitch_mm", 3.85))
     closed = result.closed
-    inward = 1.0                 # a CCW ring's interior is left of travel
-    if closed and len(pts) >= 3 and signed_area(pts) < 0:
-        inward = -1.0
-
-    def left(d: Vec2):
-        length = d.length()
-        return Vec2(-d.y / length, d.x / length) if length > 1e-12 else None
-
-    runs = result.sequences()            # per run (rows is still 1 here)
-    normals: List = [None] * len(pts)    # (bisector normal, mitre factor)
-    for seq in runs:
-        n = len(seq)
-        for k, i in enumerate(seq):
-            prev_i = seq[k - 1] if k > 0 else (seq[-1] if closed else None)
-            next_i = seq[k + 1] if k < n - 1 else (seq[0] if closed else None)
-            n_in = left(pts[i] - pts[prev_i]) if prev_i is not None else None
-            n_out = left(pts[next_i] - pts[i]) if next_i is not None else None
-            if n_in is None and n_out is None:
-                continue
-            if n_in is None or n_out is None:
-                normals[i] = ((n_in or n_out), 1.0)
-                continue
-            s = n_in + n_out
-            if s.length() < 1e-9:            # a hairpin: no mitre to speak of
-                normals[i] = (n_in, 1.0)
-                continue
-            nb = s * (1.0 / s.length())
-            # the mitre point of the two offset lines lies along the
-            # bisector at spacing / cos(half the turn); cap very sharp turns
-            normals[i] = (nb, 1.0 / max(nb.dot(n_in), 0.5))
-
-    def offset_row(seq: List[int], sign_dist: float) -> List[Hole]:
-        """The run's holes pushed sideways by ``sign_dist`` (mitred at the
-        corners), then re-divided evenly between the corners: the inside of
-        a turn is shorter and the outside longer, so rung-for-rung copies
-        pinched or stretched there. Corner holes stay put, so both rows turn
-        the corner together; along a straight of unchanged length the count
-        -- and the rungs -- stay the same."""
-        q = []
-        for i in seq:
-            h = result.holes[i]
-            nb, scale = (normals[i] if normals[i] is not None
-                         else (h.tangent.perp(), 1.0))
-            q.append(h.point + nb * (sign_dist * scale))
-        anchors = [k for k, i in enumerate(seq)
-                   if normals[i] is not None and normals[i][1] > 1.02]
-        return _even_row(q, anchors, closed, pitch)
+    pts = result.points
+    if closed and len(pts) >= 3:
+        inward = 1.0 if signed_area(pts) > 0 else -1.0
+    else:
+        inward = float(result.inward or 0.0)
+    on_ring = closed or inward != 0.0
 
     holes: List[Hole] = []
     layout: List[Tuple[int, List[int]]] = []
-    for seq in runs:
-        if closed:
-            rows_here = [[result.holes[i] for i in seq],      # on the stitch line
-                         offset_row(seq, inward * spacing)]
+    dropped = False
+    for seq in result.sequences(min_len=1):
+        row0 = [result.holes[i] for i in seq]
+        p0 = [h.point for h in row0]
+        if on_ring:
+            row1 = _offset_row(p0, closed, -inward * spacing, pitch)
+            rows_here = [row0, row1]
+            if not row1:
+                dropped = True
         else:
-            rows_here = [offset_row(seq, spacing / 2.0),
-                         offset_row(seq, -spacing / 2.0)]
+            rows_here = [_offset_row(p0, False, spacing / 2.0, pitch),
+                         _offset_row(p0, False, -spacing / 2.0, pitch)]
         for r, row in enumerate(rows_here):
             start = len(holes)
             holes.extend(row)
             layout.append((r, list(range(start, start + len(row)))))
-    # row 0 first, then row 1 (the layout keeps each run's sequence)
+    # row 0 first, then row 1 (each keeps its runs in order)
     order = sorted(range(len(layout)), key=lambda k: layout[k][0])
     reholes: List[Hole] = []
     relayout: List[Tuple[int, List[int]]] = []
@@ -1621,7 +1608,84 @@ def _apply_rows(result: StitchResult, settings) -> StitchResult:
     result.rows = 2
     result.runs = None
     result.layout = relayout
+    if dropped and not result.note:
+        result.note = ("too small for a second row at this row spacing: "
+                       "only one row fitted")
     return result
+
+
+def _turn_degrees(pts: List[Vec2], closed: bool) -> List[float]:
+    """How far the polyline turns at each vertex, in degrees (0 at the ends
+    of an open one)."""
+    n = len(pts)
+    out = [0.0] * n
+    for i in range(n):
+        if not closed and (i == 0 or i == n - 1):
+            continue
+        a, b, c = pts[(i - 1) % n], pts[i], pts[(i + 1) % n]
+        d0, d1 = b - a, c - b
+        l0, l1 = d0.length(), d1.length()
+        if l0 < 1e-9 or l1 < 1e-9:
+            continue
+        cosang = max(-1.0, min(1.0, d0.dot(d1) / (l0 * l1)))
+        out[i] = math.degrees(math.acos(cosang))
+    return out
+
+
+def _offset_row(p0: List[Vec2], closed: bool, dist: float,
+                pitch: float) -> List[Hole]:
+    """The holes of a row running ``dist`` beside the fitted row ``p0``
+    (positive = right of travel): the true mitred offset of the polyline
+    through its holes (``offset_closed_inward`` for a ring, which also trims
+    the inside-out loops a tight corner makes), with a hole kept on the
+    image of every sharp corner and the stretches between fitted evenly.
+    An empty list means the offset collapsed (the piece is too small)."""
+    from .offset import inset_with_corners, offset_open
+    n = len(p0)
+    if n == 0:
+        return []
+    if n == 1:
+        return [Hole(p0[0], Vec2(1.0, 0.0))]
+    turns = _turn_degrees(p0, closed)
+    # a corner is a sharp turn, or an isolated kink between two straights;
+    # the gentle, repeated turns of an arc are not (its holes are re-fitted)
+    anchors = [i for i in range(n)
+               if turns[i] > 55.0
+               or (turns[i] > 10.0 and turns[(i - 1) % n] < 3.0
+                   and turns[(i + 1) % n] < 3.0)]
+    if closed:
+        ring = list(p0)
+        if (ring[0] - ring[-1]).length() < 1e-9:
+            ring = ring[:-1]
+        if len(ring) < 3:
+            return []
+        # inset_with_corners insets by a positive distance regardless of the
+        # ring's winding; the caller's sign only said which side is "in"
+        q, images = inset_with_corners(ring, abs(dist),
+                                       [ring[i] for i in anchors])
+        if len(q) < 3:
+            return []
+        if (q[0] - q[-1]).length() < 1e-9:
+            q = q[:-1]
+        if (len(q) < 3 or abs(signed_area(q)) < 1e-9
+                or (signed_area(q) > 0) != (signed_area(ring) > 0)):
+            return []                      # inverted: the ring is too small
+        xs = [v.x for v in q]
+        ys = [v.y for v in q]
+        perim = sum((q[(j + 1) % len(q)] - q[j]).length() for j in range(len(q)))
+        if (min(max(xs) - min(xs), max(ys) - min(ys)) < 0.75 * pitch
+                or perim < 2.0 * pitch):
+            return []                      # a sliver: no room for a row
+        q_anchors = []
+        for img in images:
+            k = min(range(len(q)), key=lambda j: (q[j] - img).length())
+            if (q[k] - img).length() < 1e-6:
+                q_anchors.append(k)
+        return _even_row(q, sorted(set(q_anchors)), True, pitch)
+    q = offset_open(p0, dist)
+    if len(q) != n:                         # the mitre map is one-to-one
+        return _even_row(q, [], False, pitch) if len(q) >= 2 else []
+    return _even_row(q, anchors, False, pitch)
 
 
 def _even_row(q: List[Vec2], anchors: List[int], closed: bool,

@@ -48,11 +48,24 @@ def estimate_thread(res, settings, thickness_mm: float = 3.0,
     # its own tails and its own backstitch ends. The result says how the
     # holes are laid out; a bare list of holes is one run.
     want_rows = int(getattr(settings, "rows", 1) or 1)
-    if (getattr(res, "layout", None) is None and getattr(res, "rows", 1) == 1
-            and want_rows == 2 and n >= 4):
-        # a bare hole list the caller says is a double row: aligned pairs
-        # (row A, row B) per station, the way rows used to be stored
+    spacing = float(getattr(settings, "row_spacing", 3.0) or 3.0)
+    bare_double = (getattr(res, "layout", None) is None
+                   and getattr(res, "rows", 1) == 1 and want_rows == 2
+                   and n >= 4)
+    if bare_double and all(
+            abs(distance(pts[i], pts[i + 1]) - spacing) < 0.25 * spacing
+            for i in range(0, min(n - 1, 8), 2)):
+        # a bare hole list stored as aligned pairs (row A, row B) per station,
+        # the way rows used to be kept -- the pairs really are a row spacing
+        # apart, so read them that way
         seqs = [list(range(0, n, 2)), list(range(1, n, 2))]
+        rows = 2
+    elif bare_double:
+        # attached (baked) holes of a double row come row-major with no
+        # pairing left: sew them as one run, which is what a hand-sewn pair
+        # of rows costs within a tail or two (reading them as pairs doubled
+        # the seam)
+        seqs = [list(range(n))]
         rows = 2
     elif hasattr(res, "sequences"):
         seqs = res.sequences()

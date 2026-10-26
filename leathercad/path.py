@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import List, Sequence
+from typing import List, Optional, Sequence
 
 from .geometry import Vec2
 
@@ -186,10 +186,33 @@ def _bezier_flat_enough(p0, p1, p2, p3, flat) -> bool:
 class Path:
     segments: List[Segment] = field(default_factory=list)
     closed: bool = False
-    # Arc-length positions (mm) at which a stitch hole must be forced.
-    corners: List[float] = field(default_factory=list)
-    # The same corners as geometric points -- robust under insetting/transform.
+    # The corners as geometric points -- robust under insetting/transform.
+    # This is what the stitcher uses; see ``corners`` for the arc-length form.
     corner_points: List[Vec2] = field(default_factory=list)
+    _corners: Optional[List[float]] = field(default=None, repr=False,
+                                            compare=False)
+    _flatness: float = field(default=DEFAULT_FLATNESS, repr=False, compare=False)
+
+    @property
+    def corners(self) -> List[float]:
+        """Arc-length positions (mm) of the corner points along the flattened
+        path. Computed on first use: only ``stitch_path`` reads it, yet it used
+        to be worked out for every path built -- most of the cost of
+        re-syncing a piece on screen."""
+        if self._corners is None:
+            if not self.corner_points:
+                self._corners = []
+            else:
+                pts = self.flatten(self._flatness)
+                cum = _cumulative_lengths(pts)
+                positions = [_nearest_arclen(pts, cum, cp)
+                             for cp in self.corner_points]
+                self._corners = sorted(set(round(p, 6) for p in positions))
+        return self._corners
+
+    @corners.setter
+    def corners(self, value) -> None:
+        self._corners = list(value)
 
     def flatten(self, flatness: float = DEFAULT_FLATNESS) -> List[Vec2]:
         if not self.segments:
@@ -283,16 +306,11 @@ class PathBuilder:
 
     def build(self, flatness: float = DEFAULT_FLATNESS) -> Path:
         path = Path(segments=list(self._segments), closed=self._closed)
-        # Resolve corner arc-length positions against the flattened polyline,
-        # and keep the geometric corner points (robust under inset/transform).
+        # Keep the geometric corner points (robust under inset/transform); the
+        # arc-length positions are derived lazily by ``Path.corners``.
         if self._corner_points:
-            pts = path.flatten(flatness)
-            cum = _cumulative_lengths(pts)
-            positions: List[float] = []
-            for cp in self._corner_points:
-                positions.append(_nearest_arclen(pts, cum, cp))
-            path.corners = sorted(set(round(p, 6) for p in positions))
             path.corner_points = list(self._corner_points)
+            path._flatness = flatness
         return path
 
 

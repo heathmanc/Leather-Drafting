@@ -1820,7 +1820,10 @@ class StitchLineItem(QGraphicsItem):
                 painter.drawPath(self._holes_path)
         painter.setPen(hp)
         _paint_backstitch(painter, StitchResult(holes=self._rel_holes,
-                                                closed=self._holes.closed),
+                                                closed=self._holes.closed,
+                                                rows=self._holes.rows,
+                                                runs=self._holes.runs,
+                                                layout=self._holes.layout),
                           self.line.settings)
         if self.isSelected() and self._poly.size() >= 2:
             # Highlight the seam itself, not a bounding box -- it is just a line.

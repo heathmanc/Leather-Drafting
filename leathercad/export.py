@@ -213,14 +213,27 @@ def _apply_kerf(outlines, cuttable, kerf: float):
 
     rings = [i for i, cut in enumerate(cuttable) if cut]
     out = list(outlines)
+
+    def bbox(pts):
+        return (min(p.x for p in pts), min(p.y for p in pts),
+                max(p.x for p in pts), max(p.y for p in pts))
+
+    boxes = {i: bbox(outlines[i][0]) for i in rings if outlines[i][0]}
     for i in rings:
         pts_i = outlines[i][0]
         ring_i = pts_i[:-1]
         step = max(1, len(ring_i) // 12)
         sample = ring_i[::step]
         depth = 0
+        bi = boxes.get(i)
         for j in rings:
             if j == i:
+                continue
+            bj = boxes.get(j)
+            # a ring can only sit inside one whose box contains its box --
+            # which rules out all but a handful of the N^2 pairs cheaply
+            if (bi is None or bj is None or bi[0] < bj[0] or bi[1] < bj[1]
+                    or bi[2] > bj[2] or bi[3] > bj[3]):
                 continue
             ring_j = outlines[j][0][:-1]
             if all(point_in_polygon(p, ring_j) for p in sample):

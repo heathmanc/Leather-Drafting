@@ -2183,8 +2183,19 @@ class MainWindow(QMainWindow):
                                             "SVG (*.svg)")
         if not fn:
             return
-        export.export_svg(self.doc, fn, selection=opts[0], include=opts[1])
+        self._busy(lambda: export.export_svg(self.doc, fn, selection=opts[0],
+                                             include=opts[1]))
         self.statusBar().showMessage(f"Exported {os.path.basename(fn)}", 4000)
+
+    def _busy(self, fn):
+        """Run ``fn`` under a wait cursor (an export of a big file takes a
+        few seconds; the window used to just freeze)."""
+        from PySide6.QtWidgets import QApplication
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            return fn()
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def export_dxf(self):
         opts = self._export_options("Export DXF")
@@ -2194,7 +2205,8 @@ class MainWindow(QMainWindow):
                                             "DXF (*.dxf)")
         if not fn:
             return
-        export.export_dxf(self.doc, fn, selection=opts[0], include=opts[1])
+        self._busy(lambda: export.export_dxf(self.doc, fn, selection=opts[0],
+                                             include=opts[1]))
         self.statusBar().showMessage(f"Exported {os.path.basename(fn)}", 4000)
 
     def export_pdf(self):

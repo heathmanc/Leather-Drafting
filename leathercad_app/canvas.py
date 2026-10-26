@@ -369,6 +369,8 @@ class Canvas(QGraphicsView):
         self._snap_cell = 1.0     # grid cell size == snap threshold (mm)
         self._snap_idx = None     # scene-wide hover snap index (see _snap_index)
         self._group_drag = None   # active move-group drag state
+        self._moved_ids = set()   # shapes moved since the last refresh
+        self._keepout_sig = frozenset()
         self._group_driving = False   # snap_move is repositioning members
         self._last_move_refresh = 0.0     # rate-limit for item_moved refresh
         self._move_refresh_pending = False
@@ -1528,26 +1530,45 @@ class Canvas(QGraphicsView):
         return (best.model.shape_id, (world.x() - minx) / w,
                 (world.y() - miny) / h)
 
-    def _dim_world(self, ref, fallback: Vec2) -> Vec2:
+    def _dim_world(self, ref, fallback: Vec2, by_id=None) -> Vec2:
         if not ref:
             return fallback
         sid, u, v = ref
-        sh = next((s for s in self.doc.shapes if s.shape_id == sid), None)
+        if by_id is not None:
+            sh = by_id.get(sid)
+        else:
+            sh = next((s for s in self.doc.shapes if s.shape_id == sid), None)
         if sh is None:
             return fallback
         minx, miny, maxx, maxy = sh.bounds()
         return Vec2(minx + u * (maxx - minx), miny + v * (maxy - miny))
 
-    def update_dimensions(self) -> None:
+    def update_dimensions(self, only=None) -> None:
         """Recompute associative dimension endpoints from their shapes (called
-        after a move/resize) and refresh the dimension items' geometry + label."""
-        dims = {id(dm): dm for dm in getattr(self.doc, "dimensions", [])}
-        for dm in dims.values():
-            if dm.a_ref or dm.b_ref:
-                dm.p1 = self._dim_world(dm.a_ref, dm.p1)
-                dm.p2 = self._dim_world(dm.b_ref, dm.p2)
+        after a move/resize) and refresh the dimension items' geometry + label.
+        ``only`` -- shape ids that moved: dimensions anchored elsewhere are
+        left alone (re-anchoring every dimension on every mouse move halved
+        the drag frame rate with twenty of them)."""
+        dims = list(getattr(self.doc, "dimensions", []))
+        if not dims:
+            return
+        by_id = {s.shape_id: s for s in self.doc.shapes}
+        touched = set()
+        for dm in dims:
+            if not (dm.a_ref or dm.b_ref):
+                continue
+            if only is not None and not (
+                    (dm.a_ref and dm.a_ref[0] in only)
+                    or (dm.b_ref and dm.b_ref[0] in only)):
+                continue
+            p1 = self._dim_world(dm.a_ref, dm.p1, by_id)
+            p2 = self._dim_world(dm.b_ref, dm.p2, by_id)
+            if p1 != dm.p1 or p2 != dm.p2:
+                dm.p1, dm.p2 = p1, p2
+                touched.add(id(dm))
         for it in self.scene_obj.items():
-            if isinstance(it, DimensionItem):
+            if isinstance(it, DimensionItem) and (only is None
+                                                  or id(it.dim) in touched):
                 it.sync_from_model()
 
     def _place_text(self, pos: QPointF) -> None:
@@ -2827,16 +2848,27 @@ class Canvas(QGraphicsView):
         self._offset_item = None
         self._offset_pts = []
         self._snap_idx = None          # items are gone; drop the stale index
-        for sh in self.doc.shapes:
-            self._add_item(ShapeItem(sh, self))
-        for sl in self.doc.stitch_lines:
-            self._add_item(StitchLineItem(sl, self))
-        for h in self.doc.holes:
-            self._add_item(HoleItem(h, self))
-        for dm in getattr(self.doc, "dimensions", []):
-            self._add_item(DimensionItem(dm, self))
-        for tx in getattr(self.doc, "texts", []):
-            self._add_item(TextItem(tx, self))
+        from leathercad.stitching import set_cache_capacity
+        set_cache_capacity(len(self.doc.shapes) + len(self.doc.stitch_lines))
+        # creating an item positions it, which reports a "move"; one
+        # dimension / status refresh at the end instead of one per item
+        self._suspend_move_refresh = True
+        try:
+            for sh in self.doc.shapes:
+                self._add_item(ShapeItem(sh, self))
+            for sl in self.doc.stitch_lines:
+                self._add_item(StitchLineItem(sl, self))
+            for h in self.doc.holes:
+                self._add_item(HoleItem(h, self))
+            for dm in getattr(self.doc, "dimensions", []):
+                self._add_item(DimensionItem(dm, self))
+            for tx in getattr(self.doc, "texts", []):
+                self._add_item(TextItem(tx, self))
+        finally:
+            self._suspend_move_refresh = False
+        self._moved_ids = set()
+        self._keepout_sig = self._keepout_signature()
+        self.update_dimensions()
         self._rebuild_underlay()
         self.apply_layer_visibility()
         self.documentChangedSig.emit()
@@ -3486,10 +3518,9 @@ class Canvas(QGraphicsView):
                 if follow:
                     tg = poly.tangent_at(min(s, poly.length - 1e-6))
                     ang = math.degrees(math.atan2(tg.y, tg.x))
-                if (math.hypot(p.x - c0[0], p.y - c0[1]) < 0.05
-                        and abs(ang) < 1e-6):
-                    skipped += 1          # a clone exactly on the original:
-                    continue              # an invisible double cut
+                if math.hypot(p.x - c0[0], p.y - c0[1]) < 0.05:
+                    skipped += 1          # a clone on top of the original
+                    continue              # (turned or not): a double cut
                 groups = {}
                 for it in others:
                     m = self._clone_item(it, translate=(p.x - c0[0], p.y - c0[1]),
@@ -3908,8 +3939,24 @@ class Canvas(QGraphicsView):
             return not (b1[2] < b2[0] - slack or b2[2] < b1[0] - slack
                         or b1[3] < b2[1] - slack or b2[3] < b1[1] - slack)
 
-        subject_box = bbox(ordered[0][2])
-        far = [o for o in ordered[1:] if not touches(subject_box, bbox(o[2]))]
+        boxes = [bbox(o[2]) for o in ordered]
+        if op == "union":
+            # a chain counts: a shape that reaches the subject through other
+            # shapes is merged too
+            keep = {0}
+            grown = True
+            while grown:
+                grown = False
+                for k in range(1, len(ordered)):
+                    if k not in keep and any(touches(boxes[k], boxes[j])
+                                             for j in keep):
+                        keep.add(k)
+                        grown = True
+        else:
+            # a cutter that never meets the subject changes nothing
+            keep = {0} | {k for k in range(1, len(ordered))
+                          if touches(boxes[0], boxes[k])}
+        far = [o for k, o in enumerate(ordered) if k not in keep]
         if far:
             names = {"union": "merge", "difference": "subtract",
                      "intersection": "intersect"}
@@ -4738,21 +4785,37 @@ class Canvas(QGraphicsView):
         from leathercad.hardware import keepouts_near
         return keepouts_near(line.points, self.doc)
 
+    def _keepout_signature(self):
+        from leathercad.hardware import keepouts_in
+        return frozenset((round(c.x, 6), round(c.y, 6), round(r, 6))
+                         for c, r in keepouts_in(self.doc))
+
     def _refresh_keepout_dependents(self) -> None:
         """Hardware moved, placed or removed: re-stitch what keeps clear of
-        it. Cheap -- unchanged stitching comes straight from the cache."""
-        has = any(getattr(s, "keepout", 0.0) for s in self.doc.shapes)
-        if not has and not self._had_keepouts:
+        it -- only that. A piece that moved re-fits itself on release, so this
+        pass has work to do only when a keep-out itself appeared, moved or
+        went, and then only for the stitching its circle can reach. (It used
+        to re-sync every stitched item on every commit once a single snap was
+        in the file: 1-3 s per edit on a traced import.)"""
+        sig = self._keepout_signature()
+        old = getattr(self, "_keepout_sig", frozenset())
+        if sig == old:
             return
-        self._had_keepouts = has
+        self._keepout_sig = sig
+        changed = sig ^ old
         for it in list(self._live):
             if not _alive(it):
                 continue
             if isinstance(it, ShapeItem):
                 st = it.model.stitch
-                if st is not None and st.enabled and not it.model.baked_holes:
-                    it.sync_from_model()
-            elif isinstance(it, StitchLineItem):
+                if st is None or not st.enabled or it.model.baked_holes:
+                    continue
+            elif not isinstance(it, StitchLineItem):
+                continue
+            b = it.sceneBoundingRect()          # a superset of the outline
+            x0, y0, x1, y1 = b.left(), b.top(), b.right(), b.bottom()
+            if any(x0 - r <= x <= x1 + r and y0 - r <= y <= y1 + r
+                   for x, y, r in changed):
                 it.sync_from_model()
 
     def set_keepout(self, items, radius: float) -> None:
@@ -5080,11 +5143,16 @@ class Canvas(QGraphicsView):
                 ln.corner_points = [Vec2(p.x + dx, p.y + dy)
                                     for p in ln.corner_points]
             elif isinstance(it, DimensionItem):
-                # a free dimension can be nudged off the line it measures;
-                # one attached to shapes re-anchors on them again later
                 d = it.dim
-                d.p1 = Vec2(d.p1.x + dx, d.p1.y + dy)
-                d.p2 = Vec2(d.p2.x + dx, d.p2.y + dy)
+                if (d.a_ref or d.b_ref) and d.measure != "radius":
+                    # attached: its ends stay on the shape, so the nudge
+                    # moves the dimension LINE away from (or toward) what it
+                    # measures -- the one thing a user wants to move
+                    nrm = d.normal()
+                    d.offset += dx * nrm.x + dy * nrm.y
+                else:
+                    d.p1 = Vec2(d.p1.x + dx, d.p1.y + dy)
+                    d.p2 = Vec2(d.p2.x + dx, d.p2.y + dy)
             it.sync_from_model()
 
     def align_selected(self, mode: str) -> None:
@@ -5242,6 +5310,10 @@ class Canvas(QGraphicsView):
         if self._suspend_move_refresh:
             return      # bulk op (duplicate/array): one refresh happens at end
         self._moved_during_press = True
+        m = self._item_model(item)
+        sid = getattr(m, "shape_id", None)
+        if sid is not None:
+            self._moved_ids.add(sid)        # dimensions on it re-anchor
         if self._group_driving:
             return      # a driven group member; the drag leader reports once
         # Cheap must-stay-fresh work runs on every move: the resize grips
@@ -5262,7 +5334,9 @@ class Canvas(QGraphicsView):
             QTimer.singleShot(40, self._flush_move_refresh)
 
     def _move_refresh(self) -> None:
-        self.update_dimensions()
+        moved = self._moved_ids
+        self._moved_ids = set()
+        self.update_dimensions(only=moved or None)
         self.documentChangedSig.emit()
 
     def _flush_move_refresh(self) -> None:
@@ -5438,6 +5512,23 @@ class Canvas(QGraphicsView):
                 it.sync_from_model()
         self.apply_layer_visibility()
 
+    def recolor_layer(self, name: str, color: str) -> None:
+        """A layer's colour changed: repaint what sits on it. Colour is read
+        at paint time (holes, seams) or cached per item (outlines, text), so
+        no geometry or stitching needs recomputing -- refresh_all did, at
+        1-30 s a click on a big file."""
+        lyr = self.doc.layer(name)
+        if lyr is not None:
+            lyr.color = color
+        for it in self.scene_obj.items():
+            m = self._item_model(it)
+            if m is None:
+                continue
+            if getattr(m, "layer", None) == name and hasattr(it, "_color"):
+                it._color = QColor(color)
+            it.update()
+        self.scene_obj.update()
+
     def outline_width(self, selected: bool = False) -> float:
         """Cosmetic stroke width for outlines / lines (user-tunable)."""
         return self.line_width + (0.8 if selected else 0.0)
@@ -5592,6 +5683,9 @@ class Canvas(QGraphicsView):
         selectable/deletable holes (auto-spacing is turned off)."""
         made = []
         self._suppress_commit = True
+        # every new HoleItem's first setPos reports a "move": with 2,600 of
+        # them that was 2,600 Properties readouts -- one refresh at the end
+        self._suspend_move_refresh = True
         for it in list(self.selected_items()):
             if isinstance(it, ShapeItem):
                 sh = it.model
@@ -5612,10 +5706,11 @@ class Canvas(QGraphicsView):
                     self.doc.remove_stitch_line(it.line)
                     self._remove_item(it)
         self._suppress_commit = False
+        self._suspend_move_refresh = False
         if made:
             self.scene_obj.clearSelection()
-            for m in made:
-                m.setSelected(True)
+            self._set_selected_many(made)
+            self._move_refresh()
             self.documentChangedSig.emit()
             self._emit_commit()
             self.statusMessage.emit(
@@ -5810,6 +5905,9 @@ class Canvas(QGraphicsView):
         shapes = [it for it in sel if isinstance(it, ShapeItem)]
         texts = [it for it in sel if isinstance(it, TextItem)]
         if not shapes and not texts:
+            self.statusMessage.emit(
+                "Break apart: select an outline (or lettering) to split into "
+                "its edges")
             return
         made = []
         self._suppress_commit = True
@@ -5931,6 +6029,9 @@ class Canvas(QGraphicsView):
         self.documentChangedSig.emit()
         self.selectionChangedSig.emit()
         self._emit_commit()
+        self.statusMessage.emit(
+            f"Joined {len(shapes)} pieces into {len(made)} path"
+            f"{'s' if len(made) != 1 else ''}")
 
     def _layer_role(self, name: str) -> str:
         lyr = self.doc.layer(name)

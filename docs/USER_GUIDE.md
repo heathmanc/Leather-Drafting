@@ -186,8 +186,8 @@ export) is never affected — the bright colour is purely a drawing aid.
 1. Press `R` (Rectangle). Click once for the first corner, move, click again
    for the opposite corner. *(Prefer press-drag-release? Toggle
    View → Drag to draw.)*
-2. The size fields focus automatically — type an exact **Width** and
-   **Height** (say 100 × 70) and press Enter.
+2. The Width field is focused automatically — type an exact **Width**, Tab
+   to **Height**, type it (say 100, Tab, 70) and press Enter.
 3. In Properties, the **Stitching** box is already on: you get a blue row of
    stitch holes inset 3.5 mm from the edge at a 3.85 mm pitch.
 4. Pick your **Punch** style (round / oblique / french / diamond) and your

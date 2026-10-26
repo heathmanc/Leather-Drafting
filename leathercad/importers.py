@@ -51,7 +51,11 @@ def _shape_from_ring(pts: List[Vec2], closed: bool,
     local = [Vec2(p.x - cx, p.y - cy) for p in pts]
     t = Transform(x=cx, y=cy)
     if closed and len(local) >= 3:
+        # a traced curve's facets are no corners, but a drawn rectangle's
+        # are: flag the real turns so their inset corners get a hole
+        from .shapes import path_corner_flags
         return Polygon(points=local, close_path=True, sharp_corners=False,
+                       corner_mask=path_corner_flags(local, True),
                        transform=t, layer=layer)
     return PathShape(points=local, close_path=False, transform=t, layer=layer)
 

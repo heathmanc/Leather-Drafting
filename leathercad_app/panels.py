@@ -1305,8 +1305,7 @@ class LayersPanel(QWidget):
             return
         c = QColorDialog.getColor(QColor(lyr.color), self, "Layer colour")
         if c.isValid():
-            lyr.color = c.name()
-            self.canvas.refresh_all()
+            self.canvas.recolor_layer(lyr.name, c.name())
             self.reload()
             self.committed.emit()
 
@@ -1315,7 +1314,9 @@ class LayersPanel(QWidget):
         if not lyr:
             return
         lyr.visible = not lyr.visible
-        self.canvas.refresh_all()
+        # visibility is read at paint time: show/hide, don't re-stitch
+        self.canvas.apply_layer_visibility()
+        self.canvas.scene_obj.update()
         self.reload()
         self.committed.emit()
 
@@ -1328,7 +1329,8 @@ class LayersPanel(QWidget):
         if vis == lyr.visible:
             return
         lyr.visible = vis
-        self.canvas.refresh_all()
+        self.canvas.apply_layer_visibility()
+        self.canvas.scene_obj.update()
         self.committed.emit()
 
     def _role_changed(self):

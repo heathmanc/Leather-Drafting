@@ -216,10 +216,16 @@ def keepouts_for_shape(shape, doc) -> List[Tuple[Vec2, float]]:
     shape's LOCAL frame (what ``stitch_shape_path`` takes)."""
     if doc is None or getattr(shape, "stitch", None) is None:
         return []
+    keep = keepouts_in(doc, exclude=(shape,))
+    if not keep:
+        # the common case: no hardware in the file. Answer before touching
+        # the outline -- shape.bounds() flattens the whole path, and this is
+        # asked on every re-sync of every stitched piece.
+        return []
     b = shape.bounds()
     t = shape.transform
     out = []
-    for c, r in keepouts_in(doc, exclude=(shape,)):
+    for c, r in keep:
         if (b[0] - r <= c.x <= b[2] + r) and (b[1] - r <= c.y <= b[3] + r):
             out.append((t.inverse_apply(c), r))
     return out

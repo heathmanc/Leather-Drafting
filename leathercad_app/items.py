@@ -98,6 +98,48 @@ def _draw_holes(painter, holes, style, diameter, slit_len, slit_angle):
             painter.drawEllipse(QPointF(h.point.x, h.point.y), r, r)
 
 
+# Zoomed out, a vertex that moves the stroke by less than half a pixel is
+# invisible: the outline is then drawn from a copy simplified to this
+# tolerance (mm) -- a traced import's 400-point pieces pan at twice the rate.
+_LOD_TOL_MM = 0.3
+
+
+def _decimate(poly: QPolygonF, tol: float) -> QPolygonF:
+    """Ramer-Douglas-Peucker: the vertices of ``poly`` that matter at a
+    tolerance of ``tol``; the ends always stay."""
+    n = poly.size()
+    if n < 3:
+        return poly
+    xs = [poly[i].x() for i in range(n)]
+    ys = [poly[i].y() for i in range(n)]
+    keep = [False] * n
+    keep[0] = keep[-1] = True
+    tol2 = tol * tol
+    stack = [(0, n - 1)]
+    while stack:
+        i, j = stack.pop()
+        if j - i < 2:
+            continue
+        ax, ay = xs[i], ys[i]
+        dx, dy = xs[j] - ax, ys[j] - ay
+        l2 = dx * dx + dy * dy
+        best, bi = -1.0, -1
+        for k in range(i + 1, j):
+            px, py = xs[k] - ax, ys[k] - ay
+            if l2 <= 1e-18:
+                d2 = px * px + py * py
+            else:
+                cr = px * dy - py * dx
+                d2 = cr * cr / l2
+            if d2 > best:
+                best, bi = d2, k
+        if best > tol2:
+            keep[bi] = True
+            stack.append((i, bi))
+            stack.append((bi, j))
+    return QPolygonF([QPointF(xs[k], ys[k]) for k in range(n) if keep[k]])
+
+
 def _qpoly(points: List[Vec2]) -> QPolygonF:
     return QPolygonF([QPointF(p.x, p.y) for p in points])
 
@@ -868,19 +910,30 @@ class HoleItem(QGraphicsItem):
 
     def sync_from_model(self):
         self.prepareGeometryChange()
+        self._geom_cache = None
         self.setPos(self.hole.point.x, self.hole.point.y)
         self.update()
 
+    def _geom(self):
+        """(diameter, bounding rect, hit path) -- built once per diameter.
+        Qt asks thousands of loose holes for their rect on every repaint and
+        rubber-band move; constructing it each time was most of that cost."""
+        d = self.hole.hole_diameter
+        g = getattr(self, "_geom_cache", None)
+        if g is None or g[0] != d:
+            # generous, zoom-independent hit area so small holes are easy to click
+            r = max(1.6, d)
+            p = QPainterPath()
+            p.addEllipse(QPointF(0, 0), r, r)
+            g = (d, QRectF(-r - 1.0, -r - 1.0, 2 * r + 2.0, 2 * r + 2.0), p)
+            self._geom_cache = g
+        return g
+
     def boundingRect(self):
-        # generous, zoom-independent hit area so small holes are easy to click
-        r = max(1.6, self.hole.hole_diameter) + 1.0
-        return QRectF(-r, -r, 2 * r, 2 * r)
+        return self._geom()[1]
 
     def shape(self):
-        p = QPainterPath()
-        r = max(1.6, self.hole.hole_diameter)
-        p.addEllipse(QPointF(0, 0), r, r)
-        return p
+        return self._geom()[2]
 
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
@@ -954,6 +1007,11 @@ class ShapeItem(QGraphicsItem):
         self._color = QColor("#ff0000")
         self._world_outline_cache = None      # cached world-space outline (snap)
         self._world_outline_key = None
+        self._geom_path = None       # the Path the outline / snap nodes came from
+        self._geom_key = None        # (rotation, mirror) they were oriented by
+        self._hit_shape = None       # stroked hit band, built on first hit test
+        self._outline_lod = None     # simplified outline for zoomed-out paints
+        self._closed = True
         self.setFlags(
             QGraphicsItem.ItemIsSelectable
             | QGraphicsItem.ItemIsMovable
@@ -972,11 +1030,37 @@ class ShapeItem(QGraphicsItem):
         self.prepareGeometryChange()
         t = self.model.transform
         path = self.model.local_path()
-        # oriented (rotation+mirror), pre-translation -- matches Transform.apply
-        local = path.flatten()
-        oriented = [t.apply_dir(p) for p in local]
-        self._outline = _qpoly(oriented)
-        self._closed = path.closed
+        # The geometry half -- flattening, orienting, snap nodes, hit band --
+        # only when the outline or its orientation changed. The model caches
+        # its Path, so the same object coming back means nothing moved; a
+        # stitch edit, a layer tick, a keep-out pass or an undo that put the
+        # same piece back then skips straight to the stitching below.
+        gkey = (round(t.rotation, 9), bool(t.mirror_x))
+        if path is not self._geom_path or gkey != self._geom_key:
+            # oriented (rotation+mirror), pre-translation -- matches Transform.apply
+            local = path.flatten()
+            oriented = [t.apply_dir(p) for p in local]
+            self._outline = _qpoly(oriented)
+            self._closed = path.closed
+            self._hit_shape = None
+            self._outline_lod = None
+            # snap targets from REAL geometry (Fusion / LightBurn style):
+            # endpoints, edge/arc midpoints, arc & shape centres and circle
+            # quadrants -- not bounding-box corners, which don't sit on a
+            # rounded / round outline.
+            self._snap_typed_local = self._geometry_snap_nodes(path, local)
+            node_locals = [p for p, _k in self._snap_typed_local]
+            self._snap_local = node_locals
+            self._snap_offsets = [t.apply_dir(p) for p in node_locals]
+            self._snap_offset_kinds = [k for _p, k in self._snap_typed_local]
+            # For a circle / ellipse the meaningful anchor is the centre (Fusion
+            # / LightBurn lock a circle by its centre); its quadrants otherwise
+            # steal the snap.  Flag it so the canvas prefers the centre while
+            # dragging.
+            from leathercad.shapes import Circle, Ellipse
+            self._center_snap_priority = isinstance(self.model, (Circle, Ellipse))
+            self._geom_path = path
+            self._geom_key = gkey
         # the edges that aren't sewn, for a dotted marker over them
         self._skipped = QPainterPath()
         mask = getattr(self.model, "stitch_edges", None)
@@ -991,22 +1075,10 @@ class ShapeItem(QGraphicsItem):
                 for q in pts[1:]:
                     self._skipped.lineTo(q.x, q.y)
 
-        # snap targets from REAL geometry (Fusion / LightBurn style): endpoints,
-        # edge/arc midpoints, arc & shape centres and circle quadrants -- not
-        # bounding-box corners, which don't sit on a rounded / round outline.
-        self._snap_typed_local = self._geometry_snap_nodes(path, local)
-        node_locals = [p for p, _k in self._snap_typed_local]
-        self._snap_local = node_locals
-        self._snap_offsets = [t.apply_dir(p) for p in node_locals]
-        self._snap_offset_kinds = [k for _p, k in self._snap_typed_local]
-        # For a circle / ellipse the meaningful anchor is the centre (Fusion /
-        # LightBurn lock a circle by its centre); its quadrants otherwise steal
-        # the snap.  Flag it so the canvas prefers the centre while dragging.
-        from leathercad.shapes import Circle, Ellipse
-        self._center_snap_priority = isinstance(self.model, (Circle, Ellipse))
         self._hole_locals = []          # local stitch-hole centres (set below)
 
         self._holes = None
+        self._keep_used = ()            # the keep-outs this fit was made for
         st = self.model.stitch
         if self.model.baked_holes:
             # grouped/baked holes: local coords, oriented into pre-translation
@@ -1021,6 +1093,7 @@ class ShapeItem(QGraphicsItem):
             if self.canvas is not None:
                 from leathercad.hardware import keepouts_for_shape
                 keep = keepouts_for_shape(self.model, self.canvas.doc) or None
+            self._keep_used = tuple(keep or ())
             res = stitch_shape_path(path, st,
                                     getattr(self.model, "stitch_edges", None),
                                     keep)
@@ -1078,11 +1151,17 @@ class ShapeItem(QGraphicsItem):
     def shape(self):
         # Only the outline is clickable (not the filled interior). Open paths
         # (lines, construction lines) get a straight band, not a closed sliver.
-        return _outline_hit_shape(self._outline, closed=getattr(self, "_closed", True))
+        # Stroked once per outline: a rubber band asks every item for this on
+        # every mouse move.
+        if self._hit_shape is None:
+            self._hit_shape = _outline_hit_shape(
+                self._outline, closed=getattr(self, "_closed", True))
+        return self._hit_shape
 
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
         selected = self.isSelected()
+        lod = option.levelOfDetailFromTransform(painter.worldTransform())
         # the outline follows the shape's own layer; the stitch holes follow the
         # stitch layer -- so hiding Cut hides the outline but keeps the blue holes
         outline_vis = (self.canvas._layer_visible(self.model.layer)
@@ -1107,8 +1186,14 @@ class ShapeItem(QGraphicsItem):
         pen.setWidthF(w)
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)
-        if outline_vis and self._outline.size() >= 2:
-            painter.drawPolyline(self._outline)
+        poly = self._outline
+        if poly.size() > 48 and lod * _LOD_TOL_MM < 0.5:
+            # zoomed out: no vertex of the simplified copy is half a pixel off
+            if self._outline_lod is None:
+                self._outline_lod = _decimate(poly, _LOD_TOL_MM)
+            poly = self._outline_lod
+        if outline_vis and poly.size() >= 2:
+            painter.drawPolyline(poly)
         r_keep = float(getattr(self.model, "keepout", 0.0) or 0.0)
         if r_keep > 0 and (selected or getattr(self.model, "hardware", "")):
             # the stitch keep-out round a piece of hardware: a faint dashed
@@ -1148,7 +1233,6 @@ class ShapeItem(QGraphicsItem):
                 # enough that a hole covers < ~2px, stroking antialiased
                 # ellipses is wasted work -- a plain dot reads identically
                 # and paints an order of magnitude faster.
-                lod = option.levelOfDetailFromTransform(painter.worldTransform())
                 if (self._holes_pts is not None
                         and self._holes_size_mm * lod < 2.0):
                     hp.setWidthF(max(1.6, hp.widthF()))
@@ -1762,6 +1846,7 @@ class StitchLineItem(QGraphicsItem):
         if self.canvas is not None:
             from leathercad.hardware import keepouts_near
             keep = keepouts_near(pts, self.canvas.doc) or None
+        self._keep_used = tuple(keep or ())
         self._holes = self.line.result(keep)
         self._rel_holes = [Hole(Vec2(h.point.x - self._base.x,
                                      h.point.y - self._base.y), h.tangent)

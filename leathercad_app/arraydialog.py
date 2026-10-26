@@ -45,7 +45,8 @@ class ArrayDialog(QDialog):
         def length(lo, hi, value_mm, tip=""):
             sp = MathSpinBox()
             sp.setRange(lo, hi)
-            sp.setDecimals(2)
+            sp.setDecimals(4)                # exact mm behind a trimmed display
+            sp.trim_zeros = True
             sp.physical = True
             U.register_spin(sp)
             sp.setValue(value_mm)

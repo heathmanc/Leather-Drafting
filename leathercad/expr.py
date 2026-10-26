@@ -21,6 +21,9 @@ _ALLOWED_BINOPS = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv,
 # a number followed by a unit word -- but not inside an identifier (strap2in)
 _UNIT = re.compile(r"(?<![\w.])(\d[\d.]*|\.\d+)\s*(mm|cm|in)\b", re.IGNORECASE)
 _UNIT_MM = {"mm": 1.0, "cm": 10.0, "in": 25.4}
+# the whole text, ending in one unit word: "(1/2) in", "3/8in", "2*3 cm"
+_TAIL_UNIT = re.compile(r"(.*?[\d.)])\s*(mm|cm|in)", re.IGNORECASE | re.DOTALL)
+_HAS_LETTER = re.compile(r"[A-Za-z_]")
 _IDENT = re.compile(r"[A-Za-z_]\w*")
 # a name as it appears inside an expression: not the exponent of 1e2
 _NAME_REF = re.compile(r"(?<![\w.])[A-Za-z_]\w*")
@@ -68,7 +71,16 @@ def evaluate(text: str, values: Optional[Dict[str, float]] = None) -> float:
     """Evaluate ``text`` as safe arithmetic in mm. ``values`` (if given)
     supplies parameter names the expression may use."""
     s = text.strip().replace(",", ".")
-    s = _UNIT.sub(lambda m: f"({m.group(1)}*{_UNIT_MM[m.group(2).lower()]})", s)
+    # One unit word at the very end of a purely numeric expression scales the
+    # whole of it: "1/2in" is half an inch (12.7), not 1/(2 in). Anything with
+    # a parameter name in it ("strap_w + 1in"), or more than one unit
+    # ("1in+10mm"), keeps the per-number form -- parameters are millimetres.
+    tail = _TAIL_UNIT.fullmatch(s)
+    if (tail and not _UNIT.search(tail.group(1))
+            and not _HAS_LETTER.search(tail.group(1))):
+        s = f"({tail.group(1)})*{_UNIT_MM[tail.group(2).lower()]}"
+    else:
+        s = _UNIT.sub(lambda m: f"({m.group(1)}*{_UNIT_MM[m.group(2).lower()]})", s)
     # every way bad input can fail is a ValueError, so callers (the
     # Parameters dialog, typed fields) only need to catch that one
     try:

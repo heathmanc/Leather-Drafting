@@ -192,6 +192,10 @@ class Path:
     _corners: Optional[List[float]] = field(default=None, repr=False,
                                             compare=False)
     _flatness: float = field(default=DEFAULT_FLATNESS, repr=False, compare=False)
+    # (flatness, points) of the last flatten(): a path is flattened by the
+    # stitcher, the snap nodes, the bounds and the export in turn -- the arcs
+    # need walking only once. Callers get a fresh list each time.
+    _flat_cache: Optional[tuple] = field(default=None, repr=False, compare=False)
 
     @property
     def corners(self) -> List[float]:
@@ -199,24 +203,30 @@ class Path:
         path. Computed on first use: only ``stitch_path`` reads it, yet it used
         to be worked out for every path built -- most of the cost of
         re-syncing a piece on screen."""
-        if self._corners is None:
+        key = tuple(self.corner_points)
+        if self._corners is None or self._corners[0] != key:
             if not self.corner_points:
-                self._corners = []
+                positions = []
             else:
                 pts = self.flatten(self._flatness)
                 cum = _cumulative_lengths(pts)
                 positions = [_nearest_arclen(pts, cum, cp)
                              for cp in self.corner_points]
-                self._corners = sorted(set(round(p, 6) for p in positions))
-        return self._corners
+            # keyed on the corner points, so a corner added after the first
+            # read is not missed
+            self._corners = (key, sorted(set(round(p, 6) for p in positions)))
+        return self._corners[1]
 
     @corners.setter
     def corners(self, value) -> None:
-        self._corners = list(value)
+        self._corners = (tuple(self.corner_points), list(value))
 
     def flatten(self, flatness: float = DEFAULT_FLATNESS) -> List[Vec2]:
         if not self.segments:
             return []
+        fc = self._flat_cache
+        if fc is not None and fc[0] == flatness and fc[2] == len(self.segments):
+            return list(fc[1])
         pts: List[Vec2] = [self.segments[0].start()]
         for seg in self.segments:
             pts.extend(seg.flatten(flatness))
@@ -224,7 +234,8 @@ class Path:
             first, last = pts[0], pts[-1]
             if (first - last).length() > 1e-9:
                 pts.append(first)
-        return pts
+        self._flat_cache = (flatness, pts, len(self.segments))
+        return list(pts)
 
 
 class PathBuilder:

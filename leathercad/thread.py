@@ -27,6 +27,23 @@ def _polyline_len(pts: List[Vec2], closed: bool = False) -> float:
     return n
 
 
+def _looks_like_pairs(pts, spacing: float) -> bool:
+    """True when a bare hole list is laid out as interleaved pairs -- hole 0
+    beside hole 1 a row spacing apart, then the next station. The pair gaps
+    must be the row spacing (within 10 %) AND the gaps between stations
+    must be longer than it: in a row-major list every gap is the pitch, so
+    a pitch near the row spacing (an ordinary 3.85 mm iron with 3 mm rows,
+    fitted to 3.7 on a short edge) used to pass as pairs and the thread
+    estimate came out a third high."""
+    n = len(pts)
+    pair = [distance(pts[i], pts[i + 1]) for i in range(0, min(n - 1, 8), 2)]
+    between = [distance(pts[i], pts[i + 1]) for i in range(1, min(n - 1, 8), 2)]
+    if not pair or not between:
+        return False
+    return (all(abs(g - spacing) < 0.1 * spacing for g in pair)
+            and all(g > 1.1 * spacing for g in between))
+
+
 def estimate_thread(res, settings, thickness_mm: float = 3.0,
                     tail_mm: float = 150.0) -> dict:
     """Thread needed to sew one stitched item.
@@ -52,9 +69,7 @@ def estimate_thread(res, settings, thickness_mm: float = 3.0,
     bare_double = (getattr(res, "layout", None) is None
                    and getattr(res, "rows", 1) == 1 and want_rows == 2
                    and n >= 4)
-    if bare_double and all(
-            abs(distance(pts[i], pts[i + 1]) - spacing) < 0.25 * spacing
-            for i in range(0, min(n - 1, 8), 2)):
+    if bare_double and _looks_like_pairs(pts, spacing):
         # a bare hole list stored as aligned pairs (row A, row B) per station,
         # the way rows used to be kept -- the pairs really are a row spacing
         # apart, so read them that way

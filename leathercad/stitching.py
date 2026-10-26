@@ -213,11 +213,54 @@ def _march_n_final_s(poly: Polyline, pitch: float, n_steps: int,
     return cur_s
 
 
+_SPAN_MEMO_MAX = 4096
+_span_memo: "OrderedDict" = None      # created lazily (see _span_key)
+
+
+def _span_key(poly: Polyline, n_intervals: int, start_s: float, end_s: float):
+    """The span's geometry with its placement removed: the vertices between
+    ``start_s`` and ``end_s`` translated so the span starts at the origin,
+    turned so it ends on the +x axis and flipped so it first bends upward.
+    A chord march sees nothing but that shape, so two spans with the same
+    key fit the same pitch -- the four corner arcs of every rounded
+    rectangle in a document, say, or one piece drawn in several sizes."""
+    pts, cum = poly.points, poly.cum
+    a = poly.point_at(start_s)
+    b = poly.point_at(end_s)
+    ab = b - a
+    length = ab.length()
+    if length <= _EPS:
+        return None
+    ux, uy = ab.x / length, ab.y / length
+    i0 = poly.seg_index_at(start_s) + 1
+    i1 = poly.seg_index_at(end_s - 1e-9)
+    if i1 - i0 > 400:
+        return None                    # not worth hashing
+    rel = []
+    flip = 0.0
+    for i in range(i0, i1 + 1):
+        if not (start_s + 1e-9 < cum[i] < end_s - 1e-9):
+            continue
+        p = pts[i]
+        dx, dy = p.x - a.x, p.y - a.y
+        x = dx * ux + dy * uy
+        y = -dx * uy + dy * ux
+        if flip == 0.0 and abs(y) > 1e-7:
+            flip = 1.0 if y > 0 else -1.0
+        rel.append((round(x, 7), round(y * (flip or 1.0), 7)))
+    return (n_intervals, round(length, 7), round(end_s - start_s, 7),
+            tuple(rel))
+
+
 def fit_pitch_for_count(poly: Polyline, n_intervals: int, start_s: float,
                         end_s: float, tol: float = 1e-7) -> Optional[float]:
     """Find the chord pitch so ``n_intervals`` steps land exactly on ``end_s``.
 
     Returns the pitch, or None if no pitch in a sensible band works.
+    Memoised on the span's own geometry (``_span_key``): the fit depends on
+    nothing else, and a document is full of congruent spans -- every corner
+    of a rounded rectangle, every copy of a piece at another size -- so a
+    cold fit of a traced or graded project no longer refits each one.
     """
     if n_intervals < 1:
         return None
@@ -227,6 +270,30 @@ def fit_pitch_for_count(poly: Polyline, n_intervals: int, start_s: float,
     # A span on one straight edge needs no search: chord == arc length.
     if poly.seg_index_at(start_s) == poly.seg_index_at(end_s - 1e-9):
         return span / n_intervals
+    global _span_memo
+    key = _span_key(poly, n_intervals, start_s, end_s)
+    if key is not None:
+        if _span_memo is None:
+            from collections import OrderedDict
+            _span_memo = OrderedDict()
+        hit = _span_memo.get(key, _MISS)
+        if hit is not _MISS:
+            _span_memo.move_to_end(key)
+            return hit
+    p = _fit_pitch_for_count_impl(poly, n_intervals, start_s, end_s, tol)
+    if key is not None:
+        _span_memo[key] = p
+        while len(_span_memo) > _SPAN_MEMO_MAX:
+            _span_memo.popitem(last=False)
+    return p
+
+
+_MISS = object()
+
+
+def _fit_pitch_for_count_impl(poly: Polyline, n_intervals: int, start_s: float,
+                              end_s: float, tol: float) -> Optional[float]:
+    span = end_s - start_s
     nominal = span / n_intervals
     lo = nominal * 0.4
     hi = nominal * 1.05  # chord pitch is always <= arc pitch
@@ -1568,6 +1635,10 @@ def _apply_rows(result: StitchResult, settings) -> StitchResult:
     if rows <= 1 or not result.holes:
         return result
     spacing = float(getattr(settings, "row_spacing", 3.0))
+    if spacing <= 1e-9:
+        result.note = ("row spacing is 0: the second row would punch the first "
+                       "again, so only one row is fitted")
+        return result
     pitch = float(getattr(settings, "pitch_mm", 3.85))
     closed = result.closed
     pts = result.points
@@ -1583,14 +1654,18 @@ def _apply_rows(result: StitchResult, settings) -> StitchResult:
     for seq in result.sequences(min_len=1):
         row0 = [result.holes[i] for i in seq]
         p0 = [h.point for h in row0]
+        t0 = [h.tangent for h in row0]
         if on_ring:
-            row1 = _offset_row(p0, closed, -inward * spacing, pitch)
+            # a ring of one or two holes has no winding to tell its inside
+            # by: the piece is too small for a second row anyway
+            row1 = (_offset_row(p0, closed, -inward * spacing, pitch, t0)
+                    if inward != 0.0 else [])
             rows_here = [row0, row1]
             if not row1:
                 dropped = True
         else:
-            rows_here = [_offset_row(p0, False, spacing / 2.0, pitch),
-                         _offset_row(p0, False, -spacing / 2.0, pitch)]
+            rows_here = [_offset_row(p0, False, spacing / 2.0, pitch, t0),
+                         _offset_row(p0, False, -spacing / 2.0, pitch, t0)]
         for r, row in enumerate(rows_here):
             start = len(holes)
             holes.extend(row)
@@ -1601,16 +1676,25 @@ def _apply_rows(result: StitchResult, settings) -> StitchResult:
     relayout: List[Tuple[int, List[int]]] = []
     for k in order:
         r, idxs = layout[k]
+        if not idxs:
+            continue                        # a run whose second row collapsed
         start = len(reholes)
         reholes.extend(holes[i] for i in idxs)
         relayout.append((r, list(range(start, start + len(idxs)))))
     result.holes = reholes
-    result.rows = 2
-    result.runs = None
-    result.layout = relayout
-    if dropped and not result.note:
-        result.note = ("too small for a second row at this row spacing: "
-                       "only one row fitted")
+    if any(r == 1 for r, _idxs in relayout):
+        result.rows = 2
+        result.runs = None
+        result.layout = relayout
+    else:
+        # nothing of the second row survived: this IS a single row, and the
+        # readout / thread estimate must say so (the note explains why)
+        result.rows = 1
+        result.layout = None
+    if dropped:
+        msg = ("too small for a second row at this row spacing: only one row "
+               "fitted")
+        result.note = f"{result.note}; {msg}" if result.note else msg
     return result
 
 
@@ -1633,19 +1717,28 @@ def _turn_degrees(pts: List[Vec2], closed: bool) -> List[float]:
 
 
 def _offset_row(p0: List[Vec2], closed: bool, dist: float,
-                pitch: float) -> List[Hole]:
+                pitch: float, tangents=None) -> List[Hole]:
     """The holes of a row running ``dist`` beside the fitted row ``p0``
     (positive = right of travel): the true mitred offset of the polyline
-    through its holes (``offset_closed_inward`` for a ring, which also trims
-    the inside-out loops a tight corner makes), with a hole kept on the
-    image of every sharp corner and the stretches between fitted evenly.
-    An empty list means the offset collapsed (the piece is too small)."""
-    from .offset import inset_with_corners, offset_open
+    through its holes (``inset_with_corners`` for a ring, which also trims
+    the inside-out loops a tight corner makes; ``_offset_open_trimmed`` for
+    a run), with a hole kept on the image of every sharp corner and the
+    stretches between fitted evenly. Whatever the offset code left behind,
+    no hole of the new row may sit nearer the fitted row than 90 % of
+    ``dist`` (a swallowtail the trimming missed at a degenerate corner), or
+    outside a ring. An empty list means the offset collapsed (the piece is
+    too small)."""
+    from .offset import inset_with_corners, _Proximity
+    from .geometry import point_in_polygon
     n = len(p0)
     if n == 0:
         return []
     if n == 1:
-        return [Hole(p0[0], Vec2(1.0, 0.0))]
+        # a lone hole: its partner sits a row spacing off along its normal
+        t = tangents[0] if tangents else Vec2(1.0, 0.0)
+        tl = t.length()
+        t = t * (1.0 / tl) if tl > 1e-12 else Vec2(1.0, 0.0)
+        return [Hole(p0[0] + Vec2(t.y, -t.x) * dist, t)]
     turns = _turn_degrees(p0, closed)
     # a corner is a sharp turn, or an isolated kink between two straights;
     # the gentle, repeated turns of an arc are not (its holes are re-fitted)
@@ -1667,6 +1760,8 @@ def _offset_row(p0: List[Vec2], closed: bool, dist: float,
             return []
         if (q[0] - q[-1]).length() < 1e-9:
             q = q[:-1]
+        near = _Proximity(ring, abs(dist) * 0.9)
+        q = [v for v in q if not near.too_close(v) and point_in_polygon(v, ring)]
         if (len(q) < 3 or abs(signed_area(q)) < 1e-9
                 or (signed_area(q) > 0) != (signed_area(ring) > 0)):
             return []                      # inverted: the ring is too small
@@ -1681,11 +1776,136 @@ def _offset_row(p0: List[Vec2], closed: bool, dist: float,
             k = min(range(len(q)), key=lambda j: (q[j] - img).length())
             if (q[k] - img).length() < 1e-6:
                 q_anchors.append(k)
-        return _even_row(q, sorted(set(q_anchors)), True, pitch)
-    q = offset_open(p0, dist)
-    if len(q) != n:                         # the mitre map is one-to-one
-        return _even_row(q, [], False, pitch) if len(q) >= 2 else []
-    return _even_row(q, anchors, False, pitch)
+        return _drop_crowded(_even_row(q, sorted(set(q_anchors)), True, pitch),
+                             _MIN_ANCHOR_SEP * pitch)
+    q, q_anchors = _offset_open_trimmed(p0, dist, anchors)
+    if len(q) < 2:
+        return []
+    lim2 = (abs(dist) * 0.9) ** 2
+    kept = [j for j, v in enumerate(q) if _dist2_to_open(v, p0) >= lim2]
+    if len(kept) < 2:
+        return []
+    if len(kept) < len(q):
+        remap = {j: k for k, j in enumerate(kept)}
+        q = [q[j] for j in kept]
+        q_anchors = [remap[a] for a in q_anchors if a in remap]
+    return _drop_crowded(_even_row(q, q_anchors, False, pitch),
+                         _MIN_ANCHOR_SEP * pitch)
+
+
+def _drop_crowded(holes: List[Hole], sep: float) -> List[Hole]:
+    """``holes`` without any pair closer than ``sep`` -- BOTH of such a pair
+    go. Along the row the even division already keeps the spacing; this
+    catches holes facing each other ACROSS a stretch of the inner ring that
+    is narrower than the minimum spacing (a thin strip at any angle, the
+    narrow arm of an L): that stretch loses its second row, the rest keeps
+    it, and a strip that is all sliver loses the row (and says so)."""
+    n = len(holes)
+    if n < 2 or sep <= 0:
+        return holes
+    cell = sep
+    grid: dict = {}
+    for i, h in enumerate(holes):
+        grid.setdefault((int(h.point.x // cell), int(h.point.y // cell)),
+                        []).append(i)
+    crowded = set()
+    s2 = sep * sep * (1.0 - 1e-9)
+    for i, h in enumerate(holes):
+        cx, cy = int(h.point.x // cell), int(h.point.y // cell)
+        for gx in (cx - 1, cx, cx + 1):
+            for gy in (cy - 1, cy, cy + 1):
+                for j in grid.get((gx, gy), ()):
+                    if j > i and (holes[j].point - h.point).length_sq() < s2:
+                        crowded.add(i)
+                        crowded.add(j)
+    if not crowded:
+        return holes
+    return [h for i, h in enumerate(holes) if i not in crowded]
+
+
+def _dist2_to_open(v: Vec2, pts: List[Vec2]) -> float:
+    """Squared distance from ``v`` to the OPEN polyline ``pts`` (no closing
+    edge -- a run's two ends are not joined across the unsewn mouth)."""
+    best = float("inf")
+    for a, b in zip(pts, pts[1:]):
+        ab = b - a
+        l2 = ab.length_sq()
+        t = 0.0 if l2 <= 1e-18 else max(0.0, min(1.0, (v - a).dot(ab) / l2))
+        d = v - (a + ab * t)
+        best = min(best, d.length_sq())
+    return best
+
+
+def _offset_open_trimmed(p0: List[Vec2], dist: float, anchors: List[int]):
+    """Mitred offset of the open polyline ``p0`` by ``dist`` (right of travel
+    for ``dist`` > 0), with its folds trimmed and its sharpest mitres
+    bevelled. Returns ``(q, q_anchors)``: the offset polyline and the indices
+    in it that are images of the source vertices in ``anchors``.
+
+    A plain 1:1 mitre doubles back on itself wherever the offset exceeds
+    the local hole spacing -- a corner of a row offset by more than the
+    pitch -- and holes divided along the fold ended up 0.2-0.7 mm apart.
+    Here an offset edge that runs backwards against its source edge is
+    dropped and its neighbours re-mitred, until every piece runs forward;
+    a mitre more than twice ``dist`` from its corner (a hairpin) is bevelled
+    to the two edge ends instead, as the ring offset's mitre limit does."""
+    from .offset import _line_intersection
+    n = len(p0)
+    segs = []                                  # [a', b', dir, source edge]
+    for k in range(n - 1):
+        a, b = p0[k], p0[k + 1]
+        d = b - a
+        length = d.length()
+        if length < 1e-9:
+            continue
+        d = d * (1.0 / length)
+        nrm = Vec2(d.y, -d.x) * dist
+        segs.append((a + nrm, b + nrm, d, k))
+    if not segs:
+        return [], []
+    lim = 2.0 * abs(dist)
+    while True:
+        m = len(segs)
+        starts: list = [None] * m
+        ends: list = [None] * m
+        starts[0] = segs[0][0]
+        ends[-1] = segs[-1][1]
+        for i in range(1, m):
+            p = _line_intersection(segs[i - 1][0], segs[i - 1][1],
+                                   segs[i][0], segs[i][1])
+            if p is None and (segs[i - 1][1] - segs[i][0]).length() < 1e-7:
+                p = segs[i - 1][1]                # straight on: one vertex
+            if p is None or (p - p0[segs[i][3]]).length() > lim:
+                ends[i - 1] = segs[i - 1][1]      # bevel: two vertices
+                starts[i] = segs[i][0]
+            else:
+                ends[i - 1] = p
+                starts[i] = p
+        rev = {i for i in range(m)
+               if (ends[i] - starts[i]).dot(segs[i][2]) < -1e-9}
+        if not rev:
+            break
+        if len(rev) == m:
+            return [], []                      # everything folded: no row
+        segs = [s for i, s in enumerate(segs) if i not in rev]
+    q: List[Vec2] = [starts[0]]
+    reps = [(0, segs[0][3])]                   # source vertices each q vertex stands for
+    for i in range(1, m):
+        lo, hi = segs[i - 1][3] + 1, segs[i][3]
+        if ends[i - 1] is starts[i]:
+            q.append(starts[i])
+            reps.append((lo, hi))
+        else:
+            q.append(ends[i - 1])
+            reps.append((lo, hi))
+            q.append(starts[i])
+            reps.append((lo, hi))
+    q.append(ends[-1])
+    reps.append((segs[-1][3] + 1, n - 1))
+    want = set(anchors)
+    q_anchors = [j for j, (lo, hi) in enumerate(reps)
+                 if any(lo <= a <= hi for a in want)]
+    return q, q_anchors
 
 
 def _even_row(q: List[Vec2], anchors: List[int], closed: bool,
@@ -1704,6 +1924,32 @@ def _even_row(q: List[Vec2], anchors: List[int], closed: bool,
         anchors = [0] if closed else [0, n - 1]
     elif not closed:
         anchors = sorted(set(anchors) | {0, n - 1})
+    # two anchors closer than the minimum hole spacing (the two tip corners
+    # of a narrow arm, a bevelled hairpin) keep the first: a hole each would
+    # be a millimetre apart
+    if len(anchors) > 1:
+        cumq = [0.0]
+        for j in range(n):
+            cumq.append(cumq[-1] + (q[(j + 1) % n] - q[j]).length())
+        perim = cumq[-1]
+
+        def along(i, j):                  # arc length from anchor i to j (i <= j)
+            return cumq[j % n] + perim * (j // n) - cumq[i]
+        sep = _MIN_ANCHOR_SEP * pitch
+        thinned = [anchors[0]]
+        for a in anchors[1:]:
+            if along(thinned[-1], a) >= sep:
+                thinned.append(a)
+        if closed and len(thinned) > 1 and along(thinned[-1], thinned[0] + n) < sep:
+            thinned.pop()
+        if not closed:
+            # the open end always anchors: a corner crowding it goes instead
+            while (len(thinned) > 1 and thinned[-1] != n - 1
+                   and along(thinned[-1], n - 1) < sep):
+                thinned.pop()
+            if thinned[-1] != n - 1:
+                thinned.append(n - 1)
+        anchors = thinned
     spans = list(zip(anchors, anchors[1:]))
     if closed:
         spans.append((anchors[-1], anchors[0] + n))

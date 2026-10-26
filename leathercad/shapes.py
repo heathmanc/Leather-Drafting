@@ -10,7 +10,7 @@ valid in world space without recomputation.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields as dc_fields, is_dataclass
 from typing import List, Optional, Sequence, Tuple
 
 from .geometry import Vec2
@@ -105,9 +105,37 @@ class Shape:
     def is_fold_line(self) -> bool:
         return self.fold_dir in ("front", "back")
 
-    # -- geometry (subclasses implement local_path) ---------------------
-    def local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:  # pragma: no cover
+    # -- geometry (subclasses implement _build_local_path) --------------
+    def _build_local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:  # pragma: no cover
         raise NotImplementedError
+
+    def geometry_key(self) -> tuple:
+        """Everything ``local_path`` reads, as one comparable tuple: the
+        shape's own size / point fields, not its placement, layer, stitching
+        or name. Cheap next to building the path, and exact -- the panel and
+        the node handles assign these fields directly, so there is no setter
+        to hook; the key is compared on every call instead."""
+        key = []
+        for f in dc_fields(self):
+            if f.name in _NON_GEOMETRY_FIELDS:
+                continue
+            key.append(_freeze(getattr(self, f.name)))
+        return tuple(key)
+
+    def local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:
+        """The outline in local coordinates. Cached on the shape: the same
+        ``Path`` object comes back until a geometry field changes, so the
+        scene item, the stitcher, the snap index and the export (which each
+        used to rebuild and re-flatten it) share one build -- and can tell by
+        identity that nothing moved."""
+        key = (flatness, self.geometry_key())
+        cache = self.__dict__.get("_lp_cache")
+        if cache is not None and cache[0] == key:
+            return cache[1]
+        path = self._build_local_path(flatness)
+        self.__dict__["_lp_cache"] = (key, path)
+        self.__dict__.pop("_bounds_cache", None)
+        return path
 
     def world_polyline(self, flatness: float = DEFAULT_FLATNESS
                        ) -> Tuple[List[Vec2], List[Vec2], bool]:
@@ -119,12 +147,45 @@ class Shape:
         return pts_world, corners_world, path.closed
 
     def bounds(self) -> Tuple[float, float, float, float]:
-        pts, _, _ = self.world_polyline()
+        """World bounding box. Cached with the path: a dimension re-anchor,
+        a keep-out test and a nest each asked for it, and each flattened and
+        re-transformed the whole outline to answer."""
+        t = self.transform
+        path = self.local_path()          # refreshes the geometry cache
+        key = (id(path), t.x, t.y, t.rotation, bool(t.mirror_x))
+        bc = self.__dict__.get("_bounds_cache")
+        if bc is not None and bc[0] == key:
+            return bc[1]
+        pts = [t.apply(p) for p in path.flatten()]
         if not pts:                     # a path with no points yet
-            pts = [self.transform.apply(Vec2(0.0, 0.0))]
+            pts = [t.apply(Vec2(0.0, 0.0))]
         xs = [p.x for p in pts]
         ys = [p.y for p in pts]
-        return min(xs), min(ys), max(xs), max(ys)
+        box = (min(xs), min(ys), max(xs), max(ys))
+        self.__dict__["_bounds_cache"] = (key, box)
+        return box
+
+
+# Fields of every Shape that local_path() never reads (placement, styling,
+# stitching, identity). Anything else a subclass adds is geometry.
+_NON_GEOMETRY_FIELDS = frozenset({
+    "name", "transform", "layer", "stitch", "opacity", "shape_id", "kind",
+    "baked_holes", "stitch_edges", "hardware", "keepout", "construction",
+    "group_id", "fold_dir", "fold_angle",
+})
+
+
+def _freeze(v):
+    """A hashable, comparable snapshot of a geometry field's value."""
+    if isinstance(v, list):
+        return tuple(_freeze(x) for x in v)
+    if isinstance(v, tuple):
+        return tuple(_freeze(x) for x in v)
+    if isinstance(v, Vec2) or v is None or isinstance(v, (float, int, str, bool)):
+        return v
+    if is_dataclass(v):                    # an Edge (kind, mid, c1, c2)
+        return tuple(_freeze(getattr(v, f.name)) for f in dc_fields(v))
+    return repr(v)
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +198,7 @@ class Rectangle(Shape):
     corner_radius: float = 0.0
     kind: str = "rectangle"
 
-    def local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:
+    def _build_local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:
         w, h, r = self.width, self.height, self.corner_radius
         hw, hh = w / 2.0, h / 2.0
         r = max(0.0, min(r, min(hw, hh)))
@@ -169,7 +230,7 @@ class Ellipse(Shape):
     ry: float = 15.0
     kind: str = "ellipse"
 
-    def local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:
+    def _build_local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:
         # Adaptive step from the smaller radius.
         rmin = max(1e-3, min(self.rx, self.ry))
         ratio = max(-1.0, min(1.0, 1.0 - flatness / rmin))
@@ -341,7 +402,7 @@ class Polygon(Shape):
     corner_mask: Optional[List[bool]] = None
     kind: str = "polygon"
 
-    def local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:
+    def _build_local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:
         pts = self.points
         if len(pts) < 2:
             return Path()
@@ -379,7 +440,7 @@ class PathShape(Shape):
     close_path: bool = False
     kind: str = "path"
 
-    def local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:
+    def _build_local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:
         pts = _dedupe_points(self.points, self.close_path)
         n = len(pts)
         if n < 2:
@@ -401,21 +462,34 @@ class PathShape(Shape):
 _PATH_CORNER_DEG = 10.0
 
 
+# Vertices closer than this (mm) are one vertex: a tenth of a micron is
+# below any exporter's rounding noise and far below a laser's resolution.
+_DEDUPE_MM = 1e-4
+
+
 def _dedupe_points(pts: List[Vec2], closed: bool) -> List[Vec2]:
     """``pts`` without consecutive repeats (a doubled vertex, the way some
-    SVG/DXF exporters write them, is no corner and no edge)."""
+    SVG/DXF exporters write them -- exactly or to within rounding noise --
+    is no corner and no edge)."""
     out: List[Vec2] = []
     for p in pts:
-        if not out or (p - out[-1]).length() > 1e-9:
+        if not out or (p - out[-1]).length() > _DEDUPE_MM:
             out.append(p)
-    if closed and len(out) >= 2 and (out[0] - out[-1]).length() <= 1e-9:
+    if closed and len(out) >= 2 and (out[0] - out[-1]).length() <= _DEDUPE_MM:
         out.pop()
     return out
 
 
+# A turn sharper than this is a corner on its own. Flattened curves turn a
+# few degrees a vertex (a coarsely traced one up to ~20), while the facets
+# a leatherworker reads as corners -- an octagonal coaster's 45, a chamfer's
+# two 45s, a heptagon's 51 -- all lie above it.
+_SHARP_CORNER_DEG = 35.0
+
+
 def path_corner_flags(pts: List[Vec2], closed: bool,
                       tol_deg: float = _PATH_CORNER_DEG,
-                      sharp_deg: float = 55.0,
+                      sharp_deg: float = _SHARP_CORNER_DEG,
                       flat_deg: float = 3.0) -> List[bool]:
     """Which vertices of a free polyline are real corners (anchor a stitch
     hole): a sharp turn (more than ``sharp_deg``), or an isolated kink of
@@ -665,7 +739,7 @@ class EditablePath(Shape):
     closed: bool = True
     kind: str = "editpath"
 
-    def local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:
+    def _build_local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:
         n = len(self.nodes)
         if n < 2:
             return Path()

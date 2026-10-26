@@ -68,6 +68,26 @@ def fmt_area(mm2: float) -> str:
     return f"{mm2 / 100.0:.1f} cm²"
 
 
+def fmt_long(mm: float) -> str:
+    """A long length (thread): metres / centimetres, or feet / inches."""
+    if is_inches():
+        inches = mm / MM_PER_IN
+        if inches >= 36.0:
+            return f"{inches / 12.0:.1f} ft"
+        return f"{inches:.1f} in"
+    if mm >= 1000.0:
+        return f"{mm / 1000.0:.2f} m"
+    return f"{mm / 10.0:.1f} cm"
+
+
+def nudge_step(big: bool = False, fine: bool = False) -> float:
+    """The arrow-key nudge in mm: 1 / 10 / 0.1 mm, or with inches showing
+    1/16 in (Shift 1/2 in, Ctrl 1/64 in)."""
+    if is_inches():
+        return MM_PER_IN * (0.5 if big else (1.0 / 64.0 if fine else 1.0 / 16.0))
+    return 10.0 if big else (0.1 if fine else 1.0)
+
+
 _EXPLICIT_UNIT = re.compile(r"\d\s*(mm|cm|in)\b", re.IGNORECASE)
 
 

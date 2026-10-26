@@ -1351,7 +1351,8 @@ class MainWindow(QMainWindow):
             if kind == "mm":
                 w = MathSpinBox()
                 w.setRange(extra[0], extra[1])
-                w.setDecimals(2)
+                w.setDecimals(4)             # exact mm behind a trimmed display
+                w.trim_zeros = True
                 w.physical = True
                 U.register_spin(w)
                 w.setValue(s.value(skey, default, type=float))
@@ -1561,6 +1562,7 @@ class MainWindow(QMainWindow):
                 continue
             new = res[-1][2]
             if new is not it.model:              # converted to nodes: swap in
+                new.shape_id = it.model.shape_id     # keeps its dimensions
                 idx = self.doc.shapes.index(it.model)
                 self.doc.shapes[idx] = new
                 c._remove_item(it)
@@ -1733,9 +1735,30 @@ class MainWindow(QMainWindow):
         s.setValue("nestMargin", margin.value())
         s.setValue("nestGap", gap.value())
         s.setValue("nestRotate", rot.isChecked())
-        report = self.canvas.nest_selected(
-            w.value(), h.value(), margin=margin.value(),
-            spacing=gap.value(), allow_rotate=rot.isChecked())
+        # a hide's worth of pieces takes a few seconds: show the count going
+        # up and let the user bail out (nothing moves until the packing is
+        # complete, so Cancel leaves the drawing as it was)
+        from PySide6.QtWidgets import QApplication, QProgressDialog
+        prog = QProgressDialog("Nesting pieces…", "Cancel", 0, 100, self)
+        prog.setWindowTitle("Nest on sheet")
+        prog.setWindowModality(Qt.WindowModal)
+        prog.setMinimumDuration(300)
+        prog.setAutoClose(False)
+        prog.setAutoReset(False)
+
+        def progress(done, total):
+            prog.setMaximum(max(1, total))
+            prog.setValue(done)
+            QApplication.processEvents()
+            return not prog.wasCanceled()
+
+        try:
+            report = self.canvas.nest_selected(
+                w.value(), h.value(), margin=margin.value(),
+                spacing=gap.value(), allow_rotate=rot.isChecked(),
+                progress=progress)
+        finally:
+            prog.close()
         QMessageBox.information(self, "Nest on sheet", report)
 
     def _job_estimate(self):
@@ -1751,8 +1774,9 @@ class MainWindow(QMainWindow):
         def _spin(key, default, lo, hi, suffix, dec, tip=""):
             sp = MathSpinBox()
             sp.setRange(lo, hi)
-            sp.setDecimals(dec)
+            sp.setDecimals(max(dec, 4) if suffix == " mm" else dec)
             if suffix == " mm":                 # a length: display unit
+                sp.trim_zeros = True
                 sp.physical = True
                 _units.register_spin(sp)
             else:

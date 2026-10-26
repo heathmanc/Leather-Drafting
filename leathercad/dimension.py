@@ -46,7 +46,8 @@ class Dimension:
     def label(self, unit: str = "mm") -> str:
         pre = "R " if self.measure == "radius" else ""
         if unit == "in":
-            return f"{pre}{self.length() / 25.4:.3f} in"
+            txt = f"{self.length() / 25.4:.3f}".rstrip("0").rstrip(".")
+            return f"{pre}{txt or '0'} in"               # 1 in, not 1.000 in
         return f"{pre}{self.length():.1f} mm"
 
     def normal(self) -> Vec2:

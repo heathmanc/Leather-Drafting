@@ -91,12 +91,15 @@ class MathSpinBox(QDoubleSpinBox):
                 text = f"{units.to_display(v):.4f}"
                 point = self.locale().decimalPoint()
                 text = text.replace(".", point)
-                return text.rstrip("0").rstrip(point) if point in text else text
+                text = text.rstrip("0").rstrip(point) if point in text else text
+                return text[1:] if text in ("-0", "-") else text
         text = super().textFromValue(v)
         if self.trim_zeros:
             point = self.locale().decimalPoint()
             if point in text:
                 text = text.rstrip("0").rstrip(point)
+        if text.startswith("-") and not any(c in "123456789" for c in text):
+            text = text[1:]                   # a rounded -0.0000 reads "0"
         return text
 
     def validate(self, text: str, pos: int):

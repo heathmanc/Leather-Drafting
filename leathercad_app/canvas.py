@@ -19,6 +19,8 @@ from PySide6.QtGui import (QColor, QCursor, QPainter, QPen, QPainterPath,
 from PySide6.QtWidgets import (QGraphicsScene, QGraphicsView, QGraphicsPathItem,
                                QGraphicsItem, QGraphicsLineItem, QMenu)
 
+from PySide6.QtGui import QPixmapCache
+
 from leathercad.geometry import Vec2
 from leathercad.document import Document
 from leathercad.shapes import (copy_shape_attrs, Rectangle, Ellipse, Circle,
@@ -44,6 +46,83 @@ try:
 except Exception:  # pragma: no cover
     def _alive(obj) -> bool:
         return obj is not None
+
+
+def _rings_meet(a, b, slack: float = 0.05) -> bool:
+    """Do two closed rings overlap or touch? A vertex of either inside the
+    other or within ``slack`` of its outline, or two edges crossing. Edges
+    are only tested where the two boxes overlap."""
+    from leathercad.geometry import point_in_polygon
+    from leathercad.trim import _seg_intersect
+
+    def box(r):
+        return (min(p.x for p in r), min(p.y for p in r),
+                max(p.x for p in r), max(p.y for p in r))
+
+    ba, bb = box(a), box(b)
+    if (ba[2] < bb[0] - slack or bb[2] < ba[0] - slack
+            or ba[3] < bb[1] - slack or bb[3] < ba[1] - slack):
+        return False
+    s2 = slack * slack
+
+    def near_edge(p, ring):
+        n = len(ring)
+        for k in range(n):
+            u, v = ring[k], ring[(k + 1) % n]
+            d = v - u
+            l2 = d.length_sq()
+            t = 0.0 if l2 <= 1e-18 else max(0.0, min(1.0, (p - u).dot(d) / l2))
+            q = u + d * t
+            if (p - q).length_sq() <= s2:
+                return True
+        return False
+
+    for ring, other, ob in ((a, b, bb), (b, a, ba)):
+        for p in ring:
+            if (ob[0] - slack <= p.x <= ob[2] + slack
+                    and ob[1] - slack <= p.y <= ob[3] + slack):
+                if point_in_polygon(p, other) or near_edge(p, other):
+                    return True
+    # crossing edges with no vertex inside (two bars making a plus)
+    ov = (max(ba[0], bb[0]) - slack, max(ba[1], bb[1]) - slack,
+          min(ba[2], bb[2]) + slack, min(ba[3], bb[3]) + slack)
+
+    def in_overlap(r):
+        n = len(r)
+        out = []
+        for k in range(n):
+            u, v = r[k], r[(k + 1) % n]
+            if (max(u.x, v.x) < ov[0] or min(u.x, v.x) > ov[2]
+                    or max(u.y, v.y) < ov[1] or min(u.y, v.y) > ov[3]):
+                continue
+            out.append((u, v))
+        return out
+
+    ea, eb = in_overlap(a), in_overlap(b)
+    if len(ea) * len(eb) > 250_000:
+        return True                   # too tangled to tell cheaply: assume so
+    for u, v in ea:
+        for w, x in eb:
+            if _seg_intersect(u, v, w, x) is not None:
+                return True
+    return False
+
+
+def _inherit_path(old, new) -> None:
+    """Hand ``new`` (a shape just deserialised for an undo / redo) the cached
+    ``Path`` of ``old`` when their geometry is identical, so the scene item
+    that showed ``old`` sees the same Path object come back from
+    ``local_path`` and keeps its outline, snap nodes and hit band."""
+    if type(old) is not type(new):
+        return
+    lp = old.__dict__.get("_lp_cache")
+    if lp is None:
+        return
+    try:
+        if lp[0] == (lp[0][0], new.geometry_key()):
+            new.__dict__["_lp_cache"] = lp
+    except Exception:          # pragma: no cover - a key that won't compare
+        pass
 
 
 # tool modes
@@ -368,8 +447,17 @@ class Canvas(QGraphicsView):
         self._snap_grid = None    # same nodes bucketed for O(1) lookup
         self._snap_cell = 1.0     # grid cell size == snap threshold (mm)
         self._snap_idx = None     # scene-wide hover snap index (see _snap_index)
+        self._xings_memo = None   # last _all_intersections answer (see there)
+        self._selected_other = 0  # selected holes / seams / dimensions
+        # shape items paint through a device-coordinate pixmap cache (see
+        # _set_cache_mode); off only for the render-equivalence test
+        self.item_cache = True
+        # Qt's default pixmap cache (10 MB) holds a handful of screens; give
+        # the item caches of a big drawing room, or they evict one another
+        QPixmapCache.setCacheLimit(max(QPixmapCache.cacheLimit(), 192 * 1024))
         self._group_drag = None   # active move-group drag state
         self._moved_ids = set()   # shapes moved since the last refresh
+        self._moved_items = set() # items moved since the last commit
         self._keepout_sig = frozenset()
         self._group_driving = False   # snap_move is repositioning members
         self._last_move_refresh = 0.0     # rate-limit for item_moved refresh
@@ -416,6 +504,43 @@ class Canvas(QGraphicsView):
     # -- zoom / view ----------------------------------------------------
     def _apply_zoom(self) -> None:
         self.setTransform(QTransform().scale(self._zoom, -self._zoom))
+        self._update_cache_modes()
+
+    # A piece drawn larger than this on screen (px) paints directly: its
+    # device cache would be viewport-sized, and a few of those thrash the
+    # pixmap cache at high zoom, where direct painting is cheap anyway.
+    _CACHE_MAX_PX = 1400
+
+    def _set_cache_mode(self, it) -> None:
+        """Device-coordinate pixmap cache for a shape item: panning and
+        box-selecting then blit cached pixels instead of re-stroking every
+        400-point traced outline (8-11 fps on a 150-piece import; now the
+        refresh rate). Zooming re-renders, so the zoom-dependent hole dots
+        stay right. Anything that changes how an item paints must call
+        ``update()`` on the item, not just on the scene -- see
+        ``_repaint_items``."""
+        if not isinstance(it, ShapeItem) or not _alive(it):
+            return
+        r = it.boundingRect()
+        big = max(r.width(), r.height()) * self._zoom > self._CACHE_MAX_PX
+        mode = (QGraphicsItem.CacheMode.DeviceCoordinateCache
+                if getattr(self, "item_cache", True) and not big
+                else QGraphicsItem.CacheMode.NoCache)
+        if it.cacheMode() != mode:
+            it.setCacheMode(mode)
+
+    def _update_cache_modes(self) -> None:
+        for it in list(getattr(self, "_live", ())):
+            self._set_cache_mode(it)
+
+    def _repaint_items(self) -> None:
+        """Mark every drawing item dirty. A scene-wide update alone redraws a
+        device-cached shape from its cached pixels, so a style change (line
+        width, a colour) has to reach each item."""
+        for it in list(self._live):
+            if _alive(it):
+                it.update()
+        self.scene_obj.update()
 
     ZOOM_MIN = 0.05     # px per mm -- far enough out for a whole belt
     ZOOM_MAX = 120.0
@@ -563,109 +688,187 @@ class Canvas(QGraphicsView):
     # so the cursor ran at ~2 fps. The scene is now indexed once and bucketed
     # into cells, so a move only looks at the cursor's neighbourhood.
 
-    def _snap_signature(self):
-        """Cheap fingerprint of every item's geometry + placement.
+    def _item_snap_sig(self, it):
+        """One item's geometry + placement fingerprint, or None if it never
+        snaps. ``ShapeItem._outline`` / ``_snap_typed_local`` are replaced
+        wholesale by ``sync_from_model`` -- and kept as they are when nothing
+        moved -- so their identity changes exactly when geometry does, the
+        same trick ``world_outline`` relies on. The index pins the objects it
+        fingerprinted, so a stale id can't be recycled underneath us and
+        silently validate a dead entry."""
+        if isinstance(it, ShapeItem):
+            p = it.pos()
+            t = it.model.transform
+            return (id(it._outline), len(it._outline),
+                    id(getattr(it, "_snap_typed_local", None)),
+                    round(p.x(), 6), round(p.y(), 6),
+                    round(getattr(t, "rotation", 0.0), 6),
+                    bool(getattr(t, "mirror_x", False)))
+        if isinstance(it, StitchLineItem):
+            return (id(it.line.points), len(it.line.points))
+        if isinstance(it, HoleItem):
+            h = it.hole.point
+            return (round(h.x, 6), round(h.y, 6))
+        if isinstance(it, TextItem):
+            p = it.pos()
+            return (id(it), round(p.x(), 6), round(p.y(), 6))
+        return None
 
-        ``ShapeItem._outline`` / ``_snap_typed_local`` are replaced wholesale by
-        ``sync_from_model``, so their identity changes whenever geometry does --
-        the same trick ``world_outline`` already relies on. The built index
-        keeps a reference to those objects, so a stale id can't be recycled
-        underneath us and silently validate a dead cache."""
-        sig = []
+    def _snap_signature(self):
+        """``{id(item): (item, fingerprint)}`` for every visible item that
+        snaps. Hidden layers don't snap (and toggling one changes it)."""
+        sig = {}
         for it in self.scene_obj.items():
             if not it.isVisible():
-                continue           # hidden layers don't snap (and toggling
-                                   # one changes the fingerprint)
-            if isinstance(it, ShapeItem):
-                p = it.pos()
-                t = it.model.transform
-                sig.append((id(it._outline), len(it._outline),
-                            id(getattr(it, "_snap_typed_local", None)),
-                            round(p.x(), 6), round(p.y(), 6),
-                            round(getattr(t, "rotation", 0.0), 6),
-                            bool(getattr(t, "mirror_x", False))))
-            elif isinstance(it, StitchLineItem):
-                sig.append((id(it.line.points), len(it.line.points)))
-            elif isinstance(it, HoleItem):
-                h = it.hole.point
-                sig.append((round(h.x, 6), round(h.y, 6)))
-            elif isinstance(it, TextItem):
-                p = it.pos()
-                sig.append((id(it), round(p.x(), 6), round(p.y(), 6)))
-        return tuple(sig)
+                continue
+            s = self._item_snap_sig(it)
+            if s is not None:
+                sig[id(it)] = (it, s)
+        return sig
+
+    # an edge spanning more cells than this is kept in a flat list every
+    # query also scans, instead of being bucketed into all of them
+    _SPREAD_CELLS = 64
 
     def _snap_index(self):
         """Snap points and outline edges, bucketed into a uniform grid.
-        Rebuilt only when ``_snap_signature`` changes."""
+
+        Rebuilt only when ``_snap_signature`` changes -- and when only some
+        items changed (a drag, a nudge, a delete, a new piece) it is patched
+        instead: those items' points and edges leave the grid and come back,
+        the rest stay put. The full rebuild re-derived every item's world
+        nodes and outline, 0.3-0.5 s on a big file, on the first press after
+        any edit."""
         sig = self._snap_signature()
         idx = getattr(self, "_snap_idx", None)
-        if idx is not None and idx["sig"] == sig:
-            return idx
+        if idx is not None:
+            old = idx["sig"]
+            if old == sig:
+                return idx
+            changed = [oid for oid, rec in sig.items()
+                       if oid not in old or old[oid][1] != rec[1]]
+            gone = [oid for oid in old if oid not in sig]
+            if len(changed) + len(gone) <= max(16, len(sig) // 4):
+                for oid in gone:
+                    self._index_remove(idx, oid)
+                for oid in changed:
+                    self._index_remove(idx, oid)
+                    self._index_insert(idx, sig[oid][0])
+                self._index_finish(idx, sig)
+                return idx
+        idx = {"cell": self._index_cell(sig), "pgrid": {}, "egrid": {},
+               "spread": [], "owners": {}, "gen": 0}
+        for it, _s in sig.values():
+            self._index_insert(idx, it)
+        self._index_finish(idx, sig)
+        self._snap_idx = idx
+        return idx
 
-        pts, edges, refs = [], [], []
-        by_owner: dict = {}          # item -> its own points, for drag exclusion
-        for it in self.scene_obj.items():
-            if not it.isVisible():
-                continue
-            own = None
-            if isinstance(it, (ShapeItem, TextItem)):
-                own = it.world_snap_nodes_typed()
-            elif isinstance(it, StitchLineItem):
-                own = [(p, "end") for p in it.line.points]
-            elif isinstance(it, HoleItem):
-                own = [(it.hole.point, "center")]
-            if own:
-                by_owner[it] = own
-                pts.extend(own)
-            poly = None
-            if isinstance(it, ShapeItem):
-                poly = it.world_outline()
-                refs.append(it._outline)          # pin the id we fingerprinted
-                refs.append(getattr(it, "_snap_typed_local", None))
-            elif isinstance(it, StitchLineItem):
-                poly = [Vec2(p.x, p.y) for p in it.line.points]
-                refs.append(it.line.points)
-            if poly and len(poly) >= 2:
-                owner = id(it)
-                for k in range(len(poly) - 1):
-                    edges.append((poly[k], poly[k + 1], owner))
-
-        # cell size from the content's own extent: ~256 cells across, clamped
-        xs = [p.x for p, _k in pts] or [0.0]
-        ys = [p.y for p, _k in pts] or [0.0]
+    @staticmethod
+    def _index_cell(sig) -> float:
+        """Cell size from the content's own extent: ~256 cells across, clamped."""
+        xs, ys = [], []
+        for it, _s in sig.values():
+            r = it.sceneBoundingRect()
+            xs.extend((r.left(), r.right()))
+            ys.extend((r.top(), r.bottom()))
+        if not xs:
+            return 1.0
         span = max(max(xs) - min(xs), max(ys) - min(ys), 1.0)
-        cell = min(50.0, max(0.5, span / 256.0))
+        return min(50.0, max(0.5, span / 256.0))
 
-        pgrid: dict = {}
-        for p, kind in pts:
-            pgrid.setdefault((int(p.x // cell), int(p.y // cell)),
-                             []).append((p, kind))
-        egrid: dict = {}
-        spread = []                     # edges spanning too many cells to bucket
-        for e in edges:
-            a, b, _o = e
-            ix0, ix1 = sorted((int(a.x // cell), int(b.x // cell)))
-            iy0, iy1 = sorted((int(a.y // cell), int(b.y // cell)))
-            if (ix1 - ix0 + 1) * (iy1 - iy0 + 1) > 64:
-                spread.append(e)        # always considered; kept rare by design
-                continue
-            for ix in range(ix0, ix1 + 1):
-                for iy in range(iy0, iy1 + 1):
-                    egrid.setdefault((ix, iy), []).append(e)
+    @staticmethod
+    def _item_snap_nodes(it):
+        """(typed snap points, outline polyline) of one item, world space."""
+        own, poly = None, None
+        if isinstance(it, (ShapeItem, TextItem)):
+            own = it.world_snap_nodes_typed()
+        elif isinstance(it, StitchLineItem):
+            own = [(p, "end") for p in it.line.points]
+        elif isinstance(it, HoleItem):
+            own = [(it.hole.point, "center")]
+        if isinstance(it, ShapeItem):
+            poly = it.world_outline()
+        elif isinstance(it, StitchLineItem):
+            poly = [Vec2(p.x, p.y) for p in it.line.points]
+        return own or [], poly
 
-        # the alignment pass wants the nearest point sharing the cursor's x (or
-        # y) anywhere within its reach -- a cross-shaped query a disc-shaped
-        # grid can't serve. Sort once so it can bisect instead of scanning all.
+    def _index_insert(self, idx, it) -> None:
+        own, poly = self._item_snap_nodes(it)
+        cell = idx["cell"]
+        oid = id(it)
+        pgrid, egrid = idx["pgrid"], idx["egrid"]
+        pcells = []
+        for entry in own:
+            p = entry[0]
+            c = (int(p.x // cell), int(p.y // cell))
+            pgrid.setdefault(c, []).append(entry)
+            pcells.append(c)
+        edges, ecells, spread = [], [], []
+        if poly and len(poly) >= 2:
+            for k in range(len(poly) - 1):
+                a, b = poly[k], poly[k + 1]
+                e = (a, b, oid)
+                edges.append(e)
+                ix0, ix1 = sorted((int(a.x // cell), int(b.x // cell)))
+                iy0, iy1 = sorted((int(a.y // cell), int(b.y // cell)))
+                if (ix1 - ix0 + 1) * (iy1 - iy0 + 1) > self._SPREAD_CELLS:
+                    spread.append(e)    # always considered; kept rare by design
+                    continue
+                for ix in range(ix0, ix1 + 1):
+                    for iy in range(iy0, iy1 + 1):
+                        egrid.setdefault((ix, iy), []).append(e)
+                        ecells.append((ix, iy))
+        idx["spread"].extend(spread)
+        idx["owners"][oid] = {
+            "item": it, "pts": own, "edges": edges, "pcells": pcells,
+            "ecells": ecells, "spread": bool(spread),
+            # pin the objects whose ids the signature fingerprinted
+            "refs": (getattr(it, "_outline", None),
+                     getattr(it, "_snap_typed_local", None),
+                     getattr(getattr(it, "line", None), "points", None)),
+        }
+
+    def _index_remove(self, idx, oid) -> None:
+        rec = idx["owners"].pop(oid, None)
+        if rec is None:
+            return
+        pgrid, egrid = idx["pgrid"], idx["egrid"]
+        mine = {id(e) for e in rec["pts"]}
+        for c in set(rec["pcells"]):
+            lst = [e for e in pgrid.get(c, ()) if id(e) not in mine]
+            if lst:
+                pgrid[c] = lst
+            else:
+                pgrid.pop(c, None)
+        for c in set(rec["ecells"]):
+            lst = [e for e in egrid.get(c, ()) if e[2] != oid]
+            if lst:
+                egrid[c] = lst
+            else:
+                egrid.pop(c, None)
+        if rec["spread"]:
+            idx["spread"] = [e for e in idx["spread"] if e[2] != oid]
+
+    def _index_finish(self, idx, sig) -> None:
+        """The flat views over the grid: every point and edge, the per-owner
+        map (drag exclusion) and the alignment arrays -- the alignment pass
+        wants the nearest point sharing the cursor's x (or y) anywhere within
+        reach, a cross-shaped query a disc-shaped grid can't serve, so they
+        are sorted once and bisected."""
+        pts, edges, by_owner = [], [], {}
+        for rec in idx["owners"].values():
+            pts.extend(rec["pts"])
+            edges.extend(rec["edges"])
+            if rec["pts"]:
+                by_owner[rec["item"]] = rec["pts"]
         align = [(p, k) for p, k in pts if k not in ("hole", "cross")]
         axs = sorted(align, key=lambda t: t[0].x)
         ays = sorted(align, key=lambda t: t[0].y)
-        idx = {"sig": sig, "pts": pts, "edges": edges, "cell": cell,
-               "pgrid": pgrid, "egrid": egrid, "spread": spread, "refs": refs,
-               "axs": axs, "axv": [t[0].x for t in axs],
-               "ays": ays, "ayv": [t[0].y for t in ays],
-               "by_owner": by_owner}
-        self._snap_idx = idx
-        return idx
+        idx.update(sig=sig, pts=pts, edges=edges, axs=axs,
+                   axv=[t[0].x for t in axs], ays=ays,
+                   ayv=[t[0].y for t in ays], by_owner=by_owner)
+        idx["gen"] += 1
 
     def _nearest_aligned(self, pos, near: Vec2, lim: float, thr: float,
                          extra):
@@ -909,39 +1112,57 @@ class Canvas(QGraphicsView):
         return out
 
     def _all_intersections(self, exclude=None):
-        """Every point where two different outlines cross (for the move / node
-        drag snap cache). Bounded work, skipped on very busy scenes."""
+        """Every point where two different outlines cross, for the move / node
+        drag snap cache.
+
+        Found through the hover snap index: each edge is tested only against
+        the edges sharing one of its grid cells (two segments can only cross
+        inside a cell they share), exactly as the drawing-time osnap does. A
+        press on a stack of traced pieces cost 1.8-3.2 s of all-pairs tests
+        -- and above 3,000 points gave up and found nothing; now it's
+        milliseconds and nothing is skipped. Only outlines in (or near) the
+        view are searched: a drag can only snap under the cursor, and the
+        cursor is in the view. Memoised until an item moves or the view
+        changes, so a click to select pays once."""
         from leathercad.trim import _seg_intersect
         excl = exclude if isinstance(exclude, (set, list, tuple)) else {exclude}
-        entries = []
-        for it in self.scene_obj.items():
-            if it in excl:
+        excl_ids = frozenset(id(it) for it in excl if it is not None)
+        idx = self._snap_index()
+        vp = self.viewport().rect()
+        bound = None
+        if vp.width() >= 64 and vp.height() >= 64:
+            vr = self.mapToScene(vp).boundingRect()
+            pad = 0.5 * max(vr.width(), vr.height())
+            vr = vr.adjusted(-pad, -pad, pad, pad)
+            bound = (vr.left(), vr.top(), vr.right(), vr.bottom())
+        key = (id(idx), idx["gen"], excl_ids,
+               tuple(round(v, 3) for v in bound) if bound else None)
+        memo = self._xings_memo
+        if memo is not None and memo[0] == key:
+            return list(memo[1])
+        found = {}
+        for e in idx["edges"]:
+            a, b, owner = e
+            if owner in excl_ids:
                 continue
-            poly = None
-            if isinstance(it, ShapeItem):
-                poly = it.world_outline()
-            elif isinstance(it, StitchLineItem):
-                poly = [Vec2(p.x, p.y) for p in it.line.points]
-            if not poly or len(poly) < 2:
+            ax0, ax1 = (a.x, b.x) if a.x <= b.x else (b.x, a.x)
+            ay0, ay1 = (a.y, b.y) if a.y <= b.y else (b.y, a.y)
+            if bound is not None and (ax1 < bound[0] or ax0 > bound[2]
+                                      or ay1 < bound[1] or ay0 > bound[3]):
                 continue
-            xs = [p.x for p in poly]
-            ys = [p.y for p in poly]
-            entries.append((poly, (min(xs), min(ys), max(xs), max(ys))))
-        if sum(len(p) for p, _ in entries) > 3000:
-            return []                              # too busy -- skip
-        out = []
-        for i in range(len(entries)):
-            for j in range(i + 1, len(entries)):
-                A, ba = entries[i]
-                B, bb = entries[j]
-                if ba[2] < bb[0] or bb[2] < ba[0] or ba[3] < bb[1] or bb[3] < ba[1]:
-                    continue                       # bounding boxes disjoint
-                for k in range(len(A) - 1):
-                    for l in range(len(B) - 1):
-                        x = _seg_intersect(A[k], A[k + 1], B[l], B[l + 1])
-                        if x is not None:
-                            out.append(x)
-        return out
+            for c, d, o2 in self._cutters_for_edge(e, idx):
+                # same outline; a pair is tested from its lower-id owner
+                if o2 == owner or o2 < owner or o2 in excl_ids:
+                    continue
+                if (max(c.x, d.x) < ax0 or min(c.x, d.x) > ax1
+                        or max(c.y, d.y) < ay0 or min(c.y, d.y) > ay1):
+                    continue                       # boxes disjoint
+                x = _seg_intersect(a, b, c, d)
+                if x is not None:
+                    found[(round(x.x, 9), round(x.y, 9))] = x
+        out = list(found.values())
+        self._xings_memo = (key, out)
+        return list(out)
 
     def _show_align_guides(self, guides):
         # ensure two reusable dashed line items
@@ -2135,12 +2356,10 @@ class Canvas(QGraphicsView):
                 self._ask_offset_exact()
         elif event.key() in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up,
                              Qt.Key_Down) and self.selected_items():
-            # nudge: 1 mm, Shift 10 mm, Ctrl 0.1 mm (world Y is up on screen)
-            step = 1.0
-            if event.modifiers() & Qt.ShiftModifier:
-                step = 10.0
-            elif event.modifiers() & Qt.ControlModifier:
-                step = 0.1
+            # nudge: 1 mm, Shift 10 mm, Ctrl 0.1 mm -- or 1/16, 1/2 and 1/64 in
+            # with inches showing (world Y is up on screen)
+            step = U.nudge_step(bool(event.modifiers() & Qt.ShiftModifier),
+                                bool(event.modifiers() & Qt.ControlModifier))
             dx = {Qt.Key_Left: -step, Qt.Key_Right: step}.get(event.key(), 0.0)
             dy = {Qt.Key_Down: -step, Qt.Key_Up: step}.get(event.key(), 0.0)
             self.nudge_selected(dx, dy)
@@ -2800,6 +3019,7 @@ class Canvas(QGraphicsView):
     def _add_item(self, item):
         self.scene_obj.addItem(item)
         self._live.add(item)
+        self._set_cache_mode(item)
         return item
 
     def _remove_item(self, item) -> None:
@@ -2811,15 +3031,38 @@ class Canvas(QGraphicsView):
         self.scene_obj.removeItem(item)
 
     # -- document <-> scene --------------------------------------------
+    def _detach_reusable_shape_items(self) -> dict:
+        """Take the ShapeItems whose shape is still in the document out of the
+        scene before it is cleared, keyed by shape id, so ``rebuild`` can hand
+        them their new model instead of making them again. When the new
+        model's geometry is unchanged the item keeps its outline, snap nodes
+        and hit band (``_inherit_path``) and only re-reads its stitching, a
+        cache hit -- an undo used to rebuild every item from scratch. They go
+        back in document order, so stacking is unchanged."""
+        wanted = {sh.shape_id for sh in self.doc.shapes}
+        keep = {}
+        for it in list(self._live):
+            if not (isinstance(it, ShapeItem) and _alive(it)):
+                continue
+            sid = it.model.shape_id
+            if sid in wanted and sid not in keep:
+                keep[sid] = it
+                self.scene_obj.removeItem(it)
+        return keep
+
     def rebuild(self) -> None:
-        """Rebuild all items from the document (after open/load)."""
+        """Rebuild all items from the document (after open/load/undo). Shape
+        items are reused where the shape is still there (see
+        ``_detach_reusable_shape_items``); everything else is recreated."""
         # any drag in flight refers to items about to be freed: drop its state
         # so nothing placed below is snapped against stale targets
         self.end_move_snap()
         self.scene_obj.clearSelection()   # drop selection before freeing items
         self.selectionChangedSig.emit()   # let panels release their item refs
+        keep = self._detach_reusable_shape_items()
         self.scene_obj.clear()
         self._live.clear()
+        self._selected_other = 0
         self._underlay_item = None        # freed by scene.clear()
         self._preview = None
         self._pen_hud = None
@@ -2848,6 +3091,7 @@ class Canvas(QGraphicsView):
         self._offset_item = None
         self._offset_pts = []
         self._snap_idx = None          # items are gone; drop the stale index
+        self._xings_memo = None
         from leathercad.stitching import set_cache_capacity
         set_cache_capacity(len(self.doc.shapes) + len(self.doc.stitch_lines))
         # creating an item positions it, which reports a "move"; one
@@ -2855,7 +3099,14 @@ class Canvas(QGraphicsView):
         self._suspend_move_refresh = True
         try:
             for sh in self.doc.shapes:
-                self._add_item(ShapeItem(sh, self))
+                it = keep.pop(sh.shape_id, None)
+                if it is not None:
+                    _inherit_path(it.model, sh)
+                    it.model = sh
+                    self._add_item(it)
+                    it.sync_from_model()
+                else:
+                    self._add_item(ShapeItem(sh, self))
             for sl in self.doc.stitch_lines:
                 self._add_item(StitchLineItem(sl, self))
             for h in self.doc.holes:
@@ -2867,6 +3118,7 @@ class Canvas(QGraphicsView):
         finally:
             self._suspend_move_refresh = False
         self._moved_ids = set()
+        self._moved_items = set()
         self._keepout_sig = self._keepout_signature()
         self.update_dimensions()
         self._rebuild_underlay()
@@ -3082,12 +3334,11 @@ class Canvas(QGraphicsView):
                         f" · {U.fmt_area(a)}")
         if not rows:
             return "No closed cut pieces to measure."
-        cm2 = total_mm2 / 100.0
         sqft = total_mm2 / 92903.04
         usable = max(usable_pct, 1.0) / 100.0
         buy = sqft / usable
         scope = "selection" if sel else "whole pattern"
-        rows += ["", f"Total ({scope}): {cm2:.1f} cm²  =  {sqft:.2f} sq ft",
+        rows += ["", f"Total ({scope}): {U.fmt_area(total_mm2)}  =  {sqft:.2f} sq ft",
                  f"Buy ≈ {buy:.2f} sq ft of leather "
                  f"(assuming {usable_pct:g}% of the hide is usable)"]
         return "\n".join(rows)
@@ -3330,8 +3581,9 @@ class Canvas(QGraphicsView):
                       tail_mm: float = 150.0) -> str:
         """Estimated saddle-stitch thread for the selected stitched items (or
         everything stitched, when nothing is selected)."""
-        from leathercad.thread import estimate_thread, format_length
+        from leathercad.thread import estimate_thread
         from leathercad.stitching import holes_for_shape
+        format_length = U.fmt_long           # m / cm, or ft / in
         from leathercad.stitchsettings import StitchSettings
 
         sel = self.selected_items()
@@ -3364,8 +3616,8 @@ class Canvas(QGraphicsView):
                     "or draw a seam first.")
         scope = "selection" if sel else "whole pattern"
         rows += ["", f"Total ({scope}): ≈ {format_length(total)} of thread",
-                 f"(assumes {thickness_mm:g} mm total leather stack and "
-                 f"{tail_mm:g} mm needle tails per run — cut generously)"]
+                 f"(assumes {U.fmt(thickness_mm)} total leather stack and "
+                 f"{U.fmt(tail_mm)} needle tails per run — cut generously)"]
         return "\n".join(rows)
 
     # -- node-edit commands (right-click while editing nodes) -------------
@@ -3928,18 +4180,20 @@ class Canvas(QGraphicsView):
             return
         ordered.sort(key=lambda x: x[0])          # bottom-most first
 
-        # Shapes that don't even come near the subject take no part: a far
-        # cutter used to be deleted anyway, a far shape unioned lost its
-        # stitching, and intersecting two separate pieces deleted both.
-        def bbox(ring):
-            return (min(p.x for p in ring), min(p.y for p in ring),
-                    max(p.x for p in ring), max(p.y for p in ring))
+        # Shapes that don't meet the subject take no part: a far cutter used
+        # to be deleted anyway, a far shape unioned lost its stitching, and
+        # intersecting two separate pieces deleted both. "Meet" is geometric
+        # (overlap or touch), not a bounding-box test -- a small square in
+        # the bay of a tilted one shares its box and nothing else.
+        rings = [o[2] for o in ordered]
+        met: dict = {}
 
-        def touches(b1, b2, slack=0.05):
-            return not (b1[2] < b2[0] - slack or b2[2] < b1[0] - slack
-                        or b1[3] < b2[1] - slack or b2[3] < b1[1] - slack)
+        def meets(i, j):
+            key = (min(i, j), max(i, j))
+            if key not in met:
+                met[key] = _rings_meet(rings[i], rings[j])
+            return met[key]
 
-        boxes = [bbox(o[2]) for o in ordered]
         if op == "union":
             # a chain counts: a shape that reaches the subject through other
             # shapes is merged too
@@ -3948,14 +4202,12 @@ class Canvas(QGraphicsView):
             while grown:
                 grown = False
                 for k in range(1, len(ordered)):
-                    if k not in keep and any(touches(boxes[k], boxes[j])
-                                             for j in keep):
+                    if k not in keep and any(meets(k, j) for j in keep):
                         keep.add(k)
                         grown = True
         else:
             # a cutter that never meets the subject changes nothing
-            keep = {0} | {k for k in range(1, len(ordered))
-                          if touches(boxes[0], boxes[k])}
+            keep = {0} | {k for k in range(1, len(ordered)) if meets(0, k)}
         far = [o for k, o in enumerate(ordered) if k not in keep]
         if far:
             names = {"union": "merge", "difference": "subtract",
@@ -4573,13 +4825,16 @@ class Canvas(QGraphicsView):
     # -- nesting: pack pieces onto a leather sheet ----------------------
     def nest_selected(self, sheet_w: float, sheet_h: float, *,
                       margin: float = 5.0, spacing: float = 3.0,
-                      allow_rotate: bool = True) -> str:
+                      allow_rotate: bool = True, progress=None) -> str:
         """Pack the selected shapes (or ALL shapes if nothing is selected)
         onto a sheet_w x sheet_h mm sheet, using their real outlines. Grouped
         shapes travel as one piece; anything sitting INSIDE a piece (slots,
         hardware holes, loose stitch holes, seams, lettering) rides along.
-        Draws the sheet as a construction rectangle and returns a report."""
-        from leathercad.nesting import NestPiece, nest, rotate90
+        Draws the sheet as a construction rectangle and returns a report.
+
+        ``progress(done, total)`` is called per piece while packing; returning
+        False cancels, and nothing is moved."""
+        from leathercad.nesting import NestPiece, NestCancelled, nest, rotate90
         from leathercad.geometry import point_in_polygon
         from leathercad.shapes import Rectangle as _Rect
 
@@ -4667,9 +4922,12 @@ class Canvas(QGraphicsView):
         nest_pieces = [NestPiece(key=i, outlines=pc["outlines"],
                                  allow_rotate=allow_rotate)
                        for i, pc in enumerate(pieces)]
-        placements, unplaced, used = nest(
-            nest_pieces, sheet_w, sheet_h,
-            margin=margin, spacing=spacing, sheet_x=sx, sheet_y=sy)
+        try:
+            placements, unplaced, used = nest(
+                nest_pieces, sheet_w, sheet_h, margin=margin, spacing=spacing,
+                sheet_x=sx, sheet_y=sy, progress=progress)
+        except NestCancelled:
+            return "Nesting cancelled — nothing was moved."
         if not placements:
             return ("No piece fits the sheet — try a bigger sheet, a smaller "
                     "margin, or allow rotation.")
@@ -4710,7 +4968,37 @@ class Canvas(QGraphicsView):
         sheet.construction = True
         self.doc.add_shape(sheet)
 
-        self.rebuild()
+        # 7. move the scene items with their models instead of rebuilding
+        # the whole scene (~25 s after a big nest): a shifted piece is just
+        # re-positioned, a turned one re-oriented (its stitching is a cache
+        # hit), and the riders re-read their moved models
+        turned, rider_ids = set(), set()
+        for pl in placements:
+            pc = pieces[pl.key]
+            if pl.rotated:
+                turned.update(id(it) for it in pc["shapes"])
+            rider_ids.update(id(x) for x in pc["holes"] + pc["seams"]
+                             + pc["texts"])
+        self._suspend_move_refresh = True
+        try:
+            for pl in placements:
+                for it in pieces[pl.key]["shapes"]:
+                    if not _alive(it):
+                        continue
+                    if id(it) in turned:
+                        it.sync_from_model()
+                    else:
+                        t = it.model.transform
+                        it.setPos(t.x, t.y)
+            if rider_ids:
+                for it in list(self._live):
+                    m = self._item_model(it)
+                    if m is not None and id(m) in rider_ids and _alive(it):
+                        it.sync_from_model()
+            self._add_item(ShapeItem(sheet, self))
+        finally:
+            self._suspend_move_refresh = False
+        self._move_refresh()
         self.documentChangedSig.emit()
         self._emit_commit()
 
@@ -4778,8 +5066,40 @@ class Canvas(QGraphicsView):
 
     def _emit_commit(self) -> None:
         if not self._suppress_commit:
+            if self._move_refresh_pending:
+                # the trailing coalesced refresh: run it now, so the snapshot
+                # about to be taken holds the dimensions where they ended up
+                self._flush_move_refresh()
             self._refresh_keepout_dependents()
+            self._refit_moved_near_keepouts()
             self.commitRequested.emit()
+
+    def _refit_moved_near_keepouts(self) -> None:
+        """A stitched piece or seam that MOVED since the last commit re-fits
+        its holes when the hardware near it is not what it was fitted for:
+        dragged under a snap, the seam parts round it; dragged away, the
+        holes come back. Nudges and typed moves re-sync anyway; a mouse drag
+        only repositions the item, and the pass above looks at hardware that
+        moved, not at pieces. Nothing is computed when the file has no
+        hardware at all."""
+        moved, self._moved_items = self._moved_items, set()
+        if not moved or not self._keepout_sig:
+            return
+        from leathercad.hardware import keepouts_for_shape, keepouts_near
+        for it in moved:
+            if not _alive(it):
+                continue
+            if isinstance(it, ShapeItem):
+                st = it.model.stitch
+                if st is None or not st.enabled or it.model.baked_holes:
+                    continue
+                keep = tuple(keepouts_for_shape(it.model, self.doc))
+            elif isinstance(it, StitchLineItem):
+                keep = tuple(keepouts_near(it.line.points, self.doc))
+            else:
+                continue
+            if keep != getattr(it, "_keep_used", ()):
+                it.sync_from_model()
 
     def _seam_keepouts(self, line):
         from leathercad.hardware import keepouts_near
@@ -5307,6 +5627,7 @@ class Canvas(QGraphicsView):
         self._emit_commit()
 
     def item_moved(self, item) -> None:
+        self._moved_items.add(item)     # re-fit near hardware on commit
         if self._suspend_move_refresh:
             return      # bulk op (duplicate/array): one refresh happens at end
         self._moved_during_press = True
@@ -5350,12 +5671,17 @@ class Canvas(QGraphicsView):
         # TextItem is tracked too: it plugs into the shared resize/rotate grips
         # (it exposes resize_extents/resize_center/set_resize_extents), so a lone
         # selected text gets box handles just like a shape.
-        if item is not None and selected is not None and isinstance(
-                item, (ShapeItem, TextItem)):
-            if selected:
-                self._selected_shapes.add(item)
+        if item is not None and selected is not None:
+            if isinstance(item, (ShapeItem, TextItem)):
+                if selected:
+                    self._selected_shapes.add(item)
+                else:
+                    self._selected_shapes.discard(item)
             else:
-                self._selected_shapes.discard(item)
+                # loose holes, seams, dimensions: counted too, so a band over
+                # 2,000 ungrouped holes settles its grips once, like a group
+                self._selected_other = max(
+                    0, self._selected_other + (1 if selected else -1))
         if self._edit_owner is not None and not self._edit_owner.isSelected():
             self.clear_vertex_handles()
         self._refresh_resize_handles()
@@ -5387,7 +5713,10 @@ class Canvas(QGraphicsView):
         (a group of 2000 selected by one click took 48 s) is settled once:
         batched selections refresh at their end, and any other burst of a
         multi-selection once, on the next event-loop turn."""
-        if not now and (self._sel_batch or len(self._selected_shapes) > 2):
+        # (a small group with a hole or a seam in it still refreshes at once,
+        # as before; the other-item count only matters when it's a flood)
+        if not now and (self._sel_batch or len(self._selected_shapes) > 2
+                        or self._selected_other > 50):
             if not self._sel_batch and not self._grips_pending:
                 self._grips_pending = True
                 QTimer.singleShot(0, self._flush_grips)
@@ -5423,6 +5752,8 @@ class Canvas(QGraphicsView):
 
     def _flush_grips(self) -> None:
         self._grips_pending = False
+        if self._active_resize is not None:
+            return          # mid-drag: rebuilding the grips would kill the drag
         self._refresh_resize_handles(now=True)
 
     def _set_selected_many(self, items, want: bool = True) -> None:
@@ -5536,9 +5867,10 @@ class Canvas(QGraphicsView):
     def set_line_width(self, w: float) -> None:
         self.line_width = max(0.2, w)
         # the width is read in paint(); nothing else marks the items dirty, so
-        # invalidate the scene now or the change wouldn't show until the next
-        # unrelated redraw (a click, a zoom, a move).
-        self.scene_obj.update()
+        # invalidate them now or the change wouldn't show until the next
+        # unrelated redraw (a click, a zoom, a move) -- and a device-cached
+        # item wouldn't show it at all
+        self._repaint_items()
 
     def preview_color(self) -> QColor:
         """Colour for the in-progress drawing preview (user's draw colour, or a
@@ -5686,27 +6018,29 @@ class Canvas(QGraphicsView):
         # every new HoleItem's first setPos reports a "move": with 2,600 of
         # them that was 2,600 Properties readouts -- one refresh at the end
         self._suspend_move_refresh = True
-        for it in list(self.selected_items()):
-            if isinstance(it, ShapeItem):
-                sh = it.model
-                res, style = self._shape_world_holes(sh)
-                if res and res.count:
-                    made += self._explode(res, style, sh.group_id,
-                                          sh.transform.mirror_x)
-                    sh.baked_holes = None
-                    if sh.stitch:
-                        sh.stitch.enabled = False
-                    it.sync_from_model()
-            elif isinstance(it, StitchLineItem):
-                it._bake_move()              # holes go where the seam is drawn
-                res = it.line.result(self._seam_keepouts(it.line))
-                if res.count:
-                    made += self._explode(res, it.line.settings,
-                                          it.line.group_id)
-                    self.doc.remove_stitch_line(it.line)
-                    self._remove_item(it)
-        self._suppress_commit = False
-        self._suspend_move_refresh = False
+        try:
+            for it in list(self.selected_items()):
+                if isinstance(it, ShapeItem):
+                    sh = it.model
+                    res, style = self._shape_world_holes(sh)
+                    if res and res.count:
+                        made += self._explode(res, style, sh.group_id,
+                                              sh.transform.mirror_x)
+                        sh.baked_holes = None
+                        if sh.stitch:
+                            sh.stitch.enabled = False
+                        it.sync_from_model()
+                elif isinstance(it, StitchLineItem):
+                    it._bake_move()          # holes go where the seam is drawn
+                    res = it.line.result(self._seam_keepouts(it.line))
+                    if res.count:
+                        made += self._explode(res, it.line.settings,
+                                              it.line.group_id)
+                        self.doc.remove_stitch_line(it.line)
+                        self._remove_item(it)
+        finally:
+            self._suppress_commit = False
+            self._suspend_move_refresh = False
         if made:
             self.scene_obj.clearSelection()
             self._set_selected_many(made)
@@ -5772,6 +6106,7 @@ class Canvas(QGraphicsView):
         new.transform = sh.transform
         copy_shape_attrs(sh, new, holes=True)
         new.stitch = sh.stitch
+        new.shape_id = sh.shape_id      # dimensions attached to it stay attached
 
         idx = self.doc.shapes.index(sh)
         self.doc.shapes[idx] = new

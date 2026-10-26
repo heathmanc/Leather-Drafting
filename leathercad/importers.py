@@ -44,6 +44,10 @@ def _shape_from_ring(pts: List[Vec2], closed: bool,
         closed = True
     if closed and len(pts) >= 2 and (pts[0] - pts[-1]).length() < 1e-6:
         pts = pts[:-1]
+    # a doubled vertex (an SVG path that repeats a corner, "L 60 0 L 60 0")
+    # is no edge and would hide the corner's turn behind a zero-length step
+    from .shapes import _dedupe_points, path_corner_flags
+    pts = _dedupe_points(list(pts), closed)
     if len(pts) < 2:
         return None
     cx = sum(p.x for p in pts) / len(pts)
@@ -53,7 +57,6 @@ def _shape_from_ring(pts: List[Vec2], closed: bool,
     if closed and len(local) >= 3:
         # a traced curve's facets are no corners, but a drawn rectangle's
         # are: flag the real turns so their inset corners get a hole
-        from .shapes import path_corner_flags
         return Polygon(points=local, close_path=True, sharp_corners=False,
                        corner_mask=path_corner_flags(local, True),
                        transform=t, layer=layer)

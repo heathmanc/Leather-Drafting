@@ -298,7 +298,8 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
   For exact turns use **Arrange → Rotate 90° clockwise** (`Ctrl+]`),
   **counter-clockwise** (`Ctrl+[`), **180°** or **Rotate by…**.
 * **Nudge**: with something selected, the **arrow keys** move it 1 mm
-  (**Shift** 10 mm, **Ctrl** 0.1 mm). A group moves whole.
+  (**Shift** 10 mm, **Ctrl** 0.1 mm) — or, with inches showing, 1/16 in
+  (**Shift** ½ in, **Ctrl** 1/64 in). A group moves whole.
 * **Mirror / flip**: **Arrange → Flip horizontal** (`Shift+H`) and **Flip
   vertical** (`Shift+V`) mirror the selection in place about its centre;
   **Mirror across selected line** uses a selected 2-point line or guide as
@@ -462,7 +463,9 @@ and starts again past it** — no hole ends up under a cap — on shapes and on
 drawn seams alike, and it re-flows as you drag the hardware about. A dashed
 ring shows the keep-out when the part is selected; **Properties → Stitch
 keep-out** changes it (0 removes it), and **right-click → Stitch keep-out…**
-gives *any* shape one, so a hole you drew yourself works the same way.
+gives *any* shape one, so a hole you drew yourself works the same way. A
+keep-out counts whether or not its layer is showing: hidden hardware is still
+in the pattern, so the seam still parts round it.
 
 ### Fold allowance
 
@@ -584,7 +587,9 @@ extra construction.
   report, and **Allow 90° rotation** can be turned off when grain or stretch
   direction matters. Pieces are placed biggest-first; it aims for a tight,
   sensible layout, not a mathematically perfect one — nudge afterwards if
-  you spot a better pocket.
+  you spot a better pocket. A hide's worth of pieces takes a few seconds: a
+  progress bar counts them as they are placed, and **Cancel** leaves the
+  drawing exactly as it was.
 * **Fillet / chamfer** (`6`) — with this tool active, a **radius box** and a
   **Round / Chamfer** selector appear in the top toolbar; type the radius
   (it's remembered), pick the mode, then click any corner of a polygon or
@@ -862,7 +867,7 @@ what the **Stitch line** tool is for.
 | `Shift+H` / `Shift+V` | Flip horizontal / vertical in place |
 | `Ctrl+Shift+E` / `Ctrl+Shift+M` | Scale… / Move by… |
 | `Ctrl+]` / `Ctrl+[` | Rotate selection 90° clockwise / counter-clockwise |
-| Arrow keys | Nudge 1 mm (Shift 10 mm, Ctrl 0.1 mm) |
+| Arrow keys | Nudge 1 mm (Shift 10 mm, Ctrl 0.1 mm); in inches 1/16 in (Shift ½ in, Ctrl 1/64 in) |
 | `F` | Fit view to content |
 | `Ctrl+1` / `Ctrl+2` | Properties / Layers panel |
 | `Esc` | Cancel in-progress shape; again → Select tool |

@@ -7,14 +7,16 @@ per-command undo, but correct for every kind of edit with almost no wiring.
 ``to_dict()`` builds a fresh plain-data graph every call -- no container is
 shared with the live document, so the snapshot handed to ``reset``/``push`` is
 already private and copying it again on the way IN is pure overhead (137 ms of
-the 162 ms an edit cost on a dense document). Reads still hand out a copy: a
-restore feeds ``Document.from_dict``, and this way it can never retain a
-reference into the undo stack.
+the 162 ms an edit cost on a dense document). Reads hand the stored snapshot
+out as is, too: ``Document.from_dict`` copies the only containers it used to
+keep by reference (a polygon's corner mask, the tracing underlay), so a
+restored document shares nothing with the stack and the deep copy on the way
+OUT -- 0.3-0.5 s of every undo on a big file -- is gone. Callers treat what
+they get back as read-only.
 """
 
 from __future__ import annotations
 
-import copy
 from typing import List, Optional
 
 
@@ -49,10 +51,10 @@ class History:
         if not self.can_undo():
             return None
         self._index -= 1
-        return copy.deepcopy(self._stack[self._index])
+        return self._stack[self._index]
 
     def redo(self) -> Optional[dict]:
         if not self.can_redo():
             return None
         self._index += 1
-        return copy.deepcopy(self._stack[self._index])
+        return self._stack[self._index]

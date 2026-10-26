@@ -23,7 +23,11 @@ def length_spin(lo_mm: float, hi_mm: float, decimals: int = 2,
     """A length field in the display unit whose value() is millimetres."""
     sp = MathSpinBox()
     sp.setRange(lo_mm, hi_mm)
-    sp.setDecimals(decimals)
+    # the field keeps the exact millimetres (a typed 1/8 in is 3.175, not
+    # 3.2) and trims the zeros it doesn't need, so ``decimals`` is the least
+    # it shows, not a rounding of the stored value
+    sp.setDecimals(max(decimals, 4))
+    sp.trim_zeros = True
     sp.physical = True
     U.register_spin(sp)
     if value_mm is not None:

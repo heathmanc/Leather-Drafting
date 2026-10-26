@@ -178,7 +178,9 @@ def _shape_from_dict(d: dict) -> Shape:
         sh = Polygon(points=pts, corner_radius=d.get("corner_radius", 0.0),
                      close_path=d.get("close_path", True),
                      sharp_corners=d.get("sharp_corners", True),
-                     corner_mask=d.get("corner_mask"), **common)
+                     corner_mask=(list(d["corner_mask"])
+                                  if d.get("corner_mask") is not None
+                                  else None), **common)
     elif kind == "path":
         pts = [Vec2(x, y) for x, y in d.get("points", [])]
         sh = PathShape(points=pts, close_path=d.get("close_path", False), **common)
@@ -329,7 +331,9 @@ class Document:
             "dimensions": [dm.to_dict() for dm in self.dimensions],
             "texts": [tx.to_dict() for tx in self.texts],
             "kerf": self.kerf,
-            "underlay": self.underlay,
+            # a private copy: the snapshot lives on in the undo stack while
+            # the live underlay is moved and scaled in place
+            "underlay": dict(self.underlay) if self.underlay else None,
             "params": dict(self.params),
             "bindings": dict(self.bindings),
         }
@@ -349,7 +353,9 @@ class Document:
         from .text import TextShape
         doc.texts = [TextShape.from_dict(x) for x in d.get("texts", [])]
         doc.kerf = float(d.get("kerf", 0.0))
-        doc.underlay = d.get("underlay") or None
+        # never share a container with the dict: an undo snapshot is handed
+        # here as is, and must survive every later edit of the live document
+        doc.underlay = dict(d["underlay"]) if d.get("underlay") else None
         doc.params = dict(d.get("params", {}))
         doc.bindings = dict(d.get("bindings", {}))
         _advance_id_counters(doc)

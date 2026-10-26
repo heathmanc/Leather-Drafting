@@ -37,7 +37,8 @@ def test_formatting_and_conversion():
     assert units.fmt_area(645.16) == "1.00 sq in"
     assert units.has_explicit_unit("10mm") and units.has_explicit_unit("1/2 in")
     assert not units.has_explicit_unit("3/8") and not units.has_explicit_unit("w*2")
-    assert Dimension(Vec2(0, 0), Vec2(25.4, 0)).label("in") == "1.000 in"
+    assert Dimension(Vec2(0, 0), Vec2(25.4, 0)).label("in") == "1 in"
+    assert Dimension(Vec2(0, 0), Vec2(12.7, 0)).label("in") == "0.5 in"
 
 
 def test_length_fields_show_and_take_inches(qapp):

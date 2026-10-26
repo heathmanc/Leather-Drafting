@@ -225,7 +225,10 @@ def _apply_kerf(outlines, cuttable, kerf: float):
         step = max(1, len(ring_i) // 12)
         sample = ring_i[::step]
         depth = 0
-        bi = boxes.get(i)
+        # the box of the SAMPLED vertices (the ones the containment test
+        # looks at), so the prefilter never rules out a pair the full test
+        # would have accepted
+        bi = bbox(sample) if sample else None
         for j in rings:
             if j == i:
                 continue

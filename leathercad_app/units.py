@@ -88,13 +88,13 @@ def nudge_step(big: bool = False, fine: bool = False) -> float:
     return 10.0 if big else (0.1 if fine else 1.0)
 
 
-_EXPLICIT_UNIT = re.compile(r"\d\s*(mm|cm|in)\b", re.IGNORECASE)
-
-
 def has_explicit_unit(text: str) -> bool:
-    """True if a typed value names its own unit (``10mm``, ``1/2in``), so it
-    must not be read as the display unit."""
-    return bool(_EXPLICIT_UNIT.search(text))
+    """True if a typed value names its own unit (``10mm``, ``1/2in``,
+    ``(1+1)in``), so it must not be read as the display unit. Decided by the
+    evaluator itself, so the two can never disagree (a parenthesised inch
+    value used to be converted twice)."""
+    from leathercad.expr import has_unit
+    return has_unit(text)
 
 
 def register_spin(spin) -> None:

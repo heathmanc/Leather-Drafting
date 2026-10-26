@@ -13,7 +13,8 @@ from typing import List, Optional
 
 import time
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtWidgets import QGraphicsSceneMouseEvent
 from PySide6.QtGui import (QColor, QCursor, QPainter, QPen, QPainterPath,
                            QPixmap, QPolygonF, QTransform)
 from PySide6.QtWidgets import (QGraphicsScene, QGraphicsView, QGraphicsPathItem,
@@ -49,9 +50,12 @@ except Exception:  # pragma: no cover
 
 
 def _rings_meet(a, b, slack: float = 0.05) -> bool:
-    """Do two closed rings overlap or touch? A vertex of either inside the
-    other or within ``slack`` of its outline, or two edges crossing. Edges
-    are only tested where the two boxes overlap."""
+    """Do two closed rings overlap or touch? A vertex of either within
+    ``slack`` of the other's outline or inside it, or two edges crossing.
+    Only the part of each ring inside the two boxes' overlap is looked at,
+    and edges are bucketed on a grid there, so a dense traced ring sitting
+    in the bay of another (boxes overlapping, outlines apart) is answered in
+    milliseconds rather than by testing every vertex against every edge."""
     from leathercad.geometry import point_in_polygon
     from leathercad.trim import _seg_intersect
 
@@ -63,31 +67,12 @@ def _rings_meet(a, b, slack: float = 0.05) -> bool:
     if (ba[2] < bb[0] - slack or bb[2] < ba[0] - slack
             or ba[3] < bb[1] - slack or bb[3] < ba[1] - slack):
         return False
-    s2 = slack * slack
-
-    def near_edge(p, ring):
-        n = len(ring)
-        for k in range(n):
-            u, v = ring[k], ring[(k + 1) % n]
-            d = v - u
-            l2 = d.length_sq()
-            t = 0.0 if l2 <= 1e-18 else max(0.0, min(1.0, (p - u).dot(d) / l2))
-            q = u + d * t
-            if (p - q).length_sq() <= s2:
-                return True
-        return False
-
-    for ring, other, ob in ((a, b, bb), (b, a, ba)):
-        for p in ring:
-            if (ob[0] - slack <= p.x <= ob[2] + slack
-                    and ob[1] - slack <= p.y <= ob[3] + slack):
-                if point_in_polygon(p, other) or near_edge(p, other):
-                    return True
-    # crossing edges with no vertex inside (two bars making a plus)
     ov = (max(ba[0], bb[0]) - slack, max(ba[1], bb[1]) - slack,
           min(ba[2], bb[2]) + slack, min(ba[3], bb[3]) + slack)
+    cell = max((ov[2] - ov[0]) / 48.0, (ov[3] - ov[1]) / 48.0, 4.0 * slack)
+    s2 = slack * slack
 
-    def in_overlap(r):
+    def edges_in(r):
         n = len(r)
         out = []
         for k in range(n):
@@ -98,13 +83,57 @@ def _rings_meet(a, b, slack: float = 0.05) -> bool:
             out.append((u, v))
         return out
 
-    ea, eb = in_overlap(a), in_overlap(b)
-    if len(ea) * len(eb) > 250_000:
-        return True                   # too tangled to tell cheaply: assume so
-    for u, v in ea:
-        for w, x in eb:
-            if _seg_intersect(u, v, w, x) is not None:
+    def cells_of(u, v):
+        ix0, ix1 = sorted((int(u.x // cell), int(v.x // cell)))
+        iy0, iy1 = sorted((int(u.y // cell), int(v.y // cell)))
+        return [(ix, iy) for ix in range(ix0, ix1 + 1) for iy in range(iy0, iy1 + 1)]
+
+    def grid_of(edges):
+        g: dict = {}
+        for e in edges:
+            for c in cells_of(*e):
+                g.setdefault(c, []).append(e)
+        return g
+
+    def near_edge(p, grid):
+        cx, cy = int(p.x // cell), int(p.y // cell)
+        for gx in (cx - 1, cx, cx + 1):
+            for gy in (cy - 1, cy, cy + 1):
+                for u, v in grid.get((gx, gy), ()):
+                    d = v - u
+                    l2 = d.length_sq()
+                    t = 0.0 if l2 <= 1e-18 else max(0.0, min(1.0, (p - u).dot(d) / l2))
+                    q = u + d * t
+                    if (p - q).length_sq() <= s2:
+                        return True
+        return False
+
+    ea, eb = edges_in(a), edges_in(b)
+    ga, gb = grid_of(ea), grid_of(eb)
+    for ring, other, ob, og in ((a, b, bb, gb), (b, a, ba, ga)):
+        inside_box = [p for p in ring
+                      if ob[0] - slack <= p.x <= ob[2] + slack
+                      and ob[1] - slack <= p.y <= ob[3] + slack]
+        for p in inside_box:
+            if near_edge(p, og):
+                return True               # touching
+        # a ring wholly inside the other has every vertex inside, so a sample
+        # settles containment; a partial overlap shows up as crossing edges
+        step = max(1, len(inside_box) // 32)
+        for p in inside_box[::step]:
+            if point_in_polygon(p, other):
                 return True
+    # crossing edges with no vertex inside (two bars making a plus)
+    seen = set()
+    for u, v in ea:
+        for c in cells_of(u, v):
+            for e in gb.get(c, ()):
+                k = (id(u), id(e[0]))
+                if k in seen:
+                    continue
+                seen.add(k)
+                if _seg_intersect(u, v, e[0], e[1]) is not None:
+                    return True
     return False
 
 
@@ -531,7 +560,9 @@ class Canvas(QGraphicsView):
 
     def _update_cache_modes(self) -> None:
         for it in list(getattr(self, "_live", ())):
-            self._set_cache_mode(it)
+            if isinstance(it, ShapeItem) and _alive(it):
+                it.refresh_pad()        # the cosmetic stroke's width in mm moved
+                self._set_cache_mode(it)
 
     def _repaint_items(self) -> None:
         """Mark every drawing item dirty. A scene-wide update alone redraws a
@@ -570,11 +601,16 @@ class Canvas(QGraphicsView):
                 continue
             if not it.isVisible():
                 continue
+            # a shape's scene rect carries a zoom-dependent stroke pad (see
+            # ShapeItem.refresh_pad); fit to the drawing itself, so fitting
+            # twice gives the same view
+            r = (it.mapRectToScene(it.content_rect()) if isinstance(it, ShapeItem)
+                 else it.sceneBoundingRect())
             if isinstance(it, ShapeItem) and getattr(it.model, "construction",
                                                      False):
-                guides = guides.united(it.sceneBoundingRect())
+                guides = guides.united(r)
                 continue
-            rect = rect.united(it.sceneBoundingRect())
+            rect = rect.united(r)
         if rect.isNull():
             rect = guides                 # nothing but guides: show those
         if rect.isNull():
@@ -699,8 +735,13 @@ class Canvas(QGraphicsView):
         if isinstance(it, ShapeItem):
             p = it.pos()
             t = it.model.transform
+            # _holes is a fresh object on every sync, so a stitch-only edit
+            # (pitch, an unsewn edge, a keep-out) re-indexes the hole points
+            # even though the outline object is kept
             return (id(it._outline), len(it._outline),
                     id(getattr(it, "_snap_typed_local", None)),
+                    id(getattr(it, "_holes", None)),
+                    len(getattr(it, "_hole_locals", ())),
                     round(p.x(), 6), round(p.y(), 6),
                     round(getattr(t, "rotation", 0.0), 6),
                     bool(getattr(t, "mirror_x", False)))
@@ -748,7 +789,11 @@ class Canvas(QGraphicsView):
             changed = [oid for oid, rec in sig.items()
                        if oid not in old or old[oid][1] != rec[1]]
             gone = [oid for oid in old if oid not in sig]
-            if len(changed) + len(gone) <= max(16, len(sig) // 4):
+            # a patch keeps the grid's cell size; once the drawing's extent
+            # has outgrown (or shrunk under) it by half, rebuild instead
+            cell_now = self._index_cell(sig)
+            fits = 0.5 <= cell_now / idx["cell"] <= 2.0
+            if fits and len(changed) + len(gone) <= max(16, len(sig) // 4):
                 for oid in gone:
                     self._index_remove(idx, oid)
                 for oid in changed:
@@ -756,13 +801,17 @@ class Canvas(QGraphicsView):
                     self._index_insert(idx, sig[oid][0])
                 self._index_finish(idx, sig)
                 return idx
+        Canvas._index_serial += 1
         idx = {"cell": self._index_cell(sig), "pgrid": {}, "egrid": {},
-               "spread": [], "owners": {}, "gen": 0}
+               "spread": [], "owners": {}, "gen": 0,
+               "serial": Canvas._index_serial}
         for it, _s in sig.values():
             self._index_insert(idx, it)
         self._index_finish(idx, sig)
         self._snap_idx = idx
         return idx
+
+    _index_serial = 0        # every full build gets a fresh number (memo keys)
 
     @staticmethod
     def _index_cell(sig) -> float:
@@ -826,6 +875,7 @@ class Canvas(QGraphicsView):
             # pin the objects whose ids the signature fingerprinted
             "refs": (getattr(it, "_outline", None),
                      getattr(it, "_snap_typed_local", None),
+                     getattr(it, "_holes", None),
                      getattr(getattr(it, "line", None), "points", None)),
         }
 
@@ -1135,7 +1185,7 @@ class Canvas(QGraphicsView):
             pad = 0.5 * max(vr.width(), vr.height())
             vr = vr.adjusted(-pad, -pad, pad, pad)
             bound = (vr.left(), vr.top(), vr.right(), vr.bottom())
-        key = (id(idx), idx["gen"], excl_ids,
+        key = (idx["serial"], idx["gen"], excl_ids,
                tuple(round(v, 3) for v in bound) if bound else None)
         memo = self._xings_memo
         if memo is not None and memo[0] == key:
@@ -3057,6 +3107,21 @@ class Canvas(QGraphicsView):
         # any drag in flight refers to items about to be freed: drop its state
         # so nothing placed below is snapped against stale targets
         self.end_move_snap()
+        grabber = self.scene_obj.mouseGrabberItem()
+        if grabber is not None and _alive(grabber):
+            # a drag interrupted by undo / redo: let Qt finish it -- that is
+            # where it forgets the dragged items' start positions -- before
+            # the items it refers to are reused or freed, or the next drag
+            # of a reused item would jump by the stale offset
+            ev = QGraphicsSceneMouseEvent(QEvent.GraphicsSceneMouseRelease)
+            ev.setButton(Qt.LeftButton)
+            ev.setButtons(Qt.NoButton)
+            try:
+                self.scene_obj.sendEvent(grabber, ev)
+            except Exception:            # pragma: no cover - defensive
+                pass
+            if self.scene_obj.mouseGrabberItem() is not None:
+                self.scene_obj.mouseGrabberItem().ungrabMouse()
         self.scene_obj.clearSelection()   # drop selection before freeing items
         self.selectionChangedSig.emit()   # let panels release their item refs
         keep = self._detach_reusable_shape_items()
@@ -4259,16 +4324,33 @@ class Canvas(QGraphicsView):
                     out.append(_is_real_corner(ring[i - 1], p,
                                                ring[(i + 1) % n]))
             return out
+        # Shapes that met only within the slack (a hair's gap, a corner
+        # touch) may come back from combine() exactly as they went in: that
+        # is nothing to do, not a result to swap in -- a union used to turn
+        # them into polygons and strip one's stitching, a difference deleted
+        # the cutter, an intersection deleted both.
+        in_areas = sorted(abs(signed_area(r)) for _i, _it, r in ordered)
+        out_areas = sorted(abs(signed_area(r)) for r in result)
+
+        def same(xs, ys):
+            return (len(xs) == len(ys)
+                    and all(abs(x - y) <= 1e-6 * max(1.0, x) for x, y in zip(xs, ys)))
+        names = {"union": "merge", "difference": "subtract",
+                 "intersection": "intersect"}
+        subject_area = [abs(signed_area(ordered[0][2]))]
+        noop = (not result
+                or (op == "union" and same(in_areas, out_areas))
+                or (op == "difference" and same(subject_area, out_areas)))
+        if noop:
+            self.statusMessage.emit(
+                f"Nothing to {names.get(op, op)}: the shapes only touch, so "
+                "they were left as they are")
+            return
         keep_stitch = _copy.deepcopy(base.stitch)
         layer, opacity = base.layer, base.opacity
         for _i, it, _r in ordered:
             self.doc.remove_shape(it.model)
             self._remove_item(it)
-        if not result:
-            self.statusMessage.emit("Nothing left after the operation")
-            self.documentChangedSig.emit()
-            self._emit_commit()
-            return
         result.sort(key=lambda r: -abs(signed_area(r)))
         first_item = None
         made = []
@@ -5070,6 +5152,11 @@ class Canvas(QGraphicsView):
                 # the trailing coalesced refresh: run it now, so the snapshot
                 # about to be taken holds the dimensions where they ended up
                 self._flush_move_refresh()
+            for it in self._moved_items:
+                if _alive(it):
+                    # a device-cached item moved by a fraction of a pixel is
+                    # blitted at its old sub-pixel phase: repaint it in place
+                    it.update()
             self._refresh_keepout_dependents()
             self._refit_moved_near_keepouts()
             self.commitRequested.emit()

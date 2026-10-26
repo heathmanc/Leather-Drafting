@@ -31,11 +31,11 @@ class History:
         self._index = 0
 
     def push(self, state: dict) -> None:
-        # drop any redo tail
+        if 0 <= self._index < len(self._stack) and self._stack[self._index] == state:
+            return  # nothing actually changed: keep any redo tail
+        # drop the redo tail
         if self._index < len(self._stack) - 1:
             del self._stack[self._index + 1:]
-        if self._stack and self._stack[-1] == state:
-            return  # nothing actually changed
         self._stack.append(state)
         if len(self._stack) > self._limit:
             self._stack.pop(0)

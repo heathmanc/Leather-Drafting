@@ -30,18 +30,28 @@ def _polyline_len(pts: List[Vec2], closed: bool = False) -> float:
 def _looks_like_pairs(pts, spacing: float) -> bool:
     """True when a bare hole list is laid out as interleaved pairs -- hole 0
     beside hole 1 a row spacing apart, then the next station. The pair gaps
-    must be the row spacing (within 10 %) AND the gaps between stations
-    must be longer than it: in a row-major list every gap is the pitch, so
-    a pitch near the row spacing (an ordinary 3.85 mm iron with 3 mm rows,
-    fitted to 3.7 on a short edge) used to pass as pairs and the thread
-    estimate came out a third high."""
+    must be the row spacing (within 10 %) AND each pair must sit ACROSS the
+    seam: the step from hole 0 to hole 1 is at a steep angle (over 45
+    degrees) to the step from hole 0 to hole 2, the next station. In a
+    row-major list every step runs along the row, so a pitch near the row
+    spacing (an ordinary 3.85 mm iron with 3 mm rows, fitted to 3.7 on a
+    short edge) is no longer read as pairs; and fine stations (a 1.5 mm
+    pitch with 3.5 mm rows) still are."""
     n = len(pts)
-    pair = [distance(pts[i], pts[i + 1]) for i in range(0, min(n - 1, 8), 2)]
-    between = [distance(pts[i], pts[i + 1]) for i in range(1, min(n - 1, 8), 2)]
-    if not pair or not between:
+    if n < 4:
         return False
-    return (all(abs(g - spacing) < 0.1 * spacing for g in pair)
-            and all(g > 1.1 * spacing for g in between))
+    stations = range(0, min(n - 2, 8), 2)
+    for i in stations:
+        if abs(distance(pts[i], pts[i + 1]) - spacing) >= 0.1 * spacing:
+            return False
+        u = pts[i + 1] - pts[i]                 # across the pair
+        v = pts[i + 2] - pts[i]                 # on to the next station
+        lu, lv = u.length(), v.length()
+        if lu <= 1e-9 or lv <= 1e-9:
+            return False
+        if abs(u.cross(v)) <= 0.7 * lu * lv:    # sin < 0.7: along the row
+            return False
+    return True
 
 
 def estimate_thread(res, settings, thickness_mm: float = 3.0,
@@ -66,9 +76,10 @@ def estimate_thread(res, settings, thickness_mm: float = 3.0,
     # holes are laid out; a bare list of holes is one run.
     want_rows = int(getattr(settings, "rows", 1) or 1)
     spacing = float(getattr(settings, "row_spacing", 3.0) or 3.0)
+    extra_tails = 0.0
     bare_double = (getattr(res, "layout", None) is None
                    and getattr(res, "rows", 1) == 1 and want_rows == 2
-                   and n >= 4)
+                   and n >= 4 and not getattr(res, "fitted", False))
     if bare_double and _looks_like_pairs(pts, spacing):
         # a bare hole list stored as aligned pairs (row A, row B) per station,
         # the way rows used to be kept -- the pairs really are a row spacing
@@ -77,11 +88,13 @@ def estimate_thread(res, settings, thickness_mm: float = 3.0,
         rows = 2
     elif bare_double:
         # attached (baked) holes of a double row come row-major with no
-        # pairing left: sew them as one run, which is what a hand-sewn pair
-        # of rows costs within a tail or two (reading them as pairs doubled
-        # the seam)
+        # pairing left: sew them as one run of thread, plus the tails of the
+        # second row's own run (reading them as pairs doubled the seam;
+        # costing them as one run shorted the tails by a third on a small
+        # piece)
         seqs = [list(range(n))]
         rows = 2
+        extra_tails = 2.0 * tail_mm
     elif hasattr(res, "sequences"):
         seqs = res.sequences()
         rows = max(1, int(getattr(res, "rows", 1) or 1))
@@ -107,7 +120,7 @@ def estimate_thread(res, settings, thickness_mm: float = 3.0,
         seam_total += seam
         thread += per_run
     return {"seam_mm": seam_total, "holes": n, "rows": rows,
-            "thread_mm": thread}
+            "thread_mm": thread + extra_tails}
 
 
 def format_length(mm: float) -> str:

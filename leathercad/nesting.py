@@ -286,5 +286,7 @@ def nest(pieces: Sequence[NestPiece], sheet_w: float, sheet_h: float, *,
             dx=(sheet_x + margin + ox * cell) - mx0,
             dy=(sheet_y + margin + oy * cell) - my0,
             rotated=rot, pivot=pivot))
+    if progress is not None:
+        progress(len(order), len(order))        # done: the bar reaches the end
     used = cells_used * cell * cell / max(sheet_w * sheet_h, _EPS)
     return placements, unplaced, min(1.0, used)

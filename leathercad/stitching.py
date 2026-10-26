@@ -185,6 +185,15 @@ def march_chord(poly: Polyline, pitch: float, start_s: float = 0.0,
     return result
 
 
+def _trim_wrap(positions: List[float], total: float, closed: bool) -> List[float]:
+    """An exact-pitch march round a closed ring whose perimeter is a whole
+    number of pitches ends ON its start hole: that last position is hole 0
+    again, not a new hole (it was punched twice)."""
+    if closed and len(positions) > 1 and positions[-1] >= total - 1e-6:
+        return positions[:-1]
+    return positions
+
+
 def march_arclength(poly: Polyline, pitch: float, start_s: float = 0.0,
                     end_s: Optional[float] = None) -> List[float]:
     """Naive arc-length spacing -- provided for comparison only.
@@ -697,6 +706,14 @@ class StitchResult:
     # explicit (row, [hole indices]) sequences when the rows are not simple
     # aligned pairs -- a double row whose offset row was re-fitted on its own
     layout: Optional[List[Tuple[int, List[int]]]] = None
+    # one flag per ``layout`` entry: is that run sewn as a closed loop? None
+    # = every run follows ``closed``. An inner row that lost a stretch too
+    # narrow for it is sewn as open runs round an otherwise closed ring.
+    run_closed: Optional[List[bool]] = None
+    # True when the engine laid the rows out (so a single row with rows=2
+    # asked for IS one row); False for a bare list of baked holes, whose
+    # layout has to be read from the points
+    fitted: bool = False
     # +1 / -1 when the holes lie on a closed outline's stitch ring but are
     # sewn as open runs (an unsewn edge, a keep-out): the ring's interior is
     # to the left (+1) or right (-1) of travel. 0 = no inside (a drawn seam).
@@ -735,15 +752,30 @@ class StitchResult:
                     out.append(seq)
         return out
 
+    def runs_with_closure(self, row: Optional[int] = None,
+                          min_len: int = 2) -> List[Tuple[List[int], bool]]:
+        """``sequences()`` with, for each run, whether it is sewn as a closed
+        loop (its last hole stitches back to its first)."""
+        if self.layout is not None:
+            out = []
+            for k, (r, seq) in enumerate(self.layout):
+                if (row is None or r == row) and len(seq) >= min_len:
+                    cl = (self.run_closed[k]
+                          if self.run_closed is not None and k < len(self.run_closed)
+                          else self.closed)
+                    out.append((list(seq), bool(cl)))
+            return out
+        return [(seq, self.closed) for seq in self.sequences(row, min_len)]
+
     def chord_spacings(self) -> List[float]:
         """Straight-line distance between consecutive holes of each stitch
         run, per row -- including the closing gap of a closed loop (the one
         an unfitted march leaves short)."""
         pts = self.points
         gaps: List[float] = []
-        for seq in self.sequences():
+        for seq, cl in self.runs_with_closure():
             gaps += [distance(pts[i], pts[j]) for i, j in zip(seq, seq[1:])]
-            if self.closed and len(seq) > 2:
+            if cl and len(seq) > 2:
                 gaps.append(distance(pts[seq[-1]], pts[seq[0]]))
         return gaps
 
@@ -751,9 +783,9 @@ class StitchResult:
         """Length of the seam along one row, summed over its runs."""
         pts = self.points
         total = 0.0
-        for seq in self.sequences(row=0):
+        for seq, cl in self.runs_with_closure(row=0):
             total += sum(distance(pts[i], pts[j]) for i, j in zip(seq, seq[1:]))
-            if self.closed and len(seq) > 2:
+            if cl and len(seq) > 2:
                 total += distance(pts[seq[-1]], pts[seq[0]])
         return total
 
@@ -809,7 +841,7 @@ def stitch_path(path: Path, pitch: float, *, mode: str = "chord",
 
     if anchors is None:
         # Plain chord marching, no fitting.
-        positions = march_chord(poly, pitch)
+        positions = _trim_wrap(march_chord(poly, pitch), poly.length, path.closed)
         return _result_from_positions(poly, positions, [pitch], path.closed)
 
     positions: List[float] = []
@@ -1104,7 +1136,9 @@ def _copy_result(res: StitchResult) -> StitchResult:
                         runs=list(res.runs) if res.runs else None,
                         layout=([(r, list(s)) for r, s in res.layout]
                                 if res.layout else None),
-                        inward=res.inward, note=res.note)
+                        run_closed=(list(res.run_closed) if res.run_closed
+                                    else None),
+                        fitted=res.fitted, inward=res.inward, note=res.note)
 
 
 def stitch_polyline(points: List[Vec2], corner_points: List[Vec2], closed: bool,
@@ -1222,7 +1256,7 @@ def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
             if whole:
                 res = _distribute(poly, corner_points, True, settings, arcs,
                                   total)
-                return _apply_rows(res, settings)
+                return _apply_rows(res, settings, ring=poly.points)
             run_pts = _sub_polyline(poly, s0 % total if closed else s0,
                                     s1 % total if closed else min(s1, total),
                                     closed)
@@ -1244,7 +1278,8 @@ def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
         if closed and len(poly.points) >= 3:
             # the runs lie on a closed ring: a second row knows where "in" is
             out.inward = 1.0 if signed_area(poly.points) > 0 else -1.0
-        return _apply_rows(out, settings)
+        return _apply_rows(out, settings,
+                           ring=poly.points if closed else None)
 
     if closed and getattr(settings, "start_offset", 0.0):
         pts = _rotate_closed_ring(pts, settings.start_offset)
@@ -1253,7 +1288,8 @@ def _stitch_polyline_impl(points: List[Vec2], corner_points: List[Vec2],
     if poly.length <= _EPS:
         return StitchResult(closed=closed)
     return _apply_rows(_distribute(poly, corner_points, closed, settings,
-                                   arcs, poly.length), settings)
+                                   arcs, poly.length), settings,
+                       ring=poly.points if closed else None)
 
 
 def _keepout_intervals(poly: "Polyline", keepouts, closed: bool):
@@ -1583,7 +1619,8 @@ def _march_corner_style(poly: Polyline, cor: List[float], settings, style: str,
 
     anchors = _anchors_from(corners_for_anchors, total, closed, fit)
     if anchors is None:
-        positions = march_chord(poly, settings.pitch_mm)
+        positions = _trim_wrap(march_chord(poly, settings.pitch_mm), total,
+                               closed)
         return _result_from_positions(
             poly, positions, [settings.pitch_mm], closed)
 
@@ -1615,7 +1652,7 @@ def _march_corner_style(poly: Polyline, cor: List[float], settings, style: str,
     return _result_from_positions(poly, positions, pitches, closed)
 
 
-def _apply_rows(result: StitchResult, settings) -> StitchResult:
+def _apply_rows(result: StitchResult, settings, ring=None) -> StitchResult:
     """Add the second row of holes of a saddle-stitched double row.
 
     The fitted holes stay where they are -- on the stitch line, at the inset
@@ -1634,6 +1671,7 @@ def _apply_rows(result: StitchResult, settings) -> StitchResult:
     rows = getattr(settings, "rows", 1)
     if rows <= 1 or not result.holes:
         return result
+    result.fitted = True             # the engine laid these rows out itself
     spacing = float(getattr(settings, "row_spacing", 3.0))
     if spacing <= 1e-9:
         result.note = ("row spacing is 0: the second row would punch the first "
@@ -1647,10 +1685,51 @@ def _apply_rows(result: StitchResult, settings) -> StitchResult:
     else:
         inward = float(result.inward or 0.0)
     on_ring = closed or inward != 0.0
+    # runs on a closed ring: whatever the offset of one run came out as (a
+    # run along a narrow arm offsets clean out of the piece), the inner row
+    # must stay inside the stitch ring (its unsewn edges included, so a row
+    # may end ON an open mouth) and a row spacing clear of every sewn run
+    near = None
+    if ring is not None and len(ring) >= 3 and on_ring and not closed:
+        from .geometry import point_in_polygon
+        near = [[result.holes[i].point for i in seq]
+                for seq in result.sequences(min_len=1)]
+        ring_closed = list(ring) + [ring[0]]
+        lim2 = (0.9 * spacing) ** 2
+
+    def ok(h):
+        p = h.point
+        if (not point_in_polygon(p, ring)
+                and _dist2_to_open(p, ring_closed) > 1e-12):
+            return False                   # outside the piece
+        for run in near:
+            d2 = ((p - run[0]).length_sq() if len(run) == 1
+                  else _dist2_to_open(p, run))
+            if d2 < lim2:
+                return False               # crowding another run's row
+        return True
+
+    def inside_ring(runs):
+        kept, cut = [], False
+        for run in runs:
+            cur: List[Hole] = []
+            for h in run:
+                if ok(h):
+                    cur.append(h)
+                else:
+                    cut = True
+                    if cur:
+                        kept.append(cur)
+                        cur = []
+            if cur:
+                kept.append(cur)
+        return kept, cut
 
     holes: List[Hole] = []
     layout: List[Tuple[int, List[int]]] = []
+    run_closed: List[bool] = []
     dropped = False
+    narrowed = False
     for seq in result.sequences(min_len=1):
         row0 = [result.holes[i] for i in seq]
         p0 = [h.point for h in row0]
@@ -1658,42 +1737,110 @@ def _apply_rows(result: StitchResult, settings) -> StitchResult:
         if on_ring:
             # a ring of one or two holes has no winding to tell its inside
             # by: the piece is too small for a second row anyway
-            row1 = (_offset_row(p0, closed, -inward * spacing, pitch, t0)
-                    if inward != 0.0 else [])
-            rows_here = [row0, row1]
-            if not row1:
+            if inward != 0.0:
+                runs1, trimmed = _offset_row(p0, closed, -inward * spacing,
+                                             pitch, t0)
+            else:
+                runs1, trimmed = [], False
+            if near is not None and runs1:
+                runs1, cut = inside_ring(runs1)
+                trimmed = trimmed or cut
+            if not runs1:
                 dropped = True
+            elif trimmed:
+                narrowed = True
+            # an inner ring that kept every stretch is itself a closed loop
+            rows_here = [(0, [row0], closed),
+                         (1, runs1, closed and len(runs1) == 1 and not trimmed)]
         else:
-            rows_here = [_offset_row(p0, False, spacing / 2.0, pitch, t0),
-                         _offset_row(p0, False, -spacing / 2.0, pitch, t0)]
-        for r, row in enumerate(rows_here):
-            start = len(holes)
-            holes.extend(row)
-            layout.append((r, list(range(start, start + len(row)))))
+            ra, ta = _offset_row(p0, False, spacing / 2.0, pitch, t0)
+            rb, tb = _offset_row(p0, False, -spacing / 2.0, pitch, t0)
+            if min(sum(len(r) for r in ra), sum(len(r) for r in rb)) < 2:
+                # one side has no room (the inside of a hairpin): one row,
+                # on the seam itself
+                rows_here = [(0, [row0], False)]
+                dropped = True
+            else:
+                rows_here = [(0, ra, False), (1, rb, False)]
+                narrowed = narrowed or ta or tb
+        for r, runs, cl in rows_here:
+            for run in runs:
+                start = len(holes)
+                holes.extend(run)
+                layout.append((r, list(range(start, start + len(run)))))
+                run_closed.append(cl)
+    # the inner rows of SEPARATE runs can meet -- two runs facing each other
+    # across a piece narrower than twice the row spacing land on the same
+    # centreline -- so crowding is judged over the whole of row 1 as well
+    if on_ring and not closed:
+        row1 = [i for r, idxs in layout if r == 1 for i in idxs]
+        along = set()
+        for (r, idxs), cl in zip(layout, run_closed):
+            if r == 1:
+                along.update(zip(idxs, idxs[1:]))
+                if cl and len(idxs) > 2:
+                    along.add((idxs[0], idxs[-1]))
+        bad = _crowded_indices([holes[i].point for i in row1],
+                               _MIN_ANCHOR_SEP * pitch,
+                               lambda a, b: (row1[a], row1[b]) in along
+                               or (row1[b], row1[a]) in along)
+        if bad:
+            bad_ids = {row1[k] for k in bad}
+            relaid, reclose = [], []
+            for (r, idxs), cl in zip(layout, run_closed):
+                if r != 1:
+                    relaid.append((r, idxs))
+                    reclose.append(cl)
+                    continue
+                cur: List[int] = []
+                for i in idxs:
+                    if i in bad_ids:
+                        if cur:
+                            relaid.append((1, cur))
+                            reclose.append(False)
+                            cur = []
+                    else:
+                        cur.append(i)
+                if cur:
+                    relaid.append((1, cur))
+                    reclose.append(False)
+            layout, run_closed = relaid, reclose
+            if any(r == 1 for r, _idxs in layout):
+                narrowed = True
+            else:
+                dropped = True
     # row 0 first, then row 1 (each keeps its runs in order)
     order = sorted(range(len(layout)), key=lambda k: layout[k][0])
     reholes: List[Hole] = []
     relayout: List[Tuple[int, List[int]]] = []
+    reclosed: List[bool] = []
     for k in order:
         r, idxs = layout[k]
         if not idxs:
-            continue                        # a run whose second row collapsed
+            continue
         start = len(reholes)
         reholes.extend(holes[i] for i in idxs)
         relayout.append((r, list(range(start, start + len(idxs)))))
+        reclosed.append(run_closed[k])
     result.holes = reholes
     if any(r == 1 for r, _idxs in relayout):
         result.rows = 2
         result.runs = None
         result.layout = relayout
+        result.run_closed = reclosed
     else:
         # nothing of the second row survived: this IS a single row, and the
         # readout / thread estimate must say so (the note explains why)
         result.rows = 1
         result.layout = None
+        result.run_closed = None
+    notes = []
     if dropped:
-        msg = ("too small for a second row at this row spacing: only one row "
-               "fitted")
+        notes.append("too small for a second row at this row spacing: only "
+                     "one row fitted")
+    if narrowed and not dropped:
+        notes.append("the second row skips the stretches too narrow for it")
+    for msg in notes:
         result.note = f"{result.note}; {msg}" if result.note else msg
     return result
 
@@ -1717,7 +1864,7 @@ def _turn_degrees(pts: List[Vec2], closed: bool) -> List[float]:
 
 
 def _offset_row(p0: List[Vec2], closed: bool, dist: float,
-                pitch: float, tangents=None) -> List[Hole]:
+                pitch: float, tangents=None):
     """The holes of a row running ``dist`` beside the fitted row ``p0``
     (positive = right of travel): the true mitred offset of the polyline
     through its holes (``inset_with_corners`` for a ring, which also trims
@@ -1726,19 +1873,23 @@ def _offset_row(p0: List[Vec2], closed: bool, dist: float,
     stretches between fitted evenly. Whatever the offset code left behind,
     no hole of the new row may sit nearer the fitted row than 90 % of
     ``dist`` (a swallowtail the trimming missed at a degenerate corner), or
-    outside a ring. An empty list means the offset collapsed (the piece is
-    too small)."""
+    outside a ring, and no two holes closer than the minimum spacing -- a
+    stretch too narrow for the row loses it (``_drop_crowded``).
+
+    Returns ``(runs, trimmed)``: the row as one or more runs of holes (more
+    than one when a stretch was dropped), and whether anything was. No runs
+    means the offset collapsed (the piece is too small)."""
     from .offset import inset_with_corners, _Proximity
     from .geometry import point_in_polygon
     n = len(p0)
     if n == 0:
-        return []
+        return [], False
     if n == 1:
         # a lone hole: its partner sits a row spacing off along its normal
         t = tangents[0] if tangents else Vec2(1.0, 0.0)
         tl = t.length()
         t = t * (1.0 / tl) if tl > 1e-12 else Vec2(1.0, 0.0)
-        return [Hole(p0[0] + Vec2(t.y, -t.x) * dist, t)]
+        return [[Hole(p0[0] + Vec2(t.y, -t.x) * dist, t)]], False
     turns = _turn_degrees(p0, closed)
     # a corner is a sharp turn, or an isolated kink between two straights;
     # the gentle, repeated turns of an arc are not (its holes are re-fitted)
@@ -1751,76 +1902,112 @@ def _offset_row(p0: List[Vec2], closed: bool, dist: float,
         if (ring[0] - ring[-1]).length() < 1e-9:
             ring = ring[:-1]
         if len(ring) < 3:
-            return []
+            return [], False
         # inset_with_corners insets by a positive distance regardless of the
         # ring's winding; the caller's sign only said which side is "in"
         q, images = inset_with_corners(ring, abs(dist),
                                        [ring[i] for i in anchors])
         if len(q) < 3:
-            return []
+            return [], False
         if (q[0] - q[-1]).length() < 1e-9:
             q = q[:-1]
         near = _Proximity(ring, abs(dist) * 0.9)
         q = [v for v in q if not near.too_close(v) and point_in_polygon(v, ring)]
         if (len(q) < 3 or abs(signed_area(q)) < 1e-9
                 or (signed_area(q) > 0) != (signed_area(ring) > 0)):
-            return []                      # inverted: the ring is too small
+            return [], False               # inverted: the ring is too small
         xs = [v.x for v in q]
         ys = [v.y for v in q]
         perim = sum((q[(j + 1) % len(q)] - q[j]).length() for j in range(len(q)))
         if (min(max(xs) - min(xs), max(ys) - min(ys)) < 0.75 * pitch
                 or perim < 2.0 * pitch):
-            return []                      # a sliver: no room for a row
+            return [], False               # a sliver: no room for a row
         q_anchors = []
         for img in images:
             k = min(range(len(q)), key=lambda j: (q[j] - img).length())
             if (q[k] - img).length() < 1e-6:
                 q_anchors.append(k)
         return _drop_crowded(_even_row(q, sorted(set(q_anchors)), True, pitch),
-                             _MIN_ANCHOR_SEP * pitch)
+                             _MIN_ANCHOR_SEP * pitch, True)
     q, q_anchors = _offset_open_trimmed(p0, dist, anchors)
     if len(q) < 2:
-        return []
+        return [], False
     lim2 = (abs(dist) * 0.9) ** 2
     kept = [j for j, v in enumerate(q) if _dist2_to_open(v, p0) >= lim2]
     if len(kept) < 2:
-        return []
+        return [], False
     if len(kept) < len(q):
         remap = {j: k for k, j in enumerate(kept)}
         q = [q[j] for j in kept]
         q_anchors = [remap[a] for a in q_anchors if a in remap]
     return _drop_crowded(_even_row(q, q_anchors, False, pitch),
-                         _MIN_ANCHOR_SEP * pitch)
+                         _MIN_ANCHOR_SEP * pitch, False)
 
 
-def _drop_crowded(holes: List[Hole], sep: float) -> List[Hole]:
-    """``holes`` without any pair closer than ``sep`` -- BOTH of such a pair
-    go. Along the row the even division already keeps the spacing; this
-    catches holes facing each other ACROSS a stretch of the inner ring that
-    is narrower than the minimum spacing (a thin strip at any angle, the
-    narrow arm of an L): that stretch loses its second row, the rest keeps
-    it, and a strip that is all sliver loses the row (and says so)."""
-    n = len(holes)
+def _crowded_indices(points: List[Vec2], sep: float, allowed=None) -> set:
+    """Indices of every point in a pair closer than ``sep``, BOTH members.
+    ``allowed(i, j)`` (i < j) exempts a pair -- neighbours along a row, whose
+    spacing the even division already settled."""
+    n = len(points)
+    out: set = set()
     if n < 2 or sep <= 0:
-        return holes
+        return out
     cell = sep
     grid: dict = {}
-    for i, h in enumerate(holes):
-        grid.setdefault((int(h.point.x // cell), int(h.point.y // cell)),
-                        []).append(i)
-    crowded = set()
+    for i, p in enumerate(points):
+        grid.setdefault((int(p.x // cell), int(p.y // cell)), []).append(i)
     s2 = sep * sep * (1.0 - 1e-9)
-    for i, h in enumerate(holes):
-        cx, cy = int(h.point.x // cell), int(h.point.y // cell)
+    for i, p in enumerate(points):
+        cx, cy = int(p.x // cell), int(p.y // cell)
         for gx in (cx - 1, cx, cx + 1):
             for gy in (cy - 1, cy, cy + 1):
                 for j in grid.get((gx, gy), ()):
-                    if j > i and (holes[j].point - h.point).length_sq() < s2:
-                        crowded.add(i)
-                        crowded.add(j)
+                    if j <= i or (points[j] - p).length_sq() >= s2:
+                        continue
+                    if allowed is not None and allowed(i, j):
+                        continue
+                    out.add(i)
+                    out.add(j)
+    return out
+
+
+def _drop_crowded(holes: List[Hole], sep: float, closed: bool):
+    """``holes`` without any pair closer than ``sep`` -- BOTH of such a pair
+    go -- as runs: the survivors split wherever a stretch was removed, so
+    nothing sews across the gap. Along the row the even division already
+    keeps the spacing (a two-hole row shorter than the pitch keeps its two
+    ends); this catches holes facing
+    each other ACROSS a stretch of the inner ring that is narrower than the
+    minimum spacing (a thin strip at any angle, the narrow arm of an L):
+    that stretch loses its second row, the rest keeps it, and a strip that
+    is all sliver loses the row (and says so). Returns ``(runs, trimmed)``."""
+    n = len(holes)
+    if n == 0:
+        return [], False
+    if n < 2 or sep <= 0:
+        return [list(holes)], False
+
+    # a two-hole row is just its two ends, however short (a 3 mm seam); from
+    # three holes on, neighbours closer than the spacing mean a sliver
+    allowed = (lambda i, j: True) if n <= 2 else None
+    crowded = _crowded_indices([h.point for h in holes], sep, allowed)
     if not crowded:
-        return holes
-    return [h for i, h in enumerate(holes) if i not in crowded]
+        return [list(holes)], False
+    runs: List[List[Hole]] = []
+    cur: List[Hole] = []
+    for i, h in enumerate(holes):
+        if i in crowded:
+            if cur:
+                runs.append(cur)
+                cur = []
+        else:
+            cur.append(h)
+    if cur:
+        runs.append(cur)
+    if closed and len(runs) > 1 and 0 not in crowded and n - 1 not in crowded:
+        runs[0] = runs[-1] + runs[0]       # the wrap: one run across hole 0
+        runs.pop()
+    return runs, True
 
 
 def _dist2_to_open(v: Vec2, pts: List[Vec2]) -> float:
@@ -1875,7 +2062,11 @@ def _offset_open_trimmed(p0: List[Vec2], dist: float, anchors: List[int]):
                                    segs[i][0], segs[i][1])
             if p is None and (segs[i - 1][1] - segs[i][0]).length() < 1e-7:
                 p = segs[i - 1][1]                # straight on: one vertex
-            if p is None or (p - p0[segs[i][3]]).length() > lim:
+            # only the OUTER side of a turn runs away at a hairpin; the inner
+            # offset of a sharp V meets at its true corner, however far that
+            # is from the apex, and must keep it
+            outer = (segs[i - 1][2].cross(segs[i][2]) > 0) == (dist > 0)
+            if p is None or (outer and (p - p0[segs[i][3]]).length() > lim):
                 ends[i - 1] = segs[i - 1][1]      # bevel: two vertices
                 starts[i] = segs[i][0]
             else:

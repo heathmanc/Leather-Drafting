@@ -250,6 +250,10 @@ class VertexHandle(QGraphicsItem):
             # During the drag we skipped the (expensive) stitch re-fit; do it
             # once now that the node has landed so the holes are correct.
             self._sync_owner(recompute_holes=True)
+            # a dimension attached to the edited shape follows its new corner
+            sid = getattr(getattr(self.owner, "model", None), "shape_id", None)
+            if sid is not None:
+                self.canvas.update_dimensions(only={sid})
             self.canvas.commitRequested.emit()
 
     def _sync_owner(self, recompute_holes: bool) -> None:
@@ -1134,15 +1138,48 @@ class ShapeItem(QGraphicsItem):
         self.setPos(t.x, t.y)
         self.setOpacity(max(0.05, min(1.0, self.model.opacity)))
         self._recompute_bounds()
+        if self.canvas is not None and hasattr(self.canvas, "_set_cache_mode"):
+            self.canvas._set_cache_mode(self)   # grown past the cache cap?
         self.update()
 
-    def _recompute_bounds(self) -> None:
+    def content_rect(self) -> QRectF:
+        """The drawing itself in item coordinates -- outline, holes and the
+        keep-out ring -- without the zoom-dependent stroke pad of
+        ``boundingRect``; what 'fit to content' measures."""
         r = self._outline.boundingRect()
         pad = 2.0
         if self._holes:
             pad += max(1.0, (self.model.stitch.hole_diameter
                              if self.model.stitch else 1.0))
-        self._brect = r.adjusted(-pad, -pad, pad, pad)
+        r_keep = float(getattr(self.model, "keepout", 0.0) or 0.0)
+        if r_keep > 0:                  # the dashed keep-out ring, about (0, 0)
+            r = r.united(QRectF(-r_keep, -r_keep, 2 * r_keep, 2 * r_keep))
+        return r.adjusted(-pad, -pad, pad, pad)
+
+    def _recompute_bounds(self) -> None:
+        # the strokes are cosmetic (pixels), so zoomed out they are wide in
+        # mm; a device-cached item is cut off at its rect, so allow for the
+        # thickest one at the current zoom (refresh_pad keeps this current)
+        self._stroke_pad = self._stroke_pad_mm()
+        pad = self._stroke_pad
+        self._brect = self.content_rect().adjusted(-pad, -pad, pad, pad)
+
+    def _stroke_pad_mm(self) -> float:
+        c = self.canvas
+        if c is None:
+            return 1.0
+        zoom = max(float(getattr(c, "_zoom", 1.0)), 1e-6)
+        widest = c.outline_width(True) + 1.5      # the unsewn-edge dots
+        return (widest / 2.0 + 2.0) / zoom
+
+    def refresh_pad(self) -> None:
+        """Re-pad the bounding rect when the zoom changed enough that the
+        cosmetic stroke no longer fits in it (called on every zoom)."""
+        need = self._stroke_pad_mm()
+        have = getattr(self, "_stroke_pad", None)
+        if have is None or abs(need - have) > 0.25 * max(need, have, 0.5):
+            self.prepareGeometryChange()
+            self._recompute_bounds()
 
     # -- QGraphicsItem interface ---------------------------------------
     def boundingRect(self) -> QRectF:

@@ -18,12 +18,26 @@ from typing import Dict, Optional, Set
 
 _ALLOWED_BINOPS = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv,
                    ast.Mod, ast.Pow)
-# a number followed by a unit word -- but not inside an identifier (strap2in)
-_UNIT = re.compile(r"(?<![\w.])(\d[\d.]*|\.\d+)\s*(mm|cm|in)\b", re.IGNORECASE)
+# a number -- or a simple fraction, "1/2in" -- followed by a unit word, but
+# not inside an identifier (strap2in)
+_NUM = r"(?:\d[\d.]*|\.\d+)(?:[eE][-+]?\d+)?"
+_UNIT = re.compile(r"(?<![\w.])(" + _NUM + r"(?:\s*/\s*" + _NUM + r")?)\s*(mm|cm|in)\b",
+                   re.IGNORECASE)
 _UNIT_MM = {"mm": 1.0, "cm": 10.0, "in": 25.4}
-# the whole text, ending in one unit word: "(1/2) in", "3/8in", "2*3 cm"
+# the whole text, ending in one unit word: "(1/2) in", "(1+1)in", "2*3 cm"
 _TAIL_UNIT = re.compile(r"(.*?[\d.)])\s*(mm|cm|in)", re.IGNORECASE | re.DOTALL)
-_HAS_LETTER = re.compile(r"[A-Za-z_]")
+# a letter that is not the exponent of a number ("1e2")
+_HAS_LETTER = re.compile(r"(?<![\d.])[A-Za-z_]|[A-DF-Za-df-z_]")
+
+
+def has_unit(text: str) -> bool:
+    """True when ``evaluate`` will read a unit out of ``text`` -- so a field
+    must not apply its display unit on top. The one place that decides it."""
+    s = text.strip()
+    tail = _TAIL_UNIT.fullmatch(s)
+    if tail and not _UNIT.search(tail.group(1)) and not _HAS_LETTER.search(tail.group(1)):
+        return True
+    return bool(_UNIT.search(s))
 _IDENT = re.compile(r"[A-Za-z_]\w*")
 # a name as it appears inside an expression: not the exponent of 1e2
 _NAME_REF = re.compile(r"(?<![\w.])[A-Za-z_]\w*")
@@ -80,7 +94,7 @@ def evaluate(text: str, values: Optional[Dict[str, float]] = None) -> float:
             and not _HAS_LETTER.search(tail.group(1))):
         s = f"({tail.group(1)})*{_UNIT_MM[tail.group(2).lower()]}"
     else:
-        s = _UNIT.sub(lambda m: f"({m.group(1)}*{_UNIT_MM[m.group(2).lower()]})", s)
+        s = _UNIT.sub(lambda m: f"(({m.group(1)})*{_UNIT_MM[m.group(2).lower()]})", s)
     # every way bad input can fail is a ValueError, so callers (the
     # Parameters dialog, typed fields) only need to catch that one
     try:

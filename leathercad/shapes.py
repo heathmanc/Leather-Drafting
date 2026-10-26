@@ -230,6 +230,17 @@ class Ellipse(Shape):
     ry: float = 15.0
     kind: str = "ellipse"
 
+    def bounds(self) -> Tuple[float, float, float, float]:
+        """Exact: the flattened polygon stops a hair short of the true
+        extremes, which put a dimension anchored to a circle's quadrant a
+        few hundredths off."""
+        t = self.transform
+        th = math.radians(t.rotation)
+        c, s = math.cos(th), math.sin(th)
+        hx = math.hypot(self.rx * c, self.ry * s)
+        hy = math.hypot(self.rx * s, self.ry * c)
+        return (t.x - hx, t.y - hy, t.x + hx, t.y + hy)
+
     def _build_local_path(self, flatness: float = DEFAULT_FLATNESS) -> Path:
         # Adaptive step from the smaller radius.
         rmin = max(1e-3, min(self.rx, self.ry))

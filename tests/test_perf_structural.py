@@ -20,8 +20,8 @@ from PySide6.QtWidgets import QApplication, QGraphicsItem  # noqa: E402
 from leathercad.document import Document  # noqa: E402
 from leathercad.geometry import Vec2  # noqa: E402
 from leathercad.holes import LooseHole  # noqa: E402
-from leathercad.shapes import (Circle, EditablePath, PathShape, Polygon,  # noqa: E402
-                               Rectangle, Transform)
+from leathercad.shapes import (Circle, EditablePath, Ellipse, PathShape,  # noqa: E402
+                               Polygon, Rectangle, Transform)
 from leathercad.stitchline import StitchLine  # noqa: E402
 from leathercad.stitchsettings import StitchSettings  # noqa: E402
 from leathercad.stitching import Hole, StitchResult, holes_for_shape  # noqa: E402
@@ -281,7 +281,7 @@ def test_acute_corner_inner_row_stays_inside_the_outer_row():
     tri = _stitched(Polygon(points=[Vec2(-15, 0), Vec2(15, 0), Vec2(0, 56)], layer="Cut"),
                     rows=2, row_spacing=3)
     res = holes_for_shape(tri, Document())
-    rows = res.sequences(min_len=1)
+    rows = [sum(res.sequences(row=0, min_len=1), []), sum(res.sequences(row=1, min_len=1), [])]
     edge = [Vec2(-15, 0), Vec2(15, 0), Vec2(0, 56), Vec2(-15, 0)]
 
     def dist(p):
@@ -291,7 +291,7 @@ def test_acute_corner_inner_row_stays_inside_the_outer_row():
             t = max(0.0, min(1.0, (p - a).dot(ab) / ab.length_sq()))
             best = min(best, (a + ab * t - p).length())
         return best
-    assert len(rows) == 2
+    assert res.rows == 2 and rows[1]
     assert min(dist(res.holes[i].point) for i in rows[1]) >= 6.5 - 0.05
     assert min(_gaps(res)) >= 0.75 * 3.85 - 1e-9
 
@@ -716,3 +716,275 @@ def test_many_loose_holes_select_without_grips_thrash(qapp):
     c.scene_obj.clearSelection()
     assert c._selected_other == 0
     win.hide()
+
+
+# -- from the verification of this batch ---------------------------------------------------
+def test_stitch_edits_refresh_the_hole_snap_points(qapp):
+    doc = Document()
+    sh = _stitched(Rectangle(width=100, height=60, layer="Cut"))
+    doc.add_shape(sh)
+    win, c = _win(doc)
+    c.snap_to_nodes = True
+    it = _shape_items(c)[0]
+    idx = c._snap_index()
+    holes0 = [p for p, k in idx["pts"] if k == "hole"]
+    assert len(holes0) == it.hole_count
+    sh.stitch.pitch_mm = 6.0
+    it.sync_from_model()                              # what the panel does
+    idx2 = c._snap_index()
+    holes1 = [p for p, k in idx2["pts"] if k == "hole"]
+    assert len(holes1) == it.hole_count != len(holes0)
+    sh.stitch.enabled = False
+    it.sync_from_model()
+    assert not [p for p, k in c._snap_index()["pts"] if k == "hole"]
+    win.hide()
+
+
+def test_keepout_ring_fits_in_the_cached_item(qapp):
+    doc = Document()
+    snap = Circle(rx=2.0, ry=2.0, layer="Cut")
+    snap.keepout = 7.25
+    snap.hardware = "snap_20"
+    doc.add_shape(snap)
+    win, c = _win(doc)
+    it = _shape_items(c)[0]
+    r = it.boundingRect()
+    assert r.left() <= -7.25 and r.right() >= 7.25 and r.top() <= -7.25
+    c._zoom = 0.3
+    c._apply_zoom()                                   # thick strokes in mm
+    assert it.boundingRect().left() < r.left()
+    c._zoom = 8.0
+    c._apply_zoom()
+    assert it.boundingRect().left() <= -7.25
+    win.hide()
+
+
+def test_node_edit_moves_attached_dimensions(qapp):
+    win, c = _win()
+    it = c.add_shape(Polygon(points=[Vec2(-20, -10), Vec2(20, -10), Vec2(20, 10), Vec2(-20, 10)],
+                             layer="Cut"))
+    c.snap_to_nodes = True
+    c._add_dimension(QPointF(20, -10), QPointF(20, 10))
+    dim = win.doc.dimensions[0]
+    assert dim.a_ref and dim.b_ref
+    c.snap_to_nodes = False
+    c.scene_obj.clearSelection()
+    it.setSelected(True)
+    c.enter_vertex_edit(it)
+    handle = next(h for h in c._handles
+                  if abs(h.pos().x() - 20) < 1e-6 and abs(h.pos().y() - 10) < 1e-6)
+    _drag(c, 20.0, 10.0, 30.0, 10.0)
+    assert it.model.points[2].x == pytest.approx(30.0, abs=0.5)
+    assert max(dim.p1.x, dim.p2.x) == pytest.approx(30.0, abs=0.5)
+    win.hide()
+
+
+def test_a_hairline_gap_is_nothing_to_combine(qapp):
+    doc = Document()
+    doc.add_shape(_stitched(Rectangle(width=40, height=40, layer="Cut")))
+    doc.add_shape(_stitched(Rectangle(width=40, height=40, layer="Cut",
+                                      transform=Transform(x=40.04))))
+    win, c = _win(doc)
+    msgs = []
+    c.statusMessage.connect(msgs.append)
+    for op in ("union", "difference", "intersection"):
+        c.scene_obj.clearSelection()
+        for it in _shape_items(c):
+            it.setSelected(True)
+        c.boolean_selected(op)
+        assert len(doc.shapes) == 2 and all(s.stitch is not None for s in doc.shapes)
+        assert "Nothing to" in msgs[-1]
+    win.hide()
+
+
+def test_rings_meet_is_quick_on_dense_nested_bays():
+    import time
+    from leathercad_app.canvas import _rings_meet
+    n = 1200
+    cee = []
+    for i in range(n):                              # a C: a ring with a deep bay
+        a = 2 * math.pi * i / n
+        r = 50.0 if not (-0.6 < a - math.pi < 0.6) else 10.0 + 40.0 * abs(a - math.pi) / 0.6
+        cee.append(Vec2(r * math.cos(a), r * math.sin(a)))
+    inner = [Vec2(-35 + 6 * math.cos(2 * math.pi * i / n), 6 * math.sin(2 * math.pi * i / n))
+             for i in range(n)]
+    t = time.perf_counter()
+    assert not _rings_meet(cee, inner)
+    assert time.perf_counter() - t < 0.5
+    assert _rings_meet(cee, [Vec2(p.x + 30, p.y) for p in inner])      # overlapping
+    assert _rings_meet([Vec2(0, 0), Vec2(10, 0), Vec2(10, 10), Vec2(0, 10)],
+                       [Vec2(10.03, 2), Vec2(20, 2), Vec2(20, 8), Vec2(10.03, 8)])  # touching
+    assert not _rings_meet([Vec2(0, 0), Vec2(10, 0), Vec2(10, 10), Vec2(0, 10)],
+                           [Vec2(10.2, 2), Vec2(20, 2), Vec2(20, 8), Vec2(10.2, 8)])
+
+
+def test_ellipse_bounds_are_exact():
+    c = Circle(rx=15, ry=15, transform=Transform(x=100, rotation=20))
+    assert c.bounds() == pytest.approx((85, -15, 115, 15))
+    e = Ellipse(rx=30, ry=10, transform=Transform(rotation=90))
+    assert e.bounds() == pytest.approx((-10, -30, 10, 30))
+
+
+def test_rows_on_masked_runs_stay_inside_the_piece():
+    L = _stitched(Polygon(points=[Vec2(0, 0), Vec2(80, 0), Vec2(80, 10), Vec2(10, 10),
+                                  Vec2(10, 60), Vec2(0, 60)], layer="Cut"),
+                  rows=2, row_spacing=8)
+    L.stitch_edges = [True, True, False, True, True, True]
+    res = holes_for_shape(L, Document())
+    outline = L.points + [L.points[0]]
+    from leathercad.geometry import point_in_polygon
+    for i in sum(res.sequences(row=1, min_len=1), []):
+        assert point_in_polygon(res.holes[i].point, outline)
+    assert res.rows == 1 or "second row" in res.note or "narrow" in res.note
+
+
+def test_collapsed_seam_row_reports_one_row_on_the_seam():
+    a = math.radians(175)
+    pts = [Vec2(0, 0), Vec2(60, 0), Vec2(60 + 60 * math.cos(a), -60 * math.sin(a))]
+    sl = StitchLine(points=pts, corner_points=[pts[1]], closed=False,
+                    settings=StitchSettings(pitch_mm=5, inset=0, rows=2, row_spacing=2))
+    res = sl.result()
+    # either the second row could not be fitted at all (one row, on the seam,
+    # with the note) or it is there in pieces, every hole at its row distance
+    # and no two holes crowding -- never a spike off the seam
+    assert res.note and ("second row" in res.note or "narrow" in res.note)
+
+    def dist_to_seam(p):
+        best = 1e9
+        for u, v in zip(pts, pts[1:]):
+            ab = v - u
+            t = max(0.0, min(1.0, (p - u).dot(ab) / ab.length_sq()))
+            best = min(best, (u + ab * t - p).length())
+        return best
+    for h in res.holes:
+        assert dist_to_seam(h.point) <= 1.0 + 0.05
+    for seq, _cl in res.runs_with_closure(row=1, min_len=1):
+        hp = [res.holes[i].point for i in seq]       # (row 0 is the seam's own
+        for i in range(len(hp)):                     # fit; a hairpin's legs may
+            for j in range(i + 1, len(hp)):          # face each other closely)
+                assert (hp[i] - hp[j]).length() >= 0.75 * 5 - 1e-9
+    if res.rows == 1:
+        assert res.layout is None and all(dist_to_seam(h.point) < 1e-6 for h in res.holes)
+
+
+def test_v_seam_inner_row_keeps_its_true_corner():
+    a = math.radians(50)
+    pts = [Vec2(0, 0), Vec2(60, 0), Vec2(60 - 60 * math.cos(a), 60 * math.sin(a))]
+    sl = StitchLine(points=pts, corner_points=[pts[1]], closed=False,
+                    settings=StitchSettings(pitch_mm=5, inset=0, rows=2, row_spacing=2))
+    res = sl.result()
+
+    def dist_to_seam(p):
+        best = 1e9
+        for u, v in zip(pts, pts[1:]):
+            ab = v - u
+            t = max(0.0, min(1.0, (p - u).dot(ab) / ab.length_sq()))
+            best = min(best, (u + ab * t - p).length())
+        return best
+    assert res.rows == 2
+    for i in sum(res.sequences(row=0, min_len=1), []) + sum(res.sequences(row=1, min_len=1), []):
+        assert abs(dist_to_seam(res.holes[i].point) - 1.0) < 0.05
+
+
+def test_exact_pitch_march_never_punches_the_start_hole_twice():
+    r = _stitched(Rectangle(width=15, height=10, layer="Cut"), pitch_mm=7, fit="none")
+    res = holes_for_shape(r, Document())
+    pts = res.points
+    assert min((pts[i] - pts[j]).length() for i in range(len(pts)) for j in range(i + 1, len(pts))) > 1e-6
+    assert res.count == 2
+
+
+def test_inner_row_splits_into_runs_round_a_narrow_arm():
+    L = _stitched(Polygon(points=[Vec2(0, 0), Vec2(60, 0), Vec2(60, 12), Vec2(12, 12),
+                                  Vec2(12, 60), Vec2(0, 60)], layer="Cut"),
+                  rows=2, row_spacing=2)
+    res = holes_for_shape(L, Document())
+    runs = res.runs_with_closure(row=1, min_len=1)
+    assert runs and all(not cl for _seq, cl in runs)            # open runs now
+    pts = res.points
+    for seq, _cl in runs:
+        for i, j in zip(seq, seq[1:]):
+            assert (pts[i] - pts[j]).length() <= 1.5 * 3.85 + 1e-9
+    assert "narrow" in res.note
+    from leathercad.thread import estimate_thread
+    est = estimate_thread(res, L.stitch, 3.0, 150.0)
+    assert est["seam_mm"] < 400
+
+
+def test_pairs_detection_and_small_piece_tails():
+    from leathercad.thread import estimate_thread
+    for station, spacing in ((1.5, 3.5), (2.0, 5.0), (4.0, 3.0)):
+        pairs = []
+        for i in range(12):
+            pairs.append(Hole(Vec2(i * station, spacing / 2), Vec2(1, 0)))
+            pairs.append(Hole(Vec2(i * station, -spacing / 2), Vec2(1, 0)))
+        est = estimate_thread(StitchResult(holes=pairs), StitchSettings(rows=2, row_spacing=spacing),
+                              3.0, 150.0)
+        assert est["rows"] == 2 and est["seam_mm"] == pytest.approx(2 * 11 * station)
+    for w, h, p in ((30, 20, 3.0), (50, 30, 3.85), (30, 20, 2.25)):
+        sh = _stitched(Rectangle(width=w, height=h, layer="Cut"), pitch_mm=p, rows=2)
+        live = holes_for_shape(sh, Document())
+        baked = StitchResult(holes=[Hole(x.point, x.tangent) for x in live.holes])
+        a = estimate_thread(live, sh.stitch, 3.0, 150.0)["thread_mm"]
+        b = estimate_thread(baked, sh.stitch, 3.0, 150.0)["thread_mm"]
+        assert abs(a - b) / a < 0.2
+
+
+def test_units_bind_to_fractions_and_fields_do_not_double_convert(qapp):
+    from PySide6.QtCore import QSettings
+    from leathercad.expr import evaluate, has_unit
+    from leathercad_app import units
+    from leathercad_app.mathspin import MathSpinBox
+    assert evaluate("1/2in*2") == pytest.approx(25.4)
+    assert evaluate("1/2 in + 1/4 in") == pytest.approx(19.05)
+    assert evaluate("3in-1/2in") == pytest.approx(63.5)
+    assert evaluate("(1/2)in") == pytest.approx(12.7)
+    assert has_unit("(1/2)in") and has_unit("1/2in*2") and not has_unit("strap2in")
+    sp = MathSpinBox()
+    sp.setRange(0, 10000)
+    sp.setDecimals(4)
+    sp.physical = True
+    units.set_current("in")
+    try:
+        assert sp.valueFromText("(1/2)in") == pytest.approx(12.7)
+        assert sp.valueFromText("(1+1)in") == pytest.approx(50.8)
+        assert sp.valueFromText("0.5") == pytest.approx(12.7)
+    finally:
+        units.set_current("mm")
+        QSettings("Stitch Hero", "Stitch Hero").setValue("units", "mm")
+
+
+def test_nest_progress_reaches_the_end_and_redo_survives_a_no_op_commit():
+    from leathercad.nesting import NestPiece, nest
+    from leathercad_app.history import History
+    seen = []
+    nest([NestPiece(i, [([Vec2(0, 0), Vec2(20, 0), Vec2(20, 10), Vec2(0, 10), Vec2(0, 0)], True)])
+          for i in range(3)], 200, 100, progress=lambda d, t: seen.append((d, t)) or True)
+    assert seen[-1] == (3, 3)
+    h = History()
+    h.reset({"a": 0})
+    h.push({"a": 1})
+    h.push({"a": 2})
+    assert h.undo() == {"a": 1}
+    h.push({"a": 1})                       # the same state again
+    assert h.can_redo() and h.redo() == {"a": 2}
+
+
+def test_facing_runs_do_not_stack_their_inner_rows():
+    r = _stitched(Rectangle(width=40, height=10, layer="Cut"), inset=2, rows=2, row_spacing=3)
+    r.stitch_edges = [True, False, True, False]            # the two long sides
+    res = holes_for_shape(r, Document())
+    assert res.rows == 1 and "second row" in res.note
+    pts = res.points
+    assert min((pts[i] - pts[j]).length() for i in range(len(pts))
+               for j in range(i + 1, len(pts))) >= 0.75 * 3.85
+    sl = StitchLine(points=[Vec2(0, 0), Vec2(2.8, 0)],
+                    settings=StitchSettings(pitch_mm=3.85, rows=2, row_spacing=3.0))
+    res = sl.result()
+    assert res.count == 4 and res.rows == 2                # a short seam keeps its ends
+    from leathercad.thread import estimate_thread
+    small = _stitched(Rectangle(width=8, height=8, layer="Cut"), inset=1, rows=2, row_spacing=5)
+    res = holes_for_shape(small, Document())
+    assert res.rows == 1 and estimate_thread(res, small.stitch)["rows"] == 1
+    from leathercad.expr import evaluate
+    assert evaluate("1e2mm") == 100.0 and evaluate("2.5e1 mm") == 25.0

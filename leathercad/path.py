@@ -225,7 +225,8 @@ class Path:
         if not self.segments:
             return []
         fc = self._flat_cache
-        if fc is not None and fc[0] == flatness and fc[2] == len(self.segments):
+        key = (flatness, bool(self.closed), tuple(id(s) for s in self.segments))
+        if fc is not None and fc[0] == key:
             return list(fc[1])
         pts: List[Vec2] = [self.segments[0].start()]
         for seg in self.segments:
@@ -234,7 +235,7 @@ class Path:
             first, last = pts[0], pts[-1]
             if (first - last).length() > 1e-9:
                 pts.append(first)
-        self._flat_cache = (flatness, pts, len(self.segments))
+        self._flat_cache = (key, pts, list(self.segments))   # pins the ids
         return list(pts)
 
 

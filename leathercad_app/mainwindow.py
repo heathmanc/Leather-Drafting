@@ -345,7 +345,9 @@ class MainWindow(QMainWindow):
         self.doc = doc
         self.path = path
         self.canvas.doc = doc
-        self.canvas.rebuild()
+        # a traced or graded file with hundreds of distinct pieces takes a
+        # few seconds of stitch fitting: show the wait cursor meanwhile
+        self._busy(self.canvas.rebuild)
         self.layers.canvas = self.canvas
         self.layers.reload()
         self.properties.set_layers(doc.layers)
@@ -1130,7 +1132,7 @@ class MainWindow(QMainWindow):
     def _load_state(self, state):
         self.doc = Document.from_dict(state)
         self.canvas.doc = self.doc
-        self.canvas.rebuild()
+        self._busy(self.canvas.rebuild)
         self.layers.canvas = self.canvas
         self.layers.reload()
         self.properties.set_layers(self.doc.layers)
@@ -2141,7 +2143,7 @@ class MainWindow(QMainWindow):
             else:
                 self.doc.add_shape(sh)
                 n_shapes += 1
-        self.canvas.rebuild()
+        self._busy(self.canvas.rebuild)
         self.canvas.fit_to_content()
         self.commit()
         msg = f"Imported {n_shapes} shape(s)"

@@ -95,7 +95,8 @@ page — no Python needed:
 Both are built by the **Release builds** GitHub Action: push a `v0.2.0`-style
 tag, or run it manually (Actions → *Release builds* → *Run workflow*), and it
 publishes the Windows `.exe` (and the macOS `.dmg`, when that option is
-ticked) to a Release automatically.
+ticked) to a Release automatically. What changed in each version is in
+[CHANGELOG.md](CHANGELOG.md).
 
 ### From source (any OS)
 

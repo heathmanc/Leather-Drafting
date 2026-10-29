@@ -855,11 +855,13 @@ class MainWindow(QMainWindow):
         dlg.activateWindow()
 
     def _about(self):
+        from leathercad import __version__
         QMessageBox.about(
             self, "Stitch Hero",
-            "<b>Stitch Hero</b><br>CAD for laser-cut leather patterns "
-            "with pricking-iron-accurate (chord-spaced) stitch holes.<br><br>"
-            "Units are millimetres. Press <b>F1</b> for the user guide.")
+            f"<b>Stitch Hero {__version__}</b><br>CAD for laser-cut leather "
+            "patterns with pricking-iron-accurate (chord-spaced) stitch "
+            "holes.<br><br>Lengths show in millimetres or inches "
+            "(<b>View → Units</b>). Press <b>F1</b> for the user guide.")
 
     # -- display units ----------------------------------------------------
     _GRIDS_MM = (0.5, 1.0, 2.0, 2.5, 5.0, 10.0)

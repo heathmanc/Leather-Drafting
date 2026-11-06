@@ -267,10 +267,19 @@ def _merge_open(a, idx_a, b, idx_b):
     junction = Vec2((na[-1].x + nb[0].x) / 2.0, (na[-1].y + nb[0].y) / 2.0)
     nodes = na[:-1] + [junction] + nb[1:]
     edges = ea + eb
-    closed = len(nodes) > 3 and (nodes[0] - nodes[-1]).length() < 1e-6
+    # the far ends met too: a loop. Within a hair, not exactly -- pieces
+    # trimmed to the same outline end a few thousandths apart.
+    closed = (len(nodes) > 3
+              and (nodes[0] - nodes[-1]).length() < _CLOSE_TOL)
     if closed:
-        nodes = nodes[:-1]                     # ends met too: a loop
+        nodes[0] = Vec2((nodes[0].x + nodes[-1].x) / 2.0,
+                        (nodes[0].y + nodes[-1].y) / 2.0)
+        nodes = nodes[:-1]
     return nodes, edges, closed, len(na) - 1
+
+
+#: mm: welded pieces whose far ends come this close close into a loop
+_CLOSE_TOL = 0.05
 
 
 def _editpath_from_world(nodes, edges, closed, base):
@@ -3411,7 +3420,6 @@ class Canvas(QGraphicsView):
     # -- extend a line to the next outline --------------------------------
     def _do_extend(self, world: Vec2) -> None:
         """Click near an open path's end: grow it until it meets an outline."""
-        from leathercad.trim import _seg_intersect
         pick = 15.0 / max(self._zoom, 1e-6)
         best = None
         best_d = pick
@@ -3478,21 +3486,20 @@ class Canvas(QGraphicsView):
         if d.length() < 1e-9:
             return
         d = d.normalized()
-        far = Vec2(end.x + d.x * 10000.0, end.y + d.y * 10000.0)
-        hit = None
-        hit_d = float("inf")
+        # Run into the other outlines' TRUE lines, arcs and curves: stopping
+        # on their flattened polygons left the end a hair inside a curve.
+        from leathercad.trim import Cutter, first_hit
+        cutters = []
         for other in self.scene_obj.items():
             if (other is it or not isinstance(other, ShapeItem)
                     or not other.isVisible()):
                 continue                  # don't stop at hidden geometry
-            opts, _c, _cl = other.model.world_polyline()
-            for k in range(len(opts) - 1):
-                p = _seg_intersect(end, far, opts[k], opts[k + 1])
-                if p is None:
-                    continue
-                dd = ((p.x - end.x) ** 2 + (p.y - end.y) ** 2) ** 0.5
-                if 1e-6 < dd < hit_d:
-                    hit_d, hit = dd, p
+            segs = self._segments_world(other.model)
+            if segs:
+                cutters.append(Cutter(segs,
+                                      closed=other.model.local_path().closed))
+        got = first_hit(end, d, cutters)
+        hit, hit_d = (got[1], got[0]) if got is not None else (None, 0.0)
         if hit is None:
             self.statusMessage.emit(
                 "Nothing to extend to in that direction")
@@ -4026,6 +4033,10 @@ class Canvas(QGraphicsView):
             if partner is not None:
                 self._fillet_across(it, idx, partner, chamfer)
                 return
+            # ... or this path's OWN other end: the last corner of an outline
+            # welded together from pieces corner by corner. Close it there.
+            if self._fillet_close_self(it, chamfer):
+                return
             self.statusMessage.emit(
                 "Fillet: this is a loose end — bring another line's end to "
                 "this point (they snap), then click their corner")
@@ -4127,6 +4138,28 @@ class Canvas(QGraphicsView):
             if ((w.x - wpos.x) ** 2 + (w.y - wpos.y) ** 2) ** 0.5 <= tol:
                 return jt, j
         return None
+
+    def _fillet_close_self(self, it, chamfer: bool) -> bool:
+        """An open path whose two ends meet (within the weld slop) at the
+        clicked corner: close it into a loop there and round that corner.
+        Each fillet across two pieces welds them, so the fourth corner of a
+        four-piece outline is one path's start meeting its own end -- it
+        used to be refused as a loose end. False if the ends don't meet."""
+        path = self._fillet_open_path(it.model)
+        if path is None:
+            return False
+        nodes, edges = path
+        tol = max(0.75, 8.0 / max(self._zoom, 1e-6))     # as _fillet_partner
+        if (len(nodes) < 3 or (nodes[0] - nodes[-1]).length() > tol):
+            return False
+        if len(nodes) == 3 and all(e.kind == "line" for e in edges):
+            return False                  # out and back along one line
+        junction = Vec2((nodes[0].x + nodes[-1].x) / 2.0,
+                        (nodes[0].y + nodes[-1].y) / 2.0)
+        # n-1 nodes and the same n-1 edges: the last edge now closes the loop
+        self._finish_fillet([it], [junction] + nodes[1:-1], edges, True, 0,
+                            chamfer, it.model)
+        return True
 
     def _fillet_across(self, it_a, idx_a, partner, chamfer: bool) -> None:
         """Weld two open paths at their meeting ends and round that corner.
@@ -6217,31 +6250,44 @@ class Canvas(QGraphicsView):
         """The ShapeItem whose outline passes nearest ``click`` (within a few
         px), or None."""
         best, best_d = None, float("inf")
+        tol = 12.0 / max(self._zoom, 1e-3)     # ~12 px in mm
         for it in self._trim_targets():
-            wpts, _c, _cl = it.model.world_polyline()
-            d = _point_polyline_dist(click, [Vec2(p.x, p.y) for p in wpts])
+            r = it.sceneBoundingRect()
+            if (click.x < r.left() - tol or click.x > r.right() + tol
+                    or click.y < r.top() - tol or click.y > r.bottom() + tol):
+                continue                      # nowhere near this one
+            # the outline as drawn (cached on the item)
+            d = _point_polyline_dist(click, it.world_outline())
             if d < best_d:
                 best_d, best = d, it
-        tol = 12.0 / max(self._zoom, 1e-3)     # ~12 px in mm
         return best if (best is not None and best_d <= tol) else None
 
     def _trim_cutters(self, exclude):
-        """World polylines of every other outline/seam, used as cut lines."""
+        """Every other outline / seam near ``exclude``, as cutters holding
+        their TRUE lines, arcs and curves -- cutting against the flattened
+        outline put each cut on a chord, a hair inside a curve, and left a
+        nub where two curves cross at a shallow angle."""
+        from leathercad.trim import Cutter, TOUCH_TOL
+        near = None
+        if exclude is not None:
+            m = 2.0 * TOUCH_TOL + 0.5
+            near = exclude.sceneBoundingRect().adjusted(-m, -m, m, m)
         cutters = []
         for it in self._live:
             if it is exclude or not _alive(it) or not it.isVisible():
                 continue                  # a hidden layer cuts nothing
+            if near is not None and not it.sceneBoundingRect().intersects(near):
+                continue                  # too far away to cut it
             if isinstance(it, ShapeItem):
-                wpts, _c, closed = it.model.world_polyline()
-                poly = [Vec2(p.x, p.y) for p in wpts]
-                if closed and poly and (poly[0] - poly[-1]).length() > 1e-9:
-                    poly.append(poly[0])
-                if len(poly) >= 2:
-                    cutters.append(poly)
+                segs = self._segments_world(it.model)
+                if segs:
+                    cutters.append(Cutter(segs,
+                                          closed=it.model.local_path().closed))
             elif isinstance(it, StitchLineItem):
                 poly = [Vec2(p.x, p.y) for p in it.line.points]
-                if len(poly) >= 2:
-                    cutters.append(poly)
+                if len(poly) >= 2:        # a closed seam cuts along its
+                    cutters.append(Cutter.from_polyline(   # closing edge too
+                        poly, closed=bool(getattr(it.line, "closed", False))))
         return cutters
 
     def _update_trim_hover(self, click: Vec2) -> None:
@@ -6252,9 +6298,11 @@ class Canvas(QGraphicsView):
         if it is not None:
             segs = self._segments_world(it.model)
             if segs:
-                closed = it.model.world_polyline()[2]
+                closed = it.model.local_path().closed
+                # cut from the outline as drawn, so the red lies ON the line
                 poly = removed_cell_polyline(segs, self._trim_cutters(it),
-                                             click, closed)
+                                             click, closed,
+                                             display=it.world_outline())
         if not poly or len(poly) < 2:
             self._clear_trim_hover()
             return
@@ -6287,7 +6335,7 @@ class Canvas(QGraphicsView):
         segs = self._segments_world(model)
         if not segs:
             return
-        closed = model.world_polyline()[2]
+        closed = model.local_path().closed
         result = _trim(segs, self._trim_cutters(it), click, closed)
 
         self._suppress_commit = True
@@ -6301,7 +6349,10 @@ class Canvas(QGraphicsView):
                          else (pts[1] if kind == "arc" and len(pts) >= 3
                                else None))
                         for kind, pts in chain]
-                sh = _path_from_chain(conv, 0.6, model.layer)
+                # never re-close what was trimmed open: a loop with a small
+                # span cut out ends a hair apart, and Join's 0.6 mm closed it
+                # back up (the span came straight back)
+                sh = _path_from_chain(conv, 1e-9, model.layer)
                 # still a guide / fold / group member / named part
                 copy_shape_attrs(model, sh)
                 self.doc.add_shape(sh)

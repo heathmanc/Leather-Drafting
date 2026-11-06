@@ -173,6 +173,9 @@ is cut back to the two points where it crosses other geometry — the classic
 2D-sketch trim from Fusion 360 / LightBurn. Curve type is kept (a trimmed arc
 stays an arc); a closed shape opens up, and an open path clicked in the middle
 splits into two. Clicking a piece that nothing crosses removes it outright.
+Cuts land on the true lines, arcs and curves, and a line drawn to end on the
+outline shares its end point with the trimmed piece, so the pieces join and
+fillet cleanly.
 
 ![trim: click a segment to cut it back to its intersections](docs/trim.png)
 

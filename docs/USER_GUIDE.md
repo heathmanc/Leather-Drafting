@@ -230,9 +230,9 @@ Hold **Shift** while placing any line-like point to lock the segment to
 | **Slot** | `T` | Two clicks; a stadium-shaped slot (for buckle tongues, strap slots). |
 | **Score line** | `K` | Click points; lands on the **Score** layer (fold/skive/decoration). |
 | **Stitch line (seam)** | `M` | A standalone seam of holes — see [Tutorial 3](#16-tutorial-3--two-pieces-sharing-one-seam). |
-| **Trim** | `X` | Click the piece of an outline you want gone (red preview on hover). |
-| **Fillet / chamfer corner** | `6` | Set the **radius** and **Round / Chamfer** mode in the toolbar box, then click any corner of a polygon/path to round or bevel it with a true arc — rounding blends into curved sides (arcs, beziers, trimmed ellipses). |
-| **Extend to intersection** | `7` | Click the **end** of a line/path: it grows until it meets the next outline or guide (the opposite of Trim). |
+| **Trim** | `X` | Click the piece of an outline you want gone (red preview on hover, drawn right on the outline). |
+| **Fillet / chamfer corner** | `6` | Set the **radius** and **Round / Chamfer** mode in the toolbar box, then click any corner of a polygon/path to round or bevel it with a true arc — rounding blends into curved sides (arcs, beziers, trimmed ellipses). Works where two pieces' ends meet, and where an outline's own two ends meet (it closes there). |
+| **Extend to intersection** | `7` | Click the **end** of a line/path: it grows until it meets the next outline or guide, landing exactly on it (the opposite of Trim). |
 | **Offset outline** | `8` | Click a shape, then move the cursor **inside or outside** it — a dashed preview follows with the live distance in the status bar. Click to place the offset copy, or press **Enter** to type an exact distance. Circles offset to true circles and rounded rectangles keep proper rounded corners. The copy is what its source was: offsetting a construction guide gives another guide, never a cut line. |
 | **Text** | `A` | Click to place engraved lettering. |
 | **Measure** | `Q` | Two clicks; length/angle/dx/dy in the status bar. |
@@ -519,9 +519,15 @@ extra construction.
 
 * **Trim** (`X`) — click the part of an outline you want gone; it is cut back
   to where it crosses other geometry, like Fusion 360 / LightBurn trim. The
-  doomed piece highlights red on hover. Arcs survive trimming as arcs. A
-  line drawn to end on an outline counts as meeting it even if it stops a
-  hair short (up to 0.05 mm).
+  doomed piece highlights red on hover, drawn right on the outline. Cuts land
+  on the true lines, arcs and curves, so a trimmed end sits exactly on the
+  outline it was trimmed to. Arcs survive trimming as arcs. A line drawn to
+  end on an outline counts as meeting it even if it stops a hair short or
+  runs a hair past (up to 0.05 mm), and the trimmed outline then ends exactly
+  at that line's end: the two share one point, ready to join or fillet. A
+  crossing within 0.3 mm of the free end of the piece you trim doesn't leave a
+  sliver behind; it goes with the span you click (click the sliver itself to
+  remove just that).
 * **Break apart** (`Ctrl+B`) — explode a shape into its individual edges
   (lines and arcs), each independently movable.
 * **Node editing extras** — while editing nodes, **right-click a node** for
@@ -597,7 +603,10 @@ extra construction.
   it's a persistent box, no popup and no modifier keys. It also works across
   **two separate lines whose ends meet**: draw two lines into a corner (they
   snap), click the corner, and the lines are **welded into one path** with the
-  arc between them — the classic draft-then-round workflow. **Rounding blends
+  arc between them — the classic draft-then-round workflow. Round an outline
+  made of separate pieces corner by corner and the last corner, where the
+  welded path's own two ends meet, closes it into one loop and is rounded
+  like the rest. **Rounding blends
   into curves**: where a side of the corner is curved — an arc, a bezier, or
   an ellipse cut with Trim / Boolean (stored as many short straight pieces) —
   the fillet is the true tangent circle and eats as far along the curve as the

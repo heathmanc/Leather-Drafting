@@ -84,7 +84,7 @@ app = BUNDLE(
     bundle_identifier="com.stitchhero.app",
     info_plist={
         "NSHighResolutionCapable": True,
-        "CFBundleShortVersionString": "0.4.0",
+        "CFBundleShortVersionString": "0.4.1",
         "NSHumanReadableCopyright": "MIT license",
     },
 )

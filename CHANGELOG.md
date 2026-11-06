@@ -4,6 +4,40 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
+## 0.4.1 — 2026-11-06
+
+Fixes from a report on trimming and rounding a bookmark outline: two circles
+joined by two arcs, with the circles' inner arcs trimmed away and the four
+corners rounded at 35 mm.
+
+### Trim
+* **Cuts land on the true outline.** Trim cut against a flattened copy of the
+  other outlines, so a cut on a curve stopped up to 0.02 mm inside it. Where
+  two curves cross at a shallow angle, that left a nub (0.08 mm at a circle's
+  quadrant) or an end running past the other piece. Trim now cuts against the
+  real lines, arcs and curves.
+* **One shared end point.** A cut line that stops a hair short of the outline,
+  or runs a hair past it (up to 0.05 mm), cuts at its end, and the trimmed
+  outline ends exactly there: the two pieces share one point.
+* **No slivers at a free end.** A crossing within 0.3 mm of the free end of
+  the piece you trim goes with the span you click instead of staying behind.
+  Click the sliver itself to remove just that.
+* **The red preview lies on the line.** The hover highlight is cut from the
+  outline as it is drawn, so it covers the line it marks at any zoom.
+* Trimming a small span out of a closed outline leaves it open. Under 0.6 mm,
+  it closed straight back up.
+* A closed seam cuts along its closing edge too.
+
+### Fillet
+* **The last corner closes the outline.** Rounding an outline made of pieces
+  corner by corner welds them into one path; at the last corner, where that
+  path's own two ends meet, the fillet now closes the loop and rounds the
+  corner instead of calling it a loose end.
+* Welded pieces whose far ends meet within 0.05 mm close into a loop.
+
+### Extend
+* Extend lands exactly on curves, not on their flattened copy.
+
 ## 0.4.0 — 2026-10-29
 
 A review of the GUI's performance, the tools and the stitch-spacing options,

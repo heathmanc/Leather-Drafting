@@ -432,6 +432,13 @@ panel also shows the selected piece's area.
 * Select the shape plus loose holes → right-click → **Group holes into shape**
   (`Ctrl+Shift+A`) to bake them back in, so they ride with the shape. Baked
   holes are never redistributed — what you placed is what gets cut.
+* **Several pieces at once:** select everything (`Ctrl+A`) and press
+  `Ctrl+Shift+A` — each loose hole goes back to the piece it lies inside
+  (the smaller one where pieces overlap, so a pocket's holes go to the
+  pocket, not the panel under it). A hole on an open line goes to that
+  line. Holes inside no selected piece stay loose and stay selected, and
+  guides never take holes. With just one piece selected, every selected
+  hole goes to it, wherever it is.
 
 ![Individual holes](individual_holes.png)
 
@@ -544,9 +551,10 @@ extra construction.
 * **Join / weld** (`Ctrl+J`) — select several touching segments and weld them
   back into one continuous path (arcs kept). Only **Cut**-layer pieces are
   joined; score / engrave / stitch lines in the selection are left alone, so
-  you can select a whole broken-apart piece and only its outline welds. The
-  result is a plain path — turn on **Stitching** in Properties to add holes,
-  and attach loose holes inside a welded outline with `Ctrl+Shift+A`.
+  you can select a whole broken-apart piece and only its outline welds. Loose
+  holes in the selection go back to the piece they lie inside, so **Break
+  apart, select it all, Join** brings a stitched piece back whole, holes
+  attached, as one undo step.
 * **Offset / seam allowance** (`Ctrl+Shift+O`) — create a parallel copy of the
   selected outline: positive = outward, negative = inward. Use it for seam
   allowances, linings, or an outer glue line. Circles and (rounded)
@@ -708,7 +716,8 @@ linear dimensions it's an annotation — never exported.
   Score or Engrave is honoured when the colour didn't match one of yours.
 * **Circles → stitch holes** (Edit menu) — manually reclassify any selected
   circles as loose stitch holes (for imports where hole colour didn't match a
-  layer); then attach them to their piece with `Ctrl+Shift+A`.
+  layer); then select everything and press `Ctrl+Shift+A` to attach each
+  one to the piece it's inside.
 * **Your work is safe.** A `•` in the title bar means unsaved changes; closing
   then asks whether to save. Unsaved work is also **auto-saved every two
   minutes**, and if the program (or your computer) ever dies, the next launch

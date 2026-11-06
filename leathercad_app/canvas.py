@@ -3274,8 +3274,9 @@ class Canvas(QGraphicsView):
             self._add_item(HoleItem(lh, self))
         self._suppress_commit = False
         self.statusMessage.emit(
-            f"{len(circles)} circle(s) are now stitch holes — group them to a "
-            "shape with Ctrl+Shift+A if they belong to a piece")
+            f"{len(circles)} circle(s) are now stitch holes — to attach them, "
+            "select everything and press Ctrl+Shift+A (each goes to the "
+            "piece it's inside)")
         self.documentChangedSig.emit()
         self.selectionChangedSig.emit()
         self._emit_commit()
@@ -6222,7 +6223,8 @@ class Canvas(QGraphicsView):
             self._emit_commit()
             self.statusMessage.emit(
                 f"Exploded into {len(made)} loose holes — move or delete them "
-                "one by one; Ctrl+Shift+A attaches them to a piece again")
+                "one by one; to put them back, select everything and press "
+                "Ctrl+Shift+A (each goes to the piece it's inside)")
         else:
             self.statusMessage.emit(
                 "Nothing to explode: the selection has no stitch holes")
@@ -6482,7 +6484,8 @@ class Canvas(QGraphicsView):
             self._emit_commit()
             self.statusMessage.emit(
                 f"Broke {len(shapes) + len(texts)} into {len(made)} pieces "
-                "(stitch holes are loose holes now)")
+                "(stitch holes are loose holes now — select it all and "
+                "Ctrl+J joins it back, holes and all)")
         else:
             self.statusMessage.emit(
                 "Nothing to break apart: single lines and text with no "
@@ -6496,11 +6499,20 @@ class Canvas(QGraphicsView):
         Only OPEN, CUT-layer segments are joined. Score / engrave / stitch
         pieces and already-closed shapes (circles, finished outlines) are left
         untouched, so selecting the whole document welds only the loose cut
-        edges -- never a fold line, and never a standalone relief hole."""
-        sel = [it for it in self.selected_items() if isinstance(it, ShapeItem)]
+        edges -- never a fold line, and never a standalone relief hole.
+
+        Loose holes in the selection then go back to the piece they lie
+        inside (see ``_hole_homes``): break a stitched part apart, select it
+        all and Join, and it comes back whole with its holes attached. One
+        undo step for the lot."""
+        picked = self.selected_items()
+        sel = [it for it in picked if isinstance(it, ShapeItem)]
+        holes = [it for it in picked if isinstance(it, HoleItem)]
         shapes = [it for it in sel if self._is_open_cut(it.model)]
         if len(shapes) < 2:
-            if len(sel) >= 2:
+            if holes:
+                self._join_holes_home(sel, holes, [], None)
+            elif len(sel) >= 2:
                 self.statusMessage.emit(
                     "Join welds open Cut segments — select 2+ of them")
             else:
@@ -6528,9 +6540,12 @@ class Canvas(QGraphicsView):
         if not welded and len(made) == len(shapes):
             # no two ends met: nothing changes (rebuilding the same pieces
             # under new ids pushed an undo step that undid nothing)
-            self.statusMessage.emit(
-                f"Nothing to join: no two ends meet within {tol:g} mm — "
-                "move the pieces so their ends touch")
+            nothing = (f"Nothing to join: no two ends meet within {tol:g} mm "
+                       "— move the pieces so their ends touch")
+            if holes:
+                self._join_holes_home(sel, holes, [], nothing)
+            else:
+                self.statusMessage.emit(nothing)
             return
         # the welded path is still what its pieces were: a guide, a fold, a
         # group member -- and stitched if they were (Join dropped stitching)
@@ -6549,15 +6564,49 @@ class Canvas(QGraphicsView):
         items = [self._add_item(ShapeItem(self.doc.add_shape(m), self))
                  for m in made]
         self._suppress_commit = False
+        joined = (f"Joined {len(shapes)} pieces into {len(made)} path"
+                  f"{'s' if len(made) != 1 else ''}")
+        if holes:
+            # the welded paths stand in for the pieces they were made from
+            others = [it for it in sel if it not in shapes]
+            self._join_holes_home(items + others, holes, items, joined)
+            return
         self.scene_obj.clearSelection()
         for m in items:
             m.setSelected(True)
         self.documentChangedSig.emit()
         self.selectionChangedSig.emit()
         self._emit_commit()
-        self.statusMessage.emit(
-            f"Joined {len(shapes)} pieces into {len(made)} path"
-            f"{'s' if len(made) != 1 else ''}")
+        self.statusMessage.emit(joined)
+
+    def _join_holes_home(self, parts, holes, welded, joined) -> None:
+        """Join's second half: the selected loose ``holes`` go back to the
+        piece among ``parts`` they lie inside. ``welded`` are the paths the
+        first half made (``joined`` its message, or why nothing was welded);
+        sends the signals and the one undo step for both halves."""
+        homes, loose = self._hole_homes(holes, parts)
+        notes = self._attach_homes(homes)
+        none_inside = "none of the selected holes is inside a selected piece"
+        if not homes and not welded:
+            self.statusMessage.emit(
+                (joined + " · " if joined else "")
+                + none_inside[0].upper() + none_inside[1:]
+                + " — nothing attached")
+            return
+        self.scene_obj.clearSelection()
+        keep = list(welded) + [it for it in homes if it not in welded]
+        self._set_selected_many(keep + loose)
+        self.documentChangedSig.emit()
+        self.selectionChangedSig.emit()
+        self._emit_commit()
+        bits = [joined] if welded else []
+        bits.append(self._attached_text(homes, loose, notes) if homes
+                    else none_inside)
+        if joined and not welded:
+            bits.append(joined)               # why no segments were welded
+        msg = bits[0] + "".join(
+            " — " + b[0].lower() + b[1:] for b in bits[1:])
+        self.statusMessage.emit(msg[0].upper() + msg[1:])
 
     def _layer_role(self, name: str) -> str:
         lyr = self.doc.layer(name)
@@ -6623,17 +6672,112 @@ class Canvas(QGraphicsView):
         return segs
 
     # -- group: individual holes -> baked into a shape -----------------
+    #: mm: a hole inside no selected piece still goes to one whose outline
+    #: passes this close (holes along an open line, or right on an edge)
+    _ATTACH_NEAR = 1.0
+
     def group_selected(self) -> None:
-        """Bake selected loose holes into the single selected shape so they
-        move with it (no redistribution). Needs exactly one shape selected."""
+        """Attach the selected loose holes to the selected piece(s), unmoved,
+        so they move with it. With ONE piece selected every hole goes to it.
+        With several, each hole goes back to the piece it lies inside: after
+        exploding the stitching, select everything and attach once, instead
+        of a piece and its own holes at a time. Holes inside none of them
+        stay loose (and stay selected)."""
         sel = self.selected_items()
         shapes = [it for it in sel if isinstance(it, ShapeItem)]
         holes = [it for it in sel if isinstance(it, HoleItem)]
-        if len(shapes) != 1 or not holes:
+        if not shapes or not holes:
             self.statusMessage.emit(
-                "Group: select one shape and the holes to attach to it")
+                "Attach holes: select the holes and the piece(s) they belong "
+                "to — with several pieces, each hole goes to the piece it's "
+                "inside")
             return
-        shape_item = shapes[0]
+        if len(shapes) == 1:
+            homes, loose = {shapes[0]: list(holes)}, []
+        else:
+            homes, loose = self._hole_homes(holes, shapes)
+            if not homes:
+                self.statusMessage.emit(
+                    "None of the selected holes is inside a selected piece — "
+                    "nothing attached")
+                return
+        notes = self._attach_homes(homes)
+        self.scene_obj.clearSelection()
+        self._set_selected_many(list(homes) + loose)
+        self.documentChangedSig.emit()
+        self.selectionChangedSig.emit()
+        self._emit_commit()
+        self.statusMessage.emit(self._attached_text(homes, loose, notes))
+
+    def _hole_homes(self, holes, shapes):
+        """Where each loose hole belongs: ``({piece item: [hole items]},
+        [hole items with no home])``. A hole goes to the piece it lies
+        inside -- the innermost when pieces nest (a pocket laid on a panel)
+        -- or, inside none, to a piece whose outline passes within
+        ``_ATTACH_NEAR`` of it. Only cut-layer pieces take holes, never a
+        guide or a score / engrave shape."""
+        from leathercad.geometry import point_in_polygon
+        from leathercad.offset import signed_area
+        parts = []
+        for it in shapes:
+            m = it.model
+            if (getattr(m, "construction", False)
+                    or self._layer_role(m.layer) != "cut"):
+                continue
+            pts = it.world_outline()
+            if len(pts) < 2:
+                continue
+            closed = bool(m.local_path().closed)
+            box = (min(p.x for p in pts), min(p.y for p in pts),
+                   max(p.x for p in pts), max(p.y for p in pts))
+            area = abs(signed_area(pts)) if closed else 0.0
+            parts.append((it, pts, closed, area, box))
+        near = self._ATTACH_NEAR
+        homes, loose = {}, []
+        for h in holes:
+            p = h.hole.point
+            best, best_area = None, None
+            for it, pts, closed, area, box in parts:
+                if (closed and box[0] <= p.x <= box[2]
+                        and box[1] <= p.y <= box[3]
+                        and (best is None or area < best_area)
+                        and point_in_polygon(p, pts)):
+                    best, best_area = it, area
+            if best is None:                  # inside none: on an outline?
+                best_d = near
+                for it, pts, closed, area, box in parts:
+                    if not (box[0] - near <= p.x <= box[2] + near
+                            and box[1] - near <= p.y <= box[3] + near):
+                        continue
+                    d = _point_polyline_dist(p, pts)
+                    if d <= best_d:
+                        best, best_d = it, d
+            if best is None:
+                loose.append(h)
+            else:
+                homes.setdefault(best, []).append(h)
+        return homes, loose
+
+    def _attach_homes(self, homes):
+        """Attach each piece's holes (``{piece item: [hole items]}``);
+        returns the notes worth showing. No signals or undo step -- the
+        caller sends those once."""
+        notes = []
+        prev = self._suppress_commit
+        self._suppress_commit = True
+        try:
+            for it, hs in homes.items():
+                note = self._attach_holes_to(it, hs)
+                if note and note not in notes:
+                    notes.append(note)
+        finally:
+            self._suppress_commit = prev
+        return notes
+
+    def _attach_holes_to(self, shape_item, holes):
+        """Bake the loose ``holes`` (HoleItems) into ``shape_item``'s piece,
+        unmoved. Returns a note when they take on the piece's own hole style,
+        else None."""
         sh = shape_item.model
         had_holes = bool(sh.baked_holes)
         baked = list(sh.baked_holes) if sh.baked_holes else []
@@ -6659,6 +6803,7 @@ class Canvas(QGraphicsView):
         # (Only when the piece had no holes of its own: its stitching keeps
         # its style -- one style covers all of a piece's holes.)
         h0 = holes[0].hole
+        note = None
         if sh.stitch is None:
             sh.stitch = StitchSettings(enabled=False)
         if not had_holes:
@@ -6671,14 +6816,23 @@ class Canvas(QGraphicsView):
             sh.stitch.slit_angle = mirrored_slit_angle(h0.slit_angle,
                                                        sh.transform.mirror_x)
         elif h0.hole_style != sh.stitch.hole_style:
-            self.statusMessage.emit(
-                "Attached — the holes take this piece's "
-                f"{sh.stitch.hole_style} style")
+            note = (f"the holes take this piece's {sh.stitch.hole_style} "
+                    "style")
         shape_item.sync_from_model()
-        self.scene_obj.clearSelection()
-        shape_item.setSelected(True)
-        self.documentChangedSig.emit()
-        self._emit_commit()
+        return note
+
+    @staticmethod
+    def _attached_text(homes, loose, notes) -> str:
+        n = sum(len(hs) for hs in homes.values())
+        k = len(homes)
+        msg = (f"Attached {n} hole{'s' if n != 1 else ''} to "
+               + ("the piece" if k == 1 else f"{k} pieces"))
+        if loose:
+            msg += (f" — {len(loose)} not inside any selected piece stayed "
+                    "loose (still selected)")
+        if notes:
+            msg += " — " + "; ".join(notes)
+        return msg
 
     # -- move-groups (select & move several items as one) --------------
     @staticmethod

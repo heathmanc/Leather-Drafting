@@ -142,13 +142,13 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Line length / angle** | select a line and type its **Length** and **Angle** in Properties (the first point stays put) — not just its x/y position |
 | **Snap to nodes** | with Snap on, dragging a shape (or a node while editing) magnetically snaps to other shapes'/holes' nodes |
 | **Break apart** | right-click a shape → *Break apart into segments* (`Ctrl+B`) — each edge (line or arc) becomes its own movable piece |
-| **Join / weld** | select 2+ pieces → *Join / weld segments* (`Ctrl+J`) — chains segments whose endpoints touch into one path (arcs kept) |
+| **Join / weld** | select 2+ pieces → *Join / weld segments* (`Ctrl+J`) — chains segments whose endpoints touch into one path (arcs kept); loose holes in the selection attach to the piece they're inside |
 | **Trim** | Trim tool (`X`) — click the part of an outline you want gone; it's cut back to wherever it crosses another shape, just like Fusion 360 / LightBurn. Arcs are preserved; a closed shape opens, an open one splits |
 | **Text** | Text tool (`A`) — click to place **engrave lettering**; glyph outlines are baked to paths on the Engrave layer and export as engrave polylines |
 | **Measure** | Measure tool (`Q`) — click two (snapped) points for a live **length / angle / dx / dy** readout in the status bar |
 | **Dimension** | Dimension tool (`D`) — click two points to drop a permanent **dimension annotation** (extension lines, arrows, measured length). Snap the ends onto a shape and the dimension **tracks it**: move or resize the shape and the length updates. Annotations only — never cut or exported |
 | **Group (move together)** | select two or more items (holes, shapes, seams) → **Group** (`Ctrl+G`) — they share a group and move as one unit; clicking any member selects the whole group. **Ungroup** (`Ctrl+Shift+G`) breaks it apart. Survives save/undo |
-| **Attach holes to shape** | *Attach holes to shape* (`Ctrl+Shift+A`) bakes loose holes into a single shape so they ride with it for cross-piece registration; *Explode stitching → holes* turns a shape's stitching back into individual, deletable holes (they stay in the piece's move-group) |
+| **Attach holes to shape** | *Attach holes to shape* (`Ctrl+Shift+A`) bakes loose holes into a shape so they ride with it for cross-piece registration — select several pieces (or everything) and each hole goes to the piece it's inside; *Explode stitching → holes* turns a shape's stitching back into individual, deletable holes (they stay in the piece's move-group) |
 | **Right-click menu** | Group / Ungroup / Attach holes / Convert to nodes / Duplicate / Delete on the selection |
 | **Radius corners** | select a rectangle/polygon, set *Corner radius* in Properties |
 | **Iron & holes** | per shape: pick an iron from the standard mm ladder (SPI shown) or type any pitch (`25.4/7` works), inset, round or slanted-slit holes, single or **double row** (saddle stitch) + backstitch on open runs, live hole count + spacing readout |

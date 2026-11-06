@@ -1056,7 +1056,7 @@ class MainWindow(QMainWindow):
                       "click corners (or the point where two line ends meet)",
             m.EXTEND: "Extend: click the END of a line/path to grow it until it "
                       "meets the next outline or guide",
-            m.ARC3: "3-point arc: click start, end, then a point on the arc",
+            m.ARC3: "3-point arc: click the start, a point on the arc, then the end",
             m.ARCCENTER: "Centre arc: click the centre, the start, then the end",
             m.CIRCLE2: "2-point circle: click the two ends of a diameter",
             m.CIRCLE3: "3-point circle: click three points on the circle",

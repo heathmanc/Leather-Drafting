@@ -3023,6 +3023,7 @@ def test_three_point_circle(qapp):
 
 
 def test_three_point_arc(qapp):
+    from PySide6.QtCore import QPointF
     from leathercad_app.mainwindow import MainWindow
     from leathercad_app import canvas as cm
     from leathercad.document import Document
@@ -3035,12 +3036,32 @@ def test_three_point_arc(qapp):
     c.snap_to_grid = False
     c.snap_to_nodes = False
     c.tool = cm.ARC3
-    _multi_click(c, [(0, 0), (40, 0), (20, 15)])       # start, end, through
+    # start, a point on the arc, then the end -- the order the prompts ask for
+    assert cm._MULTI_HINT[(cm.ARC3, 1)] == "arc: click a point on the arc"
+    assert cm._MULTI_HINT[(cm.ARC3, 2)] == "arc: click the end point"
+    _multi_click(c, [(0, 0), (20, 15)])
+    # the preview, with the cursor where the end will go, is the arc to come:
+    # from the start, through the point on it, ending at the cursor (it used
+    # to take the second click as the END and bend through the cursor)
+    c._update_multi_preview(QPointF(40, 0))
+    prev = c._preview.path()
+    ppts = [prev.elementAt(i) for i in range(prev.elementCount())]
+    assert (round(ppts[0].x, 6), round(ppts[0].y, 6)) == (0.0, 0.0)
+    assert (round(ppts[-1].x, 6), round(ppts[-1].y, 6)) == (40.0, 0.0)
+    assert round(max(p.y for p in ppts), 1) == 15.0
+    _multi_click(c, [(40, 0)])
     eps = [s for s in win.doc.shapes if isinstance(s, EditablePath)]
     assert len(eps) == 1
-    assert [e.kind for e in eps[0].edges] == ["arc"]
-    wpts = [eps[0].transform.apply(p) for p in eps[0].local_path().flatten()]
+    ep = eps[0]
+    assert [e.kind for e in ep.edges] == ["arc"]
+    t = ep.transform
+    ends = [(round(t.apply(p).x, 6), round(t.apply(p).y, 6)) for p in ep.nodes]
+    assert ends == [(0.0, 0.0), (40.0, 0.0)]           # starts and ends there
+    mid = t.apply(ep.edges[0].mid)
+    assert (round(mid.x, 6), round(mid.y, 6)) == (20.0, 15.0)   # through it
+    wpts = [t.apply(p) for p in ep.local_path().flatten()]
     assert round(max(p.y for p in wpts), 1) == 15.0    # bulges through the point
+    assert round(min(p.y for p in wpts), 6) >= -1e-6   # the short way round
     assert len(wpts) > 8                               # a real arc, not a chord
 
 

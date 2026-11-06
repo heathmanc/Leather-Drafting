@@ -176,7 +176,7 @@ FILLET = "fillet"        # click a corner to round it (Shift = chamfer)
 EXTEND = "extend"        # click a line's end to grow it to the next outline
 OFFSET = "offset"        # click a shape, move inside/outside, click to place
 UNDERLAYCAL = "underlaycal"   # two clicks on the tracing image -> real distance
-ARC3 = "arc3"            # 3-point arc: start, end, then a point on the arc
+ARC3 = "arc3"            # 3-point arc: start, a point on the arc, then the end
 ARCCENTER = "arccenter"  # centre arc: centre, start, end (sweeps CCW)
 CIRCLE2 = "circle2"      # 2-point circle: two ends of a diameter
 CIRCLE3 = "circle3"      # 3-point circle: through three points
@@ -189,8 +189,8 @@ _MULTI_TOOLS = (ARC3, ARCCENTER, CIRCLE2, CIRCLE3)
 _MULTI_NEED = {ARC3: 3, ARCCENTER: 3, CIRCLE2: 2, CIRCLE3: 3}
 # (tool, points already placed) -> prompt for the next click
 _MULTI_HINT = {
-    (ARC3, 1): "arc: click the end point",
-    (ARC3, 2): "arc: click a point on the arc (its bulge)",
+    (ARC3, 1): "arc: click a point on the arc",
+    (ARC3, 2): "arc: click the end point",
     (ARCCENTER, 1): "centre arc: click the start point (sets the radius)",
     (ARCCENTER, 2): "centre arc: click the end point (sweeps counter-clockwise)",
     (CIRCLE2, 1): "circle: click the opposite end of the diameter",
@@ -2791,14 +2791,18 @@ class Canvas(QGraphicsView):
         elif tool == ARC3:
             if len(pts) == 1:
                 path.moveTo(pts[0]); path.lineTo(cursor)
-            elif len(pts) == 2:                          # start, end placed
-                poly = self._arc_flatten(pts[0], cursor, pts[1])   # through=cursor
+            elif len(pts) == 2:              # start and a point on it placed:
+                # the arc from the start, through that point, ending at the
+                # cursor -- the arc the next click makes. (This used to treat
+                # the second click as the END, so the preview bent the wrong
+                # way and a point snapped onto looked like it became the end.)
+                poly = self._arc_flatten(pts[0], pts[1], cursor)
                 if len(poly) >= 2:
                     path.moveTo(poly[0].x, poly[0].y)
                     for p in poly[1:]:
                         path.lineTo(p.x, p.y)
                 else:
-                    path.moveTo(pts[0]); path.lineTo(pts[1])
+                    path.moveTo(pts[0]); path.lineTo(pts[1]); path.lineTo(cursor)
         elif tool == ARCCENTER:
             if len(pts) == 1:                            # centre placed -> radius
                 r = math.hypot(cursor.x() - pts[0].x(), cursor.y() - pts[0].y())
@@ -2845,7 +2849,7 @@ class Canvas(QGraphicsView):
                 sh = Circle(rx=r, ry=r, transform=Transform(x=c.x, y=c.y),
                             stitch=self._default_stitch(), layer=self._current_layer)
         elif tool == ARC3 and len(pts) == 3:
-            # points placed as start, end, through
+            # points placed as start, a point on the arc, end
             sh = self._make_arc_shape(pts[0], pts[2], pts[1])
         elif tool == ARCCENTER and len(pts) == 3:
             tri = self._centre_arc_through(pts[0], pts[1], pts[2])

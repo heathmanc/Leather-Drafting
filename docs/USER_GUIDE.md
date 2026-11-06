@@ -220,7 +220,7 @@ Hold **Shift** while placing any line-like point to lock the segment to
 | **Circle** | `C` | First click = centre, second sets the radius. |
 | **Circle (2-point)** | `2` | Click the two ends of a **diameter**. |
 | **Circle (3-point)** | `3` | Click three points on the rim — the circle is fitted through them. |
-| **Arc (3-point)** | `4` | Click the **start**, the **end**, then a point the arc must pass through (its bulge). |
+| **Arc (3-point)** | `4` | Click the **start**, a **point on the arc** (it passes through it), then the **end**. The preview follows the cursor as the end. |
 | **Arc (centre)** | `5` | Click the **centre**, the **start** (sets the radius), then the **end** — sweeps counter-clockwise. |
 | **Polygon** | `P` | Click each vertex; double-click or `Enter` to close. |
 | **Pen (bezier curve)** | `B` | See below. |

@@ -1556,12 +1556,61 @@ class Canvas(QGraphicsView):
             return
         start = handle.pos()
         # snap to OTHER objects (and their intersections), not the shape being
-        # edited -- otherwise the node just sticks to its own neighbours.
+        # edited -- otherwise the node just sticks to its own neighbours...
         owner = getattr(handle, "owner", None)
         cands = (self._snap_candidates(exclude=owner)
-                 + self._all_intersections(exclude=owner))
+                 + self._all_intersections(exclude=owner)
+                 + self._own_node_targets(handle))
         self._snap_cache = [c for c in cands
                             if (c.x - start.x()) ** 2 + (c.y - start.y()) ** 2 > 0.25]
+
+    def _own_node_targets(self, handle):
+        """...but the shape's own OTHER nodes are fair game: an arc's middle
+        node onto a node elsewhere on the same outline (a bookmark welded
+        into one path had nothing left to snap to), an open path's end onto
+        its start. Never the nodes this drag would collapse onto -- a node's
+        neighbours, the middles of the arcs either side of it, or the two
+        ends of the arc whose middle is dragged."""
+        node = getattr(handle, "node", None)
+        owner = getattr(handle, "owner", None)
+        topo = getattr(owner, "path_topology", None)
+        if node is None or topo is None or getattr(node, "is_ctrl", False):
+            return []
+        n, closed = topo()
+        m = n if closed else n - 1                 # edges: k runs k -> k+1
+        if n < 2:
+            return []
+        if node.is_mid:
+            if node.edge is None:
+                return []
+            skip_nodes = {node.edge, (node.edge + 1) % n}
+            skip_edges = {node.edge}
+        else:
+            i = node.index
+            if i is None:
+                return []
+            skip_nodes = {i}
+            skip_edges = set()
+            for k in (i - 1, i + 1):
+                if closed or 0 <= k < n:
+                    skip_nodes.add(k % n)
+            for k in (i - 1, i):                    # the edges into / out of i
+                if closed or 0 <= k < m:
+                    skip_edges.add(k % m if m else k)
+        out = []
+        for h in self._handles:
+            hn = getattr(h, "node", None)
+            if (h is handle or hn is None or getattr(h, "owner", None) is not owner
+                    or getattr(hn, "is_ctrl", False)):
+                continue                  # bezier handles aren't on the path
+            if hn.is_mid:
+                if hn.edge is None or hn.edge in skip_edges:
+                    continue
+            elif hn.index is None or hn.index in skip_nodes:
+                continue
+            p = h.pos()
+            out.append(Vec2(p.x(), p.y()))
+        return out
 
     def snap_node(self, value: QPointF) -> QPointF:
         if not self.snap_to_nodes or self._snap_cache is None:

@@ -336,8 +336,12 @@ nodes* / *Convert to editable nodes*, `Ctrl+K`) to edit its geometry
 point-by-point:
 
 * **White squares** — on-path vertices. Drag them; they snap to other
-  geometry. Hold **Shift** to constrain the node's movement to 0/45/90°.
-* **Orange circles** — arc midpoints. Drag to reshape the arc.
+  geometry and to the other nodes of the shape you're editing (an open
+  path's end onto its start, say), but never onto their own neighbours.
+  Hold **Shift** to constrain the node's movement to 0/45/90°.
+* **Orange circles** — arc midpoints. Drag to reshape the arc; they snap the
+  same way, to other geometry and to the shape's other nodes (not to the two
+  ends of their own arc).
 * **Green dots** — bezier control handles. Drag to reshape the curve (these
   move freely, no snapping).
 

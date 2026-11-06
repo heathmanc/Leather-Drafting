@@ -1573,23 +1573,34 @@ class ShapeItem(QGraphicsItem):
             closed = getattr(sh, "close_path", False)
             for i in range(len(sh.points)):
                 out.append(NodeRef(t.apply(sh.points[i]), self._set_point(i),
-                                   ref=neighbour(sh.points, i, closed)))
+                                   ref=neighbour(sh.points, i, closed),
+                                   index=i))
         elif isinstance(sh, EditablePath):
             for i in range(len(sh.nodes)):
                 out.append(NodeRef(t.apply(sh.nodes[i]), self._set_epnode(i),
-                                   ref=neighbour(sh.nodes, i, sh.closed)))
-            for e in sh.edges:
+                                   ref=neighbour(sh.nodes, i, sh.closed),
+                                   index=i))
+            for k, e in enumerate(sh.edges):
                 if e.kind == "arc" and e.mid is not None:
                     out.append(NodeRef(t.apply(e.mid), self._set_epmid(e),
-                                       is_mid=True))
+                                       is_mid=True, edge=k))
                 elif e.kind == "bezier":
                     if e.c1 is not None:
                         out.append(NodeRef(t.apply(e.c1), self._set_edge_c1(e),
-                                           is_ctrl=True))
+                                           is_ctrl=True, edge=k))
                     if e.c2 is not None:
                         out.append(NodeRef(t.apply(e.c2), self._set_edge_c2(e),
-                                           is_ctrl=True))
+                                           is_ctrl=True, edge=k))
         return out
+
+    def path_topology(self):
+        """(number of on-path nodes, closed) -- for node snapping."""
+        sh = self.model
+        if hasattr(sh, "nodes"):
+            return len(sh.nodes), bool(sh.closed)
+        if hasattr(sh, "points"):
+            return len(sh.points), bool(getattr(sh, "close_path", False))
+        return 0, False
 
     def _set_point(self, i):
         def s(world):
@@ -1840,15 +1851,20 @@ class NodeRef:
     """One editable node: its world position + a setter that takes a new world
     point and writes it back to the model (converting to local)."""
 
-    __slots__ = ("world", "setter", "is_mid", "ref", "is_ctrl")
+    __slots__ = ("world", "setter", "is_mid", "ref", "is_ctrl", "index", "edge")
 
     def __init__(self, world: Vec2, setter, is_mid: bool = False, ref=None,
-                 is_ctrl: bool = False):
+                 is_ctrl: bool = False, index=None, edge=None):
         self.world = world
         self.setter = setter
         self.is_mid = is_mid
         self.ref = ref     # world pos of the adjacent node (for Shift-ortho)
         self.is_ctrl = is_ctrl   # a bezier tangent-control handle
+        # where it sits on the path: an on-path node's own number, or the
+        # edge an arc middle / bezier handle belongs to (edge k runs from
+        # node k to node k+1) -- so node snapping knows its neighbours
+        self.index = index
+        self.edge = edge
 
 
 class StitchLineItem(QGraphicsItem):
@@ -2004,8 +2020,12 @@ class StitchLineItem(QGraphicsItem):
         out = []
         for i in range(len(self.line.points)):
             p = self.line.points[i]
-            out.append(NodeRef(Vec2(p.x, p.y), self._set_pt(i)))
+            out.append(NodeRef(Vec2(p.x, p.y), self._set_pt(i), index=i))
         return out
+
+    def path_topology(self):
+        """(number of on-path nodes, closed) -- for node snapping."""
+        return len(self.line.points), bool(getattr(self.line, "closed", False))
 
     def _set_pt(self, i):
         def s(world):

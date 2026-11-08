@@ -4,6 +4,30 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
+## 0.4.2 — 2026-11-08
+
+### Holes
+* **Select everything and the holes go home.** After exploding a piece's
+  stitching, select everything and press `Ctrl+Shift+A`: each loose hole is
+  attached to the piece it lies inside. Where pieces overlap it goes to the
+  smaller one (a pocket's holes to the pocket, not the panel under it), a
+  hole on an open line goes to that line, and guides never take holes. Holes
+  inside no piece stay loose and stay selected. With one piece selected,
+  every selected hole still goes to it.
+* **Break apart, select all, Join** brings a stitched piece back whole: Join
+  (`Ctrl+J`) welds the outline and attaches the loose holes inside it, as one
+  undo step. It attaches holes even when there is nothing to weld.
+
+### Drawing and editing
+* **3-point arc:** the status-bar prompts and the dashed preview now follow
+  start, a point on the arc, then the end, the order the finished arc already
+  used. After the second click the preview treated that point as the end, so
+  a point snapped onto another node looked as if it had become the arc's end.
+* **Node editing:** a dragged node also snaps to the other nodes of the shape
+  being edited (an arc's middle onto a node elsewhere on the same outline, an
+  open path's end onto its start), never onto the neighbours it would
+  collapse onto.
+
 ## 0.4.1 — 2026-11-06
 
 Fixes from a report on trimming and rounding a bookmark outline: two circles

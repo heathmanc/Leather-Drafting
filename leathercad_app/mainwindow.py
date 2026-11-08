@@ -2119,8 +2119,13 @@ class MainWindow(QMainWindow):
         from leathercad.shapes import Circle
         from leathercad.holes import LooseHole
         from leathercad.geometry import Vec2
+        from leathercad.export import export_color
         color_layers = {lyr.color.lower(): lyr.name
                         for lyr in self.doc.layers}
+        for lyr in self.doc.layers:
+            # our own SVG writes the stock stitch blue as LightBurn's blue:
+            # that colour still means the Stitch layer when it comes back in
+            color_layers.setdefault(export_color(lyr.color).lower(), lyr.name)
         try:
             shapes = import_file(fn, color_layers=color_layers)
         except Exception as e:

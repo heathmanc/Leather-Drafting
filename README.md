@@ -161,7 +161,7 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Duplicate / Delete / Fit** | `Ctrl+D` / `Del` or `Backspace` / `F` |
 | **Zoom / pan** | mouse wheel / middle-drag |
 | **Save / Open** | `Ctrl+S` / `Ctrl+O` (JSON project files) |
-| **Export** | SVG `Ctrl+E` or DXF — millimetre-accurate, layer-coloured. DXF outlines export as connected **POLYLINE**s (closed shapes carry the closed flag), so LightBurn / Illustrator import them as one contour instead of loose line segments |
+| **Export** | SVG `Ctrl+E` or DXF — millimetre-accurate, layer-coloured. SVG layers are named and ordered **holes** first, **outline** last; the holes are LightBurn's own blue, so in LightBurn they land on layer C01, ahead of the red outline on C02, and are cut first. DXF outlines export as connected **POLYLINE**s (closed shapes carry the closed flag), so LightBurn / Illustrator import them as one contour instead of loose line segments |
 | **Print / PDF (1:1)** | **Export PDF (1:1, tiled)** and **Print** `Ctrl+P` render the pattern at **true 1:1 scale** (1 mm = 1 mm on paper). Patterns bigger than a sheet are split into overlapping **tiles** with crop marks and `row/col` page labels — line the pages up on the overlap and tape. Each page prints a labelled reference box so you can confirm your printer isn't scaling |
 
 Everything is in **millimetres**, Y-up, and the canvas is WYSIWYG with the export.

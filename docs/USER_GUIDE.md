@@ -725,8 +725,10 @@ linear dimensions it's an annotation — never exported.
   internally you get a plain-language dialog — your work is auto-saved first,
   and the technical details land in an error log you can send along with a bug
   report.
-* **Export SVG** (`Ctrl+E`) — millimetre-accurate, hairline strokes, grouped
-  and coloured by layer. Ideal for LightBurn, Inkscape, or a browser preview.
+* **Export SVG** (`Ctrl+E`) — millimetre-accurate, hairline strokes, one
+  named layer per layer, coloured by layer: **holes** first, then any score /
+  engrave layers, then the **outline** — so a piece is cut free only after
+  its holes. Ideal for LightBurn, Inkscape, or a browser preview.
 * **Export DXF** — R12 DXF. Outlines are written as connected **POLYLINE**s
   (closed shapes carry the closed flag), so LightBurn / Illustrator /
   QCAD import each piece as one contour, not loose segments.
@@ -745,9 +747,17 @@ linear dimensions it's an annotation — never exported.
   Kerf assumes a cut layout (pieces side by side); 1:1 printing is never
   kerf-compensated.
 
-**Typical LightBurn workflow**: Export SVG → drag into LightBurn → the red
-layer becomes your cut, blue becomes the stitch-hole cut (small holes: slow
-speed, full power works well), green a light score, grey an engrave.
+**Typical LightBurn workflow**: Export SVG → drag into LightBurn → the blue
+holes land on LightBurn's layer **C01** and the red outline on **C02**, so
+the holes come first in LightBurn's layer list and are cut first (small
+holes: slow speed, full power works well); green becomes a light score, grey
+an engrave. LightBurn files an SVG's shapes into its layers by **colour** and
+doesn't read layer names from the file, so its layers show as C01 / C02. To
+see them as *holes* and *outline*, name those two layers once in LightBurn
+(with your speeds and powers) and save that as your starting project: every
+Stitch Hero SVG you import into it lands on those named layers. (The stock
+stitch blue is written as LightBurn's own blue, `#0000FF`; a stitch colour
+you pick yourself is written as it is.)
 
 ---
 

@@ -1,8 +1,10 @@
 """SVG export sized in real millimetres for laser cutting.
 
-Two layers are emitted with distinct stroke colours so they map to laser jobs:
-  * ``cut``   -- the pattern outline(s)            (red   hairline)
-  * ``holes`` -- the stitch holes                  (blue)
+Two named layers are emitted, holes first, with distinct stroke colours so
+they map to laser jobs (LightBurn files them by colour: its blue layer C01
+comes before its red layer C02, so the holes are cut first):
+  * ``holes``   -- the stitch holes                (LightBurn blue #0000ff)
+  * ``outline`` -- the pattern outline(s)          (red hairline)
 
 Stitch holes render either as round holes (a circle of a chosen diameter) or as
 slanted slits oriented to the local path tangent -- the diamond-awl look. The
@@ -20,7 +22,7 @@ from .stitching import StitchResult
 
 
 CUT_COLOR = "#ff0000"
-HOLE_COLOR = "#0066ff"
+HOLE_COLOR = "#0000ff"   # LightBurn's own blue (its layer C01)
 HAIRLINE = 0.05  # mm
 
 
@@ -88,24 +90,16 @@ class SvgDocument:
 
         out: List[str] = []
         out.append(
-            f"<svg xmlns='http://www.w3.org/2000/svg' version='1.1' "
-            f"width='{_fmt(w)}mm' height='{_fmt(h)}mm' "
+            f"<svg xmlns='http://www.w3.org/2000/svg' "
+            f"xmlns:inkscape='http://www.inkscape.org/namespaces/inkscape' "
+            f"version='1.1' width='{_fmt(w)}mm' height='{_fmt(h)}mm' "
             f"viewBox='0 0 {_fmt(w)} {_fmt(h)}'>")
         out.append(
             f"  <!-- leathercad export. Units: mm. 1 user unit = 1 mm. -->")
 
-        # cut layer
-        out.append(f"  <g id='cut' fill='none' stroke='{CUT_COLOR}' "
-                   f"stroke-width='{HAIRLINE}'>")
-        for pl in self._cut_polylines:
-            if len(pl) < 2:
-                continue
-            d = "M " + " L ".join(f"{_fmt(X(p.x))} {_fmt(Y(p.y))}" for p in pl)
-            out.append(f"    <path d='{d}' />")
-        out.append("  </g>")
-
-        # holes layer
-        out.append(f"  <g id='holes' fill='none' stroke='{HOLE_COLOR}' "
+        # holes layer first: a piece is cut free only after its holes
+        out.append(f"  <g id='holes' inkscape:groupmode='layer' "
+                   f"inkscape:label='holes' fill='none' stroke='{HOLE_COLOR}' "
                    f"stroke-width='{HAIRLINE}'>")
         if self._slit_length is None:
             r = self._hole_diameter / 2.0
@@ -124,6 +118,17 @@ class SvgDocument:
                     f"    <line x1='{_fmt(X(a.x))}' y1='{_fmt(Y(a.y))}' "
                     f"x2='{_fmt(X(b.x))}' y2='{_fmt(Y(b.y))}' "
                     f"stroke-linecap='round' />")
+        out.append("  </g>")
+
+        # then the outline
+        out.append(f"  <g id='outline' inkscape:groupmode='layer' "
+                   f"inkscape:label='outline' fill='none' "
+                   f"stroke='{CUT_COLOR}' stroke-width='{HAIRLINE}'>")
+        for pl in self._cut_polylines:
+            if len(pl) < 2:
+                continue
+            d = "M " + " L ".join(f"{_fmt(X(p.x))} {_fmt(Y(p.y))}" for p in pl)
+            out.append(f"    <path d='{d}' />")
         out.append("  </g>")
 
         out.append("</svg>")

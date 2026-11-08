@@ -25,6 +25,22 @@ def _layer_color(doc: Document, name: str, default: str) -> str:
     return lyr.color if lyr else default
 
 
+# LightBurn sorts an imported SVG into its colour layers by stroke colour (it
+# doesn't read layer names) and lists them in its palette's order: C00 black,
+# C01 blue #0000ff, C02 red #ff0000, ... The stock stitch blue isn't one of its
+# colours, so the holes landed on C14 -- after the red outline on C02, and cut
+# after it. Written as LightBurn's own blue they land on C01, ahead of the
+# outline. A colour the user picked is written as it is.
+STOCK_STITCH_COLOR = "#0066ff"
+LIGHTBURN_BLUE = "#0000ff"
+
+
+def export_color(color: str) -> str:
+    """The colour a layer colour is written in: the stock stitch blue as
+    LightBurn's own blue (its layer C01), any other colour unchanged."""
+    return LIGHTBURN_BLUE if color.lower() == STOCK_STITCH_COLOR else color
+
+
 def _wanted(doc, obj, selection, include, part):
     """Export filters: ``selection`` (ids to keep, or None for all) and
     ``include`` (which parts: 'outlines', 'holes', 'text')."""
@@ -270,6 +286,48 @@ def _bbox_all(outlines, stitches):
     return min(xs), min(ys), max(xs), max(ys)
 
 
+def _svg_layers(doc: Document, groups: dict, hole_colors: set):
+    """``[(label, lines)]`` in cutting order: the holes ("holes") first,
+    then the other layers (score, engrave, ...) under their own names, then
+    the outline ("outline" for the stock Cut layer, else the layer's name)
+    -- each group by its document layer's place in the layer list."""
+    ranked = []
+    for color, lines in groups.items():
+        lyr = next((ly for ly in doc.layers if ly.color.lower() == color),
+                   None)
+        role = lyr.role if lyr is not None else "cut"
+        if color in hole_colors or role == "stitch":
+            rank, label = 0, "holes"
+        elif role == "cut":
+            rank = 2
+            label = ("outline" if lyr is None or lyr.name == "Cut"
+                     else lyr.name)
+        else:
+            rank, label = 1, lyr.name
+        place = doc.layers.index(lyr) if lyr is not None else len(doc.layers)
+        ranked.append((rank, place, label, lines))
+    ranked.sort(key=lambda r: (r[0], r[1]))
+    return [(label, lines) for _r, _p, label, lines in ranked]
+
+
+def _svg_id(label: str, used: set) -> str:
+    """A unique XML id from a layer label ("Pocket cut" -> "pocket-cut")."""
+    base = "".join(ch if ch.isascii() and (ch.isalnum() or ch in "-_") else "-"
+                   for ch in label.lower()).strip("-") or "layer"
+    if base[0].isdigit():
+        base = "layer-" + base
+    gid, n = base, 2
+    while gid in used:
+        gid, n = f"{base}-{n}", n + 1
+    used.add(gid)
+    return gid
+
+
+def _xml_attr(text: str) -> str:
+    return (text.replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace("'", "&apos;").replace('"', "&quot;"))
+
+
 def export_svg(doc: Document, path: str, *, margin: float = 6.0,
                hairline: float = 0.05, kerf: float | None = None,
                selection=None, include=None) -> None:
@@ -294,12 +352,20 @@ def export_svg(doc: Document, path: str, *, margin: float = 6.0,
 
     out: List[str] = []
     out.append(
-        f"<svg xmlns='http://www.w3.org/2000/svg' version='1.1' "
-        f"width='{_fmt(w)}mm' height='{_fmt(h)}mm' "
+        f"<svg xmlns='http://www.w3.org/2000/svg' "
+        f"xmlns:inkscape='http://www.inkscape.org/namespaces/inkscape' "
+        f"version='1.1' width='{_fmt(w)}mm' height='{_fmt(h)}mm' "
         f"viewBox='0 0 {_fmt(w)} {_fmt(h)}'>")
     out.append("  <!-- leathercad export. Units: mm. 1 user unit = 1 mm. -->")
 
-    out.append("  <g id='outlines' fill='none'>")
+    # Elements are gathered per colour (= per document layer), then written
+    # as named layers: the holes first, then score / engrave and the like,
+    # the outline last -- a piece is cut free only after its holes.
+    groups: dict = {}
+
+    def put(color: str, line: str) -> None:
+        groups.setdefault(color.lower(), []).append(line)
+
     if exact is not None:
         for segs, color, closed in exact:
             d = [f"M {_fmt(X(segs[0][1].x))} {_fmt(Y(segs[0][1].y))}"]
@@ -324,19 +390,21 @@ def export_svg(doc: Document, path: str, *, margin: float = 6.0,
                     d.append(f"L {_fmt(X(sg[2].x))} {_fmt(Y(sg[2].y))}")
             if closed:
                 d.append("Z")
-            out.append(f"    <path d='{' '.join(d)}' stroke='{color}' "
+            put(color, f"    <path d='{' '.join(d)}' "
+                       f"stroke='{export_color(color)}' "
                        f"stroke-width='{hairline}' />")
     else:
         for pl, color in outlines:
             if len(pl) < 2:
                 continue
             d = "M " + " L ".join(f"{_fmt(X(p.x))} {_fmt(Y(p.y))}" for p in pl)
-            out.append(f"    <path d='{d}' stroke='{color}' "
+            put(color, f"    <path d='{d}' stroke='{export_color(color)}' "
                        f"stroke-width='{hairline}' />")
-    out.append("  </g>")
 
-    out.append("  <g id='stitches' fill='none'>")
+    hole_colors = set()
     for res, settings, color in stitches:
+        hole_colors.add(color.lower())
+        sc = export_color(color)
         if settings.hole_style == "diamond":
             # the beam enlarges the hole: shrink the length by ~a kerf
             length = max(0.1, settings.slit_length - k)
@@ -344,8 +412,8 @@ def export_svg(doc: Document, path: str, *, margin: float = 6.0,
                 pts = diamond_points(hle.point, hle.tangent, length,
                                      settings.slit_angle, DIAMOND_WIDTH_RATIO)
                 pstr = " ".join(f"{_fmt(X(p.x))},{_fmt(Y(p.y))}" for p in pts)
-                out.append(
-                    f"    <polygon points='{pstr}' stroke='{color}' "
+                put(color,
+                    f"    <polygon points='{pstr}' stroke='{sc}' "
                     f"stroke-width='{hairline}' />")
         elif settings.hole_style == "slit":
             # the beam widens/lengthens the slit by ~a kerf: cut it shorter
@@ -355,21 +423,28 @@ def export_svg(doc: Document, path: str, *, margin: float = 6.0,
                 d = hle.tangent.rotate(slant)
                 a = hle.point - d * half
                 b = hle.point + d * half
-                out.append(
+                put(color,
                     f"    <line x1='{_fmt(X(a.x))}' y1='{_fmt(Y(a.y))}' "
                     f"x2='{_fmt(X(b.x))}' y2='{_fmt(Y(b.y))}' "
-                    f"stroke='{color}' stroke-width='{hairline}' "
+                    f"stroke='{sc}' stroke-width='{hairline}' "
                     f"stroke-linecap='round' />")
         else:
             # the beam enlarges holes: cut a smaller circle so the finished
             # hole comes out at the drawn diameter
             r = max(0.05, (settings.hole_diameter - k) / 2.0)
             for hle in res.holes:
-                out.append(
+                put(color,
                     f"    <circle cx='{_fmt(X(hle.point.x))}' "
                     f"cy='{_fmt(Y(hle.point.y))}' r='{_fmt(r)}' "
-                    f"stroke='{color}' stroke-width='{hairline}' />")
-    out.append("  </g>")
+                    f"stroke='{sc}' stroke-width='{hairline}' />")
+
+    used_ids: set = set()
+    for label, lines in _svg_layers(doc, groups, hole_colors):
+        gid = _svg_id(label, used_ids)
+        out.append(f"  <g id='{gid}' inkscape:groupmode='layer' "
+                   f"inkscape:label='{_xml_attr(label)}' fill='none'>")
+        out.extend(lines)
+        out.append("  </g>")
     out.append("</svg>")
 
     with open(path, "w", encoding="utf-8") as fh:

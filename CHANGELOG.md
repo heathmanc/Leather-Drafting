@@ -4,6 +4,22 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
+## 0.4.3 — 2026-11-09
+
+### Export
+* **Holes first in LightBurn.** LightBurn files an SVG's shapes into its
+  layers by colour and lists them in palette order (C01 blue before C02 red).
+  The stock stitch blue isn't one of its colours, so the holes landed on C14,
+  after the red outline. They are now written in LightBurn's own blue
+  (`#0000FF`) and land on C01, ahead of the outline on C02, so they are cut
+  first. A stitch colour you picked yourself is written as it is; colours on
+  screen are unchanged.
+* **Named SVG layers:** "holes" first, then any score / engrave layers, then
+  "outline", for programs that read layer names. LightBurn doesn't, so its
+  layers still show as C01 / C02: name them once in LightBurn and save that as
+  your starting project (the user guide has the steps).
+* Importing one of our SVGs back still puts the holes on the Stitch layer.
+
 ## 0.4.2 — 2026-11-08
 
 ### Holes

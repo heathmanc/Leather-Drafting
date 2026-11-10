@@ -4,7 +4,7 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
-## Unreleased
+## 0.4.4 — 2026-11-10
 
 ### Stitching
 * **Perfect fit.** A new toolbar toggle. With it on, dragging a resize grip on

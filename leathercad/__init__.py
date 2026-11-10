@@ -35,7 +35,7 @@ from .svg import SvgDocument
 from .trim import trim, intersection_arclengths
 from . import export
 
-__version__ = "0.4.3"
+__version__ = "0.4.4"
 
 __all__ = [
     "Vec2", "distance",

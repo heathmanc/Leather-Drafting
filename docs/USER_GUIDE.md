@@ -119,8 +119,9 @@ The user guide travels inside the app (Help → User guide still works).
   the small **▸ arrow** to pick another variant — the button remembers your
   choice. Every variant keeps its own keyboard shortcut.
 * **Actions toolbar** (top) — Undo/Redo, Duplicate, Delete, Group, Ungroup,
-  Fit, the **Nodes** and **Grid** snap toggles, the grid size, and the
-  **line** width spinner (on-screen stroke width, 0.3–8 px).
+  Fit, the **Nodes** and **Grid** snap toggles, **Perfect fit** (grips snap
+  to sizes where every stitch gap is exactly the pitch, §7), the grid size,
+  and the **line** width spinner (on-screen stroke width, 0.3–8 px).
 * **Properties panel** (right, `Ctrl+1`) — everything about the selected item:
   position, size, rotation, mirror, layer, opacity, and the whole stitching
   section. Closed it? View → Properties panel, or View → Reset panels.
@@ -386,6 +387,59 @@ row, per run and round the closing gap of a loop), and the effective pitch per
 span. When no whole-hole count comes within 12 % of your iron on some span, the
 readout says so in red: that piece wants a different size or pitch.
 
+**Use for new shapes** (the button at the bottom of the Stitching box) makes
+that piece's punch, pitch, inset and fit what every new shape starts with —
+now and the next time you open Stitch Hero. Set it once for the iron you
+own (say 5 mm at a 3.5 mm inset) instead of changing every new piece.
+
+### Perfect fit — sizes the iron walks exactly
+
+Fitting nudges the spacing a little on most sizes so the holes still land on
+every corner (the readout shows how far). At a few sizes nothing needs
+nudging: **every gap is exactly your pitch**, all the way round, so the iron
+walks the whole outline with no fudged stitch. Turn on **Perfect fit** in the
+top toolbar and the shapes find those sizes for you:
+
+* **Drag a resize grip** on a stitched rectangle, rounded rectangle, circle or
+  oval and it snaps to the nearest perfect size for that piece's own **Pitch**
+  and **Inset from edge**. The grip jumps a pitch at a time; the status bar
+  shows the size, the corner radius and the hole count, e.g. *Perfect fit:
+  191.0656 × 171.0656 mm, corners R 10.5328 mm (2 gaps each) · 136 holes,
+  every gap 5 mm at a 4 mm inset*.
+* **Draw** a rectangle, rounded rectangle, circle or ellipse and the rubber
+  band snaps the same way, for the stitching new shapes start with (see *Use
+  for new shapes* above).
+* **Edit → Snap to perfect fit** snaps every selected piece at once, about its
+  centre (handy after changing the pitch on several pieces). It works with the
+  toggle off.
+
+What makes a size perfect:
+
+* **Straights**: each straight run of the stitch line is a whole number of
+  pitches. With square stitch corners the piece is `2 × inset + k × pitch`
+  wide (102 × 62 mm at 5 mm pitch, 3.5 mm inset).
+* **Rounded corners**: a 90° corner takes the iron in exactly *n* gaps when its
+  outline radius is `inset + pitch ÷ (2 sin(45° ÷ n))` — at 5 mm pitch and a
+  3.5 mm inset that's R 7.0355 (1 gap), R 10.0328 (2), R 13.1593 (3)… Dragging a
+  grip snaps the corner radius to the nearest of these, then the width and
+  height to `2 × R + k × pitch`. A corner radius no bigger than the inset
+  leaves the stitch line a sharp corner (one hole on it), so it is kept as it is.
+  **Corners: midpoint** uses only even counts and **straddle** only odd ones
+  (plus 2, which is too short to straddle).
+* **Circles and ovals**: *n* equal gaps round the stitch line. These are
+  solved against the stitcher's own stitch line, which follows the drawn
+  outline to within a few hundredths of a millimetre of the ideal curve.
+
+Snapping only applies to pieces whose holes are still worked out from the
+outline: stitching on, holes not attached (fixed holes only scale), and for
+ovals every edge sewn. Other outlines (polygons, paths, lettering) resize
+freely, and the status bar says so. A rectangle with an unsewn edge stays
+exact. With **2 rows**, the row at the inset is the perfect one. A hardware
+keep-out cuts the seam wherever it sits, so the gaps either side of it can't be
+exact. **Exact pitch** fit marches from the start of the loop, so on a perfect
+size a rounded corner can still drift by a few thousandths of a millimetre;
+**Fit to corners & ends** (the default) lands exactly.
+
 ### Quoting a whole job
 
 **Edit → Job estimate (cut summary)…** rolls the entire pattern up into the
@@ -523,6 +577,11 @@ that x/y — Illustrator-style smart guides.
 While dragging a whole shape, it snaps by its own nodes (a circle by its
 **centre**), so you can drop a circle exactly onto a centre point without any
 extra construction.
+
+A third toggle, **Perfect fit**, snaps *sizes* instead of points: with it on, a
+resize grip on a stitched rectangle, circle or oval jumps between the sizes
+at which every stitch gap is exactly the pitch (see *Perfect fit* in §7).
+While it's sizing a piece, that grip ignores node snapping.
 
 ---
 
@@ -892,6 +951,7 @@ what the **Stitch line** tool is for.
 | `Ctrl+B` | Break apart into segments |
 | `Ctrl+J` | Join / weld segments |
 | `Ctrl+Shift+O` | Offset / seam allowance |
+| *(Edit menu)* | Snap to perfect fit: every gap exactly the pitch |
 | `Ctrl+Shift+R` | Array (grid / circular) |
 | `Ctrl+Shift+N` | Nest on sheet |
 | `Ctrl+Shift+P` | Parameters |

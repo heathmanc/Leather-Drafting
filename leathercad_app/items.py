@@ -363,7 +363,10 @@ class ResizeHandle(QGraphicsItem):
         self._dragged = False
         if self.canvas is not None:
             self.canvas._active_resize = self
-            self.canvas.begin_node_snap(self)
+            if self.canvas.perfect_fit_applies(self.owner):
+                self.canvas.end_node_snap()      # Perfect fit sizes it instead
+            else:
+                self.canvas.begin_node_snap(self)
             if getattr(self.canvas, "_resize_group", None):
                 self.canvas._begin_group_resize(self.owner)
         event.accept()
@@ -371,16 +374,23 @@ class ResizeHandle(QGraphicsItem):
     def mouseMoveEvent(self, event):
         if self.canvas is None:
             return
-        world = self.canvas.snap_node(event.scenePos())   # snap to other nodes
+        # Perfect fit sizes the shape itself, so a node it lands near
+        # doesn't get a say; otherwise the grip snaps to other nodes
+        perfect = self.canvas.perfect_fit_applies(self.owner)
+        world = (event.scenePos() if perfect
+                 else self.canvas.snap_node(event.scenePos()))
         self._dragged = True
         # Shift locks the aspect ratio (Photoshop-style); the persistent
         # canvas.aspect_lock toggle inverts what Shift does.
         shift = bool(event.modifiers() & Qt.ShiftModifier)
         lock = bool(getattr(self.canvas, "aspect_lock", False)) != shift
         self._apply_resize(Vec2(world.x(), world.y()), lock)
-        self._syncing = True
-        self.setPos(world)                                 # glyph follows cursor
-        self._syncing = False
+        if perfect:
+            self.reposition()          # the grip sits on the snapped size
+        else:
+            self._syncing = True
+            self.setPos(world)                             # glyph follows cursor
+            self._syncing = False
         event.accept()
 
     def mouseReleaseEvent(self, event):
@@ -423,6 +433,14 @@ class ResizeHandle(QGraphicsItem):
             hx_new, hy_new = hx * s, hy * s
         hx_new = max(0.5, hx_new)
         hy_new = max(0.5, hy_new)
+        fit = (self.canvas.perfect_fit_snap(owner, hx_new, hy_new, self.grip)
+               if self.canvas is not None else None)
+        if fit is not None:
+            # Perfect fit: the nearest size at which every stitch gap is the
+            # pitch -- a rounded rectangle's corners snap to a perfect radius
+            hx_new, hy_new = fit.hx, fit.hy
+            if fit.corner_radius is not None:
+                owner.model.corner_radius = fit.corner_radius
         owner.set_resize_extents(hx_new, hy_new)
         # Keep the anchor (opposite corner) pinned. Pin against the box the
         # owner ACTUALLY produced -- an owner like text re-bakes uniformly to

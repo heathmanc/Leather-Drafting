@@ -182,6 +182,7 @@ CIRCLE2 = "circle2"      # 2-point circle: two ends of a diameter
 CIRCLE3 = "circle3"      # 3-point circle: through three points
 
 _DRAG_TOOLS = (RECT, ROUNDED, ELLIPSE, CIRCLE, SLOT, LINE, CONSTRUCTION)
+_ROUNDED_RATIO = 0.18      # rounded-rectangle tool: corner radius / short side
 _POLY_TOOLS = (POLYGON, STITCHLINE, SCORE)
 # multi-click primitives (each click drops a point; the shape finalises once it
 # has enough points)
@@ -446,7 +447,11 @@ class Canvas(QGraphicsView):
         self._apply_zoom()
 
         self.tool = SELECT
-        self._default_stitch = lambda: StitchSettings(pitch_mm=3.85, inset=3.5)
+        # the stitching every new shape starts with: Properties > Stitching >
+        # "Use for new shapes" replaces it, and the main window restores the
+        # saved one at start-up
+        self.new_stitch = StitchSettings(pitch_mm=3.85, inset=3.5)
+        self._default_stitch = lambda: copy.deepcopy(self.new_stitch)
         self._current_layer = "Cut"
         self.fillet_radius: Optional[float] = None   # set by the toolbar box
         self.fillet_chamfer: bool = False            # Round vs Chamfer mode
@@ -517,6 +522,10 @@ class Canvas(QGraphicsView):
         # when True, dragging a resize grip keeps the shape's aspect ratio;
         # holding Shift inverts it (so Shift always toggles aspect-lock).
         self.aspect_lock = False
+        # Perfect fit: the resize grips, and the rectangle / circle / oval
+        # tools, snap to sizes where every stitch gap is exactly the pitch
+        # (leathercad.perfectfit). Off by default; a toolbar toggle.
+        self.perfect_fit = False
 
         # snapping -- grid and node snapping toggle independently
         self.snap_to_nodes = True    # ends / midpoints / centres / intersections
@@ -2083,10 +2092,20 @@ class Canvas(QGraphicsView):
             self._preview.setPath(path)
             self.statusMessage.emit(self._measure_text(self._start, pos))
         elif self._preview is not None and self._start is not None:
-            self._preview.setPath(self._preview_path(self._start, pos))
+            # Perfect fit: the rubber band shows the perfect size the shape
+            # will take (the cursor itself stays free)
+            end, fit = self._perfect_draw(self._start, pos)
+            self._preview.setPath(self._preview_path(
+                self._start, end,
+                fit.corner_radius if fit is not None else None))
             w = abs(pos.x() - self._start.x())
             h = abs(pos.y() - self._start.y())
-            if self.tool in (CIRCLE,):
+            if fit is not None:
+                kind = ("rect" if self.tool in (RECT, ROUNDED) else
+                        "circle" if self.tool == CIRCLE else "oval")
+                self.statusMessage.emit(self._perfect_fit_text(
+                    kind, fit, self._default_stitch()))
+            elif self.tool in (CIRCLE,):
                 r = math.hypot(w, h)          # through the cursor
                 self.statusMessage.emit(f"r {U.fmt(r)}   ø {U.fmt(2 * r)}")
             else:
@@ -2476,7 +2495,10 @@ class Canvas(QGraphicsView):
             super().keyPressEvent(event)
 
     # -- preview helpers ------------------------------------------------
-    def _preview_path(self, a: QPointF, b: QPointF) -> QPainterPath:
+    def _preview_path(self, a: QPointF, b: QPointF,
+                      radius: Optional[float] = None) -> QPainterPath:
+        """The rubber-band outline of a two-point tool; ``radius`` is a
+        rounded rectangle's corner radius when Perfect fit has chosen one."""
         path = QPainterPath()
         x0, y0 = min(a.x(), b.x()), min(a.y(), b.y())
         w, h = abs(b.x() - a.x()), abs(b.y() - a.y())
@@ -2487,7 +2509,7 @@ class Canvas(QGraphicsView):
             else:
                 path.addEllipse(x0, y0, w, h)
         elif self.tool == ROUNDED:
-            r = min(w, h) * 0.18
+            r = min(w, h) * _ROUNDED_RATIO if radius is None else radius
             path.addRoundedRect(x0, y0, w, h, r, r)
         elif self.tool == SLOT:
             r = min(w, h) / 2.0
@@ -2534,21 +2556,34 @@ class Canvas(QGraphicsView):
             self.statusMessage.emit(
                 "Too thin to be a shape — drag out both a width and a height")
             return False
+        # Perfect fit: the far corner moves to the perfect size the preview
+        # showed (checked above on the real drag, so a mis-click is still one)
+        b, fit = self._perfect_draw(a, b)
+        if fit is not None:
+            w, h = abs(b.x() - a.x()), abs(b.y() - a.y())
         cx, cy = (a.x() + b.x()) / 2, (a.y() + b.y()) / 2
         if self.tool == RECT:
+            if fit is not None:
+                w, h = 2.0 * fit.hx, 2.0 * fit.hy      # exact, not via b
             sh = Rectangle(width=w, height=h,
                            transform=Transform(x=cx, y=cy),
                            stitch=self._default_stitch(), layer=self._current_layer)
         elif self.tool == ROUNDED:
-            sh = Rectangle(width=w, height=h, corner_radius=min(w, h) * 0.18,
+            r = min(w, h) * _ROUNDED_RATIO
+            if fit is not None:
+                w, h, r = 2.0 * fit.hx, 2.0 * fit.hy, fit.corner_radius
+            sh = Rectangle(width=w, height=h, corner_radius=r,
                            transform=Transform(x=cx, y=cy),
                            stitch=self._default_stitch(), layer=self._current_layer)
         elif self.tool == CIRCLE:
             s = math.hypot(w, h)       # the circle passes through the click
+            if fit is not None:
+                s = fit.hx
             sh = Circle(rx=s, ry=s, transform=Transform(x=a.x(), y=a.y()),
                         stitch=self._default_stitch(), layer=self._current_layer)
         elif self.tool == ELLIPSE:
-            sh = Ellipse(rx=w / 2, ry=h / 2, transform=Transform(x=cx, y=cy),
+            rx, ry = (fit.hx, fit.hy) if fit is not None else (w / 2, h / 2)
+            sh = Ellipse(rx=rx, ry=ry, transform=Transform(x=cx, y=cy),
                          stitch=self._default_stitch(), layer=self._current_layer)
         elif self.tool == SLOT:
             sh = Rectangle(width=w, height=h, corner_radius=min(w, h) / 2.0,
@@ -2930,6 +2965,164 @@ class Canvas(QGraphicsView):
         self._active_resize = None
         self._resize_group = []
         self._resize_group_base = None
+
+    # -- perfect fit (see leathercad.perfectfit) --------------------------
+    def perfect_fit_applies(self, owner) -> bool:
+        """Whether a grip on ``owner`` snaps to perfect sizes right now."""
+        if not self.perfect_fit or isinstance(owner, TextItem):
+            return False
+        from leathercad.perfectfit import can_fit
+        model = getattr(owner, "model", None)
+        return model is not None and can_fit(model)
+
+    def perfect_fit_snap(self, owner, hx: float, hy: float, grip):
+        """With Perfect fit on: the perfect size nearest what a grip asks of
+        ``owner`` (half-extents), told on the status line -- or None, to
+        resize freely (the status line says why, when it's worth saying)."""
+        if not self.perfect_fit or isinstance(owner, TextItem):
+            return None
+        model = getattr(owner, "model", None)
+        if model is None:
+            return None
+        from leathercad.perfectfit import fit_shape
+        gx, gy = grip
+        axis = "both" if (gx and gy) else ("x" if gx else "y")
+        fit = fit_shape(model, hx, hy, axis)
+        if fit is None:
+            why = self._perfect_fit_refusal(model)
+            if why:
+                self.statusMessage.emit(why)
+            return None
+        kind = ("rect" if isinstance(model, Rectangle) else
+                "circle" if isinstance(model, Circle) else "oval")
+        self.statusMessage.emit(self._perfect_fit_text(kind, fit, model.stitch))
+        return fit
+
+    @staticmethod
+    def _perfect_fit_refusal(model) -> str:
+        st = getattr(model, "stitch", None)
+        stitched = st is not None and st.enabled
+        if isinstance(model, (Rectangle, Ellipse)):
+            if not stitched:
+                return ("Perfect fit: this piece isn't stitched, so it resizes "
+                        "freely")
+            if getattr(model, "baked_holes", None):
+                return ("Perfect fit: this piece's holes are attached, so it "
+                        "resizes freely")
+            return ("Perfect fit: this piece's stitching can't be made exact "
+                    "(an edge is left unsewn), so it resizes freely")
+        if stitched:
+            return ("Perfect fit snaps stitched rectangles, circles and ovals "
+                    "— this outline resizes freely")
+        return ""
+
+    @staticmethod
+    def _perfect_fit_text(kind: str, fit, st) -> str:
+        """The status line for a perfect size: what it is, and the pitch and
+        inset it is perfect for."""
+        def ln(mm, unit=True):
+            t = U.fmt_num(mm, None if U.is_inches() else 4)
+            if "." in t:
+                t = t.rstrip("0").rstrip(".")
+            return f"{t} {U.current()}" if unit else t
+
+        if kind == "rect":
+            size = f"{ln(2 * fit.hx, False)} × {ln(2 * fit.hy)}"
+            if fit.corner_gaps:
+                each = "gap" if fit.corner_gaps == 1 else "gaps"
+                size += (f", corners R {ln(fit.corner_radius)} "
+                         f"({fit.corner_gaps} {each} each)")
+            else:
+                size += ", square stitch corners"
+        elif kind == "circle":
+            size = f"ø {ln(2 * fit.hx)}"
+        else:
+            size = f"{ln(2 * fit.hx, False)} × {ln(2 * fit.hy)} oval"
+        return (f"Perfect fit: {size} · {fit.holes} holes, every gap "
+                f"{ln(st.pitch_mm)} at a {ln(st.inset)} inset")
+
+    def perfect_fit_selected(self) -> None:
+        """Edit > Snap to perfect fit: each selected stitched rectangle,
+        circle and oval takes the perfect size nearest its own, about its
+        centre -- what a nudge of a Perfect fit grip does, for a whole
+        selection at once (and with the toggle off too)."""
+        from leathercad.perfectfit import fit_shape
+        shapes = [it for it in self.selected_items()
+                  if isinstance(it, ShapeItem) and _alive(it)]
+        if not shapes:
+            self.statusMessage.emit("Select the pieces to snap to a perfect fit")
+            return
+        done = []
+        for it in shapes:
+            ext = it.resize_extents()
+            fit = fit_shape(it.model, ext[0], ext[1]) if ext else None
+            if fit is None:
+                continue
+            if fit.corner_radius is not None:
+                it.model.corner_radius = fit.corner_radius
+            it.set_resize_extents(fit.hx, fit.hy)
+            it.sync_from_model()
+            done.append((it, fit))
+        if not done:
+            self.statusMessage.emit(
+                self._perfect_fit_refusal(shapes[0].model)
+                or "Perfect fit snaps stitched rectangles, circles and ovals")
+            return
+        self.update_dimensions()
+        self._reposition_resize_handles()
+        self.geometryMovedSig.emit()
+        self.documentChangedSig.emit()
+        self._emit_commit()
+        if len(done) == 1:
+            it, fit = done[0]
+            m = it.model
+            kind = ("rect" if isinstance(m, Rectangle) else
+                    "circle" if isinstance(m, Circle) else "oval")
+            self.statusMessage.emit(self._perfect_fit_text(kind, fit, m.stitch))
+        else:
+            left = len(shapes) - len(done)
+            self.statusMessage.emit(
+                f"Snapped {len(done)} pieces to a perfect fit"
+                + (f" — {left} other{'s' if left != 1 else ''} can't be "
+                   "(only stitched rectangles, circles and ovals)"
+                   if left else ""))
+
+    def _perfect_draw(self, a: QPointF, b: QPointF):
+        """With Perfect fit on and the rectangle, rounded-rectangle, circle
+        or oval tool: ``(b, fit)`` with ``b`` moved so the shape drawn from
+        ``a`` comes out a perfect size for the new-shape pitch and inset.
+        ``(b, None)`` otherwise, or when no perfect size is near."""
+        if not self.perfect_fit or self.tool not in (RECT, ROUNDED, CIRCLE,
+                                                     ELLIPSE):
+            return b, None
+        from leathercad import perfectfit as pf
+        st = self._default_stitch()
+        if st is None or not st.enabled or not st.pitch_mm > 0:
+            return b, None
+        p, i = float(st.pitch_mm), max(0.0, float(st.inset or 0.0))
+        dx, dy = b.x() - a.x(), b.y() - a.y()
+        w, h = abs(dx), abs(dy)
+        sx = 1.0 if dx >= 0 else -1.0
+        sy = 1.0 if dy >= 0 else -1.0
+        if self.tool in (RECT, ROUNDED):
+            r0 = _ROUNDED_RATIO * min(w, h) if self.tool == ROUNDED else 0.0
+            fit = pf.fit_rectangle(w, h, r0, p, i, st.corner_style)
+            return QPointF(a.x() + sx * 2 * fit.hx, a.y() + sy * 2 * fit.hy), fit
+        even = st.symmetry in ("vertical", "horizontal")
+        if self.tool == CIRCLE:
+            r = math.hypot(w, h)
+            if r < 1e-6:
+                return b, None
+            fit = pf.fit_circle(r, p, i, st.start_offset, even)
+            if fit is None:
+                return b, None
+            k = fit.hx / r
+            return QPointF(a.x() + dx * k, a.y() + dy * k), fit
+        fit = pf.fit_ellipse(w / 2.0, h / 2.0, p, i, "both", st.start_offset,
+                             even)
+        if fit is None:
+            return b, None
+        return QPointF(a.x() + sx * 2 * fit.hx, a.y() + sy * 2 * fit.hy), fit
 
     def resize_handle_moved(self, dragged) -> None:
         # the shape geometry changed: move the sibling grips to the new box and

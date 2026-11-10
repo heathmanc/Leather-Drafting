@@ -4,6 +4,25 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
+## Unreleased
+
+### Stitching
+* **Perfect fit.** A new toolbar toggle. With it on, dragging a resize grip on
+  a stitched rectangle, rounded rectangle, circle or oval snaps it to the
+  nearest size where every gap between holes is exactly the pitch, at that
+  piece's own pitch and inset, so the iron walks the whole outline with no
+  fudged stitch. Straight runs of the stitch line become whole numbers of
+  pitches. A rounded corner snaps to a radius the iron turns in whole steps
+  (R 10.0328 takes a 5 mm iron round a 90° corner at a 3.5 mm inset in two).
+  Circles and ovals get a whole number of equal gaps. The status bar shows
+  the size, corner radius and hole count as you drag. Drawing a rectangle,
+  rounded rectangle, circle or ellipse snaps the same way.
+* **Edit → Snap to perfect fit** does the same for every selected piece at
+  once, about its centre, with or without the toggle.
+* **Use for new shapes** (Properties → Stitching): a piece's punch, pitch,
+  inset and fit become what every new shape starts with, and are remembered.
+  Before this, new shapes always started at 3.85 mm / 3.5 mm.
+
 ## 0.4.3 — 2026-11-09
 
 ### Export

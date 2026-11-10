@@ -43,6 +43,10 @@ does as you rotate it around a curve.
 It also nudges the pitch to the nearest whole-hole count so holes land cleanly
 on **every corner** and on **both ends** of an open seam — the thing
 leatherworkers do by hand — and the readout tells you how far it had to move.
+Or skip the nudge: with **Perfect fit** on, dragging a grip on a stitched
+rectangle, rounded rectangle, circle or oval snaps it to the nearest size where
+**every gap is exactly the pitch**. Straights become whole numbers of pitches,
+and corner radii become ones the iron turns in whole steps.
 
 On a **rounded corner** the holes come out **symmetric about the arc's
 midpoint** — either a stitch sitting right on the 45° apex or an even pair
@@ -246,6 +250,7 @@ Beyond drawing and stitching, Stitch Hero covers the rest of a real bench workfl
 | **Seam-mate check** | Verify that pieces sharing a seam actually line up hole-for-hole before you cut |
 | **Parts library** | Save any selection to a personal parts library and drop it into any document |
 | **Templates & generators** | Open a ready-made card holder, belt, key fob or slim card holder, or generate parametric **card-pocket stacks** and **zipper openings** |
+| **Perfect fit** | Toolbar toggle: resize grips and the rectangle / circle / oval tools snap to sizes where every stitch gap is exactly the pitch (corner radii included); *Edit → Snap to perfect fit* does a whole selection. *Use for new shapes* (Properties → Stitching) sets the pitch and inset every new shape starts with |
 | **Stitch only some edges** | right-click an edge of a stitched piece → *Don't stitch this edge*: the seam stops with a hole at the inset corner either side of a pocket's open mouth |
 | **Hardware library** | rivets, snaps, Chicago screws, Sam Browne studs, magnetic snaps, eyelets, buckle slots, turn locks and ring footprints in the Parts dock — each placed with the cut it needs and a **stitch keep-out** the seam flows round |
 | **Group rotate / scale / flip** | one rotate grip for a group or multi-selection; Arrange → Rotate 90°/180°/by…, Scale…, Move by…, Flip horizontal / vertical, Mirror across selected line; arrow-key nudge |
@@ -304,6 +309,7 @@ leathercad/            pure-Python model + engine (no dependencies)
   path.py              segments (line/arc/bezier), Path, PathBuilder, flattening
   offset.py            inward polygon offset (stitch-line inset)
   stitching.py         chord/arc marching + fitting + registration  <- the core
+  perfectfit.py        sizes at which every stitch gap is exactly the pitch
   stitchsettings.py    per-shape/seam stitch config
   shapes.py            Rectangle/Ellipse/Circle/Polygon/PathShape/EditablePath (line/arc/bezier) + transform + fillet
   layers.py            colour layers -> laser jobs

@@ -28,6 +28,14 @@ from .history import History
 from .icons import tool_icon
 
 
+# What "Use for new shapes" carries over to every new shape: the punch, its
+# spacing and how it fits -- not one piece's own symmetry, start point or
+# backstitch marks.
+_NEW_STITCH_FIELDS = ("pitch_mm", "inset", "punch_style", "hole_style",
+                      "hole_diameter", "slit_length", "slit_angle", "fit",
+                      "corner_style", "rows", "row_spacing")
+
+
 def app_icon() -> QIcon:
     """The window/taskbar icon, loaded from the bundled resources (works in
     both a source checkout and a PyInstaller build)."""
@@ -117,6 +125,7 @@ class MainWindow(QMainWindow):
         self.resize(1200, 800)
 
         self.canvas = Canvas(self.doc)
+        self._load_new_stitch()          # the pitch / inset new shapes get
         self.setCentralWidget(self._wrap_with_rulers(self.canvas))
         # every MathSpinBox in the app can use this document's parameters
         from . import mathspin
@@ -146,6 +155,7 @@ class MainWindow(QMainWindow):
         self.canvas.statusMessage.connect(self.sb_dims.setText)
         self.canvas.commitRequested.connect(self.commit)
         self.properties.committed.connect(self.commit)
+        self.properties.useForNewShapes.connect(self._save_new_stitch)
         self.layers.committed.connect(self.commit)
         self.layers.currentLayerChanged.connect(self._layer_changed)
 
@@ -508,6 +518,23 @@ class MainWindow(QMainWindow):
             lambda on: setattr(self.canvas, "snap_to_grid", on))
         tb.addAction(self.act_snap_grid)
 
+        self.act_perfect_fit = QAction("Perfect fit", self)
+        self.act_perfect_fit.setCheckable(True)
+        self.act_perfect_fit.setToolTip(
+            "Perfect fit: resizing — or drawing — a stitched rectangle,\n"
+            "rounded rectangle, circle or oval snaps it to the nearest size\n"
+            "at which every gap between holes is exactly the pitch, so the\n"
+            "iron walks the whole outline without a fudged gap.\n"
+            "It uses the piece's own Pitch and Inset (Properties ▸ Stitching);\n"
+            "a rounded rectangle's corners snap to a radius the iron can turn\n"
+            "too. New shapes take the pitch and inset set with\n"
+            "'Use for new shapes'.")
+        self.act_perfect_fit.setChecked(
+            self._settings().value("perfectFit", False, type=bool))
+        self.canvas.perfect_fit = self.act_perfect_fit.isChecked()
+        self.act_perfect_fit.toggled.connect(self._toggle_perfect_fit)
+        tb.addAction(self.act_perfect_fit)
+
         tb.addWidget(QLabel(" grid "))
         self.grid_combo = NoWheelComboBox()
         self._fill_grid_combo()
@@ -605,6 +632,56 @@ class MainWindow(QMainWindow):
         self.canvas.aspect_lock = bool(on)
         self._settings().setValue("aspectLock", bool(on))
 
+    def _toggle_perfect_fit(self, on):
+        self.canvas.perfect_fit = bool(on)
+        self._settings().setValue("perfectFit", bool(on))
+        if on:
+            st = self.canvas.new_stitch
+            self.statusBar().showMessage(
+                "Perfect fit on: drag a grip on a stitched rectangle, circle or "
+                "oval and it snaps to sizes where every gap is the pitch "
+                f"(new shapes: {_units.fmt(st.pitch_mm)} pitch, "
+                f"{_units.fmt(st.inset)} inset)", 8000)
+        else:
+            self.statusBar().showMessage("Perfect fit off", 3000)
+
+    def _load_new_stitch(self):
+        """Restore the stitching new shapes start with (saved by Properties >
+        Stitching > Use for new shapes)."""
+        from leathercad.stitchsettings import StitchSettings
+        raw = self._settings().value("newShapeStitch", "", type=str)
+        if not raw:
+            return
+        try:
+            data = json.loads(raw)
+            base = StitchSettings()
+            for k, v in data.items():
+                if k in _NEW_STITCH_FIELDS and isinstance(
+                        v, type(getattr(base, k))):
+                    setattr(base, k, v)
+                elif (k in _NEW_STITCH_FIELDS
+                      and isinstance(getattr(base, k), float)
+                      and isinstance(v, int)):
+                    setattr(base, k, float(v))
+            if base.pitch_mm > 0 and base.inset >= 0:
+                self.canvas.new_stitch = base
+        except (ValueError, TypeError, AttributeError):
+            pass                    # a damaged setting: keep the built-in one
+
+    def _save_new_stitch(self, st):
+        """Properties > Stitching > Use for new shapes: new shapes start with
+        ``st``'s punch, pitch, inset and fit from now on (and next time)."""
+        from leathercad.stitchsettings import StitchSettings
+        keep = StitchSettings()
+        for k in _NEW_STITCH_FIELDS:
+            setattr(keep, k, getattr(st, k))
+        self.canvas.new_stitch = keep
+        self._settings().setValue("newShapeStitch", json.dumps(
+            {k: getattr(keep, k) for k in _NEW_STITCH_FIELDS}))
+        self.statusBar().showMessage(
+            f"New shapes will stitch at {_units.fmt(keep.pitch_mm)} pitch, "
+            f"{_units.fmt(keep.inset)} inset ({keep.punch_style} punch)", 6000)
+
     def _line_width_changed(self, w):
         self.canvas.set_line_width(w)
         self._settings().setValue("lineWidth", w)
@@ -679,6 +756,8 @@ class MainWindow(QMainWindow):
         self._add(em, "Join / weld segments", "Ctrl+J", lambda: self.canvas.join_selected())
         self._add(em, "Offset / seam allowance…", "Ctrl+Shift+O",
                   self._offset_selected)
+        self._add(em, "Snap to perfect fit", None,
+                  self.canvas.perfect_fit_selected)
         self._add(em, "Array…", "Ctrl+Shift+R", self._array_selected)
         self._add(em, "Nest on sheet…", "Ctrl+Shift+N", self._nest_dialog)
         self._add(em, "Parameters…", "Ctrl+Shift+P", self._params_dialog)

@@ -127,6 +127,8 @@ def _is_line(sh) -> bool:
 
 class PropertiesPanel(QWidget):
     committed = Signal()   # a discrete edit finished -> caller pushes undo state
+    # Stitching > Use for new shapes: carries the piece's StitchSettings
+    useForNewShapes = Signal(object)
 
     def __init__(self, canvas):
         super().__init__()
@@ -335,6 +337,16 @@ class PropertiesPanel(QWidget):
         self.edges_row.setLayout(row)
         fs.addRow("Edges sewn", self.edges_row)
         self.edges_reset.clicked.connect(self._stitch_all_edges)
+        # this piece's punch, pitch and inset become what every new shape
+        # starts with (the main window saves them for next time)
+        self.use_for_new = QPushButton("Use for new shapes")
+        self.use_for_new.setToolTip(
+            "Make this piece's punch, pitch, inset and fit the stitching every "
+            "new shape starts with — now and next time you open Stitch Hero.\n"
+            "With Perfect fit on, new rectangles, circles and ovals then snap "
+            "to sizes that are exact for this pitch and inset.")
+        self.use_for_new.clicked.connect(self._use_for_new_shapes)
+        fs.addRow("", self.use_for_new)
         root.addWidget(self.g_stitch)
 
         self.readout = QLabel("")
@@ -461,6 +473,10 @@ class PropertiesPanel(QWidget):
         # A drawn seam is the stitch line itself -- it is never inset.
         if is_stitchline:
             self._stitch_form.setRowVisible(self.inset, False)
+        # only a shape's stitching makes sense for new shapes (a seam's inset
+        # is always 0; attached / loose holes don't fit at all)
+        self._stitch_form.setRowVisible(self.use_for_new,
+                                        is_shape and not is_baked)
         self.g_stitch.setCheckable(is_shape and not is_baked)
 
         if is_hole:
@@ -678,6 +694,14 @@ class PropertiesPanel(QWidget):
         self.slit_len.setValue(g.slit_length)
         self.slit_angle.setValue(g.slit_angle)
         self._sync_hole_vis()
+
+    def _use_for_new_shapes(self):
+        it = self._item
+        if not _alive(it) or not isinstance(it, ShapeItem):
+            return
+        st = getattr(it.model, "stitch", None)
+        if st is not None:
+            self.useForNewShapes.emit(st)
 
     def _stitch_all_edges(self):
         it = self._item

@@ -4,6 +4,20 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
+## Unreleased
+
+### Fixed
+* **Resizing a circle by a corner grip no longer flickers.** A circle has to
+  stay round, so the grip used to pick whichever of width or height had moved
+  more since the last mouse move. That choice flipped on every move, so the
+  circle jumped back and forth between two sizes as you dragged. A corner grip
+  now follows the point on the box's diagonal nearest the cursor, and grows or
+  shrinks the circle smoothly. With Perfect fit on it steps through the
+  perfect sizes in order, and each size is worked out once and remembered.
+* The grip you drag now stays on the shape's actual corner or edge, instead of
+  following the cursor away from it (a circle's corner, an edge grip pulled
+  sideways, a locked aspect ratio or a Perfect fit size).
+
 ## 0.4.4 — 2026-11-10
 
 ### Stitching

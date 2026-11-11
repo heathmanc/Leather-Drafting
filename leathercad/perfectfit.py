@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Callable, Optional, Tuple
 
 
@@ -185,9 +186,7 @@ def _even(n: int) -> int:
 def fit_circle(radius: float, pitch: float, inset: float,
                start_offset: float = 0.0, even: bool = False) -> Optional[Fit]:
     """The perfect circle nearest ``radius``: ``n`` holes, every gap the
-    pitch. ``even`` keeps the count even (mirror-symmetric stitching).
-    None if no circle of a sensible size fits."""
-    from .shapes import Circle
+    pitch. ``even`` keeps the count even (mirror-symmetric stitching)."""
     r = radius - inset
     if r > pitch / 2.0 + 1e-9:
         nr = math.pi / math.asin(min(1.0, pitch / (2.0 * r)))
@@ -202,13 +201,25 @@ def fit_circle(radius: float, pitch: float, inset: float,
         return inset + pitch / (2.0 * math.sin(math.pi / n))
 
     n = min(sorted(cands), key=lambda c: abs(ideal(c) - radius))
-    base = max(radius, 1e-3)
+    rr = _circle_radius(n, float(pitch), float(inset), float(start_offset))
+    return Fit(rr, rr, n)
+
+
+@lru_cache(maxsize=1024)
+def _circle_radius(n: int, pitch: float, inset: float,
+                   start_offset: float) -> float:
+    """The radius at which a circle's stitch line takes exactly ``n`` holes
+    at ``pitch``. It depends on nothing else, so a grip dragged across the
+    same sizes again (every move of a drag lands on one of a few) solves
+    each once -- and comes back to the very same number, not one a hair
+    off from a different starting guess."""
+    from .shapes import Circle
+    base = inset + pitch / (2.0 * math.sin(math.pi / n))     # the ideal one
     s = _solve_scale(lambda k: Circle(rx=base * k, ry=base * k).local_path(),
-                     inset, start_offset, n, pitch, ideal(n) / base)
+                     inset, start_offset, n, pitch, 1.0)
     # the true circle's radius if the polygon one won't solve: within a few
     # hundredths, and a grip that stopped snapping now and then would be worse
-    rr = base * s if s is not None else ideal(n)
-    return Fit(rr, rr, n)
+    return base * s if s is not None else base
 
 
 def fit_ellipse(rx: float, ry: float, pitch: float, inset: float,

@@ -385,12 +385,10 @@ class ResizeHandle(QGraphicsItem):
         shift = bool(event.modifiers() & Qt.ShiftModifier)
         lock = bool(getattr(self.canvas, "aspect_lock", False)) != shift
         self._apply_resize(Vec2(world.x(), world.y()), lock)
-        if perfect:
-            self.reposition()          # the grip sits on the snapped size
-        else:
-            self._syncing = True
-            self.setPos(world)                             # glyph follows cursor
-            self._syncing = False
+        # the grip sits on the box the shape actually took -- the cursor for
+        # a free corner, but a circle's diagonal, an edge's middle, a locked
+        # aspect or a Perfect fit size can't follow it everywhere
+        self.reposition()
         event.accept()
 
     def mouseReleaseEvent(self, event):
@@ -431,6 +429,19 @@ class ResizeHandle(QGraphicsItem):
             else:
                 s = hy_new / hy
             hx_new, hy_new = hx * s, hy * s
+        from leathercad.shapes import Circle
+        if isinstance(owner.model, Circle):
+            # A circle stays round, so a grip asks for ONE radius: an edge
+            # grip its own axis, a corner grip the point on the box's
+            # diagonal nearest the cursor -- the same answer however the
+            # last move went. (Taking whichever axis had moved more from the
+            # current radius flipped between the two on alternate moves, so
+            # the circle flashed between two sizes as it was dragged.)
+            if gx and gy:
+                r = (hx_new + hy_new) / 2.0
+            else:
+                r = hx_new if gx else hy_new
+            hx_new = hy_new = r
         hx_new = max(0.5, hx_new)
         hy_new = max(0.5, hy_new)
         fit = (self.canvas.perfect_fit_snap(owner, hx_new, hy_new, self.grip)

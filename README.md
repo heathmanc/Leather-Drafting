@@ -165,7 +165,7 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Duplicate / Delete / Fit** | `Ctrl+D` / `Del` or `Backspace` / `F` |
 | **Zoom / pan** | mouse wheel / middle-drag |
 | **Save / Open** | `Ctrl+S` / `Ctrl+O` (JSON project files) |
-| **Export** | SVG `Ctrl+E` or DXF — millimetre-accurate, layer-coloured. SVG layers are named and ordered **holes** first, **outline** last; the holes are LightBurn's own blue, so in LightBurn they land on layer C01, ahead of the red outline on C02, and are cut first. DXF outlines export as connected **POLYLINE**s (closed shapes carry the closed flag), so LightBurn / Illustrator import them as one contour instead of loose line segments |
+| **Export** | SVG `Ctrl+E` or DXF — millimetre-accurate, layer-coloured. The SVG is grouped **by piece**: each piece's outline and its holes are one group (holes first), and pieces grouped with `Ctrl+G` stay together, so in LightBurn every piece arrives as its own group. The holes are LightBurn's own blue, so they land on layer C01, ahead of the red outline on C02, and are cut first. Or group it **by layer** (named holes / outline layers, for Inkscape). DXF outlines export as connected **POLYLINE**s (closed shapes carry the closed flag), so LightBurn / Illustrator import them as one contour instead of loose line segments |
 | **Print / PDF (1:1)** | **Export PDF (1:1, tiled)** and **Print** `Ctrl+P` render the pattern at **true 1:1 scale** (1 mm = 1 mm on paper). Patterns bigger than a sheet are split into overlapping **tiles** with crop marks and `row/col` page labels — line the pages up on the overlap and tape. Each page prints a labelled reference box so you can confirm your printer isn't scaling |
 
 Everything is in **millimetres**, Y-up, and the canvas is WYSIWYG with the export.
@@ -257,7 +257,7 @@ Beyond drawing and stitching, Stitch Hero covers the rest of a real bench workfl
 | **Units** | View → Units → Inches shows and takes every length in inches (stored in mm); type `10mm` to enter millimetres |
 | **Fold allowance** | Edit → Fold allowance… lengthens a piece across its fold lines by angle × (radius + ½ thickness) |
 | **Generators** | strap / belt, box and curved gussets, bifold wallet, key tab, hemmed pocket — plus card pocket stacks and zipper openings |
-| **Export options** | outlines / holes / lettering, selection only; arcs and curves export as true arcs (SVG `A`/`C`, DXF bulges) |
+| **Export options** | outlines / holes / lettering, selection only, SVG grouped by piece or by layer; arcs and curves export as true arcs (SVG `A`/`C`, DXF bulges) |
 | **Edit several at once** | select several pieces; only the fields you change are written to all of them · Layers panel **Lock** |
 | **Dark theme** | A full dark UI for late-night bench sessions (*View → Dark theme*) |
 | **Autosave & recovery** | Work is autosaved and offered back after an unexpected quit |

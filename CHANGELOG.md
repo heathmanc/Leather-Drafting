@@ -4,6 +4,24 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
+## Unreleased
+
+### Export
+* **Every piece arrives in LightBurn as its own group.** LightBurn makes a
+  group of each group in an SVG, and the export had one group of every hole
+  and one of every outline. So after importing, each piece had to be
+  ungrouped and regrouped with its own holes by hand. The SVG is now grouped
+  by piece: each piece's holes, then its outline, as one group. Pieces grouped
+  with `Ctrl+G` (a pocket with its engraved label, say) come in as one group
+  around them, and a seam's holes or a lettering's letters as theirs.
+  LightBurn still sorts by colour, so the holes stay on its blue layer C01
+  and are cut before the red outlines on C02.
+* In the file, loose holes, seams and score / engrave lines come before
+  anything cut, for software that cuts in file order.
+* The export dialog's new **Group the file** choice keeps the old layout:
+  **By layer** writes named holes / score / outline layers, for Inkscape. The
+  choice is remembered.
+
 ## 0.4.5 — 2026-11-11
 
 ### Fixed

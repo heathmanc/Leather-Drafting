@@ -1,5 +1,6 @@
-"""SVG export for LightBurn: named layers, the holes first and in LightBurn's
-own blue, the outline after them.
+"""SVG export grouped by layer (``group="layer"``, the Inkscape layout):
+named layers, the holes first and in LightBurn's own blue, the outline after
+them. (The default groups by piece instead -- see test_svg_parts.py.)
 
 The report: imported into LightBurn the holes and the outline came in as
 "holes" / "C14", and the holes weren't first. LightBurn files an SVG's shapes
@@ -39,6 +40,7 @@ def _stitched_rect(**kw):
 
 def _export(doc, tmp_path, name="out.svg", **kw):
     p = tmp_path / name
+    kw.setdefault("group", "layer")
     export.export_svg(doc, str(p), **kw)
     return p.read_text(encoding="utf-8")
 

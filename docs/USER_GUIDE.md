@@ -784,10 +784,15 @@ linear dimensions it's an annotation — never exported.
   internally you get a plain-language dialog — your work is auto-saved first,
   and the technical details land in an error log you can send along with a bug
   report.
-* **Export SVG** (`Ctrl+E`) — millimetre-accurate, hairline strokes, one
-  named layer per layer, coloured by layer: **holes** first, then any score /
-  engrave layers, then the **outline** — so a piece is cut free only after
-  its holes. Ideal for LightBurn, Inkscape, or a browser preview.
+* **Export SVG** (`Ctrl+E`) — millimetre-accurate, hairline strokes,
+  coloured by layer, and **grouped by piece**: each piece is one group, its
+  holes first and its outline last, so it is cut free only after its holes.
+  Pieces you grouped with `Ctrl+G` (a pocket with its engraved label, say)
+  are one group around them, and loose holes, seams and score / engrave
+  lines come before anything cut. The export dialog's **Group the file**
+  choice offers **By layer** instead: one named layer each for the holes,
+  any score / engrave layers and the outline, as Inkscape layers. Ideal for
+  LightBurn, Inkscape, or a browser preview.
 * **Export DXF** — R12 DXF. Outlines are written as connected **POLYLINE**s
   (closed shapes carry the closed flag), so LightBurn / Illustrator /
   QCAD import each piece as one contour, not loose segments.
@@ -806,11 +811,16 @@ linear dimensions it's an annotation — never exported.
   Kerf assumes a cut layout (pieces side by side); 1:1 printing is never
   kerf-compensated.
 
-**Typical LightBurn workflow**: Export SVG → drag into LightBurn → the blue
-holes land on LightBurn's layer **C01** and the red outline on **C02**, so
-the holes come first in LightBurn's layer list and are cut first (small
-holes: slow speed, full power works well); green becomes a light score, grey
-an engrave. LightBurn files an SVG's shapes into its layers by **colour** and
+**Typical LightBurn workflow**: Export SVG → drag into LightBurn → each piece
+arrives as **its own group, outline and holes together**, ready to move or
+nest. Groups you made in Stitch Hero stay groups; nothing needs ungrouping
+and regrouping. The blue holes land on LightBurn's layer **C01** and the red
+outline on **C02**, so the holes come first in LightBurn's layer list and are
+cut first (small holes: slow speed, full power works well); green becomes a
+light score, grey an engrave. A LightBurn group can hold shapes of several
+layers, and LightBurn cuts layer by layer by default (*Order by layer* in
+its Optimization Settings), so grouping by piece doesn't change the cut
+order. LightBurn files an SVG's shapes into its layers by **colour** and
 doesn't read layer names from the file, so its layers show as C01 / C02. To
 see them as *holes* and *outline*, name those two layers once in LightBurn
 (with your speeds and powers) and save that as your starting project: every
@@ -824,7 +834,10 @@ you pick yourself is written as it is.)
 
 Export SVG / DXF first asks **what** to export: outlines, stitch holes and
 lettering can each be left out (a holes-only file for a second pass, say),
-and **Selection only** exports just what's selected. Arcs and curves are
+and **Selection only** exports just what's selected. For an SVG, **Group
+the file** picks **By piece** (the default: each piece with its own holes)
+or **By layer** (named layers, for Inkscape); the choice is remembered.
+Arcs and curves are
 written as **true arcs and curves** — SVG `A` / `C` path commands, DXF
 bulge polylines — so LightBurn gets smooth geometry and small files; with
 kerf compensation on they go out as the compensated polylines instead.

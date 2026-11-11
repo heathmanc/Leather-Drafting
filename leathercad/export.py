@@ -1,8 +1,10 @@
 """Export a Document to laser-ready SVG or DXF.
 
-Both formats are millimetre-accurate. Geometry is grouped by layer so the cutter
-can map colour -> operation (cut / score / engrave), and stitch holes render as
-round holes or slanted slits per each item's stitch settings.
+Both formats are millimetre-accurate. Geometry is coloured by layer so the
+cutter can map colour -> operation (cut / score / engrave); the SVG groups it
+by piece (a piece's outline with its holes), or by layer on request. Stitch
+holes render as round holes, slanted slits or diamonds per each item's stitch
+settings.
 """
 
 from __future__ import annotations
@@ -54,7 +56,8 @@ def _wanted(doc, obj, selection, include, part):
     return True
 
 
-def collect(doc: Document, kerf: float = 0.0, selection=None, include=None):
+def collect(doc: Document, kerf: float = 0.0, selection=None, include=None,
+            *, owners: bool = False):
     """Return (outlines, stitch_results) in world coordinates.
 
     ``selection`` -- ids of the objects to export (None = everything);
@@ -62,6 +65,10 @@ def collect(doc: Document, kerf: float = 0.0, selection=None, include=None):
 
     outlines: list of (points, color)
     stitch_results: list of (StitchResult, settings, color)
+
+    With ``owners`` two more lists follow, one per list above: the document
+    object (shape, lettering, seam, loose hole) each entry came from -- what
+    the SVG groups a piece's outline and holes by.
 
     ``kerf`` > 0 applies laser-kerf compensation to closed *cut* outlines:
     outer boundaries grow by kerf/2 and nested cutouts (a slot fully inside a
@@ -71,6 +78,8 @@ def collect(doc: Document, kerf: float = 0.0, selection=None, include=None):
     outlines: List[Tuple[List[Vec2], str]] = []
     cuttable: List[bool] = []            # closed + on a cut layer (kerf targets)
     stitches: List[Tuple[StitchResult, object, str]] = []
+    outline_owners: list = []            # parallel to outlines / stitches
+    stitch_owners: list = []
     stitch_color = _layer_color(doc, "Stitch", "#0066ff")
 
     from .stitching import Hole, holes_for_shape
@@ -94,6 +103,7 @@ def collect(doc: Document, kerf: float = 0.0, selection=None, include=None):
             role = getattr(lyr, "role", "cut") if lyr else "cut"
             pts, corners, closed = sh.world_polyline()
             outlines.append((pts, color))
+            outline_owners.append(sh)
             cuttable.append(bool(closed) and role == "cut" and len(pts) >= 4)
         res = (holes_for_shape(sh, doc)
                if holes_shown and _wanted(doc, sh, selection, include, "holes")
@@ -107,6 +117,7 @@ def collect(doc: Document, kerf: float = 0.0, selection=None, include=None):
                 from dataclasses import replace
                 style = replace(style, slit_angle=-style.slit_angle)
             stitches.append((res, style, stitch_color))
+            stitch_owners.append(sh)
 
     for tx in getattr(doc, "texts", []):
         lyr = doc.layer(tx.layer)
@@ -118,6 +129,7 @@ def collect(doc: Document, kerf: float = 0.0, selection=None, include=None):
         for contour in tx.world_contours():
             if len(contour) >= 2:
                 outlines.append((list(contour) + [contour[0]], color))
+                outline_owners.append(tx)
                 cuttable.append(False)    # lettering is engraved, never offset
 
     if kerf and kerf > 1e-9:
@@ -131,6 +143,7 @@ def collect(doc: Document, kerf: float = 0.0, selection=None, include=None):
         res = sl.result(keepouts_near(sl.points, doc))
         if res.count:
             stitches.append((res, sl.settings, stitch_color))
+            stitch_owners.append(sl)
 
     # individual (ungrouped) holes
     for h in getattr(doc, "holes", []):
@@ -139,18 +152,24 @@ def collect(doc: Document, kerf: float = 0.0, selection=None, include=None):
             continue
         res = StitchResult(holes=[Hole(h.point, h.tangent)])
         stitches.append((res, h, stitch_color))  # LooseHole has hole_* fields
+        stitch_owners.append(h)
+    if owners:
+        return outlines, stitches, outline_owners, stitch_owners
     return outlines, stitches
 
 
-def collect_paths(doc: Document, selection=None, include=None):
+def collect_paths(doc: Document, selection=None, include=None, *,
+                  owners: bool = False):
     """The visible outlines as TRUE segments in world coordinates -- for an
     export without kerf, so a laser gets real arcs instead of chords:
     ``[(segments, color, closed)]`` where a segment is ``("line", a, b)``,
     ``("arc", a, mid, b)`` or ``("bezier", a, c1, c2, b)``. Text contours
-    come as line segments. Same order and filters as ``collect``."""
+    come as line segments. Same order and filters as ``collect``; with
+    ``owners``, also the object each entry came from (a parallel list)."""
     from .path import Arc, CubicBezier, QuadraticBezier
     from .shapes import Circle
     out = []
+    own: list = []
     for sh in doc.shapes:
         if getattr(sh, "construction", False):
             continue
@@ -186,6 +205,7 @@ def collect_paths(doc: Document, selection=None, include=None):
                 segs.append(("line", segs[-1][-1], segs[0][1]))
         if segs:
             out.append((segs, color, closed))
+            own.append(sh)
     for tx in getattr(doc, "texts", []):
         lyr = doc.layer(tx.layer)
         if lyr is not None and not lyr.visible:
@@ -198,7 +218,8 @@ def collect_paths(doc: Document, selection=None, include=None):
                 pts = list(contour) + [contour[0]]
                 out.append(([("line", a, b) for a, b in zip(pts, pts[1:])],
                             color, True))
-    return out
+                own.append(tx)
+    return (out, own) if owners else out
 
 
 def _arc_params(a: Vec2, mid: Vec2, b: Vec2):
@@ -328,17 +349,119 @@ def _xml_attr(text: str) -> str:
             .replace(">", "&gt;").replace("'", "&apos;").replace('"', "&quot;"))
 
 
+def _outline_rank(doc: Document, owner) -> int:
+    """Where an outline goes in cutting order: 0 with the holes (a stitch
+    layer), 1 for score / engrave and the like, 2 for a cut -- a piece is cut
+    free only after everything on it."""
+    lyr = doc.layer(getattr(owner, "layer", "") or "")
+    role = lyr.role if lyr is not None else "cut"
+    return {"stitch": 0, "cut": 2}.get(role, 1)
+
+
+def _part_label(owner) -> str:
+    """The name of a piece's group in the SVG: the piece's own name, the
+    lettering's text, else its id. (Inkscape shows it; LightBurn doesn't
+    read it.)"""
+    name = (getattr(owner, "name", "") or "").strip()
+    if name:
+        return name
+    text = getattr(owner, "text", None)
+    if isinstance(text, str) and text.strip():
+        return "text " + text.strip()[:24]
+    for attr in ("shape_id", "line_id", "text_id", "hole_id"):
+        val = getattr(owner, attr, None)
+        if val:
+            return str(val)
+    return "part"
+
+
+def _svg_parts(elems, used_ids: set) -> List[str]:
+    """The SVG body grouped the way the pieces are: ``elems`` is
+    ``[(element, owner, rank)]`` in collection order. Each object's elements
+    -- a piece's outline and its holes, a lettering's letters, a seam's holes
+    -- become one group (holes first, the cut outline last); the members of
+    a move-group (Ctrl+G) one group around those; and the groups are ordered
+    holes, then engraving, then anything cut, for software that cuts in file
+    order. LightBurn imports each group as a group, so every piece arrives
+    with its holes, ready to move; it still sorts the cutting by colour layer
+    (holes C01 before outline C02)."""
+    objs: dict = {}
+    order: list = []                    # [owner, first index, [(rank, el)]]
+    for i, (el, owner, rank) in enumerate(elems):
+        ob = objs.get(id(owner))
+        if ob is None:
+            ob = objs[id(owner)] = [owner, i, []]
+            order.append(ob)
+        ob[2].append((rank, el))
+    members: dict = {}
+    for ob in order:
+        gid = getattr(ob[0], "group_id", None)
+        if gid:
+            members[gid] = members.get(gid, 0) + 1
+    units: list = []                    # [rank, first, "obj"/"group", what]
+    by_gid: dict = {}
+    for ob in order:
+        rank = max(r for r, _el in ob[2])
+        gid = getattr(ob[0], "group_id", None)
+        if gid and members[gid] > 1:    # a group of one is just its piece
+            unit = by_gid.get(gid)
+            if unit is None:
+                unit = by_gid[gid] = [rank, ob[1], "group", []]
+                units.append(unit)
+            unit[0] = max(unit[0], rank)
+            unit[3].append((rank, ob[1], ob))
+        else:
+            units.append([rank, ob[1], "obj", ob])
+    units.sort(key=lambda u: (u[0], u[1]))
+
+    out: List[str] = []
+
+    def emit(ob, ind: str) -> None:
+        els = sorted(ob[2], key=lambda re_: re_[0])     # stable: holes first
+        if len(els) == 1:
+            out.append(ind + els[0][1])
+            return
+        label = _part_label(ob[0])
+        out.append(f"{ind}<g id='{_svg_id(label, used_ids)}' "
+                   f"inkscape:label='{_xml_attr(label)}'>")
+        out.extend(f"{ind}  {el}" for _r, el in els)
+        out.append(f"{ind}</g>")
+
+    for _rank, _first, kind, what in units:
+        if kind == "group":             # a move-group: its members inside
+            out.append(f"  <g id='{_svg_id('group', used_ids)}' "
+                       f"inkscape:label='group'>")
+            for _r, _f, ob in sorted(what, key=lambda m: (m[0], m[1])):
+                emit(ob, "    ")
+            out.append("  </g>")
+        else:
+            emit(what, "  ")
+    return out
+
+
+SVG_GROUPINGS = ("part", "layer")
+
+
 def export_svg(doc: Document, path: str, *, margin: float = 6.0,
                hairline: float = 0.05, kerf: float | None = None,
-               selection=None, include=None) -> None:
+               selection=None, include=None, group: str = "part") -> None:
     """Write ``doc`` as a laser-ready SVG. Without kerf compensation the
     outlines are written as true arcs and curves (``A`` / ``C`` commands);
     with it, as the compensated polylines. ``selection`` / ``include``: see
-    ``collect``."""
+    ``collect``.
+
+    ``group`` -- ``"part"`` (the default): one group per piece, its outline
+    with its holes, and a move-group's pieces together (see ``_svg_parts``).
+    ``"layer"``: one named Inkscape layer per document layer instead --
+    "holes", then score / engrave, then "outline" -- which LightBurn imports
+    as one group of every hole and one of every outline."""
+    if group not in SVG_GROUPINGS:
+        raise ValueError(f"group must be one of {SVG_GROUPINGS}, not {group!r}")
     k = _resolve_kerf(doc, kerf)
-    outlines, stitches = collect(doc, kerf=k, selection=selection,
-                                 include=include)
-    exact = collect_paths(doc, selection, include) if k <= 1e-9 else None
+    outlines, stitches, outline_owners, stitch_owners = collect(
+        doc, kerf=k, selection=selection, include=include, owners=True)
+    exact, exact_owners = ((collect_paths(doc, selection, include, owners=True))
+                           if k <= 1e-9 else (None, None))
     minx, miny, maxx, maxy = _bbox_all(outlines, stitches)
     minx -= margin; miny -= margin; maxx += margin; maxy += margin
     w = maxx - minx
@@ -358,16 +481,16 @@ def export_svg(doc: Document, path: str, *, margin: float = 6.0,
         f"viewBox='0 0 {_fmt(w)} {_fmt(h)}'>")
     out.append("  <!-- leathercad export. Units: mm. 1 user unit = 1 mm. -->")
 
-    # Elements are gathered per colour (= per document layer), then written
-    # as named layers: the holes first, then score / engrave and the like,
-    # the outline last -- a piece is cut free only after its holes.
-    groups: dict = {}
+    # Every element, with the colour (= document layer) it is drawn in, the
+    # object it came from and its place in cutting order (0 holes, 1 score /
+    # engrave, 2 cut); written below either per piece or per layer.
+    elems: list = []                     # (colour, element, owner, rank)
 
-    def put(color: str, line: str) -> None:
-        groups.setdefault(color.lower(), []).append(line)
+    def put(color: str, el: str, owner, rank: int) -> None:
+        elems.append((color.lower(), el, owner, rank))
 
     if exact is not None:
-        for segs, color, closed in exact:
+        for (segs, color, closed), owner in zip(exact, exact_owners):
             d = [f"M {_fmt(X(segs[0][1].x))} {_fmt(Y(segs[0][1].y))}"]
             for sg in segs:
                 if sg[0] == "arc":
@@ -390,19 +513,21 @@ def export_svg(doc: Document, path: str, *, margin: float = 6.0,
                     d.append(f"L {_fmt(X(sg[2].x))} {_fmt(Y(sg[2].y))}")
             if closed:
                 d.append("Z")
-            put(color, f"    <path d='{' '.join(d)}' "
+            put(color, f"<path d='{' '.join(d)}' "
                        f"stroke='{export_color(color)}' "
-                       f"stroke-width='{hairline}' />")
+                       f"stroke-width='{hairline}' fill='none' />",
+                owner, _outline_rank(doc, owner))
     else:
-        for pl, color in outlines:
+        for (pl, color), owner in zip(outlines, outline_owners):
             if len(pl) < 2:
                 continue
             d = "M " + " L ".join(f"{_fmt(X(p.x))} {_fmt(Y(p.y))}" for p in pl)
-            put(color, f"    <path d='{d}' stroke='{export_color(color)}' "
-                       f"stroke-width='{hairline}' />")
+            put(color, f"<path d='{d}' stroke='{export_color(color)}' "
+                       f"stroke-width='{hairline}' fill='none' />",
+                owner, _outline_rank(doc, owner))
 
     hole_colors = set()
-    for res, settings, color in stitches:
+    for (res, settings, color), owner in zip(stitches, stitch_owners):
         hole_colors.add(color.lower())
         sc = export_color(color)
         if settings.hole_style == "diamond":
@@ -413,8 +538,8 @@ def export_svg(doc: Document, path: str, *, margin: float = 6.0,
                                      settings.slit_angle, DIAMOND_WIDTH_RATIO)
                 pstr = " ".join(f"{_fmt(X(p.x))},{_fmt(Y(p.y))}" for p in pts)
                 put(color,
-                    f"    <polygon points='{pstr}' stroke='{sc}' "
-                    f"stroke-width='{hairline}' />")
+                    f"<polygon points='{pstr}' stroke='{sc}' "
+                    f"stroke-width='{hairline}' fill='none' />", owner, 0)
         elif settings.hole_style == "slit":
             # the beam widens/lengthens the slit by ~a kerf: cut it shorter
             half = max(0.05, (settings.slit_length - k) / 2.0)
@@ -424,27 +549,37 @@ def export_svg(doc: Document, path: str, *, margin: float = 6.0,
                 a = hle.point - d * half
                 b = hle.point + d * half
                 put(color,
-                    f"    <line x1='{_fmt(X(a.x))}' y1='{_fmt(Y(a.y))}' "
+                    f"<line x1='{_fmt(X(a.x))}' y1='{_fmt(Y(a.y))}' "
                     f"x2='{_fmt(X(b.x))}' y2='{_fmt(Y(b.y))}' "
                     f"stroke='{sc}' stroke-width='{hairline}' "
-                    f"stroke-linecap='round' />")
+                    f"stroke-linecap='round' fill='none' />", owner, 0)
         else:
             # the beam enlarges holes: cut a smaller circle so the finished
             # hole comes out at the drawn diameter
             r = max(0.05, (settings.hole_diameter - k) / 2.0)
             for hle in res.holes:
                 put(color,
-                    f"    <circle cx='{_fmt(X(hle.point.x))}' "
+                    f"<circle cx='{_fmt(X(hle.point.x))}' "
                     f"cy='{_fmt(Y(hle.point.y))}' r='{_fmt(r)}' "
-                    f"stroke='{sc}' stroke-width='{hairline}' />")
+                    f"stroke='{sc}' stroke-width='{hairline}' fill='none' />",
+                    owner, 0)
 
     used_ids: set = set()
-    for label, lines in _svg_layers(doc, groups, hole_colors):
-        gid = _svg_id(label, used_ids)
-        out.append(f"  <g id='{gid}' inkscape:groupmode='layer' "
-                   f"inkscape:label='{_xml_attr(label)}' fill='none'>")
-        out.extend(lines)
-        out.append("  </g>")
+    if group == "part":
+        out.extend(_svg_parts([(el, owner, rank)
+                               for _c, el, owner, rank in elems], used_ids))
+    else:
+        # one named layer per colour: the holes first, then score / engrave
+        # and the like, the outline last -- cut free only after its holes
+        by_color: dict = {}
+        for color, el, _owner, _rank in elems:
+            by_color.setdefault(color, []).append("    " + el)
+        for label, lines in _svg_layers(doc, by_color, hole_colors):
+            gid = _svg_id(label, used_ids)
+            out.append(f"  <g id='{gid}' inkscape:groupmode='layer' "
+                       f"inkscape:label='{_xml_attr(label)}' fill='none'>")
+            out.extend(lines)
+            out.append("  </g>")
     out.append("</svg>")
 
     with open(path, "w", encoding="utf-8") as fh:

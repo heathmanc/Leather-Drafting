@@ -2240,11 +2240,13 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(msg, 7000)
         return n_shapes + n_holes
 
-    def _export_options(self, title):
+    def _export_options(self, title, svg=False):
         """What to export: everything or the selection; outlines, stitch
-        holes, lettering. Returns (selection_ids or None, include set) or None."""
+        holes, lettering -- and for an SVG, how it is grouped. Returns
+        (selection_ids or None, include set, grouping) or None; grouping is
+        "part" / "layer" for an SVG, None otherwise."""
         from PySide6.QtWidgets import (QDialog, QVBoxLayout, QCheckBox,
-                                       QDialogButtonBox, QLabel)
+                                       QDialogButtonBox, QLabel, QRadioButton)
         s = self._settings()
         sel = self.canvas.selected_items()
         dlg = QDialog(self)
@@ -2263,6 +2265,30 @@ class MainWindow(QMainWindow):
             boxes[key] = cb
             lay.addWidget(cb)
         lay.addWidget(only_sel)
+        by_part = by_layer = None
+        if svg:
+            # LightBurn makes a group of each group in the file: per piece
+            # every piece arrives with its own holes; per layer it arrives as
+            # one group of every hole and one of every outline
+            lay.addWidget(QLabel("Group the file:"))
+            by_part = QRadioButton("By piece — each piece with its own holes "
+                                   "(best for LightBurn)")
+            by_part.setToolTip(
+                "One group per piece: its holes, then its outline. Pieces you "
+                "grouped (Ctrl+G) stay one group.\nLightBurn still puts the "
+                "holes on its blue layer C01 and the outlines on red C02, so "
+                "the holes are cut first.")
+            by_layer = QRadioButton("By layer — holes, score, outline as named "
+                                    "layers (Inkscape)")
+            by_layer.setToolTip(
+                "One named layer per layer: holes, then score / engrave, then "
+                "outline.\nLightBurn imports each as one big group.")
+            if s.value("expSvgGroup", "part", type=str) == "layer":
+                by_layer.setChecked(True)
+            else:
+                by_part.setChecked(True)
+            lay.addWidget(by_part)
+            lay.addWidget(by_layer)
         note = QLabel("Arcs and curves export as true arcs / curves; with "
                       "kerf compensation on, as compensated polylines.")
         note.setWordWrap(True)
@@ -2277,6 +2303,10 @@ class MainWindow(QMainWindow):
         for k, cb in boxes.items():
             s.setValue("exp_" + k, cb.isChecked())
         s.setValue("expSelOnly", only_sel.isChecked())
+        grouping = None
+        if svg:
+            grouping = "layer" if by_layer.isChecked() else "part"
+            s.setValue("expSvgGroup", grouping)
         selection = None
         if only_sel.isChecked():
             selection = set()
@@ -2285,10 +2315,10 @@ class MainWindow(QMainWindow):
                 for attr in ("shape_id", "text_id", "line_id", "hole_id"):
                     if hasattr(m, attr):
                         selection.add(getattr(m, attr))
-        return selection, include
+        return selection, include, grouping
 
     def export_svg(self):
-        opts = self._export_options("Export SVG")
+        opts = self._export_options("Export SVG", svg=True)
         if opts is None:
             return
         fn, _ = QFileDialog.getSaveFileName(self, "Export SVG", "pattern.svg",
@@ -2296,7 +2326,7 @@ class MainWindow(QMainWindow):
         if not fn:
             return
         self._busy(lambda: export.export_svg(self.doc, fn, selection=opts[0],
-                                             include=opts[1]))
+                                             include=opts[1], group=opts[2]))
         self.statusBar().showMessage(f"Exported {os.path.basename(fn)}", 4000)
 
     def _busy(self, fn):

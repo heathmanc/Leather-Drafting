@@ -60,6 +60,16 @@ made only when the release workflow is run by hand with it ticked.
   Join or Break apart is an editable path, and Properties showed no Length
   or Angle for it at all.
 
+### Number boxes
+* **"mm" no longer shows up twice.** The unit was held at the end of every
+  number box, with whatever you typed going in front of it. Typing a unit
+  (which the boxes accept: `25mm`, `1in`, `3cm`) showed `25mm mm`, and
+  typing at the very end of a box gave `27 mmmm mm`. The value always came
+  out right, but the box looked broken. The unit is now part of the box's
+  text: select and type, and you see exactly what you typed (`25mm`, or
+  just `25`), shown as `25 mm` once entered. Edit just the number and the
+  unit stays put.
+
 ## 0.4.7 — 2026-11-15
 
 ### Selecting and snapping

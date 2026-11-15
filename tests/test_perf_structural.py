@@ -672,14 +672,15 @@ def test_remembered_lengths_keep_their_exact_millimetres(qapp):
     sp = prompts.length_spin(0.0, 100.0, 1, 3.175)
     assert sp.value() == 3.175
     units.set_current("in")
+    # (the box's unit is part of its text -- see test_unit_field.py)
     try:
-        assert sp.textFromValue(sp.value()) == "0.125"
-        assert sp.textFromValue(-1e-7) == "0"
+        assert sp.textFromValue(sp.value()) == "0.125 in"
+        assert sp.textFromValue(-1e-7) == "0 in"
     finally:
         units.set_current("mm")
         QSettings("Stitch Hero", "Stitch Hero").setValue("units", "mm")
-    assert sp.textFromValue(600.0) == "600"
-    assert sp.textFromValue(6.35) == "6.35"
+    assert sp.textFromValue(600.0) == "600 mm"
+    assert sp.textFromValue(6.35) == "6.35 mm"
 
 
 def test_unit_aware_nudge_and_long_lengths(qapp):

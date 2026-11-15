@@ -83,6 +83,32 @@ class MathSpinBox(QDoubleSpinBox):
         self._user_edited = False
         super().setValue(v)
 
+    # The unit ("mm", "in", "°") is written into the box's text, not kept as
+    # Qt's suffix: Qt holds its suffix fixed at the end of the box and puts
+    # whatever is typed in front of it, so typing a unit -- which the box
+    # accepts -- showed "25mm mm", and typing at the very end gave
+    # "27 mmmm mm". Written in, it's plain text: replaced along with the
+    # number, or left there and read as the unit it is.
+    def setSuffix(self, suffix: str) -> None:   # noqa: N802
+        self._unit = suffix or ""
+        super().setSuffix("")                   # re-renders with the unit
+
+    def suffix(self) -> str:
+        return getattr(self, "_unit", "")
+
+    def _strip_unit(self, s: str) -> str:
+        """``s`` without the box's own unit at its end ("25 mm", "25mm",
+        "(a+b) in") -- but not the tail of a parameter's name ("margin")."""
+        unit = self.suffix().strip()
+        if not unit or not s.endswith(unit):
+            return s
+        head = s[: -len(unit)]
+        if not head.strip():
+            return s
+        if head != head.rstrip() or head[-1] in "0123456789.,)":
+            return head.rstrip()
+        return s
+
     def textFromValue(self, v: float) -> str:   # noqa: N802
         if self.physical:
             from . import units
@@ -92,7 +118,7 @@ class MathSpinBox(QDoubleSpinBox):
                 point = self.locale().decimalPoint()
                 text = text.replace(".", point)
                 text = text.rstrip("0").rstrip(point) if point in text else text
-                return text[1:] if text in ("-0", "-") else text
+                return (text[1:] if text in ("-0", "-") else text) + self.suffix()
         text = super().textFromValue(v)
         if self.trim_zeros:
             point = self.locale().decimalPoint()
@@ -100,7 +126,7 @@ class MathSpinBox(QDoubleSpinBox):
                 text = text.rstrip("0").rstrip(point)
         if text.startswith("-") and not any(c in "123456789" for c in text):
             text = text[1:]                   # a rounded -0.0000 reads "0"
-        return text
+        return text + self.suffix()
 
     def validate(self, text: str, pos: int):
         # accept anything while typing; valueFromText decides on commit
@@ -110,11 +136,7 @@ class MathSpinBox(QDoubleSpinBox):
         return text
 
     def valueFromText(self, text: str) -> float:
-        s = text
-        suffix = self.suffix()
-        if suffix and s.endswith(suffix):
-            s = s[: -len(suffix)]
-        s = s.strip()
+        s = self._strip_unit(text.strip())
         params = current_params()
         try:
             v = float(evaluate(s, params))

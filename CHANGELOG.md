@@ -4,7 +4,7 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
-## Unreleased
+## 0.4.8 — 2026-11-15
 
 ### Printing at 1:1
 * **Nested PDFs.** Export PDF (1:1) and Print pack the pieces onto as few

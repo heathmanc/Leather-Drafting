@@ -6,6 +6,22 @@ made only when the release workflow is run by hand with it ticked.
 
 ## Unreleased
 
+### Selecting
+* **Things drawn close together can be picked.** A construction line between
+  two 1 mm holes 5 mm apart, with a line crossing its middle, could not be
+  selected at all. Each item's pick zone was a fixed 3.5 mm band round a line
+  or a 1.6 mm disk round a hole, and a click went to whichever item was on
+  top. Those zones covered the whole construction line, at any zoom.
+  * A click now picks the item whose drawn line or hole is nearest the
+    pointer (a tie goes to the one on top). Right-click and double-click pick
+    the same way.
+  * Pick zones shrink when you zoom in, to 5 pixels either side of a line, so
+    zooming in pulls small things apart. They never get bigger than before.
+  * **Alt+click** steps to the next item under the pointer, for things lying
+    exactly on top of each other.
+  * With several things selected, pressing one still drags them all, and a
+    plain click still picks the nearest thing on its own.
+
 ### Export
 * **Every piece arrives in LightBurn as its own group.** LightBurn makes a
   group of each group in an SVG, and the export had one group of every hole

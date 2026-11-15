@@ -1720,7 +1720,8 @@ class Canvas(QGraphicsView):
             pos, _v = self.snap(pos)
             pos, _o, _k = self._maybe_ortho(raw, pos, event)
         if self.tool == SELECT:
-            return super().mousePressEvent(event)
+            self._select_press(event)          # the item the click means
+            return
         if event.button() == Qt.LeftButton:
             if self.tool in _MULTI_TOOLS:
                 self._multi_pts.append(pos)
@@ -2180,7 +2181,16 @@ class Canvas(QGraphicsView):
                 self._finish_measure_like(pos)
             event.accept()
             return
+        pend, self._click_pick = getattr(self, "_click_pick", None), None
         super().mouseReleaseEvent(event)
+        if (pend is not None and event.button() == Qt.LeftButton
+                and not self._moved_during_press and _alive(pend)):
+            # a plain click inside a multi-selection (the press went to a
+            # selected item so that a drag would move them all): the click
+            # itself means the nearest item, on its own
+            self.scene_obj.clearSelection()
+            pend.setSelected(True)
+            self.select_group_of(pend)
         if event.button() == Qt.LeftButton and self._moved_during_press:
             self._moved_during_press = False
             self._emit_commit()
@@ -2201,7 +2211,7 @@ class Canvas(QGraphicsView):
                     Vec2(pos.x(), pos.y())):
                 event.accept()
                 return
-            it = self.itemAt(event.position().toPoint())
+            it = self.pick_item(event.position().toPoint())
             if isinstance(it, (ResizeHandle, RotateHandle)):
                 # The selection box's grips sit right on a curve's ends and
                 # extremes -- exactly where you double-click to edit it -- and
@@ -2209,8 +2219,8 @@ class Canvas(QGraphicsView):
                 # zoomed out, they cover most of it. They have no double-click
                 # action of their own: look through them to whatever is
                 # beneath, else to the shape they belong to.
-                under = [i for i in self.items(event.position().toPoint())
-                         if not isinstance(i, (ResizeHandle, RotateHandle))]
+                under = self.pick_candidates(event.position().toPoint(),
+                                             through_grips=True)
                 it = under[0] if under else (it.owner or it)
             # double-click a text -> open its edit dialog (string / font / style)
             towner = it
@@ -2230,6 +2240,19 @@ class Canvas(QGraphicsView):
                 self.enter_vertex_edit(owner)
                 event.accept()
                 return
+            # nothing to edit: Qt treats the second click as a press on the
+            # topmost item -- give it to the nearest one, as the first was
+            top = self.itemAt(event.position().toPoint())
+            if (isinstance(it, self._PICKABLE) and _alive(it)
+                    and top is not None and it is not top):
+                z = it.zValue()
+                it.setZValue(1e9)
+                try:
+                    super().mouseDoubleClickEvent(event)
+                finally:
+                    if _alive(it):
+                        it.setZValue(z)
+                return
         super().mouseDoubleClickEvent(event)
 
     def contextMenuEvent(self, event):
@@ -2243,8 +2266,9 @@ class Canvas(QGraphicsView):
                 self._finish_pen(closed=False)
             event.accept()
             return
-        # select the item under the cursor if it isn't already selected
-        it = self.itemAt(event.pos())
+        # select the item under the cursor if it isn't already selected (the
+        # nearest one, as a left-click picks it)
+        it = self.pick_item(event.pos())
         if hasattr(it, "grip") and hasattr(it, "owner"):
             it = it.owner          # a resize grip sits on the edge midpoint
         owner = it
@@ -7081,6 +7105,178 @@ class Canvas(QGraphicsView):
     def selection_has_group(self) -> bool:
         return any(getattr(self._item_model(it), "group_id", None)
                    for it in self.selected_items())
+
+    # -- which item a click means ------------------------------------------
+    # Every item has a pick zone a little wider than what it draws, so a thin
+    # line or a 1 mm hole is easy to hit. Where zones overlap, Qt hands the
+    # click to whichever item is on top -- so a guide running between two
+    # holes, with a line crossing its middle, was covered end to end by
+    # their zones and could not be selected at all. A click now goes to the
+    # item whose drawn line or hole is NEAREST the pointer (ties to the top
+    # one), and Alt+click steps on to the next item under the pointer.
+    _PICKABLE = (ShapeItem, StitchLineItem, HoleItem, TextItem, DimensionItem)
+    _GRIPS = (VertexHandle, ResizeHandle, RotateHandle)
+
+    @staticmethod
+    def _seg_dist(px, py, ax, ay, bx, by) -> float:
+        dx, dy = bx - ax, by - ay
+        l2 = dx * dx + dy * dy
+        if l2 <= 1e-18:
+            return math.hypot(px - ax, py - ay)
+        t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / l2))
+        return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+    def _poly_dist(self, lp: QPointF, polys, closed: bool) -> float:
+        px, py = lp.x(), lp.y()
+        best = float("inf")
+        for poly in polys:
+            n = poly.size()
+            if n == 1:
+                best = min(best, math.hypot(px - poly[0].x(), py - poly[0].y()))
+            last = n if closed and n > 2 else n - 1
+            for i in range(last):
+                a, b = poly[i], poly[(i + 1) % n]
+                best = min(best, self._seg_dist(px, py, a.x(), a.y(),
+                                                b.x(), b.y()))
+        return best
+
+    def _pick_distance(self, it, sp: QPointF) -> float:
+        """How far (mm) the scene point ``sp`` is from what ``it`` actually
+        draws: its outline, its line, its hole, its letters."""
+        if isinstance(it, HoleItem):
+            c = it.pos()
+            return max(0.0, math.hypot(sp.x() - c.x(), sp.y() - c.y())
+                       - it.hole.hole_diameter / 2.0)
+        lp = it.mapFromScene(sp)
+        if isinstance(it, ShapeItem):
+            return self._poly_dist(lp, [it._outline],
+                                   bool(getattr(it, "_closed", True)))
+        if isinstance(it, StitchLineItem):
+            return self._poly_dist(lp, [it._poly], bool(it.line.closed))
+        if isinstance(it, DimensionItem):
+            return self._poly_dist(lp, [QPolygonF([it._a, it._b])], False)
+        if isinstance(it, TextItem):
+            return self._poly_dist(lp, it._path.toSubpathPolygons(), False)
+        return float("inf")
+
+    def pick_candidates(self, vp, *, through_grips: bool = False) -> list:
+        """The items a click at viewport point ``vp`` could mean, best first:
+        nearest drawn geometry, then topmost. Empty when a grip or node
+        handle is on top (it always takes the click) -- unless
+        ``through_grips``, which looks past them -- or nothing pickable is
+        under the pointer."""
+        under = self.items(vp)
+        if through_grips:
+            under = [i for i in under if not isinstance(i, self._GRIPS)]
+        if not under or isinstance(under[0], self._GRIPS):
+            return []
+        sp = self.mapToScene(vp)
+        tol = 0.5 / max(self._zoom, 1e-6)       # half a pixel: a tie
+        seen, scored = set(), []
+        for order, it in enumerate(under):
+            owner = it
+            while owner is not None and not isinstance(owner, self._PICKABLE):
+                owner = owner.parentItem()
+            if (owner is None or id(owner) in seen or not _alive(owner)
+                    or not owner.flags() & QGraphicsItem.ItemIsSelectable):
+                continue                         # locked layer, decoration
+            seen.add(id(owner))
+            scored.append((self._pick_distance(owner, sp), order, owner))
+        if not scored:
+            return []
+        out = []
+        while scored:                            # nearest; ties to the top
+            dmin = min(d for d, _o, _it in scored)
+            pick = min((s for s in scored if s[0] <= dmin + tol),
+                       key=lambda s: s[1])
+            out.append(pick[2])
+            scored.remove(pick)
+        return out
+
+    def pick_item(self, vp):
+        """The single item a click at ``vp`` means -- see pick_candidates --
+        or whatever is on top when that has no opinion (a grip, nothing)."""
+        cands = self.pick_candidates(vp)
+        return cands[0] if cands else self.itemAt(vp)
+
+    def _select_press(self, event) -> None:
+        """A press with the Select tool: hand it to the item the click
+        means. Qt gives it to the topmost one under the pointer, so the
+        chosen item is lifted to the top just for the press (it then owns
+        the drag) and put back."""
+        vp = event.position().toPoint()
+        cands = self.pick_candidates(vp)
+        self._click_pick = None
+        target = None
+        say = None
+        if cands and event.button() == Qt.LeftButton:
+            target = cands[0]
+            mods = event.modifiers()
+            if mods & Qt.AltModifier and len(cands) > 1:
+                target = self._next_pick(vp, cands)
+            else:
+                if (not mods & (Qt.ControlModifier | Qt.ShiftModifier)
+                        and not target.isSelected()
+                        and len(self.selected_items()) > 1):
+                    sel = [c for c in cands if c.isSelected()]
+                    if sel:
+                        # pressing inside a multi-selection drags all of it;
+                        # if it turns out a plain click, the release selects
+                        # the nearest item instead (see mouseReleaseEvent)
+                        self._click_pick = target
+                        target = sel[0]
+                if len(cands) > 1:
+                    self._pick_cycle = (QPointF(vp), [id(c) for c in cands], 0)
+            if len(cands) > 1 and self._click_pick is None:
+                say = target
+        if target is None or target is self.items(vp)[0]:
+            super().mousePressEvent(event)
+        else:
+            z = target.zValue()
+            target.setZValue(1e9)
+            try:
+                super().mousePressEvent(event)
+            finally:
+                if _alive(target):
+                    target.setZValue(z)
+        if say is not None:
+            self._say_pick(say, cands)
+
+    def _next_pick(self, vp, cands):
+        """Alt+click: the item after the one picked last time at this spot
+        (wrapping round), or the second-nearest on a first Alt+click."""
+        cyc = getattr(self, "_pick_cycle", None)
+        ids = [id(c) for c in cands]
+        i = 0
+        if cyc is not None:
+            p, last_ids, last_i = cyc
+            near = abs(p.x() - vp.x()) <= 4 and abs(p.y() - vp.y()) <= 4
+            if near and set(last_ids) == set(ids) and last_i < len(last_ids):
+                cur = last_ids[last_i]
+                i = ids.index(cur) if cur in ids else 0
+        nxt = (i + 1) % len(cands)
+        self._pick_cycle = (QPointF(vp), ids, nxt)
+        return cands[nxt]
+
+    def _say_pick(self, picked, cands) -> None:
+        names = {ShapeItem: "shape", StitchLineItem: "seam", HoleItem: "hole",
+                 TextItem: "lettering", DimensionItem: "dimension"}
+
+        def name(it):
+            m = getattr(it, "model", None)
+            if isinstance(it, ShapeItem) and m is not None:
+                if getattr(m, "construction", False):
+                    return "construction line"
+                if isinstance(m, PathShape) and len(m.points) == 2:
+                    return "line"
+                return {"rectangle": "rectangle", "circle": "circle",
+                        "ellipse": "ellipse"}.get(getattr(m, "kind", ""),
+                                                  "shape")
+            return names.get(type(it), "item")
+
+        self.statusMessage.emit(
+            f"Selected the {name(picked)} — {len(cands)} things here; "
+            "Alt+click for the next one")
 
     def press_select(self, item, event=None) -> bool:
         """Left-press selection. Make ``item`` (plus its move-group) the current

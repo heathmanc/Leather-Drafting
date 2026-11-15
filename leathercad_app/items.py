@@ -18,20 +18,38 @@ from PySide6.QtGui import (QColor, QPainterPath, QPainterPathStroker, QPen,
 from PySide6.QtWidgets import (QGraphicsItem, QApplication,
                                QGraphicsSimpleTextItem)
 
-# Click tolerance (mm) around an outline for selection/hit-testing.
+# Click tolerance (mm) around an outline for selection/hit-testing: the pick
+# zone is at most this wide...
 OUTLINE_HIT_MM = 3.5
+# ...and never wider than this many screen pixels either side of the line.
+# Zoomed in, the zones of things drawn close together then pull apart: a
+# fixed 3.5 mm band let a crossing line and two holes cover a 5 mm guide
+# completely, at any zoom.
+HIT_PX = 5.0
 
 
-def _outline_hit_shape(poly: QPolygonF, closed: bool = False) -> QPainterPath:
+def hit_half_width(canvas) -> float:
+    """Half the width (mm) of the pick zone round a line at ``canvas``'s
+    zoom: OUTLINE_HIT_MM / 2 at the usual zoom and further out, HIT_PX
+    screen pixels either side once zoomed in."""
+    zoom = float(getattr(canvas, "_zoom", 0.0) or 0.0) if canvas else 0.0
+    if zoom <= 1e-9:
+        return OUTLINE_HIT_MM / 2.0
+    return min(OUTLINE_HIT_MM / 2.0, HIT_PX / zoom)
+
+
+def _outline_hit_shape(poly: QPolygonF, closed: bool = False,
+                       half: float = OUTLINE_HIT_MM / 2.0) -> QPainterPath:
     """A thin band around a polyline, so only the OUTLINE is clickable (not the
-    filled interior). Lets you click inside a shape to reach what's behind it."""
+    filled interior). Lets you click inside a shape to reach what's behind it.
+    ``half`` is the band's half-width (mm) -- see ``hit_half_width``."""
     path = QPainterPath()
     if poly.size() >= 2:
         path.addPolygon(poly)
         if closed and not poly.isClosed():
             path.closeSubpath()
     stroker = QPainterPathStroker()
-    stroker.setWidth(OUTLINE_HIT_MM)
+    stroker.setWidth(2.0 * half)
     return stroker.createStroke(path)
 
 from leathercad.geometry import Vec2
@@ -714,7 +732,7 @@ class TextItem(QGraphicsItem):
 
     def shape(self):
         st = QPainterPathStroker()
-        st.setWidth(OUTLINE_HIT_MM)
+        st.setWidth(2.0 * hit_half_width(self.canvas))
         return st.createStroke(self._path)
 
     def paint(self, painter, option, widget=None):
@@ -880,7 +898,8 @@ class DimensionItem(QGraphicsItem):
         return self._brect
 
     def shape(self):
-        return _outline_hit_shape(QPolygonF([self._a, self._b]), closed=False)
+        return _outline_hit_shape(QPolygonF([self._a, self._b]), closed=False,
+                                  half=hit_half_width(self.canvas))
 
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
@@ -952,13 +971,19 @@ class HoleItem(QGraphicsItem):
         Qt asks thousands of loose holes for their rect on every repaint and
         rubber-band move; constructing it each time was most of that cost."""
         d = self.hole.hole_diameter
+        # a generous hit area so a small hole is easy to click -- 1.6 mm round
+        # at the usual zoom, but no more than HIT_PX beyond the hole itself
+        # once zoomed in, where it hid whatever ran close by. The rect stays
+        # the largest it can be, so a zoom never has to re-index the item.
+        r_max = max(1.6, d)
+        zoom = float(getattr(self.canvas, "_zoom", 0.0) or 0.0)
+        r = min(r_max, d / 2.0 + HIT_PX / zoom) if zoom > 1e-9 else r_max
         g = getattr(self, "_geom_cache", None)
-        if g is None or g[0] != d:
-            # generous, zoom-independent hit area so small holes are easy to click
-            r = max(1.6, d)
+        if g is None or g[0] != (d, r):
             p = QPainterPath()
             p.addEllipse(QPointF(0, 0), r, r)
-            g = (d, QRectF(-r - 1.0, -r - 1.0, 2 * r + 2.0, 2 * r + 2.0), p)
+            g = ((d, r), QRectF(-r_max - 1.0, -r_max - 1.0, 2 * r_max + 2.0,
+                                2 * r_max + 2.0), p)
             self._geom_cache = g
         return g
 
@@ -1219,9 +1244,11 @@ class ShapeItem(QGraphicsItem):
         # (lines, construction lines) get a straight band, not a closed sliver.
         # Stroked once per outline: a rubber band asks every item for this on
         # every mouse move.
-        if self._hit_shape is None:
+        half = hit_half_width(self.canvas)
+        if self._hit_shape is None or getattr(self, "_hit_half", None) != half:
             self._hit_shape = _outline_hit_shape(
-                self._outline, closed=getattr(self, "_closed", True))
+                self._outline, closed=getattr(self, "_closed", True), half=half)
+            self._hit_half = half          # rebuilt when a zoom changes it
         return self._hit_shape
 
     def paint(self, painter, option, widget=None):
@@ -1961,7 +1988,8 @@ class StitchLineItem(QGraphicsItem):
         return self._brect
 
     def shape(self):
-        return _outline_hit_shape(self._poly, closed=self.line.closed)
+        return _outline_hit_shape(self._poly, closed=self.line.closed,
+                                  half=hit_half_width(self.canvas))
 
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)

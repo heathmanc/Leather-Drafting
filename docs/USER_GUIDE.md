@@ -263,6 +263,12 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
 * **Click the outline** to select — shapes are grabbed by their edge, not
   their filled interior, so you can click "inside" a shape to reach things
   behind it. Selected outlines turn **blue**.
+* **Things drawn close together**: a click picks whatever is **nearest the
+  pointer**: the line you're on, not the hole or crossing line beside it.
+  Zoom in to pull small things apart; the pick zone shrinks to a few pixels
+  either side of a line. Where two things sit exactly on top of each other,
+  **Alt+click** the same spot to step to the next one under the pointer (the
+  status bar says how many are there).
 * **Ctrl/Shift-click** adds to the selection; drag a rubber band over items to
   select several. `Ctrl+A` selects everything.
 * **Move**: drag. While dragging, the shape magnetically **snaps** to other
@@ -977,6 +983,7 @@ what the **Stitch line** tool is for.
 | `Ctrl+1` / `Ctrl+2` | Properties / Layers panel |
 | `Esc` | Cancel in-progress shape; again → Select tool |
 | `Shift` (held) | 0/45/90° ortho lock while placing or node-dragging |
+| `Alt`+click | Select the next item under the pointer (things on top of each other) |
 
 ---
 

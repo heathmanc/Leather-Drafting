@@ -5467,6 +5467,8 @@ class Canvas(QGraphicsView):
                 sh.ry = v
         elif field == "ry" and hasattr(sh, "ry"):
             sh.ry = v
+        elif field == "d" and isinstance(sh, Circle):   # a circle's diameter
+            sh.rx = sh.ry = v / 2.0
         elif field == "pitch" and sh.stitch is not None:
             sh.stitch.pitch_mm = v
         elif field == "inset" and sh.stitch is not None:

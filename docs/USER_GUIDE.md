@@ -288,7 +288,10 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
   new size automatically.
 * **Resize exactly**: type in the Properties fields. Both stay in sync.
   **Every number field does math**: type `105/2 + 3`, `4*25.4`, or even
-  `1in` / `3cm` and it evaluates on Enter. Position, size, radius and the
+  `1in` / `3cm` and it evaluates on Enter. A click into a field selects
+  all of it, so what you type replaces the value (click again to place the
+  cursor); an entry that can't be read — a misspelt parameter, say — is
+  pointed out beside the field and the old value kept. Position, size, radius and the
   stitch fields (pitch, inset, hole size) hold **4 decimals** (0.0001 mm) —
   enough to set a corner radius that makes the holes land exactly one pitch
   apart around the corner, or a pitch like `25.4/7`. Editing one field never
@@ -296,8 +299,9 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
 * **Parameters** (`Ctrl+Shift+P`) — Fusion-style named values. Define
   `strap_w = 20` once in Edit → **Parameters…**, then type `strap_w` (or
   `strap_w*2+5`) into any numeric field. A shape's position, rotation,
-  width, height, radius and corner radius, a **line's length and angle**,
-  and the stitch pitch and inset stay **linked** when set from a parameter:
+  width, height, radius (or a circle's **diameter**) and corner radius, a
+  **line's length and angle**, and the stitch pitch and inset stay
+  **linked** when set from a parameter:
   change the parameter and they re-evaluate and the shapes update (a line
   keeps its first end and moves the other). Other fields take the
   parameter's value when you type it. Re-type a plain number into a field

@@ -59,6 +59,19 @@ made only when the release workflow is run by hand with it ticked.
 * **Every straight line has a Line box.** A straight segment left by Trim,
   Join or Break apart is an editable path, and Properties showed no Length
   or Angle for it at all.
+* **A parameter typed into a box takes, however you enter the box.** A
+  click left the cursor where it landed, so `sidelength` typed into a
+  width went in beside the old number ("40 mmsidelength"). That reads as
+  nothing, and the box went back to 40 without a word. A click into a
+  number box now selects all of it, so what you type replaces it (click
+  again to place the cursor). An entry that can't be read is pointed out
+  beside the box, e.g. "There's no parameter called sidelenght", instead
+  of quietly reverting.
+* **A circle's radius and diameter link to parameters.** The radius took a
+  parameter's value but never stayed linked: refilling the radius and
+  diameter boxes forgot where it came from. The diameter couldn't be linked
+  at all. Either can now, one link per circle: the box you typed in last
+  decides.
 
 ### Number boxes
 * **"mm" no longer shows up twice.** The unit was held at the end of every

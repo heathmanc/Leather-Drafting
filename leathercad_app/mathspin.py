@@ -13,8 +13,9 @@ the parameter later and every bound field re-evaluates.
 
 from __future__ import annotations
 
+from PySide6.QtCore import QEvent, QPoint, Qt
 from PySide6.QtGui import QValidator
-from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QSpinBox
+from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QSpinBox, QToolTip
 
 from leathercad.expr import evaluate, names_in  # noqa: F401  (re-exported)
 
@@ -68,7 +69,47 @@ class MathSpinBox(QDoubleSpinBox):
         self.physical = False       # a length in mm: shown in the display unit
         self.last_expr = None
         self._user_edited = False
+        self._unreadable = None     # the last entry that couldn't be read
+        self._select_on_release = False
         self.lineEdit().textEdited.connect(self._mark_edited)
+        self.lineEdit().installEventFilter(self)
+        self.editingFinished.connect(self._say_unreadable)
+
+    # A click into the box selects all of it, so what's typed replaces the
+    # value: typed after "40 mm" -- where a click leaves the cursor -- a
+    # parameter's name read "40 mmsidelength", which is nothing, and the box
+    # quietly went back to 40. A drag, a double-click or a second click
+    # still put the cursor or selection where they're pointed.
+    def focusInEvent(self, event):   # noqa: N802
+        super().focusInEvent(event)
+        if event.reason() == Qt.MouseFocusReason:
+            self._select_on_release = True
+
+    def eventFilter(self, obj, event):   # noqa: N802
+        if (self._select_on_release and obj is self.lineEdit()
+                and event.type() == QEvent.MouseButtonRelease):
+            self._select_on_release = False
+            if not self.lineEdit().hasSelectedText():
+                self.selectAll()
+        return super().eventFilter(obj, event)
+
+    def _say_unreadable(self) -> None:
+        """An entry that couldn't be read is said so, beside the box --
+        it used to just go back to the old value without a word."""
+        bad, self._unreadable = self._unreadable, None
+        if not bad or not self.isVisible():
+            return
+        params = current_params()
+        unknown = sorted(n for n in names_in(bad) if n not in params)
+        if unknown:
+            why = (f"There's no parameter called “{unknown[0]}” "
+                   "(Edit → Parameters lists them).")
+        else:
+            why = ("Type a number, a sum (105/2 + 3), a unit (1in, 3cm) or "
+                   "a parameter's name.")
+        QToolTip.showText(self.mapToGlobal(QPoint(0, self.height())),
+                          f"Couldn't read “{bad}”; kept {self.text()}.\n{why}",
+                          self)
 
     def _mark_edited(self, _text) -> None:
         self._user_edited = True
@@ -144,7 +185,9 @@ class MathSpinBox(QDoubleSpinBox):
             try:
                 v = float(s.replace(",", "."))
             except ValueError:
+                self._unreadable = s or None
                 return self.value()          # unparseable: keep the old value
+        self._unreadable = None
         if self.physical:
             from . import units
             # a bare number is in the display unit; "10mm" / "1/2in" name

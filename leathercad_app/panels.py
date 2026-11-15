@@ -1008,11 +1008,11 @@ class PropertiesPanel(QWidget):
             return
         if isinstance(it, ShapeItem) and it.model.baked_holes:
             sh = it.model
+            self._record_bindings(sh)   # first: applying refills twin boxes
             self._apply_transform(sh)
             sh.opacity = self.opacity.value() / 100.0
             sh.layer = self.layer_combo.currentData() or sh.layer
             self._apply_shape_geometry(sh)
-            self._record_bindings(sh)
             if sh.stitch is None:
                 sh.stitch = StitchSettings(enabled=False)
             self._write_hole_style(sh.stitch)
@@ -1022,6 +1022,7 @@ class PropertiesPanel(QWidget):
             return
         if isinstance(it, ShapeItem):
             sh = it.model
+            self._record_bindings(sh)   # first: applying refills twin boxes
             self._apply_transform(sh)
             sh.opacity = self.opacity.value() / 100.0
             sh.layer = self.layer_combo.currentData() or sh.layer
@@ -1035,7 +1036,6 @@ class PropertiesPanel(QWidget):
                 # re-stitch now, not at the next unrelated click
                 self.canvas._refresh_keepout_dependents()
             self._apply_shape_geometry(sh)
-            self._record_bindings(sh)
             if self.g_stitch.isChecked():
                 if sh.stitch is None:
                     sh.stitch = StitchSettings()
@@ -1122,9 +1122,15 @@ class PropertiesPanel(QWidget):
         pairs = [(self.pos_x, "x"), (self.pos_y, "y"), (self.rot, "rot"),
                  (self.w, "w"), (self.h, "h"), (self.corner, "corner"),
                  (self.rx, "rx"), (self.ry, "ry"), (self.circ_r, "rx"),
-                 (self.poly_radius, "corner"),
+                 (self.circ_d, "d"), (self.poly_radius, "corner"),
                  (self.line_len, "len"), (self.line_angle, "ang"),
                  (self.pitch, "pitch"), (self.inset, "inset")]
+        if isinstance(sh, Circle):
+            # a circle's radius and diameter are one size: whichever box was
+            # typed in last decides it, and the other one lets go
+            for spin, other in ((self.circ_r, "d"), (self.circ_d, "rx")):
+                if getattr(spin, "last_expr", None) is not None:
+                    doc.bindings.pop(f"{sh.shape_id}:{other}", None)
         for spin, field in pairs:
             expr = getattr(spin, "last_expr", None)
             if expr is None:

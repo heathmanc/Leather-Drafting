@@ -6,6 +6,21 @@ made only when the release workflow is run by hand with it ticked.
 
 ## Unreleased
 
+### Snapping
+* **A dragged shape snaps by the point you grabbed it by.** Every corner,
+  midpoint and centre of a dragged shape used to be tried against every
+  target on each mouse move. The shape jumped to whichever pair happened to
+  line up, often a far corner 50-70 mm from the pointer, so what snapped to
+  what looked random. On interlocking pieces the tab latched onto the notch a
+  few millimetres into the drag, and the corner you held never snapped at
+  all. Now only the shape's point nearest where you grabbed it snaps, onto
+  the target nearest that point. Grab near another point to
+  snap by that one; a faint orange mark shows which point will snap, and the
+  status bar names it.
+* Circles and loose holes still snap by their centre; grab a circle right on
+  a quarter point to snap by that instead. A moved group snaps by its own
+  point nearest the grab.
+
 ### Selecting
 * **Things drawn close together can be picked.** A construction line between
   two 1 mm holes 5 mm apart, with a line crossing its middle, could not be

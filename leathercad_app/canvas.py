@@ -532,6 +532,7 @@ class Canvas(QGraphicsView):
         self.snap_to_grid = True
         self.snap_grid = 1.0         # mm
         self._snap_marker: Optional[QGraphicsPathItem] = None
+        self._src_marker: Optional[QGraphicsPathItem] = None   # see snap_move
         self._node_hl: Optional[QGraphicsPathItem] = None
         self._trim_hover: Optional[QGraphicsPathItem] = None
         self._align_guides: List[QGraphicsLineItem] = []
@@ -1382,7 +1383,13 @@ class Canvas(QGraphicsView):
                 m.setFlag(QGraphicsItem.ItemIsMovable, True)
         self._nonmovable_members = []
 
-    def begin_move_snap(self, item) -> None:
+    def begin_move_snap(self, item, press: Optional[QPointF] = None) -> None:
+        """Arm magnetic snapping for a drag of ``item`` pressed at scene point
+        ``press``: the targets (other shapes' nodes and intersections) once,
+        and the ONE point of the item that will snap to them -- its node
+        nearest where it was grabbed (see _grab_source)."""
+        self._move_src = self._move_src_kind = None
+        self._move_src_said = False
         # Don't fight the node-edit lock: the item being edited stays frozen so a
         # stray press on its body can't drag it out from under its handles.
         if self._edit_owner is not None and item is self._edit_owner:
@@ -1416,6 +1423,9 @@ class Canvas(QGraphicsView):
             self._snap_cache = (self._snap_candidates(exclude=item)
                                 + self._all_intersections(exclude=item))
             self._build_snap_grid()
+            self._move_src, self._move_src_kind = self._grab_source(
+                item, getattr(item, "_snap_offsets", None),
+                getattr(item, "_snap_offset_kinds", None), press, item.pos())
             return
         # A move-group is being dragged: snap the whole group by its leader (the
         # pressed item) and move the other members to match. Exclude every group
@@ -1445,9 +1455,68 @@ class Canvas(QGraphicsView):
             "starts": {id(m): QPointF(m.pos()) for m in members},
             "offsets": offsets,
         }
+        self._move_src, self._move_src_kind = self._grab_source(
+            leader, offsets, None, press, lp)
         for m in members:
             m.setFlag(QGraphicsItem.ItemIsMovable, False)
         self._nonmovable_members = list(members)
+
+    # A round thing grabbed this close (px) to a point on its rim snaps by
+    # that point; grabbed anywhere else it snaps by its centre.
+    _RIM_GRAB_PX = 10.0
+
+    def _grab_source(self, item, offsets, kinds, press, origin):
+        """The one point of a dragged item (or move-group) that snaps:
+        ``(offset from origin, kind)`` of its snap node nearest the grab
+        point ``press``. Every node used to be tried against every target on
+        each move, so the shape jumped to whichever pair happened to line up
+        -- often a far corner, a long way from the pointer. A circle, oval or
+        hole snaps by its centre unless it was grabbed right on a rim point.
+        ``(None, None)`` without a grab point: every node is tried, as
+        before."""
+        if press is None or not offsets:
+            return None, None
+        px, py = press.x() - origin.x(), press.y() - origin.y()
+        d2, i = min(((o.x - px) ** 2 + (o.y - py) ** 2, j)
+                    for j, o in enumerate(offsets))
+        kind = kinds[i] if kinds and i < len(kinds) else None
+        if kinds and getattr(item, "_center_snap_priority", False):
+            rim = (self._RIM_GRAB_PX / max(self._zoom, 1e-6)) ** 2
+            if kind != "center" and d2 > rim:
+                ci = next((j for j, k in enumerate(kinds) if k == "center"),
+                          None)
+                if ci is not None:
+                    i, kind = ci, "center"
+        return offsets[i], kind
+
+    def _move_src_name(self, item) -> str:
+        kind = getattr(self, "_move_src_kind", None)
+        if kind == "end":
+            return "corner" if getattr(item, "_closed", False) else "end"
+        return {"mid": "midpoint", "center": "centre",
+                "quad": "quarter point"}.get(kind, "nearest point")
+
+    def _show_src_marker(self, pt: Optional[QPointF], kind) -> None:
+        """A faint mark on the dragged item's snapping point, so it's plain
+        which point will land on a target."""
+        m = getattr(self, "_src_marker", None)
+        if m is None or not _alive(m):
+            self._src_marker = None      # none yet, or freed by a rebuild
+        if pt is None:
+            if self._src_marker is not None:
+                self._src_marker.setVisible(False)
+            return
+        if self._src_marker is None:
+            self._src_marker = QGraphicsPathItem()
+            self._src_marker.setZValue(999)
+            self.scene_obj.addItem(self._src_marker)
+            pen = QPen(QColor(255, 150, 40, 200), 1.5)
+            pen.setCosmetic(True)
+            self._src_marker.setPen(pen)
+            self._src_marker.setBrush(Qt.NoBrush)
+        self._src_marker.setPath(self._glyph_path(
+            pt, {"quad": "mid"}.get(kind, kind or "end"), 4.5 / self._zoom))
+        self._src_marker.setVisible(True)
 
     def _build_snap_grid(self) -> None:
         """Bucket the drag snap cache into threshold-sized cells. Each mouse
@@ -1466,6 +1535,8 @@ class Canvas(QGraphicsView):
         self._group_drag = None
         self._snap_cache = None
         self._snap_grid = None
+        self._move_src = self._move_src_kind = None
+        self._show_src_marker(None, None)
         self._hide_snap_marker()
         self.bake_seam_moves()
 
@@ -1520,7 +1591,10 @@ class Canvas(QGraphicsView):
                         bd, bp, bt = d, QPointF(s.x - off.x, s.y - off.y), s
             return bp, bt
 
-        if gd is not None:
+        src = getattr(self, "_move_src", None)
+        if src is not None:
+            offsets = [src]          # only the point it was grabbed by snaps
+        elif gd is not None:
             offsets = gd["offsets"]           # group nodes, relative to leader
         else:
             offsets = getattr(item, "_snap_offsets", None)
@@ -1530,7 +1604,8 @@ class Canvas(QGraphicsView):
         best = best_target = None
         # Circles / ellipses lock by their centre first: try centre-only, and
         # only fall back to quadrants if the centre finds no target in range.
-        if gd is None and getattr(item, "_center_snap_priority", False):
+        if (src is None and gd is None
+                and getattr(item, "_center_snap_priority", False)):
             kinds = getattr(item, "_snap_offset_kinds", [])
             centre = [o for o, k in zip(offsets, kinds) if k == "center"]
             if centre:
@@ -1538,10 +1613,21 @@ class Canvas(QGraphicsView):
         if best is None:
             best, best_target = _best(offsets)
 
+        if src is not None and not getattr(self, "_move_src_said", True):
+            self._move_src_said = True
+            self.statusMessage.emit(
+                f"Snaps by its {self._move_src_name(item)}: the point nearest "
+                "where you grabbed it (grab near another point to snap by "
+                "that one)")
         if best is None:
-            self._hide_snap_marker()
+            if self._snap_marker is not None:
+                self._snap_marker.setVisible(False)
             best = value
+            if src is not None:
+                self._show_src_marker(QPointF(vx + src.x, vy + src.y),
+                                      self._move_src_kind)
         else:
+            self._show_src_marker(None, None)
             self._show_snap_marker(QPointF(best_target.x, best_target.y), "end")
         if gd is not None:                    # drag the rest of the group along
             dx = best.x() - gd["leader_start"].x()
@@ -3422,6 +3508,7 @@ class Canvas(QGraphicsView):
         self._cal_pts = []
         self._snap_marker = None
         self._node_hl = None
+        self._src_marker = None          # freed with the scene, like the rest
         self._trim_hover = None
         self._align_guides = []
         self._handles = []

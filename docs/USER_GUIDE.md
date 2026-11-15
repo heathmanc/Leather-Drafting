@@ -272,8 +272,12 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
 * **Ctrl/Shift-click** adds to the selection; drag a rubber band over items to
   select several. `Ctrl+A` selects everything.
 * **Move**: drag. While dragging, the shape magnetically **snaps** to other
-  shapes' endpoints/centres/midpoints (see §8). Circles and loose holes snap
-  by their **centre**.
+  shapes' endpoints/centres/midpoints and intersections (see §8), **by the
+  point you grabbed it by**: its corner, end, midpoint or centre nearest
+  where you pressed lands on the target nearest that point. Grab it near
+  another point to snap by that one; a faint orange mark shows which point
+  will snap. Circles and loose holes snap by their **centre** (grab a circle
+  right on a quarter point to snap by that instead).
 * **Resize by eye**: select one rectangle/circle/ellipse and drag any of the 8
   box handles — the opposite corner stays pinned. Holes recalculate for the
   new size automatically.
@@ -580,9 +584,11 @@ point and the status bar names it (*endpoint*, *midpoint*, *centre*,
 node or centre, a dashed **alignment guide** appears and the point locks to
 that x/y — Illustrator-style smart guides.
 
-While dragging a whole shape, it snaps by its own nodes (a circle by its
-**centre**), so you can drop a circle exactly onto a centre point without any
-extra construction.
+While dragging a whole shape, it snaps by **one** of its own points: the
+corner, end, midpoint or centre nearest where you grabbed it, onto the
+target nearest that point. A circle snaps by its **centre**, so you can drop
+it exactly onto a centre point without any extra construction. Nothing else
+on the shape snaps, so it never jumps to a target far from the pointer.
 
 A third toggle, **Perfect fit**, snaps *sizes* instead of points: with it on, a
 resize grip on a stitched rectangle, circle or oval jumps between the sizes

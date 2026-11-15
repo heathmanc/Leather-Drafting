@@ -834,7 +834,7 @@ class TextItem(QGraphicsItem):
             # only a left press starts a move: a right-click's release goes to
             # the context menu, so a drag armed here would never be ended
             if event.button() == Qt.LeftButton:
-                self.canvas.begin_move_snap(self)
+                self.canvas.begin_move_snap(self, event.scenePos())
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -1021,7 +1021,7 @@ class HoleItem(QGraphicsItem):
             # only a left press starts a move: a right-click's release goes to
             # the context menu, so a drag armed here would never be ended
             if event.button() == Qt.LeftButton:
-                self.canvas.begin_move_snap(self)
+                self.canvas.begin_move_snap(self, event.scenePos())
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -1355,7 +1355,7 @@ class ShapeItem(QGraphicsItem):
             # only a left press starts a move: a right-click's release goes to
             # the context menu, so a drag armed here would never be ended
             if event.button() == Qt.LeftButton:
-                self.canvas.begin_move_snap(self)
+                self.canvas.begin_move_snap(self, event.scenePos())
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):

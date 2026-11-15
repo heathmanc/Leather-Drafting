@@ -5471,6 +5471,10 @@ class Canvas(QGraphicsView):
             sh.stitch.pitch_mm = v
         elif field == "inset" and sh.stitch is not None:
             sh.stitch.inset = v
+        elif field in ("len", "ang"):           # a line: its first end stays
+            from leathercad.shapes import set_straight_line
+            return set_straight_line(sh, **({"length": v} if field == "len"
+                                            else {"angle_deg": v}))
         else:
             return False
         return True

@@ -49,6 +49,17 @@ made only when the release workflow is run by hand with it ticked.
   they lie outside it. A group's "inside" is its biggest outline, not the
   one with the most points.
 
+### Parameters
+* **A line's length and angle follow a parameter.** With `sidelength`
+  = 10 mm, typing `sidelength` into a line's Length set it to 10 mm once.
+  The line's Length and Angle weren't among the fields a parameter keeps
+  linked, so changing `sidelength` later left the line as it was. They now
+  stay linked like a rectangle's width: change the parameter and the line
+  keeps its first end and moves the other.
+* **Every straight line has a Line box.** A straight segment left by Trim,
+  Join or Break apart is an editable path, and Properties showed no Length
+  or Angle for it at all.
+
 ## 0.4.7 — 2026-11-15
 
 ### Selecting and snapping

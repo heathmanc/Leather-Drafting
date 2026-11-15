@@ -873,3 +873,44 @@ class EditablePath(Shape):
 
 # Imported here to avoid a circular import at module top.
 from .stitchsettings import StitchSettings  # noqa: E402
+
+
+def straight_line_ends(sh):
+    """The two world ends of a straight, open two-point line -- a drawn line
+    or guide, or a straight segment left by Trim, Join or Break apart -- or
+    None for anything else."""
+    if isinstance(sh, PathShape) and len(sh.points) == 2 and not sh.close_path:
+        a, b = sh.points
+    elif (isinstance(sh, EditablePath) and len(sh.nodes) == 2
+          and not sh.closed and sh.edges and sh.edges[0].kind == "line"):
+        a, b = sh.nodes
+    else:
+        return None
+    return sh.transform.apply(a), sh.transform.apply(b)
+
+
+def set_straight_line(sh, length: Optional[float] = None,
+                      angle_deg: Optional[float] = None) -> bool:
+    """Re-aim a straight line (see ``straight_line_ends``): its first end
+    stays put and the other goes ``length`` mm away at ``angle_deg`` (each
+    kept as it is when None). False when ``sh`` is no such line or nothing
+    changed."""
+    import math
+    ends = straight_line_ends(sh)
+    if ends is None:
+        return False
+    p0, p1 = ends
+    cur_len = math.hypot(p1.x - p0.x, p1.y - p0.y)
+    cur_ang = math.degrees(math.atan2(p1.y - p0.y, p1.x - p0.x))
+    length = cur_len if length is None else float(length)
+    angle_deg = cur_ang if angle_deg is None else float(angle_deg)
+    if length == cur_len and angle_deg == cur_ang:
+        return False
+    a = math.radians(angle_deg)
+    end = sh.transform.inverse_apply(Vec2(p0.x + length * math.cos(a),
+                                          p0.y + length * math.sin(a)))
+    if isinstance(sh, PathShape):
+        sh.points[1] = end
+    else:
+        sh.nodes[1] = end
+    return True

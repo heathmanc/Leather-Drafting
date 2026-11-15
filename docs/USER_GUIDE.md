@@ -295,12 +295,15 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
   rounds the others.
 * **Parameters** (`Ctrl+Shift+P`) — Fusion-style named values. Define
   `strap_w = 20` once in Edit → **Parameters…**, then type `strap_w` (or
-  `strap_w*2+5`) into any numeric field. A field set from a parameter stays
-  **linked**: change the parameter and every linked field re-evaluates and
-  the shapes update. Re-type a plain number into a field to unlink it.
-  Parameters may reference each other (`half_w = strap_w/2`) and understand
-  units (`1in`), are saved in the file, and a parameter edit is one undo
-  step. Great for "the whole wallet, resizable from one table".
+  `strap_w*2+5`) into any numeric field. A shape's position, rotation,
+  width, height, radius and corner radius, a **line's length and angle**,
+  and the stitch pitch and inset stay **linked** when set from a parameter:
+  change the parameter and they re-evaluate and the shapes update (a line
+  keeps its first end and moves the other). Other fields take the
+  parameter's value when you type it. Re-type a plain number into a field
+  to unlink it. Parameters may reference each other (`half_w = strap_w/2`)
+  and understand units (`1in`), are saved in the file, and a parameter edit
+  is one undo step. Great for "the whole wallet, resizable from one table".
 * **Resize**: drag any of the 8 box grips on a selected shape (rectangles,
   ellipses, **and polygons / multi-point paths**); the opposite corner or edge
   stays pinned. Hold **Shift** to keep the aspect ratio, or turn on

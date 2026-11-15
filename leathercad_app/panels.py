@@ -120,9 +120,18 @@ _CLOSED_ONLY = "\n\nNot available here: this is an open path, not a closed outli
 
 
 def _is_line(sh) -> bool:
-    """A straight 2-point open path (a line or construction line)."""
-    return (isinstance(sh, PathShape) and len(sh.points) == 2
-            and not sh.close_path)
+    """A straight 2-point open path: a line or construction line, or a
+    straight segment left by Trim, Join or Break apart."""
+    from leathercad.shapes import straight_line_ends
+    return straight_line_ends(sh) is not None
+
+
+def _line_len_ang(sh):
+    import math
+    from leathercad.shapes import straight_line_ends
+    p0, p1 = straight_line_ends(sh)
+    return (math.hypot(p1.x - p0.x, p1.y - p0.y),
+            math.degrees(math.atan2(p1.y - p0.y, p1.x - p0.x)))
 
 
 class PropertiesPanel(QWidget):
@@ -556,14 +565,10 @@ class PropertiesPanel(QWidget):
                 self.poly_radius.setValue(sh.corner_radius)
                 self.poly_info.setText(str(len(sh.points)))
             elif _is_line(sh):
-                import math
-                p0 = sh.transform.apply(sh.points[0])
-                p1 = sh.transform.apply(sh.points[1])
                 self.g_line.setVisible(True)
-                self.line_len.setValue(((p1.x - p0.x) ** 2
-                                        + (p1.y - p0.y) ** 2) ** 0.5)
-                self.line_angle.setValue(
-                    math.degrees(math.atan2(p1.y - p0.y, p1.x - p0.x)))
+                length, ang = _line_len_ang(sh)
+                self.line_len.setValue(length)
+                self.line_angle.setValue(ang)
             if is_baked:
                 self.g_stitch.setTitle(f"Holes (grouped · {len(sh.baked_holes)})")
                 self._load_hole_style(sh.stitch or StitchSettings())
@@ -608,13 +613,9 @@ class PropertiesPanel(QWidget):
                 self.rx.setValue(sh.rx)
                 self.ry.setValue(sh.ry)
             elif _is_line(sh):
-                import math
-                p0 = sh.transform.apply(sh.points[0])
-                p1 = sh.transform.apply(sh.points[1])
-                self.line_len.setValue(((p1.x - p0.x) ** 2
-                                        + (p1.y - p0.y) ** 2) ** 0.5)
-                self.line_angle.setValue(
-                    math.degrees(math.atan2(p1.y - p0.y, p1.x - p0.x)))
+                length, ang = _line_len_ang(sh)
+                self.line_len.setValue(length)
+                self.line_angle.setValue(ang)
         finally:
             self._loading = False
         self._update_readout()
@@ -1107,20 +1108,11 @@ class PropertiesPanel(QWidget):
         elif isinstance(sh, Polygon):
             sh.corner_radius = _kept(self.poly_radius, sh.corner_radius)
         elif _is_line(sh):
-            import math
-            from leathercad.geometry import Vec2
-            p0 = sh.transform.apply(sh.points[0])       # keep the first point
-            p1 = sh.transform.apply(sh.points[1])
-            cur_len = math.hypot(p1.x - p0.x, p1.y - p0.y)
-            cur_ang = math.degrees(math.atan2(p1.y - p0.y, p1.x - p0.x))
-            length = _kept(self.line_len, cur_len)
-            deg = _kept(self.line_angle, cur_ang)
-            if length == cur_len and deg == cur_ang:
-                return                      # untouched: leave the end exact
-            ang = math.radians(deg)
-            p1 = Vec2(p0.x + length * math.cos(ang),
-                      p0.y + length * math.sin(ang))
-            sh.points[1] = sh.transform.inverse_apply(p1)
+            from leathercad.shapes import set_straight_line
+            cur_len, cur_ang = _line_len_ang(sh)
+            # the first point stays; untouched fields leave the end exact
+            set_straight_line(sh, _kept(self.line_len, cur_len),
+                              _kept(self.line_angle, cur_ang))
 
     def _record_bindings(self, sh) -> None:
         """Remember which fields the user set FROM a parameter expression, so
@@ -1131,6 +1123,7 @@ class PropertiesPanel(QWidget):
                  (self.w, "w"), (self.h, "h"), (self.corner, "corner"),
                  (self.rx, "rx"), (self.ry, "ry"), (self.circ_r, "rx"),
                  (self.poly_radius, "corner"),
+                 (self.line_len, "len"), (self.line_angle, "ang"),
                  (self.pitch, "pitch"), (self.inset, "inset")]
         for spin, field in pairs:
             expr = getattr(spin, "last_expr", None)

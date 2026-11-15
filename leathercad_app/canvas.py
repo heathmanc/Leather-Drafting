@@ -199,6 +199,26 @@ _MULTI_HINT = {
     (CIRCLE3, 2): "circle: click the third point",
 }
 
+class _LazyBezier:
+    """A curve of an outline, as a trim piece only once it's needed: the
+    piece samples the curve finely, too dear to do for every curve of a
+    traced outline the first time the pointer comes near it. Its control
+    points bound the curve, so their box says when it might be."""
+    __slots__ = ("pts", "box", "_piece")
+
+    def __init__(self, pts):
+        self.pts = pts
+        xs, ys = [p.x for p in pts], [p.y for p in pts]
+        self.box = (min(xs), min(ys), max(xs), max(ys))
+        self._piece = None
+
+    def piece(self):
+        if self._piece is None:
+            from leathercad.trim import _piece_from
+            self._piece = _piece_from("bezier", self.pts)
+        return self._piece
+
+
 _SNAP_LABEL = {"center": "centre", "end": "endpoint", "mid": "midpoint",
                "quad": "quadrant", "hole": "hole centre", "cross": "intersection",
                "align": "aligned", "grid": "", "edge": "on line"}
@@ -705,6 +725,14 @@ class Canvas(QGraphicsView):
             if best is not None:
                 return QPointF(best.x, best.y), True, guides, best_kind
 
+            # 1a. the line or arc being drawn goes through an outline right
+            # here: end it exactly on that outline, anywhere along an edge
+            # (only an edge's corners, midpoint and crossings with other
+            # outlines used to snap, so a line or arc couldn't be ended on it)
+            x = self._crossing_snap(near, thr)
+            if x is not None:
+                return QPointF(x.x, x.y), True, guides, "cross"
+
             # 1b. snap onto the body of a nearby construction/guide line -- the
             # "nearest point on line" osnap, so a diagonal guide is snappable
             # along its whole length, not just at its end/mid nodes.
@@ -1087,6 +1115,148 @@ class Canvas(QGraphicsView):
                 if d < best_d:
                     best_d, best = d, foot
         return best
+
+    # -- where the line or arc being drawn crosses an outline ---------------
+    def _drawing_from(self):
+        """What the point about to be placed will end, while something is
+        being drawn: ``("ray", a)`` -- a straight segment from ``a`` (a line,
+        a polyline's or pen path's next segment, a measure, the dashed line
+        to an arc's or circle's second point); ``("circle", p, q)`` -- the
+        circle through ``p``, ``q`` and the point (a 3-point arc's end, a
+        3-point circle's last point); ``("ring", c, r)`` -- a centre arc's
+        end, on its circle. None when the point starts something."""
+        t = self.tool
+        if t in (LINE, CONSTRUCTION, MEASURE, DIMENSION):
+            return ("ray", self._start) if self._start is not None else None
+        if t in _POLY_TOOLS:
+            return ("ray", self._poly_pts[-1]) if self._poly_pts else None
+        if t == PEN:
+            if not self._pen_pts or self._pen_drag:
+                return None
+            if self._pen_handles and self._pen_handles[-1] is not None:
+                return None                  # a curve leaves the last anchor
+            return ("ray", self._pen_pts[-1])
+        pts = self._multi_pts if t in _MULTI_TOOLS else None
+        if not pts:
+            return None
+        if len(pts) == 1:
+            return ("ray", pts[0])
+        if t in (ARC3, CIRCLE3):
+            return ("circle", pts[0], pts[1])
+        if t == ARCCENTER:
+            c, s = pts[0], pts[1]
+            return ("ring", c, math.hypot(s.x() - c.x(), s.y() - c.y()))
+        return None
+
+    def _crossing_snap(self, near: Vec2, thr: float):
+        """The point within ``thr`` of the cursor ``near`` where the line or
+        arc being drawn goes through another outline, so it can be ended
+        exactly on an edge anywhere along it. A 3-point arc's end lands where
+        the arc it shows crosses the edge, so it keeps the curve it showed; a
+        centre arc's end, where its circle does. None when nothing is being
+        drawn or nothing is crossed nearby."""
+        g = self._drawing_from()
+        if g is None:
+            return None
+        from leathercad.trim import _Piece
+        if g[0] == "ray":
+            a = Vec2(g[1].x(), g[1].y())
+            d = near - a
+            n = d.length()
+            if n <= 1e-9:
+                return None
+            # from its start, through the cursor and on past it
+            drawn = _Piece("line", a, a + d * ((n + 2.0 * thr) / n))
+            return self._drawn_crossing(drawn, near, thr, avoid=(a,))
+        if g[0] == "circle":
+            p, q = Vec2(g[1].x(), g[1].y()), Vec2(g[2].x(), g[2].y())
+            cr = arc_through(p, q, near)
+            if cr is None:
+                return None
+            c, r = cr[0], cr[1]
+            focus, avoid = near, (p, q)
+        else:                                          # "ring"
+            c, r = Vec2(g[1].x(), g[1].y()), g[2]
+            v = near - c
+            if v.length() <= 1e-9:
+                return None
+            focus, avoid = c + v * (r / v.length()), ()
+        if r <= 1e-9:
+            return None
+        # that circle, a little way either side of the end
+        th = math.atan2(focus.y - c.y, focus.x - c.x)
+        dth = min(0.9 * math.pi, 2.0 * thr / r)
+
+        def on(ang):
+            return Vec2(c.x + r * math.cos(ang), c.y + r * math.sin(ang))
+
+        drawn = _Piece("arc", on(th - dth), on(th + dth), on(th))
+        return self._drawn_crossing(drawn, focus, thr, avoid)
+
+    def _drawn_crossing(self, drawn, focus: Vec2, thr: float, avoid=()):
+        """The point nearest ``focus``, within ``thr``, where the trim piece
+        ``drawn`` crosses another outline or seam -- on the outline's true
+        lines, arcs and curves (as Trim cuts), not its flattened copy, so a
+        line ended on a curve lies on it. Points within a hair of ``avoid``
+        (where the drawing started) don't count. None if there's none."""
+        from leathercad.trim import _cross, _in_box
+        idx = self._snap_index()
+        owners = idx["owners"]
+        best, best_d, seen = None, thr, set()
+        for _a, _b, oid in self._edges_near(focus, thr, idx):
+            if oid in seen:
+                continue
+            seen.add(oid)
+            rec = owners.get(oid)
+            if rec is None:
+                continue
+            for piece in self._true_pieces(rec["item"]):
+                if not _in_box(focus, piece.box, thr):
+                    continue
+                if isinstance(piece, _LazyBezier):
+                    piece = piece.piece()
+                for _f, x in _cross(piece, drawn):
+                    d = (x - focus).length()
+                    if d < best_d and all((x - v).length() > 1e-6
+                                          for v in avoid):
+                        best, best_d = x, d
+        return best
+
+    def _true_pieces(self, it):
+        """``it``'s outline as its true lines, arcs and curves (world-space
+        trim pieces). Built once, and again only when the item changes: a
+        traced curve's pieces are too dear to rebuild on every mouse move."""
+        from leathercad.trim import _Piece, _piece_from
+        fp = self._item_snap_sig(it)
+        cache = getattr(self, "_piece_cache", None)
+        if cache is None:
+            cache = self._piece_cache = {}
+        hit = cache.get(id(it))
+        if hit is not None and hit[0] is it and hit[1] == fp:
+            return hit[2]
+        pieces = []
+        if isinstance(it, ShapeItem):
+            for k, pts in self._segments_world(it.model):
+                if len(pts) < 2:
+                    continue
+                if k == "bezier":            # built when the pointer nears it
+                    if max((q - pts[0]).length() for q in pts) > 1e-9:
+                        pieces.append(_LazyBezier(list(pts)))
+                    continue
+                pc = _piece_from(k, list(pts))
+                if pc.length > 1e-9:
+                    pieces.append(pc)
+        elif isinstance(it, StitchLineItem):
+            pts = [Vec2(p.x, p.y) for p in it.line.points]
+            if getattr(it.line, "closed", False) and len(pts) > 2:
+                pts.append(pts[0])
+            pieces = [pc for pc in (_Piece("line", pts[i], pts[i + 1])
+                                    for i in range(len(pts) - 1))
+                      if pc.length > 1e-9]
+        if len(cache) > 512:
+            cache.clear()
+        cache[id(it)] = (it, fp, pieces)
+        return pieces
 
     def _edges_near(self, near: Vec2, radius: float, idx=None):
         """Outline edges (a, b, owner) within ``radius`` of ``near``. Same exact
@@ -2091,33 +2261,20 @@ class Canvas(QGraphicsView):
     def _ortho_edge_snap(self, anchor: QPointF, op: QPointF):
         """Ortho + object snap: when locked to an ortho ray, snap the point to
         where that ray CROSSES a nearby outline / guide edge (e.g. a vertical
-        cut line while you draw horizontally). Returns a QPointF or None."""
+        cut line while you draw horizontally), on its true lines, arcs and
+        curves. Returns a QPointF or None."""
         if not self.snap_to_nodes:
             return None
-        dx, dy = op.x() - anchor.x(), op.y() - anchor.y()
-        L = math.hypot(dx, dy)
-        if L < 1e-9:
+        from leathercad.trim import _Piece
+        a, p = Vec2(anchor.x(), anchor.y()), Vec2(op.x(), op.y())
+        d = p - a
+        n = d.length()
+        if n < 1e-9:
             return None
-        ux, uy = dx / L, dy / L                     # unit along the ortho ray
-        ox, oy = anchor.x(), anchor.y()
         thr = 10.0 / self._zoom
-        best, best_d = None, thr
-        for a, b, _owner in self._all_edges():
-            ex, ey = b.x - a.x, b.y - a.y
-            det = ex * uy - ux * ey                 # ray dir x edge dir
-            if abs(det) < 1e-12:                    # parallel: no crossing
-                continue
-            rx, ry = a.x - ox, a.y - oy
-            s = (ux * ry - uy * rx) / det           # param along the edge
-            if s < -1e-9 or s > 1 + 1e-9:
-                continue                            # crossing is off the edge
-            px, py = a.x + s * ex, a.y + s * ey
-            if (px - ox) * ux + (py - oy) * uy <= 1e-9:
-                continue                            # behind the anchor
-            d = math.hypot(px - op.x(), py - op.y())
-            if d < best_d:
-                best_d, best = d, QPointF(px, py)
-        return best
+        drawn = _Piece("line", a, a + d * ((n + 2.0 * thr) / n))
+        x = self._drawn_crossing(drawn, p, thr, avoid=(a,))
+        return QPointF(x.x, x.y) if x is not None else None
 
     def _maybe_ortho(self, raw: QPointF, pos: QPointF, event):
         """Return (pos, applied, kind): lock to 0/45/90 from the anchor when
@@ -3529,6 +3686,7 @@ class Canvas(QGraphicsView):
         self._snap_marker = None
         self._node_hl = None
         self._src_marker = None          # freed with the scene, like the rest
+        self._piece_cache = {}
         self._trim_hover = None
         self._align_guides = []
         self._handles = []

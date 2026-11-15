@@ -20,6 +20,24 @@ made only when the release workflow is run by hand with it ticked.
   take it, so a box over just its holes doesn't. When a hole and a line are
   both under the pointer, whichever is nearer takes the click.
 
+### Drawing
+* **End a line or arc right on the edge it runs into.** Drawing a 3-point
+  arc out of a square, its end couldn't be snapped where the arc went
+  through the square's top edge. Only an edge's corners, its midpoint and
+  its crossings with other outlines snapped, so the arc ended 1.22 mm past
+  the edge. While you draw a line, polyline, seam, pen path, measurement or
+  arc, the point you're placing now also snaps to where the dashed preview
+  crosses an outline near the pointer, anywhere along it.
+  * A 3-point arc's end lands where the arc it shows goes through the
+    edge, so the arc keeps the curve you saw. A centre arc's end lands where
+    its circle does.
+  * It's worked out on the outline's true lines, arcs and curves, not the
+    flattened copy that sat up to 0.02 mm inside a curve. So an arc ended on
+    a circle lies on that circle. The Shift lock's crossing snap
+    (drawing straight across to an edge) is now exact on curves too.
+  * Corners, midpoints and centres still win when the pointer is near one,
+    and a shape's first point doesn't stick to edges.
+
 ## 0.4.6 — 2026-11-15
 
 ### Snapping

@@ -589,6 +589,18 @@ point and the status bar names it (*endpoint*, *midpoint*, *centre*,
 node or centre, a dashed **alignment guide** appears and the point locks to
 that x/y — Illustrator-style smart guides.
 
+**Ending on an edge.** While you draw a line, the next point of a polyline,
+seam or pen path, a measurement, or an arc, the point you're placing also
+snaps to where the dashed preview **crosses another outline** near the
+pointer, anywhere along an edge, not just at its corners or midpoint
+(marked as an *intersection*). So a line or arc can end exactly on the
+edge it runs into. A 3-point arc's end lands where the arc it shows goes
+through the edge, so it keeps the curve you saw. A centre arc's end lands
+where its circle does. The crossing is worked out on the outline's true
+lines and curves, so an arc ended on a circle lies on that circle, ready to
+Trim or Join. Corners, midpoints and centres still win when the pointer is
+near one. The first point of a shape doesn't stick to edges.
+
 While dragging a whole shape, it snaps by **one** of its own points: the
 corner, end, midpoint or centre nearest where you grabbed it, onto the
 target nearest that point. A circle snaps by its **centre**, so you can drop

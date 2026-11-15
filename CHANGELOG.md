@@ -4,6 +4,51 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
+## Unreleased
+
+### Printing at 1:1
+* **Nested PDFs.** Export PDF (1:1) and Print pack the pieces onto as few
+  pages as they'll go, by their real outlines, at least 8 mm apart (or the
+  gap you set, outline to outline), turning them 90° where that saves
+  paper. A sample tote that took 30 pages as drawn now takes 13.
+  * A piece that fits on a page is printed whole on one page.
+  * A piece too big for a page is tiled across as few pages as it needs.
+    Other pieces share those pages, each still whole on one page: the
+    straps ride along the gusset.
+  * Your drawing isn't changed. **As drawn** is still there, and now
+    leaves out empty pages.
+* **Ready to sell.**
+  * Every page has a header (pattern name, designer) and a footer (your
+    copyright or licence note, the scale check, page n of N).
+  * A **details page** comes first: 50 mm and 1 inch squares to check the
+    print, pieces to cut, stitch holes, the largest piece, the leather in
+    the pieces and to buy, the smallest piece of leather they fit on, the
+    thread, the iron spacing and hole size, and a list of the pieces with
+    the pages they're on.
+  * Every piece is printed with its name.
+* **Tiled pages** say which row and column they are. A dashed line shows
+  where the next page's border goes, and each overlap names the page that
+  joins there.
+* Paper: A4, US Letter, US Legal, A3, Tabloid, A2–A0 or a custom size,
+  portrait or landscape. All the options are remembered.
+* **Properties → Name**: name a piece (or several at once). The name is
+  printed on it and used in the PDF's piece list and the nesting report.
+
+### Nesting
+* **Nest on sheet previews live.** The pieces move on the drawing as soon as
+  the dialog opens, inside a dashed outline of the sheet, and again whenever
+  a setting changes. **Apply** keeps the layout as one undo step; **Cancel**
+  puts every piece back exactly. The gap starts at 8 mm.
+* **The gap is a true minimum.** An edge was marked on the packing grid only
+  at points every half cell along it, so it could skip the corner of a cell
+  and let a neighbour in up to a cell closer than the gap. Every cell an
+  outline passes through now counts, and the grid is sized so the gap isn't
+  rounded up either (8 mm stays 8 mm, not 10).
+* What travels with a piece: a fold or score line drawn a little past its
+  edges, and lettering, loose holes or seams in its `Ctrl+G` group even when
+  they lie outside it. A group's "inside" is its biggest outline, not the
+  one with the most points.
+
 ## 0.4.7 — 2026-11-15
 
 ### Selecting and snapping

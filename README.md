@@ -166,7 +166,7 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Zoom / pan** | mouse wheel / middle-drag |
 | **Save / Open** | `Ctrl+S` / `Ctrl+O` (JSON project files) |
 | **Export** | SVG `Ctrl+E` or DXF — millimetre-accurate, layer-coloured. The SVG is grouped **by piece**: each piece's outline and its holes are one group (holes first), and pieces grouped with `Ctrl+G` stay together, so in LightBurn every piece arrives as its own group. The holes are LightBurn's own blue, so they land on layer C01, ahead of the red outline on C02, and are cut first. Or group it **by layer** (named holes / outline layers, for Inkscape). DXF outlines export as connected **POLYLINE**s (closed shapes carry the closed flag), so LightBurn / Illustrator import them as one contour instead of loose line segments |
-| **Print / PDF (1:1)** | **Export PDF (1:1, tiled)** and **Print** `Ctrl+P` render the pattern at **true 1:1 scale** (1 mm = 1 mm on paper). Patterns bigger than a sheet are split into overlapping **tiles** with crop marks and `row/col` page labels — line the pages up on the overlap and tape. Each page prints a labelled reference box so you can confirm your printer isn't scaling |
+| **Print / PDF (1:1)** | **Export PDF (1:1)** and **Print** `Ctrl+P` render the pattern at **true 1:1 scale** (1 mm = 1 mm on paper). **Nested** packs the pieces onto as few pages as they'll go, at least 8 mm apart (or your gap), each piece that fits on a page printed whole on one page and labelled with its name; bigger pieces are tiled with an overlap to tape, with dashed lines and page numbers showing where each page goes. Every page has a header and footer (pattern name, designer, your copyright note, page n of N), and a **details page** lists pieces, stitch holes, the largest piece, leather and thread needed, the iron spacing and scale-check squares — ready to sell |
 
 Everything is in **millimetres**, Y-up, and the canvas is WYSIWYG with the export.
 
@@ -243,7 +243,7 @@ Beyond drawing and stitching, Stitch Hero covers the rest of a real bench workfl
 | **Offset / seam allowance** | Grow or shrink an outline by a fixed amount for a true seam allowance |
 | **Import SVG / DXF** | Bring existing vector drawings in as fully editable shapes — paths, arcs and colours map onto layers |
 | **Tracing image** | *View → Tracing image*: drop a photo or scan behind the canvas, **calibrate it to real millimetres** (two clicks + a known distance), fade it, and trace over it with the normal tools |
-| **Nest on sheet** | Shape-aware nesting packs your pieces onto a leather sheet; each piece's slots, holes and seams travel with it |
+| **Nest on sheet** | Shape-aware nesting packs your pieces onto a leather sheet, a true minimum gap apart, **previewed live on the drawing** — Apply keeps it, Cancel puts everything back; each piece's slots, holes, seams and fold lines travel with it |
 | **Kerf compensation** | On export, closed **cut** outlines are compensated for the beam — outer edges grow by kerf/2 and inner cut-outs shrink — so parts come out drawn-size |
 | **Job estimate** | Piece and hole counts, thread, cut / score / engrave travel, leather area used (with waste), and — when you feed it prices — a leather / thread **cost** breakdown |
 | **Thread estimate** | Saddle-stitch thread length for a piece, from its holes, stack thickness and tail allowance |

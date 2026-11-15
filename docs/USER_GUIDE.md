@@ -685,19 +685,24 @@ While it's sizing a piece, that grip ignores node snapping.
   through the ring.
 * **Nest on sheet** (`Ctrl+Shift+N`) — pack the selected pieces (or
   everything, if nothing is selected) onto one sheet of leather. Enter the
-  sheet size, an edge margin and the minimum gap between pieces; the packer
-  uses each piece's **real outline**, so a flap can tuck into a gusset's
-  hollow instead of blocking out its whole bounding box. Grouped shapes nest
-  as one piece, and anything sitting *inside* a piece — slots, hardware
-  holes, loose stitch holes, seams, lettering — automatically travels with
-  it. The sheet is drawn as a dashed construction rectangle (it never
-  exports), pieces that don't fit stay where they were and are named in the
-  report, and **Allow 90° rotation** can be turned off when grain or stretch
-  direction matters. Pieces are placed biggest-first; it aims for a tight,
-  sensible layout, not a mathematically perfect one — nudge afterwards if
-  you spot a better pocket. A hide's worth of pieces takes a few seconds: a
-  progress bar counts them as they are placed, and **Cancel** leaves the
-  drawing exactly as it was.
+  sheet size, an edge margin and the **gap between pieces** (8 mm to start
+  with; it is a true minimum, outline to outline). The packer uses each
+  piece's **real outline**, so a flap can tuck into a gusset's hollow
+  instead of blocking out its whole bounding box. Grouped shapes nest as one
+  piece, and anything on a piece — slots, hardware holes, loose stitch
+  holes, seams, lettering, a fold line even if it runs past the edge —
+  travels with it.
+  * **Live preview:** the pieces move on the drawing as soon as the dialog
+    opens, inside a dashed orange outline of the sheet, and move again
+    whenever you change a setting. The dialog reports how many pieces fit
+    and how much of the sheet they take. **Apply** keeps the layout (one
+    undo step) and draws the sheet as a construction rectangle (it never
+    exports); **Cancel** puts every piece back exactly where it was.
+  * Pieces that don't fit stay where they were and are named in the
+    report. **Allow 90° rotation** can be turned off when grain or stretch
+    direction matters. Pieces are placed biggest-first; it aims for a tight,
+    sensible layout, not a mathematically perfect one — nudge afterwards if
+    you spot a better pocket.
 * **Fillet / chamfer** (`6`) — with this tool active, a **radius box** and a
   **Round / Chamfer** selector appear in the top toolbar; type the radius
   (it's remembered), pick the mode, then click any corner of a polygon or
@@ -877,17 +882,56 @@ kerf compensation on they go out as the compensated polylines instead.
 
 Two ways, both guaranteed true to scale (1 mm on paper = 1 mm in the pattern):
 
-* **File → Export PDF (1:1, tiled)…** — writes a PDF.
+* **File → Export PDF (1:1)…** — writes a PDF.
 * **File → Print (1:1)…** (`Ctrl+P`) — straight to the OS print dialog.
 
-Patterns bigger than one sheet are split into **tiles with an 8 mm overlap**.
-Each page gets corner crop marks, a light border, and a `row/col` label — cut
-one margin of each sheet, line the pages up on the overlap, and tape.
+Both open the same options first, remembered for next time:
+
+* **Paper** (PDF only; when printing, the print dialog picks it): A4, US
+  Letter, US Legal, A3, Tabloid, A2–A0 or a custom size (a plotter roll),
+  portrait or landscape.
+* **Layout**
+  * **Nested** (the default) packs the pieces onto as few pages as they'll
+    go, by their real outlines, at least the **Space between pieces** apart
+    (8 mm unless you change it), outline to outline. **Turn pieces 90° where
+    that saves paper** can be unticked when every piece must keep its
+    direction. A piece that fits on a page is printed **whole on one page**,
+    so it can be cut out without taping. A piece too big for a page is
+    **tiled** across as few pages as it needs, and other pieces fill the
+    spare room on those pages, each still whole on one page. Pieces travel
+    with what's on them, as in **Nest on sheet** (§9): a `Ctrl+G` group
+    stays together, and slots, holes, seams, lettering and fold lines stay
+    on their piece. Your drawing isn't changed.
+  * **As drawn** prints the drawing as it's laid out, tiled across pages;
+    pages with nothing on them are left out.
+* **Header, footer and first page.** The **Pattern name** (it starts as the
+  file's name) heads every page, with the **Designer** on the right. The
+  **Footer note** (a copyright or licence line, say) runs along the bottom
+  of every page, beside the page number. Tick **Details page first** for a
+  cover page with:
+  * squares of 50 mm and 1 inch, to check the print's scale;
+  * pieces to cut, stitch holes, the largest piece, the leather in the
+    pieces and the leather to buy (at the hide yield set in the Job
+    estimate), the smallest piece of leather they all fit on with that gap,
+    the thread (at the Job estimate's leather thickness), the stitching
+    (spacing and hole size, per iron), and the number of pattern pages;
+  * a list of the pieces: size, stitch holes and the pages each is on.
+
+Every piece is printed with its **name** in it: give a piece one in
+**Properties → Name** (unnamed pieces are numbered). Several selected pieces
+can be named at once.
+
+Tiled pages say in their header which row and column they are. Each has
+corner crop marks and a light border; where the next page overlaps it, a
+dashed line shows where that page's border goes, and the overlap names the
+page that joins there. Trim the left and top edges of a page along its
+border, lay it on the dashed line of the page to its left (or above), and
+tape.
 
 > **Important:** in your PDF viewer's print dialog choose **Actual size /
-> 100 %** — never "Fit to page". Each page prints a labelled reference box
-> (e.g. "this box is 190×277 mm") — measure it with a ruler to confirm your
-> printer isn't scaling.
+> 100 %** — never "Fit to page". Every pattern page's footer gives the size
+> of its border box (e.g. "this box is 190 × 265 mm"); measure it, or the
+> squares on the details page, to confirm your printer isn't scaling.
 
 ---
 

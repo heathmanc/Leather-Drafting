@@ -18,7 +18,8 @@ from PySide6.QtWidgets import QGraphicsSceneMouseEvent
 from PySide6.QtGui import (QColor, QCursor, QPainter, QPen, QPainterPath,
                            QPixmap, QPolygonF, QTransform)
 from PySide6.QtWidgets import (QGraphicsScene, QGraphicsView, QGraphicsPathItem,
-                               QGraphicsItem, QGraphicsLineItem, QMenu)
+                               QGraphicsItem, QGraphicsLineItem,
+                               QGraphicsRectItem, QMenu)
 
 from PySide6.QtGui import QPixmapCache
 
@@ -3686,6 +3687,7 @@ class Canvas(QGraphicsView):
         self._snap_marker = None
         self._node_hl = None
         self._src_marker = None          # freed with the scene, like the rest
+        self._nest_sheet_item = None
         self._piece_cache = {}
         self._trim_hover = None
         self._align_guides = []
@@ -5474,197 +5476,317 @@ class Canvas(QGraphicsView):
         return True
 
     # -- nesting: pack pieces onto a leather sheet ----------------------
-    def nest_selected(self, sheet_w: float, sheet_h: float, *,
-                      margin: float = 5.0, spacing: float = 3.0,
-                      allow_rotate: bool = True, progress=None) -> str:
-        """Pack the selected shapes (or ALL shapes if nothing is selected)
-        onto a sheet_w x sheet_h mm sheet, using their real outlines. Grouped
-        shapes travel as one piece; anything sitting INSIDE a piece (slots,
-        hardware holes, loose stitch holes, seams, lettering) rides along.
-        Draws the sheet as a construction rectangle and returns a report.
+    # -- nesting ----------------------------------------------------------
+    # gap kept on top of the one asked for: outlines are flattened curves, so
+    # the true curves could sit a hair inside the gap
+    _NEST_SLACK = 0.05
 
-        ``progress(done, total)`` is called per piece while packing; returning
-        False cancels, and nothing is moved."""
-        from leathercad.nesting import NestPiece, NestCancelled, nest, rotate90
-        from leathercad.geometry import point_in_polygon
-        from leathercad.shapes import Rectangle as _Rect
-
+    def _nest_candidates(self):
+        """The pieces a nest packs: the selected shapes, else every shape
+        (never guides)."""
         cand = [it for it in self._shape_items()
                 if not getattr(it.model, "construction", False)]
         if not cand:
             cand = [it for it in self.scene_obj.items()
                     if isinstance(it, ShapeItem)
                     and not getattr(it.model, "construction", False)]
-        if not cand:
-            return "Nothing to nest — draw or select some pieces first."
+        return cand
 
-        # 1. move-groups nest as one piece
-        groups: dict = {}
-        for it in cand:
-            gid = getattr(it.model, "group_id", None) or id(it)
-            groups.setdefault(gid, []).append(it)
+    def _nest_plan(self, cand, sheet_w, sheet_h, *, margin, spacing,
+                   allow_rotate, progress=None):
+        """Group ``cand`` as pieces (a move-group is one; a slot, the loose
+        holes, seams, lettering and fold lines on a piece go with it) and
+        pack them, moving nothing. The sheet sits at the min corner of
+        everything being nested. Returns (groups, placements, unplaced,
+        used, sheet_x, sheet_y), or None when there's nothing to pack."""
+        from leathercad.nesting import (NestPiece, cell_for_gap,
+                                        group_pieces, nest)
+        groups, _left = group_pieces(
+            [it.model for it in cand], self.doc.holes, self.doc.stitch_lines,
+            getattr(self.doc, "texts", []))
+        if not groups:
+            return None
+        sx = min(g.bbox[0] for g in groups)
+        sy = min(g.bbox[1] for g in groups)
+        gap = spacing + self._NEST_SLACK
+        pieces = [NestPiece(key=i, outlines=g.outlines,
+                            allow_rotate=allow_rotate)
+                  for i, g in enumerate(groups)]
+        placements, unplaced, used = nest(
+            pieces, sheet_w, sheet_h, margin=margin, spacing=gap,
+            cell=cell_for_gap(gap), sheet_x=sx, sheet_y=sy, progress=progress)
+        return groups, placements, unplaced, used, sx, sy
 
-        def outline_of(it):
-            pts, _c, closed = it.model.world_polyline()
-            return [Vec2(p.x, p.y) for p in pts], closed
-
-        pieces = []          # [ {shapes, outlines, bbox, ring} ]
-        for gid, members in groups.items():
-            outlines = [outline_of(m) for m in members]
-            allpts = [p for pts, _c in outlines for p in pts]
-            if len(allpts) < 2:
-                continue
-            xs = [p.x for p in allpts]
-            ys = [p.y for p in allpts]
-            ring = max((pts for pts, c in outlines if c and len(pts) >= 3),
-                       key=lambda r: len(r), default=None)
-            pieces.append({"shapes": list(members), "outlines": outlines,
-                           "bbox": (min(xs), min(ys), max(xs), max(ys)),
-                           "ring": ring, "holes": [], "seams": [], "texts": []})
-
-        def containing_piece(x, y, exclude=None):
-            best = None
-            for pc in pieces:
-                if pc is exclude or pc["ring"] is None:
-                    continue
-                bx = pc["bbox"]
-                if not (bx[0] <= x <= bx[2] and bx[1] <= y <= bx[3]):
-                    continue
-                if point_in_polygon(Vec2(x, y), pc["ring"]):
-                    area = (bx[2] - bx[0]) * (bx[3] - bx[1])
-                    if best is None or area < best[0]:
-                        best = (area, pc)
-            return best[1] if best else None
-
-        # 2. a piece fully inside another (a slot in a panel) merges into it
-        for pc in sorted(pieces, key=lambda p: (p["bbox"][2] - p["bbox"][0])
-                         * (p["bbox"][3] - p["bbox"][1])):
-            b = pc["bbox"]
-            host = containing_piece(0.5 * (b[0] + b[2]), 0.5 * (b[1] + b[3]),
-                                    exclude=pc)
-            if host is not None and host in pieces and pc in pieces \
-                    and host["bbox"][0] <= b[0] and host["bbox"][1] <= b[1] \
-                    and host["bbox"][2] >= b[2] and host["bbox"][3] >= b[3]:
-                host["shapes"] += pc["shapes"]
-                host["outlines"] += pc["outlines"]
-                pieces.remove(pc)
-
-        # 3. loose holes / seams / lettering inside a piece ride along
-        for h in self.doc.holes:
-            pc = containing_piece(h.point.x, h.point.y)
-            if pc is not None:
-                pc["holes"].append(h)
-        for sl in self.doc.stitch_lines:
-            if not sl.points:
-                continue
-            mx = sum(p.x for p in sl.points) / len(sl.points)
-            my = sum(p.y for p in sl.points) / len(sl.points)
-            pc = containing_piece(mx, my)
-            if pc is not None:
-                pc["seams"].append(sl)
-        for tx in getattr(self.doc, "texts", []):
-            pc = containing_piece(tx.transform.x, tx.transform.y)
-            if pc is not None:
-                pc["texts"].append(tx)
-
-        # 4. sheet sits at the min corner of everything being nested
-        sx = min(pc["bbox"][0] for pc in pieces)
-        sy = min(pc["bbox"][1] for pc in pieces)
-        nest_pieces = [NestPiece(key=i, outlines=pc["outlines"],
-                                 allow_rotate=allow_rotate)
-                       for i, pc in enumerate(pieces)]
-        try:
-            placements, unplaced, used = nest(
-                nest_pieces, sheet_w, sheet_h, margin=margin, spacing=spacing,
-                sheet_x=sx, sheet_y=sy, progress=progress)
-        except NestCancelled:
-            return "Nesting cancelled — nothing was moved."
-        if not placements:
-            return ("No piece fits the sheet — try a bigger sheet, a smaller "
-                    "margin, or allow rotation.")
-
-        # 5. move every member of every placed piece as a rigid unit
-        def move_xy(x, y, pl):
-            if pl.rotated:
-                p = rotate90(Vec2(x, y), pl.pivot)
-                x, y = p.x, p.y
-            return x + pl.dx, y + pl.dy
-
+    def _nest_move(self, groups, placements, cand) -> None:
+        """Move every member of every placed group as a rigid unit -- models
+        first, then their scene items, re-positioned in place (a rebuild of
+        the whole scene took ~25 s after a big nest): a shifted piece is
+        just moved, a turned one re-oriented (its stitching is a cache hit),
+        and the riders re-read their moved models."""
+        item_of = {id(it.model): it for it in cand}
+        turned, rider_ids, moved = set(), set(), []
         for pl in placements:
-            pc = pieces[pl.key]
-            for it in pc["shapes"]:
-                t = it.model.transform
-                t.x, t.y = move_xy(t.x, t.y, pl)
+            g = groups[pl.key]
+            for sh in g.shapes:
+                t = sh.transform
+                p = pl.apply(Vec2(t.x, t.y))
+                t.x, t.y = p.x, p.y
                 if pl.rotated:
                     t.rotation = ((t.rotation + 90 + 180) % 360) - 180
-            for tx in pc["texts"]:
+                    turned.add(id(sh))
+                it = item_of.get(id(sh))
+                if it is not None:
+                    moved.append(it)
+            for tx in g.texts:
                 t = tx.transform
-                t.x, t.y = move_xy(t.x, t.y, pl)
+                p = pl.apply(Vec2(t.x, t.y))
+                t.x, t.y = p.x, p.y
                 if pl.rotated:
                     t.rotation = ((t.rotation + 90 + 180) % 360) - 180
-            for h in pc["holes"]:
-                h.point = Vec2(*move_xy(h.point.x, h.point.y, pl))
-                if pl.rotated:
-                    h.tangent = Vec2(-h.tangent.y, h.tangent.x)
-            for sl in pc["seams"]:
-                sl.points = [Vec2(*move_xy(p.x, p.y, pl)) for p in sl.points]
-                sl.corner_points = [Vec2(*move_xy(p.x, p.y, pl))
-                                    for p in sl.corner_points]
+            for h in g.holes:
+                h.point = pl.apply(h.point)
+                h.tangent = pl.turn(h.tangent)
+            for sl in g.seams:
+                sl.points = [pl.apply(q) for q in sl.points]
+                sl.corner_points = [pl.apply(q) for q in sl.corner_points]
+            rider_ids.update(id(x) for x in g.riders())
+        self._sync_moved(moved, turned, rider_ids)
 
-        # 6. show the sheet itself as a construction rectangle
+    def _sync_moved(self, items, turned, rider_ids) -> None:
+        self._suspend_move_refresh = True
+        try:
+            for it in items:
+                if not _alive(it):
+                    continue
+                if id(it.model) in turned:
+                    it.sync_from_model()
+                else:
+                    t = it.model.transform
+                    it.setPos(t.x, t.y)
+            if rider_ids:
+                for it in list(self._live):
+                    m = self._item_model(it)
+                    if m is not None and id(m) in rider_ids and _alive(it):
+                        it.sync_from_model()
+        finally:
+            self._suspend_move_refresh = False
+        self._move_refresh()
+
+    def _nest_report(self, groups, placements, unplaced, used, sheet_w,
+                     sheet_h, spacing, allow_rotate) -> str:
+        lines = [f"Placed {len(placements)} of {len(groups)} piece"
+                 f"{'s' if len(groups) != 1 else ''} on the "
+                 f"{U.fmt_num(sheet_w)} × {U.fmt(sheet_h)} sheet.",
+                 f"Sheet blocked out (incl. {U.fmt(spacing)} gaps): {used:.0%}."]
+        if unplaced:
+            names = [groups[k].shapes[0].name or f"piece {k + 1}"
+                     for k in unplaced]
+            lines.append("Didn't fit: " + ", ".join(names) + ".")
+        if allow_rotate and any(pl.rotated for pl in placements):
+            lines.append("Rotated pieces are turned 90° — check grain "
+                         "direction before cutting.")
+        return "\n".join(lines)
+
+    def _add_sheet(self, sx, sy, sheet_w, sheet_h) -> None:
+        """The sheet itself, as a construction rectangle."""
+        from leathercad.shapes import Rectangle as _Rect
         sheet = _Rect(name="Sheet", width=sheet_w, height=sheet_h,
                       transform=Transform(x=sx + sheet_w / 2.0,
                                           y=sy + sheet_h / 2.0),
                       layer="Cut")
         sheet.construction = True
         self.doc.add_shape(sheet)
+        self._add_item(ShapeItem(sheet, self))
 
-        # 7. move the scene items with their models instead of rebuilding
-        # the whole scene (~25 s after a big nest): a shifted piece is just
-        # re-positioned, a turned one re-oriented (its stitching is a cache
-        # hit), and the riders re-read their moved models
-        turned, rider_ids = set(), set()
-        for pl in placements:
-            pc = pieces[pl.key]
-            if pl.rotated:
-                turned.update(id(it) for it in pc["shapes"])
-            rider_ids.update(id(x) for x in pc["holes"] + pc["seams"]
-                             + pc["texts"])
-        self._suspend_move_refresh = True
+    def nest_selected(self, sheet_w: float, sheet_h: float, *,
+                      margin: float = 5.0, spacing: float = 3.0,
+                      allow_rotate: bool = True, progress=None) -> str:
+        """Pack the selected shapes (or ALL shapes if nothing is selected)
+        onto a sheet_w x sheet_h mm sheet, using their real outlines. Grouped
+        shapes travel as one piece; anything on a piece (slots, hardware
+        holes, loose stitch holes, seams, lettering, fold lines) rides along.
+        Draws the sheet as a construction rectangle and returns a report.
+
+        ``progress(done, total)`` is called per piece while packing; returning
+        False cancels, and nothing is moved."""
+        from leathercad.nesting import NestCancelled
+        cand = self._nest_candidates()
+        if not cand:
+            return "Nothing to nest — draw or select some pieces first."
         try:
-            for pl in placements:
-                for it in pieces[pl.key]["shapes"]:
-                    if not _alive(it):
-                        continue
-                    if id(it) in turned:
-                        it.sync_from_model()
-                    else:
-                        t = it.model.transform
-                        it.setPos(t.x, t.y)
-            if rider_ids:
-                for it in list(self._live):
-                    m = self._item_model(it)
-                    if m is not None and id(m) in rider_ids and _alive(it):
-                        it.sync_from_model()
-            self._add_item(ShapeItem(sheet, self))
-        finally:
-            self._suspend_move_refresh = False
-        self._move_refresh()
+            got = self._nest_plan(cand, sheet_w, sheet_h, margin=margin,
+                                  spacing=spacing, allow_rotate=allow_rotate,
+                                  progress=progress)
+        except NestCancelled:
+            return "Nesting cancelled — nothing was moved."
+        if got is None:
+            return "Nothing to nest — draw or select some pieces first."
+        groups, placements, unplaced, used, sx, sy = got
+        if not placements:
+            return ("No piece fits the sheet — try a bigger sheet, a smaller "
+                    "margin, or allow rotation.")
+        self._nest_move(groups, placements, cand)
+        self._add_sheet(sx, sy, sheet_w, sheet_h)
         self.documentChangedSig.emit()
         self._emit_commit()
+        return self._nest_report(groups, placements, unplaced, used, sheet_w,
+                                 sheet_h, spacing, allow_rotate)
 
-        lines = [f"Placed {len(placements)} of {len(pieces)} piece"
-                 f"{'s' if len(pieces) != 1 else ''} on the "
-                 f"{U.fmt_num(sheet_w)} × {U.fmt(sheet_h)} sheet.",
-                 f"Sheet blocked out (incl. {U.fmt(spacing)} gaps): {used:.0%}."]
-        if unplaced:
-            names = [pieces[k]['shapes'][0].model.name
-                     or f"piece {k + 1}" for k in unplaced]
-            lines.append("Didn't fit: " + ", ".join(names) + ".")
-        if allow_rotate:
-            lines.append("Rotated pieces are turned 90° — check grain "
-                         "direction before cutting.")
-        return "\n".join(lines)
+    # -- nesting with a preview: the pieces move for a look, then stay or go
+    # back. The first preview notes where everything was; every later one
+    # starts again from there, so changing the sheet never compounds.
+    def nest_preview(self, sheet_w: float, sheet_h: float, *,
+                     margin: float = 5.0, spacing: float = 8.0,
+                     allow_rotate: bool = True) -> str:
+        """Lay the pieces out on the sheet on screen, as ``nest_selected``
+        would, without making it an edit yet: ``nest_apply`` keeps it (one
+        undo step), ``nest_cancel`` puts every piece back. Returns the
+        report."""
+        pv = getattr(self, "_nest_pv", None)
+        if pv is None:
+            cand = self._nest_candidates()
+            if not cand:
+                return "Nothing to nest — draw or select some pieces first."
+            pv = self._nest_pv = {"cand": cand, "snap": self._nest_snapshot(),
+                                  "sheet": None, "args": None}
+        else:
+            self._nest_restore()
+        got = self._nest_plan(pv["cand"], sheet_w, sheet_h, margin=margin,
+                              spacing=spacing, allow_rotate=allow_rotate)
+        pv["args"] = None
+        if got is None:
+            return "Nothing to nest — draw or select some pieces first."
+        groups, placements, unplaced, used, sx, sy = got
+        self._suppress_commit = True
+        try:
+            self._nest_move(groups, placements, pv["cand"])
+        finally:
+            self._suppress_commit = False
+        self._show_nest_sheet(sx, sy, sheet_w, sheet_h)
+        pv["args"] = (sx, sy, sheet_w, sheet_h)
+        if not placements:
+            return ("No piece fits the sheet — try a bigger sheet, a smaller "
+                    "margin, or allow rotation.")
+        return self._nest_report(groups, placements, unplaced, used, sheet_w,
+                                 sheet_h, spacing, allow_rotate)
+
+    def nest_previewing(self) -> bool:
+        return getattr(self, "_nest_pv", None) is not None
+
+    def nest_preview_rect(self):
+        """The sheet and every piece being nested, as one scene rectangle
+        (to frame the preview), or None."""
+        pv = getattr(self, "_nest_pv", None)
+        if pv is None:
+            return None
+        rect = QRectF()
+        sheet = getattr(self, "_nest_sheet_item", None)
+        if sheet is not None and _alive(sheet):
+            rect = sheet.rect()
+        for it in pv["cand"]:
+            if _alive(it):
+                rect = rect.united(it.mapRectToScene(it.content_rect()))
+        return None if rect.isNull() else rect
+
+    def nest_apply(self) -> bool:
+        """Keep the previewed layout: the sheet is drawn as a construction
+        rectangle and the whole nest is one undo step."""
+        pv = getattr(self, "_nest_pv", None)
+        if pv is None:
+            return False
+        self._hide_nest_sheet()
+        self._nest_pv = None
+        if pv["args"] is None:
+            return False
+        self._add_sheet(*pv["args"])
+        self.documentChangedSig.emit()
+        self._emit_commit()
+        return True
+
+    def nest_cancel(self) -> None:
+        """Put every piece back where it was before the preview."""
+        if getattr(self, "_nest_pv", None) is None:
+            return
+        self._nest_restore()
+        self._hide_nest_sheet()
+        self._nest_pv = None
+
+    def _nest_snapshot(self):
+        """Where everything a nest can move is now."""
+        d = self.doc
+        return {"shapes": [(sh, sh.transform.x, sh.transform.y,
+                            sh.transform.rotation) for sh in d.shapes],
+                "holes": [(h, h.point, h.tangent) for h in d.holes],
+                "seams": [(sl, list(sl.points), list(sl.corner_points))
+                          for sl in d.stitch_lines],
+                "texts": [(tx, tx.transform.x, tx.transform.y,
+                           tx.transform.rotation)
+                          for tx in getattr(d, "texts", [])]}
+
+    def _nest_restore(self) -> None:
+        pv = getattr(self, "_nest_pv", None)
+        if pv is None:
+            return
+        snap = pv["snap"]
+        turned, moved_ids, riders = set(), set(), set()
+        for sh, x, y, rot in snap["shapes"]:
+            t = sh.transform
+            if (t.x, t.y, t.rotation) != (x, y, rot):
+                if t.rotation != rot:
+                    turned.add(id(sh))
+                t.x, t.y, t.rotation = x, y, rot
+                moved_ids.add(id(sh))
+        for h, pt, tg in snap["holes"]:
+            if h.point is not pt or h.tangent is not tg:
+                h.point, h.tangent = pt, tg
+                riders.add(id(h))
+        for sl, pts, corners in snap["seams"]:
+            if sl.points != pts:
+                sl.points, sl.corner_points = list(pts), list(corners)
+                riders.add(id(sl))
+        for tx, x, y, rot in snap["texts"]:
+            t = tx.transform
+            if (t.x, t.y, t.rotation) != (x, y, rot):
+                t.x, t.y, t.rotation = x, y, rot
+                riders.add(id(tx))
+        items = [it for it in pv["cand"]
+                 if _alive(it) and id(it.model) in moved_ids]
+        self._suppress_commit = True
+        try:
+            self._sync_moved(items, turned, riders)
+        finally:
+            self._suppress_commit = False
+
+    def _show_nest_sheet(self, sx, sy, w, h) -> None:
+        it = getattr(self, "_nest_sheet_item", None)
+        if it is None or not _alive(it):
+            it = QGraphicsRectItem()
+            pen = QPen(QColor(255, 130, 0), 1.5, Qt.DashLine)
+            pen.setCosmetic(True)
+            it.setPen(pen)
+            it.setBrush(QColor(255, 160, 40, 18))
+            it.setZValue(-50)
+            self.scene_obj.addItem(it)
+            self._nest_sheet_item = it
+        it.setRect(QRectF(sx, sy, w, h))
+        it.setVisible(True)
+
+    def _hide_nest_sheet(self) -> None:
+        it = getattr(self, "_nest_sheet_item", None)
+        if it is not None and _alive(it):
+            self.scene_obj.removeItem(it)
+        self._nest_sheet_item = None
+
+    def fit_rect(self, rect: QRectF, pad: float = 15.0) -> None:
+        """Zoom and centre the view on the scene rectangle ``rect``."""
+        rect = rect.adjusted(-pad, -pad, pad, pad)
+        vw = max(1, self.viewport().width())
+        vh = max(1, self.viewport().height())
+        self._zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX,
+                                            min(vw / max(rect.width(), 1e-6),
+                                                vh / max(rect.height(), 1e-6))))
+        self._apply_zoom()
+        self.centerOn(rect.center())
 
     def make_back_piece_selected(self) -> None:
         """Duplicate each selected shape as its mirror image -- the matching

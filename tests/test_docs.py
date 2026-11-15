@@ -47,7 +47,7 @@ def test_every_tool_and_shortcut_documented(guide_text):
 
 
 def test_key_menu_commands_documented(guide_text):
-    for cmd in ("Export PDF (1:1, tiled)", "Offset / seam allowance",
+    for cmd in ("Export PDF (1:1)", "Offset / seam allowance",
                 "Make back piece (mirror)", "Ungroup stitching → individual holes",
                 "Group holes into shape", "Join / weld segments",
                 "Break apart into segments", "Convert to editable nodes",
@@ -57,7 +57,8 @@ def test_key_menu_commands_documented(guide_text):
                 "Thread estimate", "Circles → stitch holes",
                 "Area / leather usage", "Nest on sheet", "Parameters",
                 "Card pocket stack", "Zipper opening",
-                "Snap to perfect fit", "Perfect fit", "Use for new shapes"):
+                "Snap to perfect fit", "Perfect fit", "Use for new shapes",
+                "Details page first", "Space between pieces"):
         assert cmd in guide_text, f"menu command not documented: {cmd}"
 
 

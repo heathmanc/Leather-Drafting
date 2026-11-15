@@ -247,6 +247,13 @@ class PropertiesPanel(QWidget):
         self.layer_combo = NoWheelComboBox()
         self.opacity = QSlider(Qt.Horizontal)
         self.opacity.setRange(10, 100)
+        # what the piece is called: its label on a printed pattern, its line
+        # in the PDF's piece list and in the nesting report
+        self.piece_name = QLineEdit()
+        self.piece_name.setPlaceholderText("e.g. Front panel")
+        self.piece_name.setToolTip("The piece's name: printed on it in a 1:1 "
+                                   "PDF and listed on the details page")
+        fa.addRow("Name", self.piece_name)
         fa.addRow("Layer", self.layer_combo)
         fa.addRow("Opacity", self.opacity)
         self.keepout = _spin(0.0, 500.0, 0.5, 2)
@@ -381,6 +388,7 @@ class PropertiesPanel(QWidget):
         self.opacity.valueChanged.connect(self._opacity_stepped)
         self._focus_pending = False
         self.layer_combo.currentIndexChanged.connect(self._apply_commit)
+        self.piece_name.editingFinished.connect(self._name_edited)
         self.fit.currentIndexChanged.connect(self._apply_commit)
         self.g_stitch.toggled.connect(self._apply_commit)
         self.punch_style.currentIndexChanged.connect(self._on_punch_style)
@@ -525,6 +533,7 @@ class PropertiesPanel(QWidget):
             self.pos_y.setValue(sh.transform.y)
             self.rot.setValue(sh.transform.rotation)
             self.mirror.setChecked(sh.transform.mirror_x)
+            self.piece_name.setText(getattr(sh, "name", "") or "")
             self.opacity.setValue(int(sh.opacity * 100))
             idx = self.layer_combo.findData(sh.layer)
             if idx >= 0:
@@ -884,6 +893,24 @@ class PropertiesPanel(QWidget):
             self._apply_to_others()
             if self._dirty & {self.layer_combo, self.opacity, self.g_stitch}:
                 self.canvas.apply_layer_visibility()
+
+    def _name_edited(self):
+        """A piece renamed: only when the text really changed (leaving the
+        field is no edit), and then as one undo step."""
+        if self._loading or not _alive(self._item):
+            return
+        sh = getattr(self._item, "model", None)
+        new = self.piece_name.text().strip()
+        if (sh is None or not isinstance(self._item, ShapeItem)
+                or (new == (sh.name or "") and not self._multi)):
+            return
+        self._dirty.add(self.piece_name)
+        sh.name = new
+        for it in self._multi:
+            if _alive(it) and isinstance(it, ShapeItem):
+                it.model.name = new
+        self.canvas.documentChangedSig.emit()
+        self._commit()
 
     def _apply_to_others(self):
         """Write the fields changed since loading to every other selected

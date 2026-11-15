@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -734,7 +735,7 @@ class MainWindow(QMainWindow):
         self._add(fm, "Import SVG / DXF…", "Ctrl+I", self.import_file)
         self._add(fm, "Export SVG…", "Ctrl+E", self.export_svg)
         self._add(fm, "Export DXF…", None, self.export_dxf)
-        self._add(fm, "Export PDF (1:1, tiled)…", None, self.export_pdf)
+        self._add(fm, "Export PDF (1:1)…", None, self.export_pdf)
         self._add(fm, "Print (1:1)…", "Ctrl+P", self.print_pattern)
         fm.addSeparator()
         self._add(fm, "Quit", "Ctrl+Q", self.close)
@@ -1765,23 +1766,28 @@ class MainWindow(QMainWindow):
         # cancelled: nothing written
 
     def _nest_dialog(self):
-        """Ask the sheet size + gaps (remembered), pack the pieces, report."""
+        """Nest on sheet, previewed live: the pieces move on the drawing as
+        the sheet size, margin, gap or turning change. Apply keeps the layout
+        (one undo step); Cancel puts every piece back where it was."""
         from PySide6.QtWidgets import (QDialog, QFormLayout, QDialogButtonBox,
-                                       QVBoxLayout, QCheckBox, QLabel)
-        from .mathspin import MathSpinBox
+                                       QVBoxLayout, QCheckBox, QLabel,
+                                       QApplication)
+        from PySide6.QtCore import QTimer
+        from .prompts import length_spin
         s = self._settings()
+        c = self.canvas
         dlg = QDialog(self)
         dlg.setWindowTitle("Nest on sheet")
         lay = QVBoxLayout(dlg)
         hint = QLabel("Packs the selected pieces (or everything, if nothing "
                       "is selected) onto one sheet of leather, using their "
-                      "real outlines. Grouped shapes and anything inside a "
-                      "piece (slots, holes, seams) travel with it.")
+                      "real outlines. Grouped shapes and anything on a piece "
+                      "(slots, holes, seams, lettering) travel with it. The "
+                      "layout shows on the drawing as you change the "
+                      "settings; Apply keeps it, Cancel puts everything back.")
         hint.setWordWrap(True)
         lay.addWidget(hint)
         form = QFormLayout()
-
-        from .prompts import length_spin
 
         def _spin(key, default, lo, hi, tip):
             sp = length_spin(lo, hi, 1, s.value(key, default, type=float))
@@ -1794,8 +1800,9 @@ class MainWindow(QMainWindow):
                   "Height of the leather you're cutting from")
         margin = _spin("nestMargin", 5.0, 0.0, 100.0,
                        "Keep-out border along the sheet edges")
-        gap = _spin("nestGap", 3.0, 0.5, 50.0,
-                    "Minimum space between neighbouring pieces")
+        gap = _spin("nestGapMm", 8.0, 0.5, 50.0,
+                    "The least space left between neighbouring pieces, "
+                    "outline to outline")
         rot = QCheckBox("Allow 90° rotation")
         rot.setChecked(s.value("nestRotate", True, type=bool))
         rot.setToolTip("Turn off if grain / stretch direction matters "
@@ -1806,43 +1813,64 @@ class MainWindow(QMainWindow):
         form.addRow("Gap between pieces", gap)
         form.addRow("", rot)
         lay.addLayout(form)
-        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
-                              | QDialogButtonBox.StandardButton.Cancel)
+        report = QLabel()
+        report.setWordWrap(True)
+        report.setMinimumHeight(64)
+        lay.addWidget(report)
+        bb = QDialogButtonBox()
+        bb.addButton("Apply", QDialogButtonBox.ButtonRole.AcceptRole)
+        bb.addButton(QDialogButtonBox.StandardButton.Cancel)
         bb.accepted.connect(dlg.accept)
         bb.rejected.connect(dlg.reject)
         lay.addWidget(bb)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
+
+        timer = QTimer(dlg)
+        timer.setSingleShot(True)
+        timer.setInterval(250)
+        state = {"busy": False, "framed": None}
+
+        def preview():
+            if state["busy"]:
+                timer.start()
+                return
+            state["busy"] = True
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                text = c.nest_preview(w.value(), h.value(),
+                                      margin=margin.value(),
+                                      spacing=gap.value(),
+                                      allow_rotate=rot.isChecked())
+            finally:
+                QApplication.restoreOverrideCursor()
+                state["busy"] = False
+            report.setText(text)
+            size = (round(w.value(), 3), round(h.value(), 3))
+            if state["framed"] != size:     # show the whole sheet again
+                state["framed"] = size
+                r = c.nest_preview_rect()
+                if r is not None:
+                    c.fit_rect(r)
+
+        for sp in (w, h, margin, gap):
+            sp.valueChanged.connect(lambda *_a: timer.start())
+        rot.toggled.connect(lambda *_a: timer.start())
+        timer.timeout.connect(preview)
+        preview()                         # the first look, straight away
+        ok = dlg.exec() == QDialog.DialogCode.Accepted
+        timer.stop()
+        if not ok:
+            c.nest_cancel()
+            self.statusBar().showMessage("Nest cancelled — nothing moved", 4000)
             return
+        if state["busy"] is False and timer.isActive():
+            preview()
         s.setValue("nestSheetW", w.value())
         s.setValue("nestSheetH", h.value())
         s.setValue("nestMargin", margin.value())
-        s.setValue("nestGap", gap.value())
+        s.setValue("nestGapMm", gap.value())
         s.setValue("nestRotate", rot.isChecked())
-        # a hide's worth of pieces takes a few seconds: show the count going
-        # up and let the user bail out (nothing moves until the packing is
-        # complete, so Cancel leaves the drawing as it was)
-        from PySide6.QtWidgets import QApplication, QProgressDialog
-        prog = QProgressDialog("Nesting pieces…", "Cancel", 0, 100, self)
-        prog.setWindowTitle("Nest on sheet")
-        prog.setWindowModality(Qt.WindowModal)
-        prog.setMinimumDuration(300)
-        prog.setAutoClose(False)
-        prog.setAutoReset(False)
-
-        def progress(done, total):
-            prog.setMaximum(max(1, total))
-            prog.setValue(done)
-            QApplication.processEvents()
-            return not prog.wasCanceled()
-
-        try:
-            report = self.canvas.nest_selected(
-                w.value(), h.value(), margin=margin.value(),
-                spacing=gap.value(), allow_rotate=rot.isChecked(),
-                progress=progress)
-        finally:
-            prog.close()
-        QMessageBox.information(self, "Nest on sheet", report)
+        if c.nest_apply():
+            self.statusBar().showMessage(report.text().split("\n")[0], 6000)
 
     def _job_estimate(self):
         """One dialog for the numbers a maker quotes a job with: pieces, holes,
@@ -2351,22 +2379,183 @@ class MainWindow(QMainWindow):
                                              include=opts[1]))
         self.statusBar().showMessage(f"Exported {os.path.basename(fn)}", 4000)
 
+    # paper sizes offered for a 1:1 PDF (name, width, height in mm)
+    _PAPER = (("A4 (210 × 297 mm)", 210.0, 297.0),
+              ("US Letter (8.5 × 11 in)", 215.9, 279.4),
+              ("US Legal (8.5 × 14 in)", 215.9, 355.6),
+              ("A3 (297 × 420 mm)", 297.0, 420.0),
+              ("Tabloid (11 × 17 in)", 279.4, 431.8),
+              ("A2 (420 × 594 mm)", 420.0, 594.0),
+              ("A1 (594 × 841 mm)", 594.0, 841.0),
+              ("A0 (841 × 1189 mm)", 841.0, 1189.0),
+              ("Custom size", 0.0, 0.0))
+
+    def _pattern_title(self) -> str:
+        """The pattern's name for a print: the file's name, else the
+        drawing's own name."""
+        if self.path:
+            return os.path.splitext(os.path.basename(self.path))[0]
+        name = (getattr(self.doc, "name", "") or "").strip()
+        return "" if name in ("", "Untitled") else name
+
+    def _print_options(self, title: str, *, paper: bool = True):
+        """The 1:1 print / PDF options, remembered: paper (PDF only -- the
+        print dialog picks it when printing), nested or as drawn, the gap
+        between pieces, turning, the details page, and the header and
+        footer text. Returns a PrintOptions, or None if cancelled."""
+        from PySide6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout,
+                                       QComboBox, QRadioButton, QCheckBox,
+                                       QLineEdit, QDialogButtonBox, QLabel,
+                                       QGroupBox)
+        from .prompts import length_spin
+        from .printing import PrintOptions
+        s = self._settings()
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        lay = QVBoxLayout(dlg)
+
+        size = orient = cw = ch = None
+        if paper:
+            box = QGroupBox("Paper")
+            form = QFormLayout(box)
+            size = QComboBox()
+            for name, _w, _h in self._PAPER:
+                size.addItem(name)
+            size.setCurrentIndex(min(len(self._PAPER) - 1,
+                                     max(0, s.value("pdfPaper", 0, type=int))))
+            orient = QComboBox()
+            orient.addItems(["Portrait", "Landscape"])
+            orient.setCurrentIndex(1 if s.value("pdfLandscape", False, type=bool)
+                                   else 0)
+            cw = length_spin(50.0, 5000.0, 1, s.value("pdfCustomW", 610.0, type=float))
+            ch = length_spin(50.0, 20000.0, 1, s.value("pdfCustomH", 914.0, type=float))
+            form.addRow("Size", size)
+            form.addRow("Orientation", orient)
+            form.addRow("Custom width", cw)
+            form.addRow("Custom height", ch)
+
+            def custom_shown(i):
+                on = self._PAPER[i][1] <= 0
+                cw.setEnabled(on)
+                ch.setEnabled(on)
+            size.currentIndexChanged.connect(custom_shown)
+            custom_shown(size.currentIndex())
+            lay.addWidget(box)
+
+        box = QGroupBox("Layout")
+        form = QFormLayout(box)
+        nested = QRadioButton("Nested: the pieces packed onto as few pages as "
+                              "they'll go")
+        drawn = QRadioButton("As drawn: the drawing as it's laid out, tiled "
+                             "across pages")
+        (drawn if s.value("pdfLayout", "nested", type=str) == "drawn"
+         else nested).setChecked(True)
+        gap = length_spin(0.0, 100.0, 1, s.value("pdfGap", 8.0, type=float))
+        gap.setToolTip("The least space left between neighbouring pieces, "
+                       "outline to outline")
+        rot = QCheckBox("Turn pieces 90° where that saves paper")
+        rot.setChecked(s.value("pdfRotate", True, type=bool))
+        rot.setToolTip("Turn off if every piece must keep its direction")
+        form.addRow(nested)
+        form.addRow(drawn)
+        form.addRow("Space between pieces", gap)
+        form.addRow("", rot)
+
+        def nested_only(on):
+            gap.setEnabled(on)
+            rot.setEnabled(on)
+        nested.toggled.connect(nested_only)
+        nested_only(nested.isChecked())
+        lay.addWidget(box)
+
+        box = QGroupBox("Header, footer and first page")
+        form = QFormLayout(box)
+        name = QLineEdit(self._pattern_title())
+        name.setPlaceholderText("Pattern")
+        designer = QLineEdit(s.value("pdfDesigner", "", type=str))
+        designer.setPlaceholderText("Your name or shop")
+        note = QLineEdit(s.value("pdfNote", "", type=str))
+        note.setPlaceholderText("e.g. © 2026 Your Shop · for personal use only")
+        details = QCheckBox("Details page first: pieces, stitch holes, largest "
+                            "piece, leather and thread needed, scale check")
+        details.setChecked(s.value("pdfDetails", True, type=bool))
+        form.addRow("Pattern name", name)
+        form.addRow("Designer", designer)
+        form.addRow("Footer note", note)
+        form.addRow(details)
+        lay.addWidget(box)
+
+        hint = QLabel("A piece that fits on a page is printed whole on one "
+                      "page; a bigger one is tiled across pages that overlap "
+                      "so they can be taped. Your drawing isn't changed.")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        if dlg.exec() != QDialog.Accepted:
+            return None
+
+        o = PrintOptions(nested=nested.isChecked(), spacing=gap.value(),
+                         allow_rotate=rot.isChecked(),
+                         title=name.text().strip(),
+                         designer=designer.text().strip(),
+                         note=note.text().strip(),
+                         details=details.isChecked(),
+                         thickness_mm=s.value("threadThickness", 3.0, type=float),
+                         tail_mm=s.value("threadTail", 150.0, type=float),
+                         usable_pct=s.value("leatherUsable", 75.0, type=float))
+        if paper:
+            i = size.currentIndex()
+            _n, w, h = self._PAPER[i]
+            if w <= 0:
+                w, h = cw.value(), ch.value()
+            if orient.currentIndex() == 1:
+                w, h = max(w, h), min(w, h)
+            else:
+                w, h = min(w, h), max(w, h)
+            o.page_w, o.page_h = w, h
+            s.setValue("pdfPaper", i)
+            s.setValue("pdfLandscape", orient.currentIndex() == 1)
+            s.setValue("pdfCustomW", cw.value())
+            s.setValue("pdfCustomH", ch.value())
+        s.setValue("pdfLayout", "nested" if o.nested else "drawn")
+        s.setValue("pdfGap", o.spacing)
+        s.setValue("pdfRotate", o.allow_rotate)
+        s.setValue("pdfDesigner", o.designer)
+        s.setValue("pdfNote", o.note)
+        s.setValue("pdfDetails", o.details)
+        return o
+
     def export_pdf(self):
-        from .printing import export_pdf_tiled
+        from .printing import export_pdf
+        opts = self._print_options("Export PDF (1:1)")
+        if opts is None:
+            return
+        base = re.sub(r'[\\/:*?"<>|]+', "-", opts.title).strip() or "pattern"
         fn, _ = QFileDialog.getSaveFileName(self, "Export PDF (1:1)",
-                                            "pattern.pdf", "PDF (*.pdf)")
+                                            base + ".pdf", "PDF (*.pdf)")
         if not fn:
             return
-        rows, cols = export_pdf_tiled(self.doc, fn)
-        self.statusBar().showMessage(
-            f"Exported {os.path.basename(fn)} — {rows}×{cols} page(s), 1:1 scale",
-            5000)
+        plan = self._busy(lambda: export_pdf(self.doc, fn, opts))
+        msg = (f"Exported {os.path.basename(fn)} — {len(plan.pages)} "
+               f"page{'s' if len(plan.pages) != 1 else ''}, 1:1 scale")
+        if opts.nested:
+            msg += (f"; pieces nested {_units.fmt(opts.spacing)} apart on "
+                    f"{plan.pattern_pages} pattern page"
+                    f"{'s' if plan.pattern_pages != 1 else ''} "
+                    f"({plan.drawn_pages} as drawn)")
+        self.statusBar().showMessage(msg, 10000)
 
     def print_pattern(self):
         from PySide6.QtPrintSupport import QPrinter, QPrintDialog
         from PySide6.QtGui import QPageSize, QPageLayout
-        from PySide6.QtCore import QSizeF, QMarginsF
-        from .printing import render_tiled
+        from PySide6.QtCore import QMarginsF
+        from .printing import render
+        opts = self._print_options("Print pattern (1:1)", paper=False)
+        if opts is None:
+            return
         printer = QPrinter(QPrinter.HighResolution)
         printer.setPageSize(QPageSize(QPageSize.A4))
         printer.setPageMargins(QMarginsF(0, 0, 0, 0), QPageLayout.Unit.Millimeter)
@@ -2375,9 +2564,11 @@ class MainWindow(QMainWindow):
         if dlg.exec() != QPrintDialog.Accepted:
             return
         layout = printer.pageLayout().fullRect(QPageLayout.Unit.Millimeter)
-        render_tiled(printer, self.doc,
-                     page_w=layout.width(), page_h=layout.height())
-        self.statusBar().showMessage("Sent to printer at 1:1 scale", 4000)
+        opts.page_w, opts.page_h = layout.width(), layout.height()
+        plan = self._busy(lambda: render(printer, self.doc, opts))
+        self.statusBar().showMessage(
+            f"Sent {len(plan.pages)} page{'s' if len(plan.pages) != 1 else ''}"
+            " to the printer at 1:1 scale", 6000)
 
     def _update_title(self):
         name = os.path.basename(self.path) if self.path else "Untitled"

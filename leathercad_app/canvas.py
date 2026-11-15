@@ -1426,6 +1426,7 @@ class Canvas(QGraphicsView):
             self._move_src, self._move_src_kind = self._grab_source(
                 item, getattr(item, "_snap_offsets", None),
                 getattr(item, "_snap_offset_kinds", None), press, item.pos())
+            self._grab_by_hole(item, press, item.pos())
             return
         # A move-group is being dragged: snap the whole group by its leader (the
         # pressed item) and move the other members to match. Exclude every group
@@ -1457,6 +1458,7 @@ class Canvas(QGraphicsView):
         }
         self._move_src, self._move_src_kind = self._grab_source(
             leader, offsets, None, press, lp)
+        self._grab_by_hole(leader, press, lp)
         for m in members:
             m.setFlag(QGraphicsItem.ItemIsMovable, False)
         self._nonmovable_members = list(members)
@@ -1488,6 +1490,19 @@ class Canvas(QGraphicsView):
                 if ci is not None:
                     i, kind = ci, "center"
         return offsets[i], kind
+
+    def _grab_by_hole(self, item, press, origin) -> None:
+        """Pressed on one of the piece's own stitch holes: that hole is the
+        handle, so its centre is what snaps. (Its holes used to be no part
+        of a piece's click area at all.) Grabbed by its outline, a piece
+        still snaps by its nearest corner, end, midpoint or centre."""
+        if press is None or not hasattr(item, "hole_at"):
+            return
+        c = item.hole_at(item.mapFromScene(press))
+        if c is not None:
+            lp = item.mapToScene(QPointF(c.x, c.y))
+            self._move_src = Vec2(lp.x() - origin.x(), lp.y() - origin.y())
+            self._move_src_kind = "hole"
 
     def _move_src_name(self, item) -> str:
         kind = getattr(self, "_move_src_kind", None)
@@ -1615,10 +1630,15 @@ class Canvas(QGraphicsView):
 
         if src is not None and not getattr(self, "_move_src_said", True):
             self._move_src_said = True
-            self.statusMessage.emit(
-                f"Snaps by its {self._move_src_name(item)}: the point nearest "
-                "where you grabbed it (grab near another point to snap by "
-                "that one)")
+            if self._move_src_kind == "hole":
+                self.statusMessage.emit(
+                    "Snaps by the centre of the hole you grabbed it by (grab "
+                    "the outline to snap by a corner, end or midpoint)")
+            else:
+                self.statusMessage.emit(
+                    f"Snaps by its {self._move_src_name(item)}: the point "
+                    "nearest where you grabbed it (grab near another point to "
+                    "snap by that one)")
         if best is None:
             if self._snap_marker is not None:
                 self._snap_marker.setVisible(False)
@@ -7235,9 +7255,10 @@ class Canvas(QGraphicsView):
             return max(0.0, math.hypot(sp.x() - c.x(), sp.y() - c.y())
                        - it.hole.hole_diameter / 2.0)
         lp = it.mapFromScene(sp)
-        if isinstance(it, ShapeItem):
-            return self._poly_dist(lp, [it._outline],
-                                   bool(getattr(it, "_closed", True)))
+        if isinstance(it, ShapeItem):          # its outline, or its own holes
+            return min(self._poly_dist(lp, [it._outline],
+                                       bool(getattr(it, "_closed", True))),
+                       it.hole_distance(lp))
         if isinstance(it, StitchLineItem):
             return self._poly_dist(lp, [it._poly], bool(it.line.closed))
         if isinstance(it, DimensionItem):

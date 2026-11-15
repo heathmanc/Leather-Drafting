@@ -262,7 +262,8 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
 
 * **Click the outline** to select — shapes are grabbed by their edge, not
   their filled interior, so you can click "inside" a shape to reach things
-  behind it. Selected outlines turn **blue**.
+  behind it. A click on one of a piece's own **stitch holes** selects the
+  piece too. Selected outlines turn **blue**.
 * **Things drawn close together**: a click picks whatever is **nearest the
   pointer**: the line you're on, not the hole or crossing line beside it.
   Zoom in to pull small things apart; the pick zone shrinks to a few pixels
@@ -270,14 +271,18 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
   **Alt+click** the same spot to step to the next one under the pointer (the
   status bar says how many are there).
 * **Ctrl/Shift-click** adds to the selection; drag a rubber band over items to
-  select several. `Ctrl+A` selects everything.
+  select several (a band has to touch a piece's outline: one over just its
+  holes doesn't take it). `Ctrl+A` selects everything.
 * **Move**: drag. While dragging, the shape magnetically **snaps** to other
   shapes' endpoints/centres/midpoints and intersections (see §8), **by the
   point you grabbed it by**: its corner, end, midpoint or centre nearest
   where you pressed lands on the target nearest that point. Grab it near
   another point to snap by that one; a faint orange mark shows which point
   will snap. Circles and loose holes snap by their **centre** (grab a circle
-  right on a quarter point to snap by that instead).
+  right on a quarter point to snap by that instead). Grab a piece **by one of
+  its stitch holes** and that hole's centre snaps, onto a corner or onto
+  another piece's hole, so two pieces' stitching lines up hole for hole. It
+  works the same for a piece in a `Ctrl+G` group: the whole group moves.
 * **Resize by eye**: select one rectangle/circle/ellipse and drag any of the 8
   box handles — the opposite corner stays pinned. Holes recalculate for the
   new size automatically.
@@ -587,7 +592,9 @@ that x/y — Illustrator-style smart guides.
 While dragging a whole shape, it snaps by **one** of its own points: the
 corner, end, midpoint or centre nearest where you grabbed it, onto the
 target nearest that point. A circle snaps by its **centre**, so you can drop
-it exactly onto a centre point without any extra construction. Nothing else
+it exactly onto a centre point without any extra construction. Grabbed by
+one of its stitch holes, a piece snaps by that hole's **centre**: drop it on
+another piece's hole to register the two rows of stitching. Nothing else
 on the shape snaps, so it never jumps to a target far from the pointer.
 
 A third toggle, **Perfect fit**, snaps *sizes* instead of points: with it on, a

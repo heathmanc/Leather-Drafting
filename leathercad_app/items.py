@@ -1251,6 +1251,77 @@ class ShapeItem(QGraphicsItem):
             self._hit_half = half          # rebuilt when a zoom changes it
         return self._hit_shape
 
+    # -- the piece's own holes are part of it, for a click ------------------
+    def _hole_size(self) -> float:
+        """A hole's drawn size (mm): a round hole's diameter, a slit's or
+        diamond's length."""
+        st = self.model.stitch
+        if st is None:
+            return 1.0
+        if st.hole_style in ("slit", "diamond"):
+            return float(st.slit_length)
+        return float(st.hole_diameter)
+
+    def _hole_pick_radius(self) -> float:
+        # as for a loose hole (HoleItem._geom): 1.6 mm round at the usual
+        # zoom, no more than HIT_PX past the hole once zoomed in
+        d = self._hole_size()
+        zoom = float(getattr(self.canvas, "_zoom", 0.0) or 0.0)
+        r_max = max(1.6, d)
+        return min(r_max, d / 2.0 + HIT_PX / zoom) if zoom > 1e-9 else r_max
+
+    def hole_at(self, p: QPointF):
+        """The centre (item coordinates) of the piece's own stitch hole whose
+        pick zone the item point ``p`` falls in -- the nearest, if several --
+        or None."""
+        res = self._holes
+        if not res or not res.count:
+            return None
+        x, y = p.x(), p.y()
+        best, best_d2 = None, self._hole_pick_radius() ** 2
+        for h in res.holes:
+            d2 = (h.point.x - x) ** 2 + (h.point.y - y) ** 2
+            if d2 <= best_d2:
+                best, best_d2 = h.point, d2
+        return best
+
+    def hole_distance(self, p: QPointF) -> float:
+        """How far (mm) the item point ``p`` is from the nearest of the
+        piece's own holes; 0 inside one."""
+        res = self._holes
+        if not res or not res.count:
+            return float("inf")
+        x, y = p.x(), p.y()
+        d2 = min((h.point.x - x) ** 2 + (h.point.y - y) ** 2 for h in res.holes)
+        return max(0.0, d2 ** 0.5 - self._hole_size() / 2.0)
+
+    # A click (or hover) asks Qt about the one pixel under the pointer; a
+    # rubber band only starts after a drag of several pixels.
+    _CLICK_PX = 2.5
+
+    def collidesWithPath(self, path, mode=Qt.IntersectsItemShape) -> bool:
+        """A click on one of the piece's own holes is a click on the piece,
+        so it can be picked up -- and snapped -- by a hole. Only the outline
+        used to count. Qt finds what's under a click by asking each item
+        whether the clicked pixel collides with it, so the holes are added
+        here; a box drawn by a rubber band still goes by the outline alone
+        (``shape()``), so a box over a piece's holes doesn't take the piece."""
+        if super().collidesWithPath(path, mode):
+            return True
+        if mode != Qt.IntersectsItemShape or not self._holes:
+            return False
+        r = path.boundingRect()
+        zoom = float(getattr(self.canvas, "_zoom", 0.0) or 0.0) or 1.0
+        if max(r.width(), r.height()) > self._CLICK_PX / zoom:
+            return False
+        return self.hole_at(r.center()) is not None
+
+    def contains(self, point: QPointF) -> bool:
+        # the point-query twin of collidesWithPath: holes count
+        if self.shape().contains(point):
+            return True
+        return self.hole_at(point) is not None
+
     def paint(self, painter, option, widget=None):
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
         selected = self.isSelected()

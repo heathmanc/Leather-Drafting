@@ -4,6 +4,22 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
+## Unreleased
+
+### Selecting and snapping
+* **Pick a piece up by one of its holes.** Only a piece's outline was
+  clickable. Its stitch holes, attached or worked out from its stitching,
+  were no part of it, so a press on a hole started a rubber band and a piece
+  could never be dragged or snapped by a hole. A click on one of a piece's
+  holes now selects the piece. Drag from there and **that hole's centre is
+  the point that snaps**, onto a corner, a line's end or another piece's
+  hole. So two pieces' stitching can be lined up hole for hole. A piece in a
+  `Ctrl+G` group brings the whole group with it.
+* Grabbed by its outline, a piece still snaps by its nearest corner, end,
+  midpoint or centre. A rubber band still has to touch a piece's outline to
+  take it, so a box over just its holes doesn't. When a hole and a line are
+  both under the pointer, whichever is nearer takes the click.
+
 ## 0.4.6 — 2026-11-15
 
 ### Snapping

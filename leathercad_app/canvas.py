@@ -5498,30 +5498,143 @@ class Canvas(QGraphicsView):
                     and not getattr(it.model, "construction", False)]
         return cand
 
+    def _nest_sheet_shape(self):
+        """The sheet an earlier nest drew (a construction rectangle called
+        "Sheet"), the latest one, or None."""
+        for sh in reversed(self.doc.shapes):
+            if (getattr(sh, "construction", False) and sh.name == "Sheet"
+                    and isinstance(sh, Rectangle)):
+                return sh
+        return None
+
     def _nest_plan(self, cand, sheet_w, sheet_h, *, margin, spacing,
-                   allow_rotate, progress=None):
+                   allow_rotate, progress=None, smallest=False, keep=True,
+                   budget=None):
         """Group ``cand`` as pieces (a move-group is one; a slot, the loose
         holes, seams, lettering and fold lines on a piece go with it) and
-        pack them, moving nothing. The sheet sits at the min corner of
-        everything being nested. Returns (groups, placements, unplaced,
-        used, sheet_x, sheet_y), or None when there's nothing to pack."""
-        from leathercad.nesting import (NestPiece, cell_for_gap,
-                                        group_pieces, nest)
+        lay them out many ways, keeping the best -- moving nothing yet.
+
+        The sheet is the one an earlier nest drew, if there is one, else it
+        sits at the min corner of what's being nested. Pieces not being
+        nested that lie on it stay where they are, and nothing is laid on
+        them. On an earlier sheet, with ``keep``, the pieces being nested
+        that are already on it stay put too and only the rest are fitted
+        round them -- a piece dragged off goes back into a gap instead of
+        the whole sheet being redone -- unless that leaves some out and
+        laying the whole lot out afresh gets more on. ``smallest`` finds the
+        smallest sheet that takes every piece instead, ``sheet_w`` x
+        ``sheet_h`` at most.
+
+        ``budget``: seconds of trying (None: the default for the mode; 0:
+        every try, whatever it takes). Returns a dict -- groups, placements,
+        unplaced, sheet (x, y, w, h), kept (groups left where they are),
+        tries, cover (the share of the sheet the pieces on it take up),
+        existing (the earlier sheet), redone (laid out afresh, the pieces on
+        the sheet moved after all) -- or None when there's nothing to
+        pack."""
+        from leathercad.nesting import (NestPiece, cell_for_gap, group_pieces,
+                                        leather_area, nest_best, nest_smallest,
+                                        sheet_packer)
         groups, _left = group_pieces(
             [it.model for it in cand], self.doc.holes, self.doc.stitch_lines,
             getattr(self.doc, "texts", []))
         if not groups:
             return None
-        sx = min(g.bbox[0] for g in groups)
-        sy = min(g.bbox[1] for g in groups)
+        existing = self._nest_sheet_shape()
+        if existing is not None:
+            b = existing.bounds()
+            sx, sy = b[0], b[1]
+        else:
+            sx = min(g.bbox[0] for g in groups)
+            sy = min(g.bbox[1] for g in groups)
         gap = spacing + self._NEST_SLACK
-        pieces = [NestPiece(key=i, outlines=g.outlines,
-                            allow_rotate=allow_rotate)
-                  for i, g in enumerate(groups)]
-        placements, unplaced, used = nest(
-            pieces, sheet_w, sheet_h, margin=margin, spacing=gap,
-            cell=cell_for_gap(gap), sheet_x=sx, sheet_y=sy, progress=progress)
-        return groups, placements, unplaced, used, sx, sy
+        cell = cell_for_gap(gap)
+        rect = (sx, sy, sx + sheet_w, sy + sheet_h)
+        if budget is None:
+            budget = 2.5 if smallest else 1.5
+        budget = budget or None
+
+        def meets(b, r):
+            return b[0] < r[2] and r[0] < b[2] and b[1] < r[3] and r[1] < b[3]
+
+        # what isn't being nested but lies on the sheet: nothing lands on it
+        others = []
+        cand_ids = {id(it.model) for it in cand}
+        for sh in self.doc.shapes:
+            if getattr(sh, "construction", False) or id(sh) in cand_ids:
+                continue
+            if meets(sh.bounds(), rect):
+                pts, _c, closed = sh.world_polyline()
+                others.append(([Vec2(p.x, p.y) for p in pts], bool(closed)))
+        kept = []
+        if keep and existing is not None and not smallest:
+            probe = sheet_packer(sheet_w, sheet_h, margin=margin, spacing=gap,
+                                 cell=cell, sheet_x=sx, sheet_y=sy)
+            probe.block_outlines(others)
+            room = (sx + margin - 0.5, sy + margin - 0.5,
+                    sx + sheet_w - margin + 0.5, sy + sheet_h - margin + 0.5)
+
+            def biggest(k):
+                b = groups[k].bbox
+                return -(b[2] - b[0]) * (b[3] - b[1])
+            for i in sorted(range(len(groups)), key=biggest):
+                b = groups[i].bbox
+                if not (b[0] >= room[0] and b[1] >= room[1]
+                        and b[2] <= room[2] and b[3] <= room[3]):
+                    continue
+                if probe.collides(groups[i].outlines):
+                    continue              # on top of another: it moves
+                kept.append(i)
+                probe.block_outlines(groups[i].outlines)
+
+        every = [NestPiece(key=i, outlines=g.outlines, allow_rotate=allow_rotate)
+                 for i, g in enumerate(groups)]
+        masks: dict = {}                  # each piece rasterised once
+        redone = False
+        if smallest:
+            res = nest_smallest(every, margin=margin, spacing=gap, cell=cell,
+                                sheet_x=sx, sheet_y=sy, max_w=sheet_w,
+                                max_h=sheet_h, obstacles=others, budget=budget,
+                                progress=progress)
+            tries = res.tries
+            sheet = res.sheet
+        else:
+            kept_set = set(kept)
+            loose = [p for p in every if p.key not in kept_set]
+            stay = others + [o for i in kept for o in groups[i].outlines]
+            res = nest_best(loose, sheet_w, sheet_h, margin=margin,
+                            spacing=gap, cell=cell, sheet_x=sx, sheet_y=sy,
+                            obstacles=stay, budget=budget, progress=progress,
+                            mask_cache=masks)
+            tries = res.tries
+            if kept and res.unplaced:
+                # the gaps round the pieces left where they were don't take
+                # every piece: lay the lot out afresh, and take that when it
+                # gets more on
+                fresh = nest_best(every, sheet_w, sheet_h, margin=margin,
+                                  spacing=gap, cell=cell, sheet_x=sx,
+                                  sheet_y=sy, obstacles=others, budget=budget,
+                                  progress=progress, mask_cache=masks)
+                tries += fresh.tries
+                if len(fresh.placements) > len(res.placements) + len(kept):
+                    res, kept, redone = fresh, [], True
+            sheet = (sx, sy, sheet_w, sheet_h)
+        on_sheet = kept + [pl.key for pl in res.placements]
+        area = sheet[2] * sheet[3]
+        leather = sum(leather_area(groups[i].outlines) for i in on_sheet)
+        final = (sheet[0], sheet[1], sheet[0] + sheet[2], sheet[1] + sheet[3])
+
+        def box(pts):
+            return (min(p.x for p in pts), min(p.y for p in pts),
+                    max(p.x for p in pts), max(p.y for p in pts))
+        also = [o for o in others if o[0] and meets(box(o[0]), final)]
+        if also:
+            leather += leather_area(also)
+        cover = leather / area if area > 0 else 0.0
+        return {"groups": groups, "placements": res.placements,
+                "unplaced": res.unplaced, "sheet": sheet, "kept": kept,
+                "tries": tries, "cover": min(1.0, cover),
+                "existing": existing, "redone": redone}
 
     def _nest_move(self, groups, placements, cand) -> None:
         """Move every member of every placed group as a rigid unit -- models
@@ -5531,14 +5644,17 @@ class Canvas(QGraphicsView):
         and the riders re-read their moved models."""
         item_of = {id(it.model): it for it in cand}
         turned, rider_ids, moved = set(), set(), []
+
+        def turn(t, pl):
+            t.rotation = ((t.rotation + pl.degrees + 180) % 360) - 180
         for pl in placements:
             g = groups[pl.key]
             for sh in g.shapes:
                 t = sh.transform
                 p = pl.apply(Vec2(t.x, t.y))
                 t.x, t.y = p.x, p.y
-                if pl.rotated:
-                    t.rotation = ((t.rotation + 90 + 180) % 360) - 180
+                if pl.turns:
+                    turn(t, pl)
                     turned.add(id(sh))
                 it = item_of.get(id(sh))
                 if it is not None:
@@ -5547,8 +5663,8 @@ class Canvas(QGraphicsView):
                 t = tx.transform
                 p = pl.apply(Vec2(t.x, t.y))
                 t.x, t.y = p.x, p.y
-                if pl.rotated:
-                    t.rotation = ((t.rotation + 90 + 180) % 360) - 180
+                if pl.turns:
+                    turn(t, pl)
             for h in g.holes:
                 h.point = pl.apply(h.point)
                 h.tangent = pl.turn(h.tangent)
@@ -5578,24 +5694,71 @@ class Canvas(QGraphicsView):
             self._suspend_move_refresh = False
         self._move_refresh()
 
-    def _nest_report(self, groups, placements, unplaced, used, sheet_w,
-                     sheet_h, spacing, allow_rotate) -> str:
-        lines = [f"Placed {len(placements)} of {len(groups)} piece"
-                 f"{'s' if len(groups) != 1 else ''} on the "
-                 f"{U.fmt_num(sheet_w)} × {U.fmt(sheet_h)} sheet.",
-                 f"Sheet blocked out (incl. {U.fmt(spacing)} gaps): {used:.0%}."]
+    @staticmethod
+    def _nest_names(groups, keys, most=6) -> str:
+        names = [groups[k].shapes[0].name or f"piece {k + 1}" for k in keys]
+        if len(names) > most:
+            names = names[:most] + [f"{len(names) - most} more"]
+        return ", ".join(names)
+
+    def _nest_report(self, plan, spacing, allow_rotate, smallest=False) -> str:
+        groups, placements = plan["groups"], plan["placements"]
+        kept, unplaced = plan["kept"], plan["unplaced"]
+        _sx, _sy, sw, sh = plan["sheet"]
+        n = len(groups)
+        s = "s" if n != 1 else ""
+        placed = len(placements) + len(kept)
+        size = f"{U.fmt_num(sw)} × {U.fmt(sh)}"
+        if smallest and not unplaced:
+            head = f"Smallest sheet found: {size} — all {n} piece{s} on it."
+        else:
+            head = f"Placed {placed} of {n} piece{s} on the {size} sheet"
+            head += (f" ({len(kept)} left where they were)." if kept else ".")
+        lines = [head]
+        if plan.get("redone"):
+            lines.append("Laid out afresh: the gaps round the pieces already "
+                         "on the sheet couldn't take them all.")
+        if placements:
+            lines.append(f"Best of {plan['tries']} layouts tried; the pieces "
+                         f"take up {plan['cover']:.0%} of the sheet, "
+                         f"{U.fmt(spacing)} apart.")
         if unplaced:
-            names = [groups[k].shapes[0].name or f"piece {k + 1}"
-                     for k in unplaced]
-            lines.append("Didn't fit: " + ", ".join(names) + ".")
-        if allow_rotate and any(pl.rotated for pl in placements):
-            lines.append("Rotated pieces are turned 90° — check grain "
-                         "direction before cutting.")
+            lines.append("Didn't fit: " + self._nest_names(groups, unplaced)
+                         + ".")
+        turned = [pl for pl in placements if pl.turns]
+        if allow_rotate and turned:
+            shown = turned[:6]
+            what = ", ".join(
+                f"{groups[pl.key].shapes[0].name or f'piece {pl.key + 1}'} "
+                f"{pl.degrees}°" for pl in shown)
+            if len(turned) > len(shown):
+                what += f", {len(turned) - len(shown)} more"
+            lines.append(f"Turned: {what} — check grain direction before "
+                         "cutting.")
         return "\n".join(lines)
 
-    def _add_sheet(self, sx, sy, sheet_w, sheet_h) -> None:
-        """The sheet itself, as a construction rectangle."""
+    def _nest_nothing(self, plan, spacing, allow_rotate, smallest) -> str:
+        """Nothing placed: say what didn't fit, and why it might not."""
+        groups = plan["groups"]
+        what = self._nest_names(groups, plan["unplaced"]) or "the pieces"
+        if smallest:
+            return (f"No sheet up to the size given takes {what} — try a "
+                    "bigger one, a smaller margin, or allow rotation.")
+        return (f"There's no room on the sheet for {what} — try a bigger "
+                "sheet, a smaller margin or gap, or allow rotation.")
+
+    def _add_sheet(self, sx, sy, sheet_w, sheet_h, existing=None) -> None:
+        """The sheet itself, as a construction rectangle -- the earlier one
+        moved and resized, when the nest went onto it."""
         from leathercad.shapes import Rectangle as _Rect
+        if existing is not None and existing in self.doc.shapes:
+            existing.width, existing.height = sheet_w, sheet_h
+            existing.transform.x = sx + sheet_w / 2.0
+            existing.transform.y = sy + sheet_h / 2.0
+            for it in self._live:
+                if getattr(it, "model", None) is existing and _alive(it):
+                    it.sync_from_model()
+            return
         sheet = _Rect(name="Sheet", width=sheet_w, height=sheet_h,
                       transform=Transform(x=sx + sheet_w / 2.0,
                                           y=sy + sheet_h / 2.0),
@@ -5606,48 +5769,50 @@ class Canvas(QGraphicsView):
 
     def nest_selected(self, sheet_w: float, sheet_h: float, *,
                       margin: float = 5.0, spacing: float = 3.0,
-                      allow_rotate: bool = True, progress=None) -> str:
+                      allow_rotate: bool = True, progress=None,
+                      smallest: bool = False, keep: bool = True,
+                      budget=None) -> str:
         """Pack the selected shapes (or ALL shapes if nothing is selected)
-        onto a sheet_w x sheet_h mm sheet, using their real outlines. Grouped
-        shapes travel as one piece; anything on a piece (slots, hardware
-        holes, loose stitch holes, seams, lettering, fold lines) rides along.
-        Draws the sheet as a construction rectangle and returns a report.
+        onto a sheet_w x sheet_h mm sheet, using their real outlines, trying
+        many layouts and keeping the best (see _nest_plan). Grouped shapes
+        travel as one piece; anything on a piece (slots, hardware holes,
+        loose stitch holes, seams, lettering, fold lines) rides along. Draws
+        the sheet as a construction rectangle and returns a report.
 
-        ``progress(done, total)`` is called per piece while packing; returning
-        False cancels, and nothing is moved."""
+        ``progress(done, total)`` counts the layouts tried; returning False
+        cancels, and nothing is moved."""
         from leathercad.nesting import NestCancelled
         cand = self._nest_candidates()
         if not cand:
             return "Nothing to nest — draw or select some pieces first."
         try:
-            got = self._nest_plan(cand, sheet_w, sheet_h, margin=margin,
-                                  spacing=spacing, allow_rotate=allow_rotate,
-                                  progress=progress)
+            plan = self._nest_plan(cand, sheet_w, sheet_h, margin=margin,
+                                   spacing=spacing, allow_rotate=allow_rotate,
+                                   progress=progress, smallest=smallest,
+                                   keep=keep, budget=budget)
         except NestCancelled:
             return "Nesting cancelled — nothing was moved."
-        if got is None:
+        if plan is None:
             return "Nothing to nest — draw or select some pieces first."
-        groups, placements, unplaced, used, sx, sy = got
-        if not placements:
-            return ("No piece fits the sheet — try a bigger sheet, a smaller "
-                    "margin, or allow rotation.")
-        self._nest_move(groups, placements, cand)
-        self._add_sheet(sx, sy, sheet_w, sheet_h)
+        if not plan["placements"] and not plan["kept"]:
+            return self._nest_nothing(plan, spacing, allow_rotate, smallest)
+        self._nest_move(plan["groups"], plan["placements"], cand)
+        self._add_sheet(*plan["sheet"], existing=plan["existing"])
         self.documentChangedSig.emit()
         self._emit_commit()
-        return self._nest_report(groups, placements, unplaced, used, sheet_w,
-                                 sheet_h, spacing, allow_rotate)
+        return self._nest_report(plan, spacing, allow_rotate, smallest)
 
     # -- nesting with a preview: the pieces move for a look, then stay or go
     # back. The first preview notes where everything was; every later one
     # starts again from there, so changing the sheet never compounds.
     def nest_preview(self, sheet_w: float, sheet_h: float, *,
                      margin: float = 5.0, spacing: float = 8.0,
-                     allow_rotate: bool = True) -> str:
+                     allow_rotate: bool = True, smallest: bool = False,
+                     keep: bool = True, budget=None, progress=None) -> str:
         """Lay the pieces out on the sheet on screen, as ``nest_selected``
         would, without making it an edit yet: ``nest_apply`` keeps it (one
         undo step), ``nest_cancel`` puts every piece back. Returns the
-        report."""
+        report. ``progress(done, total)`` counts the layouts tried."""
         pv = getattr(self, "_nest_pv", None)
         if pv is None:
             cand = self._nest_candidates()
@@ -5657,24 +5822,25 @@ class Canvas(QGraphicsView):
                                   "sheet": None, "args": None}
         else:
             self._nest_restore()
-        got = self._nest_plan(pv["cand"], sheet_w, sheet_h, margin=margin,
-                              spacing=spacing, allow_rotate=allow_rotate)
+        plan = self._nest_plan(pv["cand"], sheet_w, sheet_h, margin=margin,
+                               spacing=spacing, allow_rotate=allow_rotate,
+                               smallest=smallest, keep=keep, budget=budget,
+                               progress=progress)
         pv["args"] = None
-        if got is None:
+        if plan is None:
             return "Nothing to nest — draw or select some pieces first."
-        groups, placements, unplaced, used, sx, sy = got
         self._suppress_commit = True
         try:
-            self._nest_move(groups, placements, pv["cand"])
+            self._nest_move(plan["groups"], plan["placements"], pv["cand"])
         finally:
             self._suppress_commit = False
-        self._show_nest_sheet(sx, sy, sheet_w, sheet_h)
-        pv["args"] = (sx, sy, sheet_w, sheet_h)
-        if not placements:
-            return ("No piece fits the sheet — try a bigger sheet, a smaller "
-                    "margin, or allow rotation.")
-        return self._nest_report(groups, placements, unplaced, used, sheet_w,
-                                 sheet_h, spacing, allow_rotate)
+        sx, sy, sw, sh = plan["sheet"]
+        if sw > 0 and sh > 0:
+            self._show_nest_sheet(sx, sy, sw, sh)
+            pv["args"] = (sx, sy, sw, sh, plan["existing"])
+        if not plan["placements"] and not plan["kept"]:
+            return self._nest_nothing(plan, spacing, allow_rotate, smallest)
+        return self._nest_report(plan, spacing, allow_rotate, smallest)
 
     def nest_previewing(self) -> bool:
         return getattr(self, "_nest_pv", None) is not None
@@ -5704,7 +5870,8 @@ class Canvas(QGraphicsView):
         self._nest_pv = None
         if pv["args"] is None:
             return False
-        self._add_sheet(*pv["args"])
+        sx, sy, sw, sh, existing = pv["args"]
+        self._add_sheet(sx, sy, sw, sh, existing=existing)
         self.documentChangedSig.emit()
         self._emit_commit()
         return True

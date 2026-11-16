@@ -1772,7 +1772,7 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import (QDialog, QFormLayout, QDialogButtonBox,
                                        QVBoxLayout, QCheckBox, QLabel,
                                        QApplication)
-        from PySide6.QtCore import QTimer
+        from PySide6.QtCore import QEventLoop, QTimer
         from .prompts import length_spin
         s = self._settings()
         c = self.canvas
@@ -1781,10 +1781,11 @@ class MainWindow(QMainWindow):
         lay = QVBoxLayout(dlg)
         hint = QLabel("Packs the selected pieces (or everything, if nothing "
                       "is selected) onto one sheet of leather, using their "
-                      "real outlines. Grouped shapes and anything on a piece "
-                      "(slots, holes, seams, lettering) travel with it. The "
-                      "layout shows on the drawing as you change the "
-                      "settings; Apply keeps it, Cancel puts everything back.")
+                      "real outlines, trying many layouts and keeping the "
+                      "best. Grouped shapes and anything on a piece (slots, "
+                      "holes, seams, lettering) travel with it. The layout "
+                      "shows on the drawing as you change the settings; "
+                      "Apply keeps it, Cancel puts everything back.")
         hint.setWordWrap(True)
         lay.addWidget(hint)
         form = QFormLayout()
@@ -1803,19 +1804,43 @@ class MainWindow(QMainWindow):
         gap = _spin("nestGapMm", 8.0, 0.5, 50.0,
                     "The least space left between neighbouring pieces, "
                     "outline to outline")
-        rot = QCheckBox("Allow 90° rotation")
+        rot = QCheckBox("Allow turning pieces (90°, 180°, 270°)")
         rot.setChecked(s.value("nestRotate", True, type=bool))
         rot.setToolTip("Turn off if grain / stretch direction matters "
                        "for every piece")
+        smallest = QCheckBox("Find the smallest sheet that takes every piece")
+        smallest.setChecked(s.value("nestSmallest", False, type=bool))
+        smallest.setToolTip(
+            "Tries strips of many widths and draws the sheet round the "
+            "tightest layout found. The width and height above become the "
+            "most it may be — the leather you have.")
+        keep = QCheckBox("Leave pieces already on the sheet where they are")
+        keep.setChecked(s.value("nestKeep", True, type=bool))
+        earlier = c._nest_sheet_shape()
+        if earlier is None:
+            keep.setEnabled(False)
+            keep.setToolTip("There's no sheet from an earlier nest on the "
+                            "drawing yet.")
+        else:
+            keep.setToolTip(
+                "Only pieces off the sheet (or on top of another) are fitted "
+                "into the gaps — a piece dragged off goes back in. If they "
+                "can't all go in, the whole sheet is laid out afresh. Untick "
+                "to lay everything out afresh anyway.")
+            if not smallest.isChecked():
+                w.setValue(earlier.width)       # the sheet on the drawing
+                h.setValue(earlier.height)
         form.addRow("Sheet width", w)
         form.addRow("Sheet height", h)
         form.addRow("Edge margin", margin)
         form.addRow("Gap between pieces", gap)
         form.addRow("", rot)
+        form.addRow("", smallest)
+        form.addRow("", keep)
         lay.addLayout(form)
         report = QLabel()
         report.setWordWrap(True)
-        report.setMinimumHeight(64)
+        report.setMinimumHeight(80)
         lay.addWidget(report)
         bb = QDialogButtonBox()
         bb.addButton("Apply", QDialogButtonBox.ButtonRole.AcceptRole)
@@ -1824,10 +1849,26 @@ class MainWindow(QMainWindow):
         bb.rejected.connect(dlg.reject)
         lay.addWidget(bb)
 
+        def relabel():
+            most = smallest.isChecked()
+            for field, name in ((w, "Sheet width"), (h, "Sheet height")):
+                label = form.labelForField(field)
+                if label is not None:
+                    label.setText(name + (", at most" if most else ""))
+            keep.setEnabled(earlier is not None and not most)
+        relabel()
+
         timer = QTimer(dlg)
         timer.setSingleShot(True)
         timer.setInterval(250)
         state = {"busy": False, "framed": None}
+
+        def tick(done, total):
+            # the layouts being tried, shown as they go; clicks wait
+            report.setText(f"Trying layouts… {100 * done // max(1, total)}%")
+            QApplication.processEvents(
+                QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+            return True
 
         def preview():
             if state["busy"]:
@@ -1839,36 +1880,44 @@ class MainWindow(QMainWindow):
                 text = c.nest_preview(w.value(), h.value(),
                                       margin=margin.value(),
                                       spacing=gap.value(),
-                                      allow_rotate=rot.isChecked())
+                                      allow_rotate=rot.isChecked(),
+                                      smallest=smallest.isChecked(),
+                                      keep=keep.isChecked(), progress=tick)
             finally:
                 QApplication.restoreOverrideCursor()
                 state["busy"] = False
             report.setText(text)
-            size = (round(w.value(), 3), round(h.value(), 3))
-            if state["framed"] != size:     # show the whole sheet again
-                state["framed"] = size
-                r = c.nest_preview_rect()
-                if r is not None:
+            r = c.nest_preview_rect()
+            if r is not None:
+                size = (round(r.width()), round(r.height()))
+                if state["framed"] != size:     # show the whole sheet again
+                    state["framed"] = size
                     c.fit_rect(r)
 
         for sp in (w, h, margin, gap):
             sp.valueChanged.connect(lambda *_a: timer.start())
-        rot.toggled.connect(lambda *_a: timer.start())
+        for box in (rot, smallest, keep):
+            box.toggled.connect(lambda *_a: timer.start())
+        smallest.toggled.connect(lambda *_a: relabel())
         timer.timeout.connect(preview)
-        preview()                         # the first look, straight away
+        QTimer.singleShot(0, preview)     # the first look, once it's open
         ok = dlg.exec() == QDialog.DialogCode.Accepted
+        pending = timer.isActive()
         timer.stop()
         if not ok:
             c.nest_cancel()
             self.statusBar().showMessage("Nest cancelled — nothing moved", 4000)
             return
-        if state["busy"] is False and timer.isActive():
-            preview()
+        if pending or not c.nest_previewing():
+            preview()            # a change not yet laid out: lay it out first
         s.setValue("nestSheetW", w.value())
         s.setValue("nestSheetH", h.value())
         s.setValue("nestMargin", margin.value())
         s.setValue("nestGapMm", gap.value())
         s.setValue("nestRotate", rot.isChecked())
+        s.setValue("nestSmallest", smallest.isChecked())
+        if keep.isEnabled():
+            s.setValue("nestKeep", keep.isChecked())
         if c.nest_apply():
             self.statusBar().showMessage(report.text().split("\n")[0], 6000)
 

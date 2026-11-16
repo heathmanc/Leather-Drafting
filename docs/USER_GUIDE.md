@@ -705,11 +705,35 @@ While it's sizing a piece, that grip ignores node snapping.
     and how much of the sheet they take. **Apply** keeps the layout (one
     undo step) and draws the sheet as a construction rectangle (it never
     exports); **Cancel** puts every piece back exactly where it was.
+  * **Many layouts, the best kept.** One pass places the pieces one after
+    another, each in the lowest, leftmost pocket it fits — so where each
+    piece lands depends on what went before. The nest makes dozens of passes
+    (the pieces in different orders, filled row by row and column by
+    column, every piece tried in all four quarter turns) and keeps the
+    layout that gets the most pieces on, then the most leather, then the
+    tightest. The report says how many layouts it tried and how much of the
+    sheet the pieces take up. It takes a second or two; the dialog counts
+    the layouts as it goes.
+  * **Find the smallest sheet that takes every piece** sizes the border to
+    the layout instead: it tries strips of many widths and draws the sheet
+    round the layout that needs the least leather, the edge margin clear
+    all round, rounded up to a whole millimetre (of two sizes within half a
+    percent of each other, the squarer). The width and height become the
+    most the sheet may be — the leather you have.
+  * **Nesting again onto the same sheet.** Once a nest has drawn its sheet,
+    the next nest goes onto that sheet (its width and height fill in from
+    it). With **Leave pieces already on the sheet where they are** (on by
+    default) only the pieces off it — one you dragged away, a new one —
+    are fitted into the gaps, so a good layout stays as it was and a piece
+    dragged off goes back in. If the gaps can't take them all, the whole
+    sheet is laid out afresh, when that gets more on (the report says so).
+    Untick it to lay everything out afresh anyway. Pieces you aren't nesting
+    that lie on the sheet always stay put, and nothing is laid on them.
   * Pieces that don't fit stay where they were and are named in the
-    report. **Allow 90° rotation** can be turned off when grain or stretch
-    direction matters. Pieces are placed biggest-first; it aims for a tight,
-    sensible layout, not a mathematically perfect one — nudge afterwards if
-    you spot a better pocket.
+    report, and so are the pieces that were turned. **Allow turning
+    pieces** can be turned off when grain or stretch direction matters. It
+    aims for a tight, sensible layout, not a mathematically perfect one —
+    nudge afterwards if you spot a better pocket.
 * **Fillet / chamfer** (`6`) — with this tool active, a **radius box** and a
   **Round / Chamfer** selector appear in the top toolbar; type the radius
   (it's remembered), pick the mode, then click any corner of a polygon or

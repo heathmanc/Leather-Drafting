@@ -4,6 +4,39 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
+## Unreleased
+
+### Nest on sheet
+* **Many layouts, the best kept.** A nest used to be one pass, biggest
+  piece first, so where each piece landed hung on what went before. It
+  now makes dozens of passes — the pieces in different orders, filled row
+  by row and column by column, every piece in all four quarter turns —
+  and keeps the layout that gets the most pieces on, then the most
+  leather, then the tightest. A test set that used to get 7 of 10 pieces
+  onto its sheet now gets 9.
+* **Find the smallest sheet that takes every piece.** A new option sizes
+  the border to the layout: strips of many widths are tried and the sheet
+  is drawn round the layout that needs the least leather, to the next
+  whole millimetre. The width and height you give become the most it may
+  be.
+* **Nesting again onto the same sheet.** The next nest goes onto the sheet
+  the last one drew. Pieces already on it stay where they are and only
+  the rest are fitted into the gaps, so a piece dragged off goes back in
+  and a good layout isn't torn up. When the gaps can't take them all, the
+  whole sheet is laid out afresh, if that gets more on. Before, a piece
+  dragged off to the left or below took the sheet with it, and nesting one
+  piece ignored the pieces already on the sheet.
+* Pieces you aren't nesting that lie on the sheet stay put, and nothing is
+  laid on them.
+* The edge margin is measured from the outline to the sheet's edge. Pieces
+  used to sit half a gap further in: 9 mm from the edge for a 5 mm margin
+  and an 8 mm gap.
+* The report names the pieces that were turned, and how far, and says how
+  much of the sheet the pieces take up.
+* A change typed into the dialog just before pressing Apply (or Enter) is
+  now laid out before the layout is kept; Apply used to keep the layout
+  from before the change.
+
 ## 0.4.8 — 2026-11-15
 
 ### Printing at 1:1

@@ -2525,8 +2525,9 @@ class MainWindow(QMainWindow):
         designer.setPlaceholderText("Your name or shop")
         note = QLineEdit(s.value("pdfNote", "", type=str))
         note.setPlaceholderText("e.g. © 2026 Your Shop · for personal use only")
-        details = QCheckBox("Details page first: pieces, stitch holes, largest "
-                            "piece, leather and thread needed, scale check")
+        details = QCheckBox("Details page first: pieces to cut, stitch holes and "
+                            "spacing, leather needed, a cutting layout, scale "
+                            "check")
         details.setChecked(s.value("pdfDetails", True, type=bool))
         form.addRow("Pattern name", name)
         form.addRow("Designer", designer)
@@ -2552,8 +2553,6 @@ class MainWindow(QMainWindow):
                          designer=designer.text().strip(),
                          note=note.text().strip(),
                          details=details.isChecked(),
-                         thickness_mm=s.value("threadThickness", 3.0, type=float),
-                         tail_mm=s.value("threadTail", 150.0, type=float),
                          usable_pct=s.value("leatherUsable", 75.0, type=float))
         if paper:
             i = size.currentIndex()

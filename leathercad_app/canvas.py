@@ -2954,11 +2954,14 @@ class Canvas(QGraphicsView):
         else:  # STITCHLINE
             from leathercad.stitchline import turning_points
             seam_pts = [Vec2(p.x(), p.y()) for p in pts]
+            # the iron and holes new shapes stitch with (it used to be a fixed
+            # 3.85 mm, whatever spacing the pattern was being punched at); a
+            # seam is the stitch line itself, never inset
+            st = self._default_stitch()
+            st.enabled, st.inset, st.fit = True, 0.0, "endpoints"
             sl = StitchLine(points=seam_pts,
                             corner_points=turning_points(seam_pts),
-                            closed=False,
-                            settings=StitchSettings(pitch_mm=3.85, inset=0.0,
-                                                    fit="endpoints"))
+                            closed=False, settings=st)
             self.add_stitch_line(sl)
         self.toolFinished.emit()
 
@@ -5535,9 +5538,10 @@ class Canvas(QGraphicsView):
         from leathercad.nesting import (NestPiece, cell_for_gap, group_pieces,
                                         leather_area, nest_best, nest_smallest,
                                         sheet_packer)
+        from leathercad.pieces import on_cut_layer
         groups, _left = group_pieces(
             [it.model for it in cand], self.doc.holes, self.doc.stitch_lines,
-            getattr(self.doc, "texts", []))
+            getattr(self.doc, "texts", []), is_cut=on_cut_layer(self.doc))
         if not groups:
             return None
         existing = self._nest_sheet_shape()
@@ -7592,6 +7596,12 @@ class Canvas(QGraphicsView):
             # the angle so they come out slanting as the loose holes did
             sh.stitch.slit_angle = mirrored_slit_angle(h0.slit_angle,
                                                        sh.transform.mirror_x)
+            # and the spacing they were punched at, not a default 3.85 mm
+            # (what the details page and Properties say the piece is at)
+            from leathercad.irons import measured_pitch, nearest_pitch
+            m = measured_pitch([h.hole for h in holes])
+            if m is not None:
+                sh.stitch.pitch_mm = nearest_pitch(m)
         elif h0.hole_style != sh.stitch.hole_style:
             note = (f"the holes take this piece's {sh.stitch.hole_style} "
                     "style")

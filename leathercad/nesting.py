@@ -738,19 +738,28 @@ def nest_best(pieces: Sequence[NestPiece], sheet_w: float, sheet_h: float, *,
     return best
 
 
+def _long_way(s) -> float:
+    return max(s[2], s[3]) / max(min(s[2], s[3]), _EPS)
+
+
+def _leather_needed(s) -> float:
+    """A sheet's area, weighed for its shape: a strip longer than twice its
+    width counts a quarter more for each width past that -- a 110 x 757 mm
+    strip of a wallet's pieces is no piece of leather anyone buys."""
+    return s[2] * s[3] * (1.0 + 0.25 * max(0.0, _long_way(s) - 2.0))
+
+
 def _smaller(a, b) -> bool:
-    """Whether sheet ``a`` (x, y, w, h) beats sheet ``b``: less leather, or
-    within half a percent of it and squarer (easier to buy and handle)."""
-    area_a, area_b = a[2] * a[3], b[2] * b[3]
+    """Whether sheet ``a`` (x, y, w, h) beats sheet ``b``: less leather (see
+    ``_leather_needed``), or within half a percent of it and squarer (easier
+    to buy and handle)."""
+    area_a, area_b = _leather_needed(a), _leather_needed(b)
     if area_a < area_b * 0.995:
         return True
     if area_a > area_b * 1.005:
         return False
-
-    def long_way(s):
-        return max(s[2], s[3]) / max(min(s[2], s[3]), _EPS)
-    if abs(long_way(a) - long_way(b)) > 1e-9:
-        return long_way(a) < long_way(b)
+    if abs(_long_way(a) - _long_way(b)) > 1e-9:
+        return _long_way(a) < _long_way(b)
     return area_a < area_b - 1e-6
 
 
@@ -901,11 +910,14 @@ def _box_area(b) -> float:
     return (b[2] - b[0]) * (b[3] - b[1])
 
 
-def group_pieces(shapes, holes=(), seams=(), texts=()):
+def group_pieces(shapes, holes=(), seams=(), texts=(), is_cut=None):
     """Sort what's being nested into the groups that travel as one.
 
     * Shapes of one move-group (``Ctrl+G``) are one piece.
-    * A piece lying wholly inside another (a slot in a panel) joins it.
+    * A piece lying wholly inside another (a slot in a panel) joins it --
+      unless, given ``is_cut`` (a test: is this shape on a cut layer?), it is
+      a cut outline nearly as big as the one it lies in -- a copy of the
+      piece, a lining -- which is a piece of its own (see ``pieces``).
     * An open line that runs onto a piece (a fold or score line, even one
       drawn a little past its edges) joins the piece it crosses.
     * Loose holes, seams and lettering go with their move-group, else with
@@ -962,6 +974,16 @@ def group_pieces(shapes, holes=(), seams=(), texts=()):
         groups.remove(g)
         host_of[id(g)] = host
 
+    from .pieces import is_own_piece
+
+    def own_piece(g, host) -> bool:
+        """``g`` (inside ``host``) is a piece of its own, not a hole in it."""
+        if is_cut is None or g.ring is None or host.ring is None:
+            return False
+        if not all(is_cut(sh) for sh in g.shapes):
+            return False
+        return is_own_piece(_ring_area(g.ring), _ring_area(host.ring))
+
     # a piece fully inside another (a slot in a panel) merges into it
     for g in sorted(groups, key=lambda g: _box_area(g.bbox)):
         if g not in groups:
@@ -969,7 +991,8 @@ def group_pieces(shapes, holes=(), seams=(), texts=()):
         b = g.bbox
         host = containing(0.5 * (b[0] + b[2]), 0.5 * (b[1] + b[3]), exclude=g)
         if host is not None and host.bbox[0] <= b[0] and host.bbox[1] <= b[1] \
-                and host.bbox[2] >= b[2] and host.bbox[3] >= b[3]:
+                and host.bbox[2] >= b[2] and host.bbox[3] >= b[3] \
+                and not own_piece(g, host):
             merge(g, host)
     # an open line running onto a piece goes with it (a fold line drawn a
     # little past both edges has neither end on the piece: test along it)

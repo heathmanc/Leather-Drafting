@@ -412,7 +412,9 @@ readout says so in red: that piece wants a different size or pitch.
 **Use for new shapes** (the button at the bottom of the Stitching box) makes
 that piece's punch, pitch, inset and fit what every new shape starts with —
 now and the next time you open Stitch Hero. Set it once for the iron you
-own (say 5 mm at a 3.5 mm inset) instead of changing every new piece.
+own (say 5 mm at a 3.5 mm inset) instead of changing every new piece. A
+seam drawn with the **Stitch line** tool takes the same punch and pitch
+(it runs on the line you draw, so it has no inset).
 
 ### Perfect fit — sizes the iron walks exactly
 
@@ -941,12 +943,29 @@ Both open the same options first, remembered for next time:
   of every page, beside the page number. Tick **Details page first** for a
   cover page with:
   * squares of 50 mm and 1 inch, to check the print's scale;
+  * a **cutting layout**: every piece on the smallest piece of leather
+    they all fit on with that gap, drawn small beside the squares and
+    numbered as in the list of pieces — as **Nest on sheet** lays them out
+    on the drawing. A long thin strip is passed over for a squarer piece
+    unless it saves a lot of leather;
   * pieces to cut, stitch holes, the largest piece, the leather in the
     pieces and the leather to buy (at the hide yield set in the Job
-    estimate), the smallest piece of leather they all fit on with that gap,
-    the thread (at the Job estimate's leather thickness), the stitching
-    (spacing and hole size, per iron), and the number of pattern pages;
-  * a list of the pieces: size, stitch holes and the pages each is on.
+    estimate), the size of that piece of leather, the stitching (spacing
+    and hole size, per iron), and the number of pattern pages;
+  * a list of the pieces: how many of each to cut (copies of a piece share
+    a line), size, stitch holes and the pages they're on.
+
+  Every piece counts, copies included — even a copy left on top of the
+  original, or a lining laid on its outer: an outline inside another is a
+  piece of its own when it's nearly as big (85 % of it or more), and a hole
+  cut out of it — a slot, a thumb hole, a window, the middle of a ring —
+  when it's smaller. A piece drawn on another is printed apart from it, as
+  its own pattern piece. (A pocket drawn where it's sewn on is smaller than
+  its panel, so it reads as a hole in it, as a laser would cut it: draw
+  pockets apart from the panel.) The
+  stitching lists the irons the holes are really punched at: holes you
+  placed by hand and attached to a piece are measured, so a spacing nobody
+  punched never shows up.
 
 Every piece is printed with its **name** in it: give a piece one in
 **Properties → Name** (unnamed pieces are numbered). Several selected pieces

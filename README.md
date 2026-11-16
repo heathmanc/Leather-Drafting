@@ -166,7 +166,7 @@ edge, and use the **pin** button at the top to lock it in place. Its position
 | **Zoom / pan** | mouse wheel / middle-drag |
 | **Save / Open** | `Ctrl+S` / `Ctrl+O` (JSON project files) |
 | **Export** | SVG `Ctrl+E` or DXF — millimetre-accurate, layer-coloured. The SVG is grouped **by piece**: each piece's outline and its holes are one group (holes first), and pieces grouped with `Ctrl+G` stay together, so in LightBurn every piece arrives as its own group. The holes are LightBurn's own blue, so they land on layer C01, ahead of the red outline on C02, and are cut first. Or group it **by layer** (named holes / outline layers, for Inkscape). DXF outlines export as connected **POLYLINE**s (closed shapes carry the closed flag), so LightBurn / Illustrator import them as one contour instead of loose line segments |
-| **Print / PDF (1:1)** | **Export PDF (1:1)** and **Print** `Ctrl+P` render the pattern at **true 1:1 scale** (1 mm = 1 mm on paper). **Nested** packs the pieces onto as few pages as they'll go, at least 8 mm apart (or your gap), each piece that fits on a page printed whole on one page and labelled with its name; bigger pieces are tiled with an overlap to tape, with dashed lines and page numbers showing where each page goes. Every page has a header and footer (pattern name, designer, your copyright note, page n of N), and a **details page** lists pieces, stitch holes, the largest piece, leather and thread needed, the iron spacing and scale-check squares — ready to sell |
+| **Print / PDF (1:1)** | **Export PDF (1:1)** and **Print** `Ctrl+P` render the pattern at **true 1:1 scale** (1 mm = 1 mm on paper). **Nested** packs the pieces onto as few pages as they'll go, at least 8 mm apart (or your gap), each piece that fits on a page printed whole on one page and labelled with its name; bigger pieces are tiled with an overlap to tape, with dashed lines and page numbers showing where each page goes. Every page has a header and footer (pattern name, designer, your copyright note, page n of N), and a **details page** lists the pieces to cut (copies counted, with how many of each), stitch holes, the largest piece, the leather needed, the iron spacing really punched, scale-check squares and a **cutting layout** of every piece on one piece of leather — ready to sell |
 
 Everything is in **millimetres**, Y-up, and the canvas is WYSIWYG with the export.
 
@@ -322,6 +322,7 @@ leathercad/            pure-Python model + engine (no dependencies)
   boolean.py           union / difference / intersection on polygons
   importers.py         import SVG & DXF as editable shapes
   nesting.py           pack pattern pieces onto a sheet
+  pieces.py            which outlines are pieces and which are holes cut out of one
   estimate.py          leather-area / travel-length / cost job estimate
   thread.py            saddle-stitch thread-length estimate
   templates.py         starter documents (card holder / belt / key fob …)

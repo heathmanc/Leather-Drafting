@@ -16,7 +16,6 @@ from typing import Dict, List
 
 from .geometry import Vec2
 from .layers import CUT, SCORE, ENGRAVE
-from .offset import signed_area
 from .stitching import holes_for_shape
 from .stitchsettings import StitchSettings
 from .thread import estimate_thread
@@ -95,7 +94,7 @@ def estimate_project(doc, *, thickness_mm: float = 3.0, tail_mm: float = 150.0,
             est.engrave_mm += length
         elif role == CUT:
             est.cut_mm += length
-            if closed and len(pts) >= 4:
+            if closed and len(_ring(pts)) >= 3:      # a triangle counts
                 rings.append(_ring(pts))
         # holes carried by the shape's stitching
         res = holes_for_shape(sh, doc)
@@ -117,16 +116,14 @@ def estimate_project(doc, *, thickness_mm: float = 3.0, tail_mm: float = 150.0,
             xs.append(h.point.x)
             ys.append(h.point.y)
 
-    # A ring inside an odd number of others is a cutout (a buckle slot, a
-    # thumb hole): it isn't a piece and its area isn't leather to buy. Every
-    # other ring is a piece. Same nesting rule as the kerf compensation.
-    from .geometry import point_in_polygon
-    for i, ring in enumerate(rings):
-        sample = ring[::max(1, len(ring) // 12)]
-        depth = sum(1 for j, other in enumerate(rings) if j != i
-                    and all(point_in_polygon(p, other) for p in sample))
-        area = abs(signed_area(ring))
-        if depth % 2 == 0:
+    # A ring inside a piece is a cutout (a buckle slot, a thumb hole): it
+    # isn't a piece and its area isn't leather to buy -- unless it's nearly
+    # as big as that piece, when it's a piece of its own drawn on top (a copy
+    # of the piece, a lining). See pieces.
+    from .pieces import classify
+    piece, _parent, areas = classify(rings)
+    for is_piece, area in zip(piece, areas):
+        if is_piece:
             est.pieces += 1
             est.parts_area_mm2 += area
         else:

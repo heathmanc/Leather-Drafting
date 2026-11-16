@@ -4,6 +4,38 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
+## Unreleased
+
+### The PDF's details page
+* **Every piece to cut is counted.** A piece drawn on top of another — a
+  copy left on the original, a lining laid on its outer — was taken for a
+  hole cut out of it: it wasn't counted, its leather was taken off the
+  total, and it was printed inside the other piece. An outline inside
+  another is now a piece of its own when it's nearly as big (85 % of it or
+  more; a slot, a thumb hole, a window or a ring's middle is smaller), and
+  it's printed as its own pattern piece. The same goes for the Job
+  estimate and Nest on sheet.
+* **How many of each.** The list of pieces has a Cut column: copies of a
+  piece share a line. Unnamed copies share their number on the pattern
+  pages too.
+* **Only the irons you punched with.** Holes placed by hand and attached
+  to a piece kept a 3.85 mm spacing in its settings that nobody punched,
+  and the details page listed it. Their spacing is now measured from the
+  holes. Attaching holes sets the piece's spacing to the one they're at.
+* **A cutting layout.** Beside the scale squares, every piece is drawn on
+  the smallest piece of leather it all fits on, numbered as in the list —
+  like Nest on sheet on the drawing. A long thin strip (a wallet's pieces
+  fitted on 110 × 757 mm) is passed over for a squarer piece unless it
+  saves a lot of leather; Nest on sheet's smallest sheet does the same.
+* The thread is left off the details page.
+
+### Drawing
+* The Stitch line (seam) tool drew every seam at 3.85 mm, whatever iron
+  the pattern was punched with. A seam now takes the punch and spacing set
+  with Use for new shapes. Seams already drawn keep theirs: select one to
+  see or change it.
+* A triangle counts as a piece in the Job estimate.
+
 ## 0.4.9 — 2026-11-16
 
 ### Nest on sheet

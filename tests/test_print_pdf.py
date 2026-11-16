@@ -124,9 +124,10 @@ def test_header_footer_on_every_page_and_a_details_page_first(qapp, tmp_path):
     first = pages[0]
     for words in ("Pattern details", "Pieces to cut", "Stitch holes",
                   "Largest piece", "Leather in the pieces", "Leather to buy",
-                  "Fits on a piece of", "Thread", "3.85 mm spacing",
+                  "Fits on a piece of", "3.85 mm spacing", "Cutting layout",
                   "50 mm", "1 in", "Front panel", "Gusset"):
         assert words in first, words
+    assert "Thread" not in first                 # left out, as asked
     holes = sum(part.holes for part in plan.parts)
     assert f"Stitch holes {holes}" in first.replace("\r\n", " ").replace("\n", " ")
     # the pattern pages carry the scale check and the pieces' names

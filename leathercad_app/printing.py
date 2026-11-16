@@ -58,8 +58,6 @@ class PrintOptions:
     designer: str = ""            # header, right
     note: str = ""                # footer, left: a copyright / licence line
     details: bool = True          # a details page first
-    thickness_mm: float = 3.0     # leather stack, for the thread estimate
-    tail_mm: float = 150.0
     usable_pct: float = 75.0      # hide yield, for the leather to buy
 
     @property
@@ -86,6 +84,9 @@ class Part:
     outlines: list = field(default_factory=list)
     stitches: list = field(default_factory=list)
     pages: list = field(default_factory=list)       # pages it's printed on
+    # per stitch entry: holes put there by hand -- attached to the piece or
+    # loose -- whose settings don't say the spacing they were punched at
+    placed: list = field(default_factory=list)
 
     @property
     def holes(self) -> int:
@@ -196,11 +197,12 @@ def make_parts(doc, spacing: float = 8.0) -> List[Part]:
     lies within a gap of them. Only what's shown (visible layers) is
     printed; guides never are."""
     from leathercad.nesting import group_pieces
+    from leathercad.pieces import on_cut_layer
     outlines, stitches, out_own, st_own = collect(doc, owners=True)
     shapes = [sh for sh in doc.shapes if not getattr(sh, "construction", False)]
     groups, (lh, ls, lt) = group_pieces(
         shapes, getattr(doc, "holes", []), getattr(doc, "stitch_lines", []),
-        getattr(doc, "texts", []))
+        getattr(doc, "texts", []), is_cut=on_cut_layer(doc))
     parts: List[Part] = []
     of: dict = {}
     for g in groups:
@@ -230,14 +232,47 @@ def make_parts(doc, spacing: float = 8.0) -> List[Part]:
                 else len(pts) >= 4 and (pts[0] - pts[-1]).length() < 1e-6
         part_for(own).outlines.append((list(pts), color, closed))
     for entry, own in zip(stitches, st_own):
-        part_for(own).stitches.append(entry)
+        part = part_for(own)
+        part.stitches.append(entry)
+        part.placed.append(bool(getattr(own, "baked_holes", None))
+                           or getattr(entry[1], "pitch_mm", None) is None)
     shown = [p for p in parts if p.outlines or p.stitches]
     n = 0
+    named: dict = {}              # copies of an unnamed piece share its name
     for p in shown:
         if not p.name:
-            n += 1
-            p.name = f"Piece {n}"
+            key = _same(p)
+            if key not in named:
+                n += 1
+                named[key] = f"Piece {n}"
+            p.name = named[key]
     return shown
+
+
+def _same(part):
+    """What makes two printed pieces copies of one another: the same size
+    (either way round), outlines and holes."""
+    w, h = part.size()
+    return (round(max(w, h), 1), round(min(w, h), 1), len(part.outlines),
+            part.holes)
+
+
+def _piece_rows(parts):
+    """The pieces table: copies of a piece (same name, size and holes) on one
+    row, with how many to cut and every page they're on. Returns the rows
+    ``[part, how many, pages]`` and each part's row number (by ``id``)."""
+    rows, at, number = [], {}, {}
+    for part in parts:
+        key = (part.name,) + _same(part)
+        if key in at:
+            row = rows[at[key]]
+            row[1] += 1
+            row[2].update(part.pages)
+        else:
+            at[key] = len(rows)
+            rows.append([part, 1, set(part.pages)])
+        number[id(part)] = at[key] + 1
+    return rows, number
 
 
 # ---------------------------------------------------------------------------
@@ -597,31 +632,135 @@ def _overlap_guides(painter, D, plan_, page, page_no_of):
                          int(Qt.AlignCenter), f"over page {above}")
 
 
+def _hole_size(st) -> str:
+    style = getattr(st, "hole_style", "round")
+    if style in ("slit", "diamond"):
+        return f"{st.slit_length:g} mm {style} holes"
+    return f"Ø{st.hole_diameter:g} mm round holes"
+
+
 def _stitching_lines(parts) -> List[str]:
-    """How the pattern is stitched: one line per distinct iron spacing and
-    hole, most-used first -- what tells a maker which pricking iron to use."""
-    seen: dict = {}
+    """How the pattern is punched: one line per iron spacing and hole, most
+    holes first -- what tells a maker which pricking iron to use.
+
+    The spacing is the one the holes are really at. A piece's stitching (and
+    a seam) says its iron. Holes put there by hand -- attached to a piece, or
+    loose -- carry no spacing of their own (attached ones kept a default
+    3.85 mm that nobody punched), so theirs is measured from the holes and
+    put on the iron it matches."""
+    from leathercad.irons import measured_pitch, nearest_pitch
+    live, by_hand = [], []
     for part in parts:
-        for res, st, _c in part.stitches:
-            pitch = getattr(st, "pitch_mm", None)
-            if pitch is None or not res.count:
-                continue                          # a loose hole
-            style = getattr(st, "hole_style", "round")
-            size = (f"{st.slit_length:g} mm {style} holes"
-                    if style in ("slit", "diamond")
-                    else f"Ø{st.hole_diameter:g} mm round holes")
-            rows = ", double row" if getattr(st, "rows", 1) == 2 else ""
-            key = (round(pitch, 3), size, rows)
-            line = f"{pitch:g} mm spacing ({pitch / INCH:.3f} in), {size}{rows}"
-            seen.setdefault(key, [line, 0])[1] += res.count
+        flags = list(part.placed) + [False] * (len(part.stitches)
+                                               - len(part.placed))
+        pooled: dict = {}
+        for (res, st, _c), placed in zip(part.stitches, flags):
+            if not res.count:
+                continue
+            if placed:                        # pooled by hole, per piece
+                pooled.setdefault(_hole_size(st), [[], st])[0].extend(res.holes)
+            else:
+                live.append((res.count, st))
+        by_hand += [(holes, st) for holes, st in pooled.values()]
+    irons = {float(st.pitch_mm) for _n, st in live}
+    seen: dict = {}
+
+    def add(pitch, st, rows, n):
+        size = _hole_size(st)
+        rows = ", double row" if rows else ""
+        key = (round(pitch, 3), size, rows)
+        line = f"{pitch:g} mm spacing ({pitch / INCH:.3f} in), {size}{rows}"
+        seen.setdefault(key, [line, 0])[1] += n
+    for n, st in live:
+        add(float(st.pitch_mm), st, getattr(st, "rows", 1) == 2, n)
+    for holes, st in by_hand:
+        m = measured_pitch(holes)
+        if m is not None:                     # lone holes: no spacing to tell
+            add(nearest_pitch(m, irons), st, False, len(holes))
     return [f"{line} — {n} holes"
             for line, n in sorted(seen.values(), key=lambda v: -v[1])]
+
+
+def _cutting_layout(plan_):
+    """Every piece on the smallest piece of leather found, the gap apart: the
+    ``NestResult`` (its sheet at the origin), or None. Only the pieces --
+    loose holes, seams and lettering on no piece aren't cut from it."""
+    from leathercad.nesting import nest_smallest
+    o = plan_.opts
+    pieces = [pc for pc in _nest_pieces(plan_.parts, o)
+              if any(cl for _p, _c, cl in plan_.parts[pc.key].outlines)]
+    if not pieces:
+        return None
+    res = nest_smallest(pieces, margin=0.0, spacing=o.spacing + LINE_SLACK,
+                        budget=1.0)
+    if res.unplaced or not res.placements:
+        return None
+    return res
+
+
+def _draw_layout(painter, D, plan_, layout, number, bx, by, bw, bh):
+    """The cutting layout drawn small in the box (bx, by, bw, bh) mm: the
+    piece of leather, every piece on it, numbered as in the pieces table."""
+    _sx, _sy, sw, sh = layout.sheet
+    if sw <= 0 or sh <= 0:
+        return
+    s = min(bw / sw, bh / sh)
+    ox, oy = bx + (bw - sw * s) / 2.0, by
+
+    def M(p):                                 # sheet (Y-up) -> page (Y-down)
+        return QPointF((ox + p.x * s) * D, (oy + (sh - p.y) * s) * D)
+    edge = QPen(QColor(150, 128, 98))
+    edge.setWidthF(0.2 * D)
+    painter.setPen(edge)
+    painter.setBrush(QColor(246, 238, 224))
+    painter.drawRect(QRectF(ox * D, oy * D, sw * s * D, sh * s * D))
+    cut = QPen(QColor(60, 50, 40))
+    cut.setWidthF(0.15 * D)
+    fold = QPen(QColor(150, 150, 150))
+    fold.setWidthF(0.1 * D)
+    for pl in layout.placements:
+        part = plan_.parts[pl.key]
+        # the piece's closed outlines as one shape, so a slot in it shows as
+        # a hole (odd-even fill), then its open lines (a fold) over it
+        piece = QPainterPath()
+        piece.setFillRule(Qt.OddEvenFill)
+        lines = []
+        for pts, _color, closed in part.outlines:
+            if len(pts) < 2:
+                continue
+            path = QPainterPath(M(pl.apply(pts[0])))
+            for p in pts[1:]:
+                path.lineTo(M(pl.apply(p)))
+            if closed:
+                path.closeSubpath()
+                piece.addPath(path)
+            else:
+                lines.append(path)
+        painter.setPen(cut)
+        painter.setBrush(QColor(222, 196, 158))
+        painter.drawPath(piece)
+        painter.setPen(fold)
+        painter.setBrush(Qt.NoBrush)
+        for path in lines:
+            painter.drawPath(path)
+        b = _placed_box(part, pl)
+        n = number.get(id(part))
+        if b is None or n is None:
+            continue
+        across = min(b[2] - b[0], b[3] - b[1]) * s
+        if across < 3.0:
+            continue                          # too small to number
+        c = M(Vec2(0.5 * (b[0] + b[2]), 0.5 * (b[1] + b[3])))
+        size = max(1.6, min(3.0, across * 0.45))
+        painter.setFont(_font(D, size, bold=True))
+        painter.setPen(QColor(70, 55, 40))
+        painter.drawText(QRectF(c.x() - 10 * D, c.y() - size * D, 20 * D,
+                                2 * size * D), int(Qt.AlignCenter), f"{n}")
 
 
 def _details(painter, D, plan_, doc):
     """The first page: what the pattern is and what it takes to make."""
     from leathercad.estimate import MM2_PER_SQFT, estimate_project
-    from leathercad.nesting import smallest_sheet
     o = plan_.opts
     x, w = MARGIN_X + 2.0, o.content_w - 4.0
     y = MARGIN_TOP + 3.0
@@ -650,11 +789,22 @@ def _details(painter, D, plan_, doc):
           align=Qt.AlignHCenter)
     _text(painter, D, x + 58.0, y + 50.0 - INCH / 2 - 2.2, INCH, 6, "1 in",
           3.3, align=Qt.AlignHCenter)
+
+    # the cutting layout, beside the squares when there's room
+    table, number = _piece_rows(plan_.parts)
+    layout = _cutting_layout(plan_)
+    beside = w - 95.0 >= 55.0
+    if layout is not None and beside:
+        lx = x + 95.0
+        _text(painter, D, lx, y - 1.0, w - 95.0, 6,
+              "Cutting layout (not to scale)", 3.3, bold=True,
+              align=Qt.AlignHCenter)
+        _draw_layout(painter, D, plan_, layout, number, lx, y + 4.5,
+                     w - 95.0, 45.5)
     y += 50.0 + 6.0
 
     # the numbers
-    est = estimate_project(doc, thickness_mm=o.thickness_mm,
-                           tail_mm=o.tail_mm, usable_pct=o.usable_pct)
+    est = estimate_project(doc, usable_pct=o.usable_pct)
     rows = []
     rows.append(("Pieces to cut", f"{est.pieces or len(plan_.parts)}"))
     rows.append(("Stitch holes", f"{est.holes}"))
@@ -669,15 +819,11 @@ def _details(painter, D, plan_, doc):
                      f"{est.parts_area_mm2 / 10000.0:.1f} dm²  ({sqft:.2f} sq ft)"))
         rows.append(("Leather to buy",
                      f"about {buy:.2f} sq ft  ({o.usable_pct:g}% of a hide usable)"))
-    sheet = smallest_sheet(_nest_pieces(plan_.parts, o), o.spacing + LINE_SLACK)
-    if sheet is not None:
+    if layout is not None:
         rows.append(("Fits on a piece of",
-                     f"{_mm_in(sheet[0], sheet[1])}, pieces "
-                     f"{_num(o.spacing)} mm apart"))
-    if est.thread_mm > 0:
-        rows.append(("Thread", f"about {est.thread_mm / 1000.0:.1f} m "
-                     f"({est.thread_mm / 914.4:.1f} yd), saddle stitch "
-                     f"through {o.thickness_mm:g} mm of leather"))
+                     f"{_mm_in(layout.sheet[2], layout.sheet[3])}, pieces "
+                     f"{_num(o.spacing)} mm apart"
+                     + ("" if beside else " (layout below)")))
     stitching = _stitching_lines(plan_.parts)
     for i, line in enumerate(stitching[:3]):
         rows.append(("Stitching" if i == 0 else "", line))
@@ -703,29 +849,38 @@ def _details(painter, D, plan_, doc):
                    f"{_num(o.overlap)} mm and each overlap names the page "
                    "that joins there.", 3.0, wrap=True,
                    color=QColor(80, 80, 80)) + 2.0
+    if layout is not None and not beside and bottom - y > 50.0:
+        y += 2.0
+        y += _text(painter, D, x, y, w, 6, "Cutting layout (not to scale)",
+                   3.3, bold=True) + 1.0
+        tall = min(70.0, bottom - y - 24.0)
+        _draw_layout(painter, D, plan_, layout, number, x, y, w, tall)
+        y += tall + 2.0
 
     # the pieces
     y += 3.0
-    if y > bottom - 12 or not plan_.parts:
+    if y > bottom - 12 or not table:
         return
     y += _text(painter, D, x, y, w, 7, "Pieces", 4.6, bold=True) + 1.5
-    cols = [(0.0, 9.0, "#"), (9.0, 72.0, "Piece"), (81.0, 58.0, "Size"),
-            (139.0, 18.0, "Holes"), (157.0, max(18.0, w - 157.0), "Page")]
+    cols = [(0.0, 8.0, "#"), (8.0, 66.0, "Piece"), (74.0, 12.0, "Cut"),
+            (86.0, 56.0, "Size"), (142.0, 16.0, "Holes"),
+            (158.0, max(18.0, w - 158.0), "Page")]
     for cx, cw_, head in cols:
         _text(painter, D, x + cx, y, cw_, 6, head, 3.1, bold=True)
     y += 5.0
-    for i, part in enumerate(plan_.parts):
+    for i, (part, many, pages) in enumerate(table):
         if y > bottom - 5:
-            left = len(plan_.parts) - i
+            left = len(table) - i
             _text(painter, D, x, y, w, 6, f"… and {left} more", 3.1,
                   color=QColor(90, 90, 90))
             break
         pw, ph = part.size()
-        pages = sorted(set(part.pages))
+        pages = sorted(pages)
         where = (f"{pages[0]}" if len(pages) == 1 else
                  f"{pages[0]}–{pages[-1]}" if pages == list(range(pages[0], pages[-1] + 1))
                  else ", ".join(map(str, pages))) if pages else ""
-        cells = [f"{i + 1}", part.name, _mm_in(pw, ph), f"{part.holes}", where]
+        cells = [f"{i + 1}", part.name, f"{many}", _mm_in(pw, ph),
+                 f"{part.holes}", where]
         for (cx, cw_, _h), text in zip(cols, cells):
             _text(painter, D, x + cx, y, cw_, 6, text, 3.1)
         y += 4.6

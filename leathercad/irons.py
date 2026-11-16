@@ -78,3 +78,60 @@ def geometry_for(style: str, pitch_mm: float) -> dict:
         "slit_length": slit_len,
         "slit_angle": d["angle"],
     }
+
+
+def measured_pitch(holes, reach: float = 12.0):
+    """The spacing a row of holes was punched at, mm: for each hole the
+    distance to the nearest hole in line with it -- along its tangent, so not
+    the hole across in a second row -- and the middle value of those. None
+    when no two holes are in line within ``reach``. Each hole needs
+    ``.point`` and ``.tangent``."""
+    import math
+    pts = [(h.point.x, h.point.y) for h in holes]
+    if len(pts) < 2:
+        return None
+    grid: Dict[tuple, list] = {}
+    for k, (x, y) in enumerate(pts):
+        grid.setdefault((math.floor(x / reach), math.floor(y / reach)),
+                        []).append(k)
+    gaps = []
+    for k, h in enumerate(holes):
+        tx, ty = h.tangent.x, h.tangent.y
+        tl = math.hypot(tx, ty)
+        if tl < 1e-12:
+            continue
+        tx, ty = tx / tl, ty / tl
+        x, y = pts[k]
+        cx, cy = math.floor(x / reach), math.floor(y / reach)
+        best = None
+        for gx in (cx - 1, cx, cx + 1):
+            for gy in (cy - 1, cy, cy + 1):
+                for j in grid.get((gx, gy), ()):
+                    if j == k:
+                        continue
+                    dx, dy = pts[j][0] - x, pts[j][1] - y
+                    along = abs(dx * tx + dy * ty)
+                    across = abs(dx * ty - dy * tx)
+                    if across > 0.35 * along:
+                        continue                 # another row, not this one
+                    d = math.hypot(dx, dy)
+                    if d > 1e-6 and (best is None or d < best):
+                        best = d
+        if best is not None and best <= reach:
+            gaps.append(best)
+    if not gaps:
+        return None
+    gaps.sort()
+    return gaps[len(gaps) // 2]
+
+
+def nearest_pitch(value: float, extra=(), share: float = 0.04) -> float:
+    """A measured spacing put on the iron it was punched with: the nearest
+    standard pitch (or one of ``extra``) within ``share`` of it; otherwise
+    the value itself, to the nearest 0.05 mm."""
+    best = None
+    for p in list(STANDARD_PITCHES) + [float(e) for e in extra]:
+        if abs(value - p) <= max(0.05, share * p):
+            if best is None or abs(value - p) < abs(value - best):
+                best = p
+    return best if best is not None else round(value * 20.0) / 20.0

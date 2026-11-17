@@ -461,3 +461,50 @@ def test_random_pieces_and_fold_lines_fold_without_trouble():
 def test_letters():
     assert [fs.letter(k) for k in (0, 1, 25, 26, 27, 51, 52)] == \
         ["A", "B", "Z", "AA", "AB", "AZ", "BA"]
+
+
+def test_a_busy_outline_is_thinned_for_the_model():
+    n = 1000
+    top = [(240 * k / n, 100 + 3 * math.sin(2 * math.pi * 40 * k / n))
+           for k in range(n + 1)]
+    bot = [(240 * k / n, -3 * math.sin(2 * math.pi * 40 * k / n))
+           for k in range(n + 1)]
+    scalloped = bot + top[::-1]
+    ring = fs.model_outline(scalloped)
+    assert len(ring) <= 260
+    area = pc.area(pc.ccw(scalloped))
+    assert abs(pc.area(ring) - area) < 0.01 * area
+    lay = fs.fold_piece(scalloped, [fs.FoldLine((80, -10), (80, 110), 180, 1)])
+    assert len(lay.panels) == 2 and len(lay.cells) < 200
+    # an ordinary outline is followed as it is; a doubled point is dropped
+    assert fs.model_outline(RECT) == RECT
+    ring = fs.model_outline(RECT[::-1] + [RECT[-1]])   # the wrong way round
+    assert len(ring) == 4 and set(ring) == set(RECT) and pc.area(ring) > 0
+
+
+def test_the_hole_check_agrees_with_measuring_every_pair():
+    rng = random.Random(1)
+    holes = [(rng.uniform(2, 158), rng.uniform(2, 98), 1.0)
+             for _ in range(1500)]
+    lay = fs.fold_piece(HALF, [fs.FoldLine((80, 0), (80, 100), 180, 1)],
+                        holes=holes)
+    findings, bad = lay.lineup(tol=0.75, near=4.0)
+    assert len(findings) == 1
+    left = [(k, h) for k, h in enumerate(holes) if lay.hole_panel[k] == 0
+            and lay.hole_flat[k]]
+    right = [(k, (160 - h[0], h[1])) for k, h in enumerate(holes)
+             if lay.hole_panel[k] == 1 and lay.hole_flat[k]]
+    want = set()
+    off = lone = 0
+    for mine, theirs in ((left, right), (right, left)):
+        for k, p in mine:
+            d = min(math.hypot(p[0] - q[1][0], p[1] - q[1][1])
+                    for q in theirs)
+            if 0.75 < d <= 4.0:
+                want.add(k)
+                off += 1
+            elif d > 4.0:
+                lone += 1
+    assert bad == want and len(bad) > 100
+    assert (findings[0].off, findings[0].lone) == (off, lone)
+    assert findings[0].holes == len(left) + len(right)

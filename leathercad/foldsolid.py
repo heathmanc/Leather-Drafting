@@ -291,18 +291,39 @@ def net_regions(outlines: Sequence[Sequence[Pt]], tol: float = 0.6):
     left to right (top to bottom where they line up)."""
     polys = [pc.ccw([tuple(p) for p in o]) for o in outlines]
     regions = [(p, [pc.OUTLINE] * len(p)) for p in polys]
+    boxes = [pc.bounds(p) for p in polys]
+    # each panel's corners by the square they are in, to find a corner of
+    # one panel at a corner of another without trying every pair
+    grids = []
+    for poly in polys:
+        grid: Dict[tuple, list] = {}
+        for k, q in enumerate(poly):
+            grid.setdefault((math.floor(q[0]), math.floor(q[1])), []).append(k)
+        grids.append(grid)
+
+    def corners_at(j, q):
+        gx, gy = math.floor(q[0]), math.floor(q[1])
+        return [k for ix in (gx - 1, gx, gx + 1) for iy in (gy - 1, gy, gy + 1)
+                for k in grids[j].get((ix, iy), ())
+                if math.dist(polys[j][k], q) < tol]
+
     shared = []
     for i in range(len(polys)):
+        A, ba = polys[i], boxes[i]
         for j in range(i + 1, len(polys)):
-            A, B = polys[i], polys[j]
+            B, bb = polys[j], boxes[j]
+            if (ba[0] > bb[2] + tol or bb[0] > ba[2] + tol
+                    or ba[1] > bb[3] + tol or bb[1] > ba[3] + tol):
+                continue
             found = None
             for ka in range(len(A)):
                 a0, a1 = A[ka], A[(ka + 1) % len(A)]
-                if math.dist(a0, a1) < 1e-6:
+                if math.dist(a0, a1) < 1.0:   # too short an edge to fold on
                     continue
-                for kb in range(len(B)):
-                    b0, b1 = B[kb], B[(kb + 1) % len(B)]
-                    if math.dist(a0, b1) < tol and math.dist(a1, b0) < tol:
+                # the same edge of B runs the other way: it ends at a0
+                for k1 in corners_at(j, a0):
+                    kb = (k1 - 1) % len(B)
+                    if math.dist(a1, B[kb]) < tol:
                         found = (ka, kb)
                         break
                 if found:
@@ -1008,9 +1029,18 @@ class Layout:
                     continue                   # not sewn together here
                 off, lone, worst = 0, 0, 0.0
                 for mine, theirs in ((over_i, over_j), (over_j, over_i)):
+                    grid: Dict[tuple, list] = {}       # their holes, by square
+                    for _k2, q2 in theirs:
+                        grid.setdefault((math.floor(q2[0] / near),
+                                         math.floor(q2[1] / near)),
+                                        []).append(q2)
                     for k, p in mine:
-                        d = min(math.hypot(p[0] - q2[0], p[1] - q2[1])
-                                for _k2, q2 in theirs)
+                        gx, gy = math.floor(p[0] / near), math.floor(p[1] / near)
+                        d = min((math.hypot(p[0] - q2[0], p[1] - q2[1])
+                                 for ix in (gx - 1, gx, gx + 1)
+                                 for iy in (gy - 1, gy, gy + 1)
+                                 for q2 in grid.get((ix, iy), ())),
+                                default=2.0 * near)
                         if d <= tol:
                             continue
                         if d <= near:
@@ -1189,6 +1219,23 @@ def sharp_corners(outline: Sequence[Pt], degrees: float = 35.0):
     return out
 
 
+def model_outline(outline: Sequence[Pt], smooth: float = 0.03,
+                  most: int = 260) -> List[Pt]:
+    """An outline made ready for the model: counter-clockwise, no doubled
+    points, and a flattened curve thinned to within ``smooth`` mm -- or a
+    little further for an outline so busy (a scalloped edge, a traced one)
+    that it would still have more than ``most`` points, up to 0.5 mm."""
+    ring, _f = pc.tidy([(float(p[0]), float(p[1])) for p in outline],
+                       [0] * len(outline), 1e-6)
+    ring = pc.ccw(ring)
+    out = pc.simplify(ring, smooth)
+    tol = max(smooth, 0.03)
+    while len(out) > most and tol < 0.5:
+        tol *= 1.6
+        out = pc.simplify(ring, min(tol, 0.5))
+    return out
+
+
 def fold_piece(outline: Sequence[Pt], folds: Sequence[FoldLine], *,
                thickness: float = 2.0, radius: float = 0.0,
                base: Optional[int] = None, holes=(), cutouts=(),
@@ -1202,9 +1249,7 @@ def fold_piece(outline: Sequence[Pt], folds: Sequence[FoldLine], *,
     that stays still (the biggest if not given). ``detail`` is the degrees
     of bend to a strip, ``smooth`` how closely (mm) a curved outline is
     followed."""
-    ring, _f = pc.tidy([(float(p[0]), float(p[1])) for p in outline],
-                       [0] * len(outline), 1e-6)
-    ring = pc.simplify(pc.ccw(ring), smooth)
+    ring = model_outline(outline, smooth)
     regions, lines = split_piece(ring, folds)
     return Layout(regions, folds, lines, thickness=thickness, radius=radius,
                   base=base, holes=holes, cutouts=cutouts, detail=detail,
@@ -1217,11 +1262,7 @@ def fold_net(outlines: Sequence[Sequence[Pt]], *, angle: float = 90.0,
              smooth: float = 0.03) -> Layout:
     """Lay out panels drawn edge to edge (a paper net) for folding along
     the edges they share, every one by ``angle`` the same way."""
-    rings = []
-    for o in outlines:
-        ring, _f = pc.tidy([(float(p[0]), float(p[1])) for p in o],
-                           [0] * len(o), 1e-6)
-        rings.append(pc.simplify(pc.ccw(ring), smooth))
+    rings = [model_outline(o, smooth) for o in outlines]
     regions, folds, lines = net_regions(rings)
     for f in folds:
         f.angle, f.direction = angle, direction

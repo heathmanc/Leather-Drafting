@@ -589,7 +589,10 @@ class FoldView(QWidget):
                 self.update()
             if fold >= 0 and self.layout_ is not None:
                 f = self.layout_.folds[fold]
-                tip = f"Fold {f.label}" + (f" ({f.name})" if f.name else "")
+                step = self.layout_.steps[fold]
+                tip = f"Fold {f.label}" + (f", {f.name}" if f.name else "") \
+                    + (f": to the {'front' if f.direction >= 0 else 'back'}, "
+                       f"{f.angle:g}°, step {step}" if step else ": left flat")
                 QToolTip.showText(e.globalPosition().toPoint(), tip, self)
             return
         px, py, button, shift = self._press

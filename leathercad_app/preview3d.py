@@ -50,6 +50,7 @@ class Foldable:
         self.cutouts = []
         self.lines = []            # the fold-line shapes across it
         self.outlines = []         # a net: its panels
+        self.rings = []            # ... thinned for the model
         self.holes = []
         self.area = 0.0
 
@@ -162,13 +163,19 @@ def foldables(doc) -> List[Foldable]:
     if not rings:
         return []
     is_piece, parent, areas = classify(rings)
-    holes = document_holes(doc) if rings else []
+    found = []
+
+    def holes():                   # read once, and only if something folds
+        if not found:
+            found.append(document_holes(doc))
+        return found[0]
+
     out: List[Foldable] = []
     plain = []                      # pieces no fold line crosses
     for i, sh in enumerate(owners):
         if not is_piece[i]:
             continue
-        ring = pc.ccw(_ring(rings[i]))
+        ring = fs.model_outline(_ring(rings[i]))    # thinned once, here
         across = [s for s in folds
                   if fs.split_piece(ring, fold_lines([s]))[1][0] is not None]
         if not across:
@@ -181,7 +188,7 @@ def foldables(doc) -> List[Foldable]:
         f.cutouts = [_ring(rings[j]) for j in range(len(rings))
                      if parent[j] == i and not is_piece[j]]
         f.lines = across
-        f.holes = _holes_in(holes, ring)
+        f.holes = _holes_in(holes(), ring)
         f.area = areas[i]
         out.append(f)
     out.sort(key=lambda f: -f.area)
@@ -195,7 +202,7 @@ def foldables(doc) -> List[Foldable]:
                                        f"edges")
             f.outlines = [outlines[k] for k in joined]
             for o in f.outlines:
-                f.holes += _holes_in(holes, o)
+                f.holes += _holes_in(holes(), o)
             out.append(f)
     return out
 
@@ -507,7 +514,9 @@ class FoldPreviewDialog(QDialog):
         elif item.kind == "piece":
             self.folds = fold_lines(item.lines)
         else:
-            regions, folds, lines = fs.net_regions(item.outlines)
+            rings = [fs.model_outline(o) for o in item.outlines]
+            regions, folds, lines = fs.net_regions(rings)
+            item.rings = rings
             for f in folds:                    # a net's settings live here
                 prev = old.get(f.label)
                 if prev is not None:
@@ -740,7 +749,7 @@ class FoldPreviewDialog(QDialog):
         else:
             regions, lines = self._net
             sharp = set()
-            for o in item.outlines:
+            for o in item.rings:
                 sharp |= fs.sharp_corners(o)
             layout = fs.Layout(regions, self.folds, lines, sharp=sharp, **kw)
         was_end = self.layout_ is not None and self.layout_.n_steps > 0 \
@@ -947,7 +956,8 @@ class FoldPreviewDialog(QDialog):
         self._writing = True
         try:
             for it in list(getattr(self.canvas, "_live", ())):
-                if getattr(it, "model", None) in changed:
+                model = getattr(it, "model", None)
+                if any(model is sh for sh in changed):
                     self.canvas.refresh_item(it)
         finally:
             self._writing = False

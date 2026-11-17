@@ -36,6 +36,22 @@ _FLAT_FRAME: Frame = ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
 
 
 @dataclass
+class Lineup:
+    """Two panels that lie on each other when folded, with stitch holes in
+    both where they overlap: ``holes`` of them in all, ``off`` that come
+    down near a hole of the other panel but not on it (``worst`` the
+    furthest of those, mm), and ``lone`` with no hole of the other panel
+    anywhere near."""
+
+    a: int
+    b: int
+    holes: int
+    off: int
+    worst: float
+    lone: int
+
+
+@dataclass
 class FoldLine:
     """A fold across the piece, from ``a`` to ``b`` (pattern mm).
 
@@ -272,11 +288,12 @@ def find_hinges(regions, lines) -> List[Hinge]:
 
 
 def net_regions(outlines: Sequence[Sequence[Pt]], tol: float = 0.6):
-    """Panels drawn edge to edge, as a paper net: ``(regions, folds)`` with
-    a fold along every edge two panels share whole."""
+    """Panels drawn edge to edge, as a paper net: ``(regions, folds,
+    lines)`` with a fold along every edge two panels share whole, lettered
+    left to right (top to bottom where they line up)."""
     polys = [pc.ccw([tuple(p) for p in o]) for o in outlines]
     regions = [(p, [pc.OUTLINE] * len(p)) for p in polys]
-    folds: List[FoldLine] = []
+    shared = []
     for i in range(len(polys)):
         for j in range(i + 1, len(polys)):
             A, B = polys[i], polys[j]
@@ -293,17 +310,34 @@ def net_regions(outlines: Sequence[Sequence[Pt]], tol: float = 0.6):
                 if found:
                     break
             if found:
-                ka, kb = found
-                fi = len(folds)
-                folds.append(FoldLine(A[ka], A[(ka + 1) % len(A)]))
-                regions[i][1][ka] = fi
-                regions[j][1][kb] = fi
+                shared.append((i, found[0], j, found[1]))
+
+    def where(item):
+        i, ka = item[0], item[1]
+        a, b = polys[i][ka], polys[i][(ka + 1) % len(polys[i])]
+        return (round(0.5 * (a[0] + b[0]), 1), -round(0.5 * (a[1] + b[1]), 1))
+
+    shared.sort(key=where)
+    folds: List[FoldLine] = []
     lines = []
-    for f in folds:
-        ln = math.dist(f.a, f.b)
-        lines.append((f.a, ((f.b[0] - f.a[0]) / ln, (f.b[1] - f.a[1]) / ln),
-                      ln))
+    for fi, (i, ka, j, kb) in enumerate(shared):
+        a, b = polys[i][ka], polys[i][(ka + 1) % len(polys[i])]
+        folds.append(FoldLine(a, b, label=letter(fi)))
+        regions[i][1][ka] = fi
+        regions[j][1][kb] = fi
+        ln = math.dist(a, b)
+        lines.append((a, ((b[0] - a[0]) / ln, (b[1] - a[1]) / ln), ln))
     return regions, folds, lines
+
+
+def letter(k: int) -> str:
+    """A, B ... Z, AA, AB ..."""
+    out = ""
+    k += 1
+    while k:
+        k, r = divmod(k - 1, 26)
+        out = chr(65 + r) + out
+    return out
 
 
 def fold_steps(folds: Sequence[FoldLine], live: Sequence[bool]) -> List[int]:
@@ -922,16 +956,19 @@ class Layout:
 
     # -- do the stitch holes meet? --------------------------------------------
 
-    def lineup(self, tol: float = 0.75):
-        """Check the folded piece: where panels come to lie on each other,
-        does every stitch hole of one meet a hole of the other?
+    def lineup(self, tol: float = 0.75, near: float = 4.0):
+        """Check the folded piece: where two panels come to lie on each
+        other and both have stitch holes there, do the holes meet?
 
-        Returns ``(findings, bad)``: a line of text for each pair of panels
-        lying together, and the holes (indices) with no partner within
-        ``tol`` mm."""
+        Returns ``(findings, bad)``: a ``Lineup`` for each such pair of
+        panels, and the holes (indices) that come down within ``near`` mm
+        of a hole on the other panel but more than ``tol`` mm off it --
+        the ones that were meant to meet and don't. A hole with nothing
+        near it on the other panel is counted (``lone``) but not marked:
+        a flap lies over stitching it isn't sewn to."""
         t = self.thickness
         frames = self.frames([1.0] * len(self.folds))
-        findings: List[str] = []
+        findings: List[Lineup] = []
         bad = set()
         reach = max(3.0 * t, 3.0) + 0.01
         n = len(self.panels)
@@ -965,31 +1002,24 @@ class Layout:
                        for k in pj.holes if self.hole_flat[k]]
                 over_i = [(k, p) for k, p in hi_ if pc.inside(p, out_j)]
                 over_j = [(k, p) for k, p in hj_ if pc.inside(p, pi.pts)]
-                if not over_i and not over_j:
-                    continue
-                worst, missed = 0.0, 0
+                if not over_i or not over_j:
+                    continue                   # not sewn together here
+                off, lone, worst = 0, 0, 0.0
                 for mine, theirs in ((over_i, over_j), (over_j, over_i)):
                     for k, p in mine:
-                        d = min((math.hypot(p[0] - q2[0], p[1] - q2[1])
-                                 for _k2, q2 in theirs), default=1e9)
-                        if d > tol:
+                        d = min(math.hypot(p[0] - q2[0], p[1] - q2[1])
+                                for _k2, q2 in theirs)
+                        if d <= tol:
+                            continue
+                        if d <= near:
                             bad.add(k)
-                            missed += 1
-                            if d < 1e8:
-                                worst = max(worst, d)
-                both = f"Panels {pi.number} and {pj.number}"
-                total = len(over_i) + len(over_j)
-                if not missed:
-                    findings.append(f"{both}: all {len(over_i)} holes meet.")
-                elif not over_i or not over_j:
-                    findings.append(
-                        f"{both}: {total} holes with nothing to meet on the "
-                        f"other panel.")
-                else:
-                    msg = f"{both}: {missed} of {total} holes miss"
-                    if worst > 0.0:
-                        msg += f", by up to {worst:.1f} mm"
-                    findings.append(msg + ".")
+                            off += 1
+                            worst = max(worst, d)
+                        else:
+                            lone += 1
+                findings.append(Lineup(pi.number, pj.number,
+                                       len(over_i) + len(over_j), off, worst,
+                                       lone))
         return findings, bad
 
 
@@ -1181,29 +1211,20 @@ def fold_piece(outline: Sequence[Pt], folds: Sequence[FoldLine], *,
                   sharp=sharp_corners(ring))
 
 
-def fold_net(outlines: Sequence[Sequence[Pt]], *, thickness: float = 2.0,
-             radius: float = 0.0, base: Optional[int] = None, holes=(),
-             detail: float = 15.0, smooth: float = 0.03,
-             settings: Optional[Sequence[FoldLine]] = None) -> Layout:
+def fold_net(outlines: Sequence[Sequence[Pt]], *, angle: float = 90.0,
+             direction: int = 1, thickness: float = 2.0, radius: float = 0.0,
+             base: Optional[int] = None, holes=(), detail: float = 15.0,
+             smooth: float = 0.03) -> Layout:
     """Lay out panels drawn edge to edge (a paper net) for folding along
-    the edges they share. ``settings`` -- fold lines from an earlier call,
-    angles and all -- are kept for the edges still there."""
+    the edges they share, every one by ``angle`` the same way."""
     rings = []
     for o in outlines:
         ring, _f = pc.tidy([(float(p[0]), float(p[1])) for p in o],
                            [0] * len(o), 1e-6)
         rings.append(pc.simplify(pc.ccw(ring), smooth))
     regions, folds, lines = net_regions(rings)
-    if settings:
-        for f in folds:
-            for old in settings:
-                if (math.dist(f.a, old.a) < 0.6 and math.dist(f.b, old.b) < 0.6
-                        ) or (math.dist(f.a, old.b) < 0.6
-                              and math.dist(f.b, old.a) < 0.6):
-                    f.angle, f.direction = old.angle, old.direction
-                    f.radius, f.order, f.active = (old.radius, old.order,
-                                                   old.active)
-                    break
+    for f in folds:
+        f.angle, f.direction = angle, direction
     sharp = set()
     for r in rings:
         sharp |= sharp_corners(r)

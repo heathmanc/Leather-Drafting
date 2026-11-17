@@ -98,8 +98,13 @@ class Shape:
     # Fold line: when ``fold_dir`` is set ('front' or 'back'), this line is a
     # score/crease the 3D preview folds a single piece about, by ``fold_angle``
     # degrees (180 = folded flat). Empty ``fold_dir`` -> an ordinary line.
+    # ``fold_order`` is its step in the folding (0 = not set: after the folds
+    # that have one); ``fold_radius`` the inside radius of its bend in mm
+    # (below 0 = the radius chosen for the whole piece).
     fold_dir: str = ""
     fold_angle: float = 90.0
+    fold_order: int = 0
+    fold_radius: float = -1.0
 
     @property
     def is_fold_line(self) -> bool:
@@ -171,7 +176,7 @@ class Shape:
 _NON_GEOMETRY_FIELDS = frozenset({
     "name", "transform", "layer", "stitch", "opacity", "shape_id", "kind",
     "baked_holes", "stitch_edges", "hardware", "keepout", "construction",
-    "group_id", "fold_dir", "fold_angle",
+    "group_id", "fold_dir", "fold_angle", "fold_order", "fold_radius",
 })
 
 
@@ -287,7 +292,8 @@ def copy_shape_attrs(src, dst, *, holes: bool = False):
     frame). Returns ``dst``."""
     import copy
     for name in ("name", "layer", "opacity", "construction", "group_id",
-                 "fold_dir", "fold_angle", "hardware", "keepout"):
+                 "fold_dir", "fold_angle", "fold_order", "fold_radius",
+                 "hardware", "keepout"):
         if hasattr(src, name):
             setattr(dst, name, getattr(src, name))
     dst.stitch = copy.deepcopy(src.stitch)

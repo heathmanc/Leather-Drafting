@@ -95,6 +95,10 @@ def _shape_to_dict(sh: Shape) -> dict:
         "fold_dir": sh.fold_dir,
         "fold_angle": sh.fold_angle,
     }
+    if sh.fold_order:
+        base["fold_order"] = int(sh.fold_order)
+    if sh.fold_radius >= 0.0:
+        base["fold_radius"] = float(sh.fold_radius)
     if sh.stitch_edges is not None:
         base["stitch_edges"] = [bool(e) for e in sh.stitch_edges]
     if sh.hardware:
@@ -152,6 +156,8 @@ def _shape_from_dict(d: dict) -> Shape:
         group_id=d.get("group_id"),
         fold_dir=d.get("fold_dir", ""),
         fold_angle=d.get("fold_angle", 90.0),
+        fold_order=int(d.get("fold_order", 0) or 0),
+        fold_radius=float(d.get("fold_radius", -1.0)),
         stitch_edges=([bool(e) for e in d["stitch_edges"]]
                       if d.get("stitch_edges") is not None else None),
         hardware=str(d.get("hardware", "") or ""),

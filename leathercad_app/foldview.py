@@ -374,7 +374,9 @@ def render(layout, t: float, w: int = 900, h: int = 620, *, dark: bool = False,
 class FoldView(QWidget):
     """The model on screen. Drag to turn it, drag with the right or middle
     button (or Shift) to slide it, roll the wheel to zoom, double-click to
-    fit it back in. Clicking a fold line picks that fold."""
+    fit it back in. Clicking a fold line picks that fold. The view keeps
+    the model centred and filling it as it folds, until it is zoomed or
+    slid by hand."""
 
     foldPicked = Signal(int)          # the fold clicked on, -1 for none
 
@@ -389,6 +391,7 @@ class FoldView(QWidget):
         self.selected = -1
         self.hover = -1
         self.labels = True
+        self.follow = True            # keep the model filling the view
         self.caption = ""
         self._drawn: List[tuple] = []
         self._press = None
@@ -413,10 +416,9 @@ class FoldView(QWidget):
         else:
             self.t = min(max(self.t, 0.0), float(layout.n_steps))
             if first or refit:
-                self.cam.centre, self.cam.radius = layout.extent()
-                self.cam.pan_x = self.cam.pan_y = 0.0
-                self.cam.zoom = 1.0
+                self.follow = True
             self.scene = Scene(layout, self.t, self.bad)
+            self._frame()
         self.update()
 
     def set_time(self, t: float):
@@ -427,7 +429,20 @@ class FoldView(QWidget):
             return
         self.t = t
         self.scene = Scene(self.layout_, t, self.bad)
+        self._frame()
         self.update()
+
+    def _frame(self):
+        """While the view follows the model, keep it centred and filling
+        the view as it folds (it stops once you zoom or slide it yourself;
+        Fit starts it again)."""
+        if not self.follow or self.layout_ is None or self.scene is None:
+            return
+        lo, hi = self.layout_.bounds3(self.scene.fractions)
+        self.cam.centre = tuple(0.5 * (a + b) for a, b in zip(lo, hi))
+        self.cam.radius = max(5.0, 0.5 * math.dist(lo, hi))
+        self.cam.pan_x = self.cam.pan_y = 0.0
+        self.cam.zoom = 1.0
 
     def set_selected(self, fold: int):
         if fold != self.selected:
@@ -450,13 +465,8 @@ class FoldView(QWidget):
 
     def fit(self):
         """Bring the model, as it stands, back to fill the view."""
-        if self.layout_ is None or self.scene is None:
-            return
-        lo, hi = self.layout_.bounds3(self.scene.fractions)
-        self.cam.centre = tuple(0.5 * (a + b) for a, b in zip(lo, hi))
-        self.cam.radius = max(5.0, 0.5 * math.dist(lo, hi))
-        self.cam.pan_x = self.cam.pan_y = 0.0
-        self.cam.zoom = 1.0
+        self.follow = True
+        self._frame()
         self.update()
 
     # -- painting -------------------------------------------------------------
@@ -467,8 +477,9 @@ class FoldView(QWidget):
         if self.scene is None:
             p.fillRect(0, 0, w, h, self.look.ground)
             p.setPen(self.look.faint)
-            p.drawText(self.rect(), Qt.AlignCenter, self.caption
-                       or "Nothing to fold")
+            p.drawText(self.rect().adjusted(40, 40, -40, -40),
+                       Qt.AlignCenter | Qt.TextWordWrap,
+                       self.caption or "Nothing to fold")
             p.end()
             return
         self._drawn = paint_scene(p, w, h, self.scene, self.cam, self.look,
@@ -552,6 +563,7 @@ class FoldView(QWidget):
             self.cam.yaw -= dx * 0.01
             self.cam.pitch = min(math.pi, max(0.0, self.cam.pitch - dy * 0.01))
         else:
+            self.follow = False
             self.cam.pan_x += dx
             self.cam.pan_y += dy
         self.update()
@@ -584,4 +596,5 @@ class FoldView(QWidget):
         self.cam.pan_x = mx - (mx - self.cam.pan_x) * k
         self.cam.pan_y = my - (my - self.cam.pan_y) * k
         self.cam.zoom = new
+        self.follow = False
         self.update()

@@ -1245,29 +1245,32 @@ class MainWindow(QMainWindow):
                                 self.canvas.seam_mate_report())
 
     def _assembly_preview(self):
-        """3D preview. If the piece has fold/score lines, fold that SINGLE piece
-        about them (numbered panels, front/back, leather thickness + bend
-        allowance). Otherwise fold separate panels that share edges (a net)."""
-        from .preview3d import (build_from_document, Preview3DDialog,
-                                build_scored_from_document, ScoredFoldDialog)
-        dark = getattr(self.canvas, "dark", False)
-        outline, folds, fold_shapes = build_scored_from_document(self.doc)
-        if fold_shapes and outline:
-            self._assembly_dlg = ScoredFoldDialog(self.doc, dark=dark, parent=self,
-                                                  canvas=self.canvas)
-            self._assembly_dlg.show()
-            return
-        panels, hinges = build_from_document(self.doc)
-        if not panels:
+        """The 3D assembly preview: fold a piece along its fold lines (or panels
+        drawn edge to edge along the edges they share), with the leather's
+        thickness and bend radius, each fold in its turn."""
+        from .preview3d import FoldPreviewDialog, foldables
+        dlg = getattr(self, "_assembly_dlg", None)
+        try:
+            if dlg is not None and dlg.isVisible():
+                dlg.reload()
+                dlg.raise_()
+                dlg.activateWindow()
+                return
+        except RuntimeError:                 # closed and freed
+            pass
+        if not foldables(self.doc):
             QMessageBox.information(
                 self, "3D assembly preview",
                 "Nothing to fold yet.\n\n"
-                "• Single piece: draw a closed outline, add a line across it, "
-                "right-click the line → “Mark as fold line”, then reopen this.\n"
-                "• Multiple panels: panels that share an edge in the flat layout "
-                "fold up automatically.")
+                "• One piece: draw a line across it where it folds, "
+                "right-click the line → “Mark as fold line”, then open "
+                "this again.\n"
+                "• Several panels: draw them edge to edge, and they fold "
+                "along the edges they share.")
             return
-        dlg = Preview3DDialog(panels, hinges, dark=dark, parent=self)
+        dlg = FoldPreviewDialog(canvas=self.canvas, parent=self,
+                                dark=getattr(self.canvas, "dark", False),
+                                settings=self._settings())
         dlg.show()
         self._assembly_dlg = dlg          # keep a ref so it isn't GC'd
 

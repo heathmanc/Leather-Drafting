@@ -538,8 +538,20 @@ def test_marks_and_fold_lines_stand_off_every_leather(qapp):
                 assert math.dist(_rgb(mark), leather) > 100, (name, kind)
             assert to_front != to_back
             assert look.fold_colour(_Way(1), False, kind) == look.idle
-        # the line along an edge of the leather shows on its cut edge
-        assert math.dist(_rgb(look.edge), look.wall) > 60
+        # the line along an edge of the leather is darker than its cut
+        # edge, and shows on its face
+        cut = QColor(*look.wall)
+        assert look.edge.lightness() < cut.lightness()
+        assert math.dist(_rgb(look.edge), look.front) > 40
+        assert math.dist(_rgb(fv.Look(True, name).edge), look.front) > 40
+    # ... but in a dark window a dark leather has a lighter line round it,
+    # which keeps the piece off the ground
+    for name, lighter in (("Black", True), ("Navy", True),
+                          ("Dark brown", True), ("Tan", False),
+                          ("Natural", False)):
+        dim = fv.Look(True, name)
+        assert (dim.edge.lightness() > QColor(*dim.wall).lightness()) \
+            == lighter, name
     # a dark leather takes light marks, a pale one dark marks
     assert fv.Look(leather="Black").is_dark(fv.FRONT)
     assert fv.Look(leather="Black").ink(fv.FRONT).lightness() > 150

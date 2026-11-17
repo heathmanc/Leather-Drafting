@@ -186,11 +186,12 @@ class Look:
         self.text = QColor(232, 232, 236) if dark else QColor(40, 40, 46)
         self.faint = QColor(150, 152, 160) if dark else QColor(110, 112, 120)
         self.front, self.back, self.wall = LEATHERS[self.leather]
-        # the line along an edge of the leather: darker than the cut edge,
-        # or for a leather too dark for that to show, a little lighter
+        # the line along an edge of the leather: darker than the cut edge
+        # -- but lighter for a dark leather in a dark window, where a darker
+        # line would lose the piece against the ground
         w = self.wall
-        self.edge = QColor(*(int(c * 0.5) for c in w)) if _lum(w) > 70 \
-            else QColor(*(min(255, int(c + 58)) for c in w))
+        self.edge = QColor(*(min(255, int(c + 58)) for c in w)) \
+            if dark and _lum(w) <= 70 else QColor(*(int(c * 0.5) for c in w))
         self.bad = QColor(226, 38, 38)
         self.cut = QColor(52, 54, 60) if dark else QColor(120, 122, 130)
         self.idle = QColor(128, 128, 136)            # a fold that isn't made

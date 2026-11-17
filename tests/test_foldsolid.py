@@ -309,7 +309,8 @@ def test_a_bend_is_an_arc_of_the_radius_asked_for():
 
 
 def test_holes_and_cutouts_ride_on_the_faces():
-    holes = [(40, 50, 1.0), (120, 50, 1.2), (80.2, 30, 1.0)]   # one in the bend
+    # the third hole is in the bend
+    holes = [(40, 50, 1.0), (120, 50, 1.2), (80.2, 30, 1.0)]
     slot = [(20, 20), (60, 20), (60, 24), (20, 24)]
     lay = fs.fold_piece(HALF, [fs.FoldLine((80, 0), (80, 100), 180, 1)],
                         holes=holes, cutouts=[slot])

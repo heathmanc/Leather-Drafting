@@ -317,9 +317,10 @@ def _triangles(pts: Sequence[Pt]) -> List[Tuple[int, int, int]]:
             if ((px == ax and py == ay) or (px == bx and py == by)
                     or (px == cx and py == cy)):
                 continue                      # the same spot as a corner
-            if ((bx - ax) * (py - ay) - (by - ay) * (px - ax) >= -1e-12
-                    and (cx - bx) * (py - by) - (cy - by) * (px - bx) >= -1e-12
-                    and (ax - cx) * (py - cy) - (ay - cy) * (px - cx) >= -1e-12):
+            tol = -1e-12
+            if ((bx - ax) * (py - ay) - (by - ay) * (px - ax) >= tol
+                    and (cx - bx) * (py - by) - (cy - by) * (px - bx) >= tol
+                    and (ax - cx) * (py - cy) - (ay - cy) * (px - cx) >= tol):
                 return True
         return False
 

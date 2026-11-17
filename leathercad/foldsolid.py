@@ -789,8 +789,9 @@ class Layout:
             M = 2 * m
             for j in range(M + 1):
                 if phi < 1e-9:
-                    mid = (a0[0] + cc[0] * w * j / M, a0[1] + cc[1] * w * j / M,
-                           a0[2] + cc[2] * w * j / M)
+                    along = w * j / M
+                    mid = (a0[0] + cc[0] * along, a0[1] + cc[1] * along,
+                           a0[2] + cc[2] * along)
                     nn = n
                 else:
                     al = phi * j / M
@@ -1056,7 +1057,8 @@ class Layout:
                                          math.floor(q2[1] / near)),
                                         []).append(q2)
                     for k, p in mine:
-                        gx, gy = math.floor(p[0] / near), math.floor(p[1] / near)
+                        gx = math.floor(p[0] / near)
+                        gy = math.floor(p[1] / near)
                         d = min((math.hypot(p[0] - q2[0], p[1] - q2[1])
                                  for ix in (gx - 1, gx, gx + 1)
                                  for iy in (gy - 1, gy, gy + 1)

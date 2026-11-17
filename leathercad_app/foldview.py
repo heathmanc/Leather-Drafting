@@ -15,7 +15,7 @@ lettered, and the panels numbered.
 from __future__ import annotations
 
 import math
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Tuple
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (QBrush, QColor, QFont, QImage, QPainter, QPen,
@@ -93,7 +93,8 @@ class Camera:
         and out of it towards the eye."""
         cy, sy = math.cos(self.yaw), math.sin(self.yaw)
         cp, sp = math.cos(self.pitch), math.sin(self.pitch)
-        return ((cy, sy, 0.0), (-cp * sy, cp * cy, sp), (sp * sy, -sp * cy, cp))
+        return ((cy, sy, 0.0), (-cp * sy, cp * cy, sp),
+                (sp * sy, -sp * cy, cp))
 
     def scale(self, w: float, h: float) -> float:
         return self.zoom * 0.46 * max(40.0, min(w, h)) / max(self.radius, 1e-6)
@@ -246,9 +247,10 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                                                             else 1.0))
                         dot.setCapStyle(Qt.RoundCap)
                         p.setPen(dot)
-                        p.drawPoints(QPolygonF([QPointF(
-                            ox + ax * x + ay * y + az * z,
-                            oy + bx * x + by * y + bz * z) for x, y, z in geo]))
+                        p.drawPoints(QPolygonF([
+                            QPointF(ox + ax * x + ay * y + az * z,
+                                    oy + bx * x + by * y + bz * z)
+                            for x, y, z in geo]))
                     elif dk == LINE:
                         (x, y, z), (x2, y2, z2) = geo
                         p.setPen(marks.get(style, edge))
@@ -259,9 +261,10 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                     elif dk == POLY:
                         p.setPen(Qt.NoPen)
                         p.setBrush(cut)
-                        p.drawPolygon(QPolygonF([QPointF(
-                            ox + ax * x + ay * y + az * z,
-                            oy + bx * x + by * y + bz * z) for x, y, z in geo]))
+                        p.drawPolygon(QPolygonF([
+                            QPointF(ox + ax * x + ay * y + az * z,
+                                    oy + bx * x + by * y + bz * z)
+                            for x, y, z in geo]))
 
     def spot(q):
         return (ox + ax * q[0] + ay * q[1] + az * q[2],
@@ -298,7 +301,8 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                     if k < pieces:
                         t = (k + 0.5) / pieces
                         clear = not _hidden(
-                            (q[0] + (r[0] - q[0]) * t, q[1] + (r[1] - q[1]) * t,
+                            (q[0] + (r[0] - q[0]) * t,
+                             q[1] + (r[1] - q[1]) * t,
                              q[2] + (r[2] - q[2]) * t), discs, eye, m)
                     if clear and start is None:
                         start = k

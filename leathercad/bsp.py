@@ -109,7 +109,8 @@ def _split_decals(decals, plane, eps):
     front, back = [], []
     for kind, geo, style in decals:
         if kind == DOTS:
-            f = [p for p in geo if nx * p[0] + ny * p[1] + nz * p[2] - d >= 0.0]
+            f = [p for p in geo
+                 if nx * p[0] + ny * p[1] + nz * p[2] - d >= 0.0]
             if len(f) == len(geo):
                 front.append((kind, geo, style))
             elif not f:
@@ -154,7 +155,8 @@ def _split_decals(decals, plane, eps):
                         bp.append(a)
                     if (da > 0.0 and db < 0.0) or (da < 0.0 and db > 0.0):
                         t = da / (da - db)
-                        m = (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t,
+                        m = (a[0] + (b[0] - a[0]) * t,
+                             a[1] + (b[1] - a[1]) * t,
                              a[2] + (b[2] - a[2]) * t)
                         fp.append(m)
                         bp.append(m)

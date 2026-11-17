@@ -4,7 +4,7 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
-## Unreleased
+## 0.4.12 — 2026-11-17
 
 ### The 3D assembly preview, rebuilt
 * **Solid leather.** The piece folds as leather with its real thickness:

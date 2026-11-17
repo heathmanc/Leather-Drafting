@@ -113,7 +113,10 @@ jobs:
     # a single fat app that runs natively on BOTH Intel and Apple Silicon.
     # This needs a fat interpreter (python.org universal2, installed below) and
     # PySide6's universal2 wheels; the result is unsigned.
-    runs-on: macos-14
+    # macos-latest, not a pinned image: macos-14 was retired too, and a job
+    # pinned to a retired image is cancelled at once ("The configuration
+    # 'macos-14-arm64-us-default' is not supported") without building.
+    runs-on: macos-latest
     env:
       # python.org ships a genuine universal2 CPython; actions/setup-python
       # only has thin per-arch builds, which can't produce a fat app.

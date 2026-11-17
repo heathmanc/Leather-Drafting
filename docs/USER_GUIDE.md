@@ -566,7 +566,80 @@ as fold line**), select the piece and choose **Edit → Fold allowance…**.
 Give it the thickness (and an inside radius for a rolled edge) and the
 flap side slides away from the fold by the allowance, taking any holes,
 seams and hardware on it along; the fold line moves to the middle of the
-bend zone. The 3D fold preview uses the same allowance.
+bend zone. The 3D assembly preview bends the same length of leather into
+each fold.
+
+### Folding it up in 3D
+
+**View → 3D assembly preview…** (`Ctrl+Shift+3`) folds a piece along its
+fold lines and shows it as solid leather, so you can see what a pattern
+makes before you cut it. Mark each crease first: draw a line across the
+piece where it folds, right-click it → **Mark as fold line**. The line
+needn't reach the edges — a fold always runs right across the leather it's
+drawn on.
+
+![The 3D assembly preview: a one-piece wallet part folded](fold_preview.png)
+
+The view shows the leather at its real thickness, with rounded bends: its
+**front** (the side the pattern is drawn on) tan, its **back** pale. Every
+fold line is drawn on it and lettered — **solid blue** if it folds to the
+front, **dashed magenta** to the back — and the panels between the folds
+are numbered. Drag to turn the piece, right-drag (or Shift-drag) to slide
+it, roll the wheel to zoom; **Fit** or a double-click brings it back. Click
+a fold line to choose its row in the table: it lights up through whatever
+is folded over it.
+
+Each fold line has a row:
+
+| | |
+|---|---|
+| **Fold** | its letter and name. Untick it to leave that fold flat for now |
+| **Step** | when it folds: 1 first. Give two folds the same step and they fold together. **▲ Earlier** and **▼ Later** move the chosen fold a step |
+| **Folds to** | **Front**: the front faces of the leather come together. **Back**: the backs do. **Flip** swaps it |
+| **Angle** | how far: 90° stands a panel up, 180° lays it flat on the next |
+| **Radius** | the inside radius of this bend. **Auto** uses the piece's Bend radius (step down past 0, or type `auto`, to go back to it) |
+| **Leather used** | the length of leather the bend takes up |
+
+Above the table, **Leather thickness** and **Bend radius** are for the
+whole piece — a bend radius of 0 is a sharp crease, and the leather still
+takes half its thickness to get round — and **Stays still** chooses the
+panel the rest folds about.
+
+**The order matters.** A fold that closes flat over leather folded in
+before it has to go round that leather, so it bends at a bigger radius and
+takes more of the piece. The preview works that out from the steps, shows
+it in the Radius column (*Auto (1 mm)*) and says which fold goes round
+what. Swap the steps of a wallet's two flaps and the other one takes the
+outside.
+
+Under the view, the buttons and the slider fold the piece up a step at a
+time, or play it through. With the view clicked: `Space` plays, `←` `→`
+step, `Home` and `End` jump to flat and folded. The view keeps the piece
+centred as it closes up, until you zoom or slide it yourself.
+
+Below the table the preview reports:
+
+* **Leather the bends take** — each bend is *angle × (inside radius + ½
+  thickness)* of leather, half from each side of its fold line. It's the
+  sum [Fold allowance](#fold-allowance) adds to a piece drawn at its
+  finished size.
+* **Folds too close together** for the bends they need.
+* **Stitch holes** — where two panels come to lie on each other and both
+  have holes there, whether the holes meet. Holes that come down near a
+  partner but not on it are drawn **red**, with how far out they are; a
+  hole with nothing near it on the other panel is only counted (a flap
+  lies over stitching it isn't sewn to).
+
+What you set here — step, direction, angle, radius — is kept on the fold
+lines and saved with the drawing; a run of changes is one **Undo** in the
+main window. You can leave the preview open while you draw: it follows the
+drawing. When several pieces have fold lines, **Piece** chooses which to
+fold (it opens on the one that's selected).
+
+With no fold lines, panels drawn edge to edge fold along the edges they
+share, like a paper net (what you set for a net lasts while the preview is
+open). Folds that cross are folded one after the other, as you would by
+hand; the layers inside the second fold are shown cut along it.
 
 ### Generators
 
@@ -1105,6 +1178,7 @@ what the **Stitch line** tool is for.
 | *(Edit menu)* | Snap to perfect fit: every gap exactly the pitch |
 | `Ctrl+Shift+R` | Array (grid / circular) |
 | `Ctrl+Shift+N` | Nest on sheet |
+| `Ctrl+Shift+3` | 3D assembly preview |
 | `Ctrl+Shift+P` | Parameters |
 | `Ctrl+M` | Make back piece (mirror) |
 | `Shift+H` / `Shift+V` | Flip horizontal / vertical in place |

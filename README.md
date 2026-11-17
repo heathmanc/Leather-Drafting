@@ -255,12 +255,15 @@ Beyond drawing and stitching, Stitch Hero covers the rest of a real bench workfl
 | **Hardware library** | rivets, snaps, Chicago screws, Sam Browne studs, magnetic snaps, eyelets, buckle slots, turn locks and ring footprints in the Parts dock — each placed with the cut it needs and a **stitch keep-out** the seam flows round |
 | **Group rotate / scale / flip** | one rotate grip for a group or multi-selection; Arrange → Rotate 90°/180°/by…, Scale…, Move by…, Flip horizontal / vertical, Mirror across selected line; arrow-key nudge |
 | **Units** | View → Units → Inches shows and takes every length in inches (stored in mm); type `10mm` to enter millimetres |
+| **3D assembly preview** | *View → 3D assembly preview*: fold a piece along its fold lines as **solid leather** — real thickness and rounded bends, front and back in different colours, fold lines coloured by direction and lettered. A table sets each fold's **step, direction, angle and radius**; a fold that closes over earlier layers bends at the radius it needs to go round them. Step or play through the folding, and see which **stitch holes** that should meet don't |
 | **Fold allowance** | Edit → Fold allowance… lengthens a piece across its fold lines by angle × (radius + ½ thickness) |
 | **Generators** | strap / belt, box and curved gussets, bifold wallet, key tab, hemmed pocket — plus card pocket stacks and zipper openings |
 | **Export options** | outlines / holes / lettering, selection only, SVG grouped by piece or by layer; arcs and curves export as true arcs (SVG `A`/`C`, DXF bulges) |
 | **Edit several at once** | select several pieces; only the fields you change are written to all of them · Layers panel **Lock** |
 | **Dark theme** | A full dark UI for late-night bench sessions (*View → Dark theme*) |
 | **Autosave & recovery** | Work is autosaved and offered back after an unexpected quit |
+
+![3D assembly preview: a one-piece wallet part folding up](docs/fold_preview.png)
 
 ## Scripting API (no GUI needed)
 
@@ -329,11 +332,17 @@ leathercad/            pure-Python model + engine (no dependencies)
   generators.py        parametric part generators (card pockets, zippers)
   text.py              engrave lettering baked to paths
   dimension.py         dimension annotations that track shapes
+  folds.py             fold allowance: lengthen a piece across its fold lines
+  polycut.py           cut a polygon along a line, convex parts (for folding)
+  foldsolid.py         fold a piece as solid leather: thickness, bends, folding order
+  bsp.py               back-to-front order of the folded model, for painting
 leathercad_app/        PySide6 desktop app
   canvas.py            mm-accurate Y-up QGraphicsView, tools, grid, zoom/pan, tracing underlay
   items.py             shape/seam graphics items with live hole rendering
   panels.py            properties + layers docks
   partspanel.py        parts-library dock
+  foldview.py          the 3D view of a folded piece
+  preview3d.py         3D assembly preview dialog (fold-line table, stepping)
   theme.py             light / dark themes
   robustness.py        autosave + crash recovery
   mainwindow.py        window, toolbar, menus, export wiring

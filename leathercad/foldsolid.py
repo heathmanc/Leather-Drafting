@@ -20,8 +20,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import polycut as pc
-from .bsp import BACK, DOTS, FRONT, INNER, LINE, POLY, WALL, Cell, Face, \
-    plane_of
+from .bsp import BACK, DOTS, FRONT, INNER, POLY, WALL, Cell, Face, plane_of
 
 Pt = Tuple[float, float]
 P3 = Tuple[float, float, float]
@@ -119,7 +118,7 @@ class _Cell2:
 
     __slots__ = ("pts", "flags", "panel", "hinge", "strip", "place", "area",
                  "box", "edges", "edges_rev", "sides", "tag", "dots",
-                 "lines", "polys")
+                 "polys")
 
     def __init__(self, pts, flags, panel):
         self.pts = pts
@@ -131,7 +130,6 @@ class _Cell2:
         self.area = pc.area(pts)
         self.box = pc.bounds(pts)
         self.dots = []            # (x, y, diameter, hole index)
-        self.lines = []           # (fold, p, q)
         self.polys = []           # rings of points
 
 
@@ -664,12 +662,6 @@ class Layout:
         by_panel: Dict[int, List[_Cell2]] = {}
         for c in cells:
             by_panel.setdefault(c.panel, []).append(c)
-        # the fold lines themselves, drawn on both faces of the leather
-        for c in cells:
-            n = len(c.pts)
-            for k in range(n):
-                if c.flags[k] >= 0:
-                    c.lines.append((c.flags[k], c.pts[k], c.pts[(k + 1) % n]))
         # stitch holes go on the cell they are in
         self.hole_panel = [-1] * len(self.holes)
         self.hole_flat = [False] * len(self.holes)
@@ -878,12 +870,22 @@ class Layout:
     # -- marks for the view ---------------------------------------------------
 
     def fold_marks(self, fractions: Sequence[float]):
-        """Each fold line as it lies on the model: ``{fold: [(p, q, p', q')]}``
-        with ``p``-``q`` on the front face and ``p'``-``q'`` on the back,
-        one entry for every stretch of the fold."""
+        """Each fold line as it lies on the model: ``{fold: [(p, q, p', q',
+        n)]}`` with ``p``-``q`` on the front face of the leather, ``p'``-
+        ``q'`` on the back and ``n`` the normal out of the front there, one
+        entry for every stretch of the fold (the middle of its bend)."""
         frames = self.frames(fractions)
         ht = 0.5 * self.thickness
         out: Dict[int, list] = {}
+        for h in self.hinges:
+            if h.tree:
+                continue
+            # a stretch cut free by folds that cross: along its panel's edge
+            a, e, _ln = self.lines[h.fold]
+            fr = frames[h.left]
+            ends = [place(fr, (a[0] + k * e[0], a[1] + k * e[1]), lift)
+                    for lift in (ht, -ht) for k in (h.lo, h.hi)]
+            out.setdefault(h.fold, []).append(tuple(ends) + (fr[3],))
         for h in self.tree:
             f = self.folds[h.fold]
             w = self.used[h.fold]
@@ -1108,13 +1110,11 @@ def _cut_zone(flat: List[pc.Poly], h: Hinge, side: float, half: float,
 
 def _decals(c: _Cell2, to3d, bad):
     """The marks on one face of a cell, placed by ``to3d``."""
-    if not (c.dots or c.lines or c.polys):
+    if not (c.dots or c.polys):
         return None
     out = []
     for ring in c.polys:
         out.append((POLY, [to3d(p) for p in ring], "cut"))
-    for fold, p, q in c.lines:
-        out.append((LINE, (to3d(p), to3d(q)), fold))
     if c.dots:
         groups: Dict[tuple, list] = {}
         for x, y, dia, k in c.dots:

@@ -4,6 +4,40 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
+## Unreleased
+
+### The 3D assembly preview, rebuilt
+* **Solid leather.** The piece folds as leather with its real thickness:
+  bends are rounded, layers lie a thickness apart, and the front (the side
+  you draw on) and the back are different colours. It's drawn right from
+  every side — layers, standing flaps and all; the old view sorted flat
+  panels by distance and often drew them in the wrong order.
+* **Fold lines you can see.** Each is drawn on the leather and lettered,
+  solid blue if it folds to the front and dashed magenta to the back, and
+  the panels are numbered. Click a fold line to choose it: it lights up
+  through whatever is folded over it. A fold line no longer has to be
+  drawn exactly edge to edge to count, and folds that cross now fold.
+* **A row for each fold line** — the step it folds at, the way it folds,
+  how far and how tightly — instead of a row for each panel. Folds with
+  the same step fold together; Earlier, Later and Flip work on the chosen
+  fold; untick one to leave it flat.
+* **Thickness and bend radius work.** They change the model, not just a
+  number under it: the layers move apart, the bends open out, and each
+  bend's **Leather used** follows — angle × (inside radius + ½ thickness),
+  the sum Fold allowance adds. A fold can have a radius of its own.
+* **The order of folding matters.** A fold that closes over leather folded
+  in before it bends at the radius it needs to go round that leather, and
+  the preview says which fold goes round what.
+* **Step through it.** Fold a step at a time, drag the slider, or play it;
+  the view follows the piece as it closes up.
+* **Stitch holes that should meet and don't** are drawn red, with how far
+  out they are.
+* **Saved with the drawing.** Step, direction, angle and radius are kept on
+  the fold lines; a run of changes is one Undo in the main window, and the
+  preview follows the drawing while it's open.
+* Choose which piece to fold when several have fold lines (it opens on the
+  selected one). Panels drawn edge to edge still fold up as a net.
+
 ## 0.4.11 — 2026-11-17
 
 ### The PDF's details page

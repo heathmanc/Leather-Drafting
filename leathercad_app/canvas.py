@@ -2624,7 +2624,7 @@ class Canvas(QGraphicsView):
         a_join.setEnabled(len(shapes) >= 2)
         a_offset = menu.addAction("Offset / seam allowance…")
         a_offset.setEnabled(bool(shapes))
-        # mark an open line as a fold/score line for the 3D single-piece fold
+        # mark an open line as a fold/score line for the 3D assembly preview
         line_like = (len(shapes) == 1
                      and not shapes[0].model.local_path().closed)
         is_fold = line_like and shapes[0].model.is_fold_line
@@ -4440,8 +4440,9 @@ class Canvas(QGraphicsView):
             self.commitRequested.emit()
 
     def toggle_fold_line(self, item) -> None:
-        """Mark / unmark an open line as a fold (score) line for the 3D
-        single-piece fold. A fold line defaults to a 90° front fold."""
+        """Mark / unmark an open line as a fold (score) line, which the 3D
+        assembly preview folds the piece about. A fold line starts as a
+        90° fold to the front."""
         m = item.model
         if m.is_fold_line:
             m.fold_dir = ""
@@ -4451,8 +4452,8 @@ class Canvas(QGraphicsView):
                 m.fold_angle = 90.0
         self.refresh_item(item)
         self.statusMessage.emit(
-            "Marked as fold line — open the 3D single-piece fold to fold it"
-            if m.is_fold_line else "Fold line unmarked")
+            "Marked as fold line — View → 3D assembly preview folds the "
+            "piece along it" if m.is_fold_line else "Fold line unmarked")
         self.commitRequested.emit()
 
     def seam_mate_report(self) -> str:

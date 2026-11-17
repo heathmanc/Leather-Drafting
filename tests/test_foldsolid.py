@@ -235,6 +235,8 @@ def test_folds_that_cross_fold_one_after_the_other():
     lay = fs.fold_piece(square, folds)
     assert len(lay.panels) == 4 and len(lay.hinges) == 4
     assert len(lay.tree) == 3                 # the ring is cut at one hinge
+    marks = lay.fold_marks([1.0, 1.0])        # every stretch still marked
+    assert len(marks[0]) == 2 and len(marks[1]) == 2
     assert sorted(_heights(lay)) == [0.0, 2.0, 4.0, 6.0]
     assert _near(lay.radius, [0.0, 2.0])        # B goes round 2 layers
 
@@ -306,7 +308,7 @@ def test_a_bend_is_an_arc_of_the_radius_asked_for():
     assert inside == {r}
 
 
-def test_holes_cutouts_and_fold_lines_ride_on_the_faces():
+def test_holes_and_cutouts_ride_on_the_faces():
     holes = [(40, 50, 1.0), (120, 50, 1.2), (80.2, 30, 1.0)]   # one in the bend
     slot = [(20, 20), (60, 20), (60, 24), (20, 24)]
     lay = fs.fold_piece(HALF, [fs.FoldLine((80, 0), (80, 100), 180, 1)],
@@ -316,8 +318,7 @@ def test_holes_cutouts_and_fold_lines_ride_on_the_faces():
     # (folded with no inside radius, the inside of the bend closes to a
     # line: the hole in the bend shows on the outside only)
     for t, on_faces in ((0.0, 6), (1.0, 5)):
-        dots = lines = polys = 0
-        marked = 0
+        dots = polys = marked = 0
         for c in lay.solid(lay.fractions(t), bad=[1]):
             for f in c.faces:
                 for kind, geo, style in f.decals or ():
@@ -325,13 +326,11 @@ def test_holes_cutouts_and_fold_lines_ride_on_the_faces():
                     if kind == bsp.DOTS:
                         dots += len(geo)
                         marked += len(geo) if style[1] else 0
-                    elif kind == bsp.LINE:
-                        lines += 1
-                        assert style == 0
                     else:
+                        assert kind == bsp.POLY
                         polys += 1
         assert dots == on_faces and marked == 2    # on front and back
-        assert polys == 2 and lines >= 2
+        assert polys == 2
     # flat, a hole sits right over its place in the pattern
     spots = {tuple(round(v, 6) for v in p)
              for c in lay.solid([0.0]) for f in c.faces

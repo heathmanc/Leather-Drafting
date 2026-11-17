@@ -23,7 +23,7 @@ from PySide6.QtGui import (QBrush, QColor, QFont, QImage, QPainter, QPen,
 from PySide6.QtWidgets import QToolTip, QWidget
 
 from leathercad import bsp
-from leathercad.bsp import BACK, DOTS, FRONT, INNER, LINE, POLY
+from leathercad.bsp import BACK, DOTS, FRONT, INNER, POLY
 
 _LEVELS = 24                      # shades of each colour
 
@@ -125,17 +125,24 @@ class Scene:
         self.panels = layout.panel_marks(self.fractions)
 
 
-def _hidden(pt, order, eye, m, reach=1e-3) -> bool:
+def _discs(order, m):
+    """Each cell's circle on the screen: ``(x, y, radius squared, cell)``."""
+    ox, ax, ay, az, oy, bx, by, bz = m
+    s2 = ax * ax + ay * ay + az * az              # (pixels per mm) squared
+    return [(ox + ax * c.cx + ay * c.cy + az * c.cz,
+             oy + bx * c.cx + by * c.cy + bz * c.cz, c.rad * c.rad * s2, c)
+            for c in order]
+
+
+def _hidden(pt, discs, eye, m, reach=1e-3) -> bool:
     """Whether something of the model lies between ``pt`` and the eye."""
     ox, ax, ay, az, oy, bx, by, bz = m
     ex, ey, ez = eye
-    sx = ox + ax * pt[0] + ay * pt[1] + az * pt[2]
-    sy = oy + bx * pt[0] + by * pt[1] + bz * pt[2]
-    s2 = ax * ax + ay * ay + az * az              # (pixels per mm) squared
-    for cell in order:
-        cx = ox + ax * cell.cx + ay * cell.cy + az * cell.cz
-        cy = oy + bx * cell.cx + by * cell.cy + bz * cell.cz
-        if (cx - sx) ** 2 + (cy - sy) ** 2 > cell.rad * cell.rad * s2:
+    px, py, pz = pt
+    sx = ox + ax * px + ay * py + az * pz
+    sy = oy + bx * px + by * py + bz * pz
+    for cx, cy, r2, cell in discs:
+        if (cx - sx) ** 2 + (cy - sy) ** 2 > r2:
             continue
         for f in cell.faces:
             if f.kind == INNER:
@@ -145,22 +152,24 @@ def _hidden(pt, order, eye, m, reach=1e-3) -> bool:
             if facing <= 1e-6:
                 continue
             # how far towards the eye the face's plane is from the point
-            if (d - nx * pt[0] - ny * pt[1] - nz * pt[2]) / facing <= reach:
+            if (d - nx * px - ny * py - nz * pz) / facing <= reach:
                 continue
-            pts = [(ox + ax * x + ay * y + az * z, oy + bx * x + by * y + bz * z)
-                   for x, y, z in f.pts]
+            x0, y0, z0 = f.pts[-1]
+            u0 = ox + ax * x0 + ay * y0 + az * z0
+            v0 = oy + bx * x0 + by * y0 + bz * z0
             inside = True
-            x0, y0 = pts[-1]
             sign = 0.0
-            for x1, y1 in pts:
-                c = (x1 - x0) * (sy - y0) - (y1 - y0) * (sx - x0)
+            for x1, y1, z1 in f.pts:
+                u1 = ox + ax * x1 + ay * y1 + az * z1
+                v1 = oy + bx * x1 + by * y1 + bz * z1
+                c = (u1 - u0) * (sy - v0) - (v1 - v0) * (sx - u0)
                 if c != 0.0:
                     if sign == 0.0:
                         sign = c
                     elif (c > 0.0) != (sign > 0.0):
                         inside = False
                         break
-                x0, y0 = x1, y1
+                u0, v0 = u1, v1
             if inside:
                 return True
     return False
@@ -190,12 +199,6 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
 
     edge = QPen(look.edge, 1.0)
     edge.setCosmetic(True)
-    fold_pens = []
-    for i, f in enumerate(layout.folds):
-        pen = QPen(look.fold_colour(f, bool(layout.steps[i])), 2.2)
-        pen.setCosmetic(True)
-        pen.setCapStyle(Qt.RoundCap)
-        fold_pens.append(pen)
     cut = QBrush(look.cut)
     top = _LEVELS - 1
     shade = look.shade
@@ -242,13 +245,6 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                         p.drawPoints(QPolygonF([QPointF(
                             ox + ax * x + ay * y + az * z,
                             oy + bx * x + by * y + bz * z) for x, y, z in geo]))
-                    elif dk == LINE:
-                        (x, y, z), (x2, y2, z2) = geo
-                        p.setPen(fold_pens[style])
-                        p.drawLine(QPointF(ox + ax * x + ay * y + az * z,
-                                           oy + bx * x + by * y + bz * z),
-                                   QPointF(ox + ax * x2 + ay * y2 + az * z2,
-                                           oy + bx * x2 + by * y2 + bz * z2))
                     elif dk == POLY:
                         p.setPen(Qt.NoPen)
                         p.setBrush(cut)
@@ -260,31 +256,68 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
         return (ox + ax * q[0] + ay * q[1] + az * q[2],
                 oy + bx * q[0] + by * q[1] + bz * q[2])
 
-    # the fold lines again, for picking, and the chosen one shown through
-    # whatever lies over it
+    # The fold lines go on last, over the leather they lie on: drawn with
+    # the faces, the next strip of the bend painted half of each away. A
+    # line shows on a face turned towards the eye, wherever nothing stands
+    # in front of it; the chosen fold is lit through whatever does.
+    discs = _discs(order, m)
     drawn = []
+    pieces = 8
     for fi, marks in scene.folds.items():
-        for a, b, a2, b2, _nn in marks:
-            for q, r in ((a, b), (a2, b2)):
+        fold = layout.folds[fi]
+        pen = fold_pen(look, fold, bool(layout.steps[fi]))
+        for a, b, a2, b2, nn in marks:
+            facing = nn[0] * ex + nn[1] * ey + nn[2] * ez
+            for q, r, side in ((a, b, facing), (a2, b2, -facing)):
                 (x0, y0), (x1, y1) = spot(q), spot(r)
                 drawn.append((fi, x0, y0, x1, y1))
                 if fi == selected or fi == hover:
                     glow = QColor(look.pick)
                     glow.setAlpha(150 if fi == selected else 90)
-                    pen = QPen(glow, 7.0 if fi == selected else 5.0)
-                    pen.setCapStyle(Qt.RoundCap)
-                    p.setPen(pen)
+                    halo = QPen(glow, 7.0 if fi == selected else 5.0)
+                    halo.setCapStyle(Qt.RoundCap)
+                    p.setPen(halo)
                     p.drawLine(QPointF(x0, y0), QPointF(x1, y1))
-                    core = QPen(look.fold_colour(layout.folds[fi],
-                                                 bool(layout.steps[fi])), 1.6)
-                    p.setPen(core)
-                    p.drawLine(QPointF(x0, y0), QPointF(x1, y1))
+                if side <= 0.02:
+                    continue                   # that face is turned away
+                start = None
+                p.setPen(pen)
+                for k in range(pieces + 1):
+                    clear = False
+                    if k < pieces:
+                        t = (k + 0.5) / pieces
+                        clear = not _hidden(
+                            (q[0] + (r[0] - q[0]) * t, q[1] + (r[1] - q[1]) * t,
+                             q[2] + (r[2] - q[2]) * t), discs, eye, m)
+                    if clear and start is None:
+                        start = k
+                    elif not clear and start is not None:
+                        t0, t1 = start / pieces, k / pieces
+                        p.drawLine(QPointF(x0 + (x1 - x0) * t0,
+                                           y0 + (y1 - y0) * t0),
+                                   QPointF(x0 + (x1 - x0) * t1,
+                                           y0 + (y1 - y0) * t1))
+                        start = None
     if labels:
-        _paint_labels(p, scene, look, order, eye, m, selected)
+        _paint_labels(p, scene, look, discs, eye, m, selected)
     return drawn
 
 
-def _paint_labels(p, scene, look, order, eye, m, selected):
+def fold_pen(look: Look, fold, live: bool) -> QPen:
+    """The line a fold is drawn with: solid to the front, dashed to the
+    back, dotted grey for one that isn't folded."""
+    pen = QPen(look.fold_colour(fold, live), 2.2)
+    pen.setCosmetic(True)
+    if not live:
+        pen.setStyle(Qt.DotLine)
+    elif fold.direction < 0:
+        pen.setDashPattern([4.0, 2.5])
+    else:
+        pen.setCapStyle(Qt.RoundCap)
+    return pen
+
+
+def _paint_labels(p, scene, look, discs, eye, m, selected):
     layout = scene.layout
     ox, ax, ay, az, oy, bx, by, bz = m
     ex, ey, ez = eye
@@ -303,7 +336,7 @@ def _paint_labels(p, scene, look, order, eye, m, selected):
         if abs(facing) < 0.08:
             continue
         at = front if facing > 0.0 else back
-        if _hidden(at, order, eye, m):
+        if _hidden(at, discs, eye, m):
             continue
         c = spot(at)
         box = QRectF(c.x() - 14, c.y() - 10, 28, 20)
@@ -331,7 +364,7 @@ def _paint_labels(p, scene, look, order, eye, m, selected):
         if facing < 0.0:
             mids.reverse()
         at, ghost = None, False
-        if abs(facing) >= 0.05 and not _hidden(mids[0], order, eye, m):
+        if abs(facing) >= 0.05 and not _hidden(mids[0], discs, eye, m):
             at = mids[0]
         elif fi == selected:
             at, ghost = mids[0], True          # out of sight: shown faintly
@@ -369,6 +402,13 @@ def render(layout, t: float, w: int = 900, h: int = 620, *, dark: bool = False,
                 labels=labels, selected=selected)
     p.end()
     return img
+
+
+class _Way:
+    """A fold direction on its own, for the legend."""
+
+    def __init__(self, direction):
+        self.direction = direction
 
 
 class FoldView(QWidget):
@@ -509,14 +549,13 @@ class FoldView(QWidget):
             p.setPen(look.faint)
             p.drawText(QPointF(x + 18, y), text)
             x += 18 + fm.horizontalAdvance(text) + 16
-        for colour, text in ((look.to_front, "folds to the front"),
-                             (look.to_back, "folds to the back")):
-            pen = QPen(colour, 2.2)
-            p.setPen(pen)
-            p.drawLine(QPointF(x, y - 4), QPointF(x + 18, y - 4))
+        for way, text in ((1, "folds to the front"),
+                          (-1, "folds to the back")):
+            p.setPen(fold_pen(look, _Way(way), True))
+            p.drawLine(QPointF(x, y - 4), QPointF(x + 22, y - 4))
             p.setPen(look.faint)
-            p.drawText(QPointF(x + 23, y), text)
-            x += 23 + fm.horizontalAdvance(text) + 16
+            p.drawText(QPointF(x + 27, y), text)
+            x += 27 + fm.horizontalAdvance(text) + 16
 
     # -- the mouse ------------------------------------------------------------
 

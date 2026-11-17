@@ -1335,7 +1335,7 @@ class ShapeItem(QGraphicsItem):
         # blue (so a highlighted arc/line reads clearly, not just a bounding box)
         if getattr(self.model, "is_fold_line", False):
             # a score / fold line: dash-dot magenta so it reads as a crease, not
-            # a cut edge (it drives the 3D single-piece fold)
+            # a cut edge (the 3D assembly preview folds the piece about it)
             pen = QPen(QColor(30, 140, 255) if selected else QColor(200, 60, 170))
             pen.setStyle(Qt.DashDotLine)
         elif getattr(self.model, "construction", False):

@@ -567,6 +567,59 @@ def test_small_copies_not_asked_for_in_a_long_while_are_thrown_away(
 
 # -- the PDF, the folder, deleting -------------------------------------------
 
+def test_a_question_takes_the_answer_that_is_clicked(qapp, tmp_path):
+    """The other tests answer the window's questions for it. This one has
+    the real box come up and presses its buttons: Cancel is no, closing
+    the box is no, and Cancel is what Enter presses."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QMessageBox
+    from leathercad_app.librarywindow import LibraryWindow, Thumbs
+    win = LibraryWindow(root=tmp_path / "lib", thumbs=Thumbs(tmp_path / "t"))
+    seen = []
+
+    def ask(label, *question):
+        """Ask, and press the button called ``label`` when the box is up
+        (or close the box, if it has no such button)."""
+        def press():
+            box = QApplication.activeModalWidget()
+            if not isinstance(box, QMessageBox):
+                return
+            seen.append((box.text(), box.defaultButton().text(),
+                         sorted(b.text().replace("&", "")
+                                for b in box.buttons())))
+            for b in box.buttons():
+                if b.text().replace("&", "") == label:
+                    b.click()
+                    return
+            box.reject()                       # (as Esc, or its close box)
+
+        def give_up():                         # the press went astray
+            box = QApplication.activeModalWidget()
+            if box is not None:
+                box.reject()
+
+        guard = QTimer()
+        guard.setSingleShot(True)
+        guard.timeout.connect(give_up)
+        guard.start(5000)
+        QTimer.singleShot(0, press)
+        try:
+            return win._ask(*question)
+        finally:
+            guard.stop()
+
+    try:
+        assert ask("Delete", "Delete entry", "Delete it?", "Delete") is True
+        assert ask("Cancel", "Delete entry", "Delete it?", "Delete") is False
+        assert ask("no such", "Delete entry", "Delete it?", "Delete") is False
+        assert ask("OK", "Library", "Go on?") is True
+        assert seen[0] == ("Delete it?", "Cancel", ["Cancel", "Delete"])
+        assert seen[3][1:] == ("Cancel", ["Cancel", "OK"])
+        assert len(seen) == 4
+    finally:
+        win.close()
+
+
 def test_a_pdf_is_attached_opened_and_removed(qapp, tmp_path):
     shelf = Library(tmp_path / "lib")
     item = shelf.add("Wallet")

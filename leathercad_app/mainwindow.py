@@ -1782,8 +1782,9 @@ class MainWindow(QMainWindow):
         hint = QLabel("Packs the selected pieces (or everything, if nothing "
                       "is selected) onto one sheet of leather, using their "
                       "real outlines, trying many layouts and keeping the "
-                      "best. Grouped shapes and anything on a piece (slots, "
-                      "holes, seams, lettering) travel with it. The layout "
+                      "best. Anything on a piece (slots, holes, seams, "
+                      "lettering) travels with it; pieces that overlap, or "
+                      "share a group, are laid out apart. The layout "
                       "shows on the drawing as you change the settings; "
                       "Apply keeps it, Cancel puts everything back.")
         hint.setWordWrap(True)

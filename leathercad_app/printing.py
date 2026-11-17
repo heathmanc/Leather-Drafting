@@ -197,12 +197,13 @@ def make_parts(doc, spacing: float = 8.0) -> List[Part]:
     lies within a gap of them. Only what's shown (visible layers) is
     printed; guides never are."""
     from leathercad.nesting import group_pieces
-    from leathercad.pieces import on_cut_layer
+    from leathercad.pieces import closes, on_cut_layer
+    is_cut = on_cut_layer(doc)
     outlines, stitches, out_own, st_own = collect(doc, owners=True)
     shapes = [sh for sh in doc.shapes if not getattr(sh, "construction", False)]
     groups, (lh, ls, lt) = group_pieces(
         shapes, getattr(doc, "holes", []), getattr(doc, "stitch_lines", []),
-        getattr(doc, "texts", []), is_cut=on_cut_layer(doc))
+        getattr(doc, "texts", []), is_cut=is_cut)
     parts: List[Part] = []
     of: dict = {}
     for g in groups:
@@ -230,6 +231,8 @@ def make_parts(doc, spacing: float = 8.0) -> List[Part]:
         else:
             closed = bool(own.local_path().closed) if hasattr(own, "local_path") \
                 else len(pts) >= 4 and (pts[0] - pts[-1]).length() < 1e-6
+            if not closed and is_cut(own) and closes(pts):
+                closed = True             # a piece drawn as an open loop
         part_for(own).outlines.append((list(pts), color, closed))
     for entry, own in zip(stitches, st_own):
         part = part_for(own)

@@ -697,10 +697,14 @@ While it's sizing a piece, that grip ignores node snapping.
   sheet size, an edge margin and the **gap between pieces** (8 mm to start
   with; it is a true minimum, outline to outline). The packer uses each
   piece's **real outline**, so a flap can tuck into a gusset's hollow
-  instead of blocking out its whole bounding box. Grouped shapes nest as one
-  piece, and anything on a piece — slots, hardware holes, loose stitch
-  holes, seams, lettering, a fold line even if it runs past the edge —
-  travels with it.
+  instead of blocking out its whole bounding box. Anything on a piece —
+  slots, hardware holes, loose stitch holes, seams, lettering, a fold line
+  even if it runs past the edge — travels with it. Pieces never stay stuck
+  together, however they lie when you start: overlapping pieces are laid
+  out apart, a `Ctrl+G` group with several pieces in it is split (each
+  piece goes on its own, taking what's on it), and an outline drawn as an
+  open path round to where it began — finished a little past its start, as
+  a traced or joined outline often is — is a piece, not a line.
   * **Live preview:** the pieces move on the drawing as soon as the dialog
     opens, inside a dashed orange outline of the sheet, and move again
     whenever you change a setting. The dialog reports how many pieces fit

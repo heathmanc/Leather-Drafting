@@ -29,6 +29,17 @@ made only when the release workflow is run by hand with it ticked.
   saves a lot of leather; Nest on sheet's smallest sheet does the same.
 * The thread is left off the details page.
 
+### Nest on sheet
+* **Pieces are never nested stuck together.** A piece outlined with an
+  open path drawn back round to its start (finished a little past it, as a
+  traced or joined outline often is) counted as a line. Lying across
+  another piece, it was nested stuck to it, as a fold line is. Lying
+  alone, it was nested as a hollow outline that other pieces could land
+  inside. Such a path is now a piece. A `Ctrl+G` group holding several
+  pieces is split for nesting: each piece goes on its own, with what's on
+  it. The PDF, the Job estimate and the leather-usage report count these
+  pieces too.
+
 ### Drawing
 * The Stitch line (seam) tool drew every seam at 3.85 mm, whatever iron
   the pattern was punched with. A seam now takes the punch and spacing set

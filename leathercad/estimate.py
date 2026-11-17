@@ -16,6 +16,7 @@ from typing import Dict, List
 
 from .geometry import Vec2
 from .layers import CUT, SCORE, ENGRAVE
+from .pieces import closes
 from .stitching import holes_for_shape
 from .stitchsettings import StitchSettings
 from .thread import estimate_thread
@@ -94,7 +95,9 @@ def estimate_project(doc, *, thickness_mm: float = 3.0, tail_mm: float = 150.0,
             est.engrave_mm += length
         elif role == CUT:
             est.cut_mm += length
-            if closed and len(_ring(pts)) >= 3:      # a triangle counts
+            # a triangle counts, and so does a piece drawn as an open path
+            # back round to its start
+            if (closed or closes(pts)) and len(_ring(pts)) >= 3:
                 rings.append(_ring(pts))
         # holes carried by the shape's stitching
         res = holes_for_shape(sh, doc)

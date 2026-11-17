@@ -914,17 +914,40 @@ def group_pieces(shapes, holes=(), seams=(), texts=(), is_cut=None):
     """Sort what's being nested into the groups that travel as one.
 
     * Shapes of one move-group (``Ctrl+G``) are one piece.
-    * A piece lying wholly inside another (a slot in a panel) joins it --
-      unless, given ``is_cut`` (a test: is this shape on a cut layer?), it is
-      a cut outline nearly as big as the one it lies in -- a copy of the
-      piece, a lining -- which is a piece of its own (see ``pieces``).
+    * A piece lying wholly inside another (a slot in a panel) joins it.
     * An open line that runs onto a piece (a fold or score line, even one
       drawn a little past its edges) joins the piece it crosses.
     * Loose holes, seams and lettering go with their move-group, else with
       the smallest piece they sit inside.
 
+    Given ``is_cut`` (a test: is this shape on a cut layer?), it also knows
+    which shapes are pieces of leather (see ``pieces``), and pieces never end
+    up stuck together:
+
+    * a cut path drawn round to where it began is a piece, not a line --
+      even left open, finished a little past its start;
+    * a cut outline nearly as big as the one it lies in -- a copy of the
+      piece, a lining -- is a piece of its own;
+    * a move-group holding several pieces is split, one group a piece; what
+      else is in it (a fold line, an engraving) goes with the piece it's on,
+      or the nearest.
+
     Returns ``(groups, (holes, seams, texts))``: the second part is what lies
     on no piece."""
+    from .pieces import closes, is_own_piece
+    split = is_cut is not None
+
+    def outline(m):
+        pts, _corners, closed = m.world_polyline()
+        pts = [Vec2(p.x, p.y) for p in pts]
+        closed = bool(closed)
+        if split and not closed and is_cut(m) and closes(pts):
+            closed = True                 # a piece drawn as an open loop
+        return pts, closed
+
+    outlines_of = {id(sh): outline(sh) for sh in shapes}
+    piece_ids = {id(sh) for sh in shapes
+                 if split and outlines_of[id(sh)][1] and is_cut(sh)}
     order, members = [], {}
     for sh in shapes:
         key = getattr(sh, "group_id", None) or ("one", id(sh))
@@ -932,20 +955,25 @@ def group_pieces(shapes, holes=(), seams=(), texts=(), is_cut=None):
             members[key] = []
             order.append(key)
         members[key].append(sh)
-    groups: List[PieceGroup] = []
-    by_gid: Dict[str, PieceGroup] = {}
+    units = []                            # (gid or None, shapes)
     for key in order:
-        outlines = []
-        for m in members[key]:
-            pts, _corners, closed = m.world_polyline()
-            outlines.append(([Vec2(p.x, p.y) for p in pts], bool(closed)))
+        gid = None if isinstance(key, tuple) else key
+        ms = members[key]
+        if gid is not None and sum(id(m) in piece_ids for m in ms) > 1:
+            units += [(gid, [m]) for m in ms]       # one group a piece
+        else:
+            units.append((gid, ms))
+    groups: List[PieceGroup] = []
+    by_gid: Dict[str, List[PieceGroup]] = {}
+    for gid, ms in units:
+        outlines = [outlines_of[id(m)] for m in ms]
         if sum(len(pts) for pts, _c in outlines) < 2:
             continue
-        g = PieceGroup(shapes=list(members[key]), outlines=outlines)
+        g = PieceGroup(shapes=list(ms), outlines=outlines)
         _refresh(g)
         groups.append(g)
-        if not isinstance(key, tuple):
-            by_gid[key] = g
+        if gid is not None:
+            by_gid.setdefault(gid, []).append(g)
     host_of: Dict[int, PieceGroup] = {}       # a merged group -> where it went
 
     def home(g):
@@ -953,9 +981,9 @@ def group_pieces(shapes, holes=(), seams=(), texts=(), is_cut=None):
             g = host_of[id(g)]
         return g
 
-    def containing(x, y, exclude=None):
+    def containing(x, y, exclude=None, among=None):
         best = None
-        for g in groups:
+        for g in (groups if among is None else among):
             if g is exclude or g.ring is None:
                 continue
             b = g.bbox
@@ -974,15 +1002,21 @@ def group_pieces(shapes, holes=(), seams=(), texts=(), is_cut=None):
         groups.remove(g)
         host_of[id(g)] = host
 
-    from .pieces import is_own_piece
+    def has_piece(g) -> bool:
+        return any(id(sh) in piece_ids for sh in g.shapes)
 
     def own_piece(g, host) -> bool:
         """``g`` (inside ``host``) is a piece of its own, not a hole in it."""
-        if is_cut is None or g.ring is None or host.ring is None:
+        if not split or g.ring is None or host.ring is None:
             return False
         if not all(is_cut(sh) for sh in g.shapes):
             return False
         return is_own_piece(_ring_area(g.ring), _ring_area(host.ring))
+
+    def gap(g, x, y) -> float:
+        b = g.bbox
+        return math.hypot(max(b[0] - x, 0.0, x - b[2]),
+                          max(b[1] - y, 0.0, y - b[3]))
 
     # a piece fully inside another (a slot in a panel) merges into it
     for g in sorted(groups, key=lambda g: _box_area(g.bbox)):
@@ -1008,10 +1042,34 @@ def group_pieces(shapes, holes=(), seams=(), texts=(), is_cut=None):
                  if h is not None]
         if hosts:
             merge(g, min(hosts, key=lambda h: _box_area(h.bbox)))
+    # what's left of a split move-group with no piece in it (an engraving
+    # running off its piece) goes with the nearest of the group's pieces
+    if split:
+        for gid, gs in by_gid.items():
+            mine = []
+            for g in gs:
+                g = home(g)
+                if g in groups and g not in mine:
+                    mine.append(g)
+            hosts = [g for g in mine if has_piece(g)]
+            for g in mine:
+                if hosts and not has_piece(g):
+                    b = g.bbox
+                    cx, cy = 0.5 * (b[0] + b[2]), 0.5 * (b[1] + b[3])
+                    merge(g, min(hosts, key=lambda h: gap(h, cx, cy)))
 
     def attach(r, x, y, bucket) -> bool:
         gid = getattr(r, "group_id", None)
-        g = home(by_gid[gid]) if gid in by_gid else None
+        g = None
+        if gid in by_gid:
+            mine = []
+            for h in by_gid[gid]:
+                h = home(h)
+                if h not in mine:
+                    mine.append(h)
+            # the group's piece it lies on, else the nearest of them
+            g = containing(x, y, among=mine) or min(
+                mine, key=lambda h: gap(h, x, y))
         if g is None:
             g = containing(x, y)
         if g is None:

@@ -3937,8 +3937,9 @@ class Canvas(QGraphicsView):
             if lyr is not None and getattr(lyr, "role", "cut") != "cut":
                 continue
             pts, _c, closed = sh.world_polyline()
-            if not closed or len(pts) < 4:
-                continue
+            from leathercad.pieces import closes
+            if not (closed or closes(pts)) or len(pts) < 4:
+                continue              # (a piece drawn as an open loop counts)
             ring = pts[:-1] if (pts[0] - pts[-1]).length() < 1e-9 else pts
             a = abs(signed_area(ring))
             total_mm2 += a
@@ -5538,10 +5539,11 @@ class Canvas(QGraphicsView):
         from leathercad.nesting import (NestPiece, cell_for_gap, group_pieces,
                                         leather_area, nest_best, nest_smallest,
                                         sheet_packer)
-        from leathercad.pieces import on_cut_layer
+        from leathercad.pieces import closes, on_cut_layer
+        cut_test = on_cut_layer(self.doc)
         groups, _left = group_pieces(
             [it.model for it in cand], self.doc.holes, self.doc.stitch_lines,
-            getattr(self.doc, "texts", []), is_cut=on_cut_layer(self.doc))
+            getattr(self.doc, "texts", []), is_cut=cut_test)
         if not groups:
             return None
         existing = self._nest_sheet_shape()
@@ -5569,7 +5571,9 @@ class Canvas(QGraphicsView):
                 continue
             if meets(sh.bounds(), rect):
                 pts, _c, closed = sh.world_polyline()
-                others.append(([Vec2(p.x, p.y) for p in pts], bool(closed)))
+                pts = [Vec2(p.x, p.y) for p in pts]
+                closed = bool(closed) or (cut_test(sh) and closes(pts))
+                others.append((pts, closed))
         kept = []
         if keep and existing is not None and not smallest:
             probe = sheet_packer(sheet_w, sheet_h, margin=margin, spacing=gap,
@@ -5778,10 +5782,11 @@ class Canvas(QGraphicsView):
                       budget=None) -> str:
         """Pack the selected shapes (or ALL shapes if nothing is selected)
         onto a sheet_w x sheet_h mm sheet, using their real outlines, trying
-        many layouts and keeping the best (see _nest_plan). Grouped shapes
-        travel as one piece; anything on a piece (slots, hardware holes,
-        loose stitch holes, seams, lettering, fold lines) rides along. Draws
-        the sheet as a construction rectangle and returns a report.
+        many layouts and keeping the best (see _nest_plan). Anything on a
+        piece (slots, hardware holes, loose stitch holes, seams, lettering,
+        fold lines) rides along; pieces are never kept together -- not when
+        they overlap, nor when they share a move-group (see group_pieces).
+        Draws the sheet as a construction rectangle and returns a report.
 
         ``progress(done, total)`` counts the layouts tried; returning False
         cancels, and nothing is moved."""

@@ -45,6 +45,39 @@ def _box(pts):
     return min(xs), min(ys), max(xs), max(ys)
 
 
+def _seg_dist(p, a, b) -> float:
+    ab = b - a
+    t = max(0.0, min(1.0, (p - a).dot(ab) / max(ab.length_sq(), 1e-18)))
+    return (a.lerp(b, t) - p).length()
+
+
+def closes(pts: Sequence[Vec2], closed: bool = False,
+           tol: float = 0.5) -> bool:
+    """Whether an outline encloses leather: a closed one, or an open path
+    drawn round to where it began -- its two ends meet, or one end runs back
+    onto the path (a loop finished a little past its start, as a traced or
+    joined outline often is). A line that only doubles back on itself
+    encloses nothing."""
+    n = len(pts)
+    if closed:
+        return n >= 3
+    if n < 4:
+        return False
+    a, b = pts[0], pts[-1]
+    meets = (a - b).length() <= tol
+    if not meets:
+        # an end on a stretch of the path away from its own end
+        meets = (any(_seg_dist(a, pts[i], pts[i + 1]) <= tol
+                     for i in range(2, n - 1))
+                 or any(_seg_dist(b, pts[i], pts[i + 1]) <= tol
+                        for i in range(0, n - 3)))
+    if not meets:
+        return False
+    xs, ys = [p.x for p in pts], [p.y for p in pts]
+    box = (max(xs) - min(xs)) * (max(ys) - min(ys))
+    return box > 0 and ring_area(pts) >= 0.1 * box
+
+
 def is_own_piece(inner_area: float, host_area: float) -> bool:
     """Whether an outline of ``inner_area`` lying inside one of
     ``host_area`` is a piece of its own (else a hole cut out of it)."""

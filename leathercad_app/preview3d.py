@@ -760,9 +760,6 @@ class FoldPreviewDialog(QDialog):
         item = self.current
         if item is None:
             self.layout_ = None
-            self.view.caption = ("Nothing to fold yet. Draw a line across a "
-                                 "piece, right-click it and choose Mark as "
-                                 "fold line.")
             self.view.set_layout(None)
             self.readout.setText("")
             self._sync_run()
@@ -894,7 +891,8 @@ class FoldPreviewDialog(QDialog):
     def _caption(self) -> str:
         lay = self.layout_
         if lay is None:
-            return ""
+            return ("Nothing to fold yet. Draw a line across a piece, "
+                    "right-click it and choose Mark as fold line.")
         n, t = lay.n_steps, self.view.t
         if not n:
             return "Nothing folds: tick a fold and give it an angle"
@@ -1003,6 +1001,13 @@ class FoldPreviewDialog(QDialog):
                 self.canvas.commitRequested.emit()
             finally:
                 self._writing = False
+
+    def event(self, event):
+        # going back to the drawing (to undo, say): what was changed here
+        # is an undo step by then, not still waiting to become one
+        if event.type() == QEvent.WindowDeactivate:
+            self._flush_commit()
+        return super().event(event)
 
     def closeEvent(self, event):   # noqa: N802
         self._stop()

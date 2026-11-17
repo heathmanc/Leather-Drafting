@@ -1271,6 +1271,7 @@ class MainWindow(QMainWindow):
         dlg = FoldPreviewDialog(canvas=self.canvas, parent=self,
                                 dark=getattr(self.canvas, "dark", False),
                                 settings=self._settings())
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dlg.show()
         self._assembly_dlg = dlg          # keep a ref so it isn't GC'd
 

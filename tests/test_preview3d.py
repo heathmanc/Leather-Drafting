@@ -425,6 +425,56 @@ def test_the_view_paints_the_leather_and_its_fold_lines(qapp):
         == fv.Look(True).ground
 
 
+def test_turning_sliding_and_zooming_the_view_with_the_mouse(qapp):
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtTest import QTest
+    dlg = _dialog(_trifold())
+    try:
+        v = dlg.view
+        v.repaint()
+        yaw, pitch = v.cam.yaw, v.cam.pitch
+        mid = QPoint(v.width() // 2, v.height() // 2)
+        QTest.mousePress(v, Qt.LeftButton, Qt.NoModifier, mid)
+        QTest.mouseMove(v, mid + QPoint(60, 30))
+        QTest.mouseRelease(v, Qt.LeftButton, Qt.NoModifier,
+                           mid + QPoint(60, 30))
+        assert v.cam.yaw != yaw and v.cam.pitch != pitch and v.follow
+        assert dlg.selected_fold() == -1              # a drag picks nothing
+        QTest.mousePress(v, Qt.RightButton, Qt.NoModifier, mid)
+        QTest.mouseMove(v, mid + QPoint(25, 10))
+        QTest.mouseRelease(v, Qt.RightButton, Qt.NoModifier,
+                           mid + QPoint(25, 10))
+        assert (v.cam.pan_x, v.cam.pan_y) == (25.0, 10.0) and not v.follow
+        zoom = v.cam.zoom
+        v.wheelEvent(QWheelEvent(QPointF(mid), QPointF(v.mapToGlobal(mid)),
+                                 QPoint(0, 0), QPoint(0, 120), Qt.NoButton,
+                                 Qt.NoModifier, Qt.NoScrollPhase, False))
+        assert v.cam.zoom > zoom
+        QTest.mouseDClick(v, Qt.LeftButton, Qt.NoModifier, mid)
+        assert v.follow and v.cam.zoom == 1.0 and v.cam.pan_x == 0.0
+        # a click on a fold line picks it; over it, the pointer says so
+        v.look_from("front")
+        v.repaint()
+        _f, x0, y0, x1, y1 = next(d for d in v._drawn if d[0] == 0)
+        at = QPoint(int((x0 + x1) / 2), int((y0 + y1) / 2))
+        QTest.mouseMove(v, at)
+        assert v.hover == 0
+        QTest.mouseClick(v, Qt.LeftButton, Qt.NoModifier, at)
+        assert dlg.selected_fold() == 0 and v.selected == 0
+        QTest.mouseClick(v, Qt.LeftButton, Qt.NoModifier, QPoint(4, 4))
+        assert dlg.selected_fold() == -1
+        # the keys, with the view clicked
+        QTest.keyClick(v, Qt.Key_Right)
+        assert v.t == 1.0
+        QTest.keyClick(v, Qt.Key_End)
+        assert v.t == 2.0
+        QTest.keyClick(v, Qt.Key_Home)
+        assert v.t == 0.0
+    finally:
+        dlg.close()
+
+
 def test_the_view_follows_the_model_until_it_is_moved_by_hand(qapp):
     dlg = _dialog(_trifold())
     try:
@@ -520,6 +570,15 @@ def test_the_preview_keeps_up_with_the_drawing(qapp, tmp_path, monkeypatch):
         dlg._refresh.stop()
         dlg.reload()
         assert dlg.layout_ is layout
+        # and when the piece goes, the preview says how to start again
+        win.doc.shapes[:] = [s for s in win.doc.shapes if s.is_fold_line]
+        win.canvas.rebuild()
+        dlg._refresh.stop()
+        dlg.reload()
+        assert dlg.current is None and dlg.table.rowCount() == 0
+        assert dlg.view.scene is None
+        assert "Mark as fold line" in dlg.view.caption
+        assert not dlg.btn_play.isEnabled()
         dlg.close()
     finally:
         win._unsaved_changes = False

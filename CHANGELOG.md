@@ -32,6 +32,8 @@ made only when the release workflow is run by hand with it ticked.
   the view follows the piece as it closes up.
 * **Stitch holes that should meet and don't** are drawn red, with how far
   out they are.
+* **What's on the piece is on the model**: stitch holes, cutouts, slits,
+  and lines scored or engraved on it.
 * **Saved with the drawing.** Step, direction, angle and radius are kept on
   the fold lines; a run of changes is one Undo in the main window, and the
   preview follows the drawing while it's open.

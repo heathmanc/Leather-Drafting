@@ -23,7 +23,7 @@ from PySide6.QtGui import (QBrush, QColor, QFont, QImage, QPainter, QPen,
 from PySide6.QtWidgets import QToolTip, QWidget
 
 from leathercad import bsp
-from leathercad.bsp import BACK, DOTS, FRONT, INNER, POLY
+from leathercad.bsp import BACK, DOTS, FRONT, INNER, LINE, POLY
 
 _LEVELS = 24                      # shades of each colour
 
@@ -44,6 +44,7 @@ class Look:
         self.hole = QColor(58, 36, 20)
         self.bad = QColor(226, 38, 38)
         self.cut = QColor(52, 54, 60) if dark else QColor(120, 122, 130)
+        self.score = QColor(92, 60, 36)              # scored or engraved
         self.to_front = QColor(24, 104, 232)         # folds front to front
         self.to_back = QColor(206, 30, 122)          # folds back to back
         self.idle = QColor(128, 128, 136)            # a fold that isn't made
@@ -200,6 +201,9 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
     edge = QPen(look.edge, 1.0)
     edge.setCosmetic(True)
     cut = QBrush(look.cut)
+    marks = {"cut": QPen(look.cut, 1.8), "line": QPen(look.score, 1.1)}
+    for pen in marks.values():
+        pen.setCosmetic(True)
     top = _LEVELS - 1
     shade = look.shade
     order = bsp.back_to_front(scene.tree, ex, ey, ez)
@@ -245,6 +249,13 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                         p.drawPoints(QPolygonF([QPointF(
                             ox + ax * x + ay * y + az * z,
                             oy + bx * x + by * y + bz * z) for x, y, z in geo]))
+                    elif dk == LINE:
+                        (x, y, z), (x2, y2, z2) = geo
+                        p.setPen(marks.get(style, edge))
+                        p.drawLine(QPointF(ox + ax * x + ay * y + az * z,
+                                           oy + bx * x + by * y + bz * z),
+                                   QPointF(ox + ax * x2 + ay * y2 + az * z2,
+                                           oy + bx * x2 + by * y2 + bz * z2))
                     elif dk == POLY:
                         p.setPen(Qt.NoPen)
                         p.setBrush(cut)
@@ -340,9 +351,8 @@ def _paint_labels(p, scene, look, discs, eye, m, selected):
             continue
         c = spot(at)
         box = QRectF(c.x() - 14, c.y() - 10, 28, 20)
-        halo = QColor(look.back[0], look.back[1], look.back[2]) \
-            if facing < 0.0 else QColor(look.front[0], look.front[1],
-                                        look.front[2])
+        r, g, b = look.back if facing < 0.0 else look.front
+        halo = QColor(int(r), int(g), int(b))
         p.setPen(QPen(halo.lighter(125), 3.0))
         for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             p.drawText(box.translated(dx, dy), Qt.AlignCenter,

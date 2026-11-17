@@ -48,6 +48,7 @@ class Foldable:
         self.title = title
         self.outline = []          # a piece: its outline
         self.cutouts = []
+        self.marks = []            # slits and scored lines on it
         self.lines = []            # the fold-line shapes across it
         self.outlines = []         # a net: its panels
         self.rings = []            # ... thinned for the model
@@ -58,6 +59,7 @@ class Foldable:
         """Everything the model is built from: unchanged, nothing to redo."""
         return (self.kind, self.key, tuple(self.outline),
                 tuple(tuple(c) for c in self.cutouts),
+                tuple((k, tuple(pts)) for k, pts in self.marks),
                 tuple(tuple(o) for o in self.outlines), tuple(self.holes),
                 tuple((_fold_ends(s), s.fold_dir, s.fold_angle, s.fold_order,
                        s.fold_radius, s.name) for s in self.lines))
@@ -145,6 +147,18 @@ def _holes_in(holes, ring) -> list:
             and pc.inside((h[0], h[1]), ring)]
 
 
+def _marks_in(drawn, ring) -> list:
+    """The drawn lines that lie on a piece (the ends of each on it)."""
+    x0, y0, x1, y1 = pc.bounds(ring)
+    out = []
+    for kind, pts in drawn:
+        a, b = pts[0], pts[-1]
+        if (x0 <= a[0] <= x1 and y0 <= a[1] <= y1 and pc.inside(a, ring)
+                and pc.inside(b, ring)):
+            out.append((kind, pts))
+    return out
+
+
 def foldables(doc) -> List[Foldable]:
     """What can be folded in a drawing: each piece with fold lines across
     it, biggest first, then the net of panels that share edges (if any)."""
@@ -153,13 +167,21 @@ def foldables(doc) -> List[Foldable]:
     folds = [s for s in doc.shapes if getattr(s, "is_fold_line", False)
              and _fold_ends(s) is not None]
     rings, owners = [], []
+    drawn = []                      # slits, and lines scored or engraved
     for sh in doc.shapes:
-        if getattr(sh, "is_fold_line", False) or not cut(sh):
+        if getattr(sh, "is_fold_line", False) \
+                or getattr(sh, "construction", False):
             continue
         pts, _corners, closed = sh.world_polyline()
-        if closes(pts, closed):
+        if not cut(sh):
+            if len(pts) >= 2:
+                drawn.append(("line", _ring(pts) + ([(pts[0].x, pts[0].y)]
+                                                    if closed else [])))
+        elif closes(pts, closed):
             rings.append(pts)
             owners.append(sh)
+        elif len(pts) >= 2:
+            drawn.append(("cut", _ring(pts)))
     if not rings:
         return []
     is_piece, parent, areas = classify(rings)
@@ -188,6 +210,7 @@ def foldables(doc) -> List[Foldable]:
         f.cutouts = [_ring(rings[j]) for j in range(len(rings))
                      if parent[j] == i and not is_piece[j]]
         f.lines = across
+        f.marks = _marks_in(drawn, ring)
         f.holes = _holes_in(holes(), ring)
         f.area = areas[i]
         out.append(f)
@@ -504,9 +527,12 @@ class FoldPreviewDialog(QDialog):
 
     def _show(self, item: Optional[Foldable], same: bool = False):
         """Put a foldable in the view and its folds in the table."""
-        old = {f.label: f for f in self.folds} if same else {}
+        def ident(f):               # a fold line's own id; a net's letter
+            return getattr(f.key, "shape_id", None) or f.label
+
+        old = {ident(f): f for f in self.folds} if same else {}
         chosen = self.selected_fold() if same else -1
-        chosen = self.folds[chosen].label if chosen >= 0 else None
+        chosen = ident(self.folds[chosen]) if chosen >= 0 else None
         self.current = item
         self._net = None
         if item is None:
@@ -527,7 +553,7 @@ class FoldPreviewDialog(QDialog):
             self._net = (regions, lines)
         if same:
             for f in self.folds:               # ticks aren't in the drawing
-                prev = old.get(f.label)
+                prev = old.get(ident(f))
                 if prev is not None:
                     f.active = prev.active
         else:
@@ -535,7 +561,7 @@ class FoldPreviewDialog(QDialog):
         self._number_steps()
         self._fill_table()
         for row, f in enumerate(self.folds):
-            if f.label == chosen:
+            if chosen is not None and ident(f) == chosen:
                 self.table.selectRow(row)
         self.rebuild(refit=not same)
 
@@ -745,7 +771,8 @@ class FoldPreviewDialog(QDialog):
                   base=self._base, holes=item.holes)
         if item.kind == "piece":
             layout = fs.fold_piece(item.outline, self.folds,
-                                   cutouts=item.cutouts, **kw)
+                                   cutouts=item.cutouts, marks=item.marks,
+                                   **kw)
         else:
             regions, lines = self._net
             sharp = set()

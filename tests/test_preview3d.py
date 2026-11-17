@@ -105,6 +105,7 @@ def test_foldables_are_the_pieces_fold_lines_cross(qapp):
     assert f.kind == "piece" and f.key == body.shape_id
     assert [s.name for s in f.lines] == ["Left fold", "Right fold"]
     assert len(f.cutouts) == 1 and len(f.outline) >= 4
+    assert f.marks == []
     assert len(f.holes) > 100 and {h[2] for h in f.holes} == {1.2}
     lines = fold_lines(f.lines)
     assert [(ln.label, ln.name, ln.angle, ln.direction, ln.order)
@@ -112,6 +113,32 @@ def test_foldables_are_the_pieces_fold_lines_cross(qapp):
                                  ("B", "Right fold", 180.0, 1, 2)]
     assert lines[0].key is f.lines[0]
     assert foldables(Document("empty")) == []
+
+
+def test_slits_and_scored_lines_on_a_piece_are_shown_on_it(qapp):
+    from leathercad_app.preview3d import foldables
+    doc = _trifold()
+    slit = Polygon(points=[Vec2(20, 30), Vec2(60, 30)], close_path=False,
+                   name="Card slot")
+    score = Polygon(points=[Vec2(100, 60), Vec2(120, 80), Vec2(140, 60)],
+                    close_path=False, name="V")
+    score.layer = "Score"
+    guide = Polygon(points=[Vec2(10, 90), Vec2(230, 90)], close_path=False)
+    guide.construction = True
+    off = Polygon(points=[Vec2(300, 0), Vec2(340, 0)], close_path=False)
+    doc.shapes += [slit, score, guide, off]
+    f = foldables(doc)[0]
+    assert [(k, len(pts)) for k, pts in f.marks] == [("cut", 2), ("line", 3)]
+    dlg = _dialog(doc)
+    try:
+        assert sum(len(c.lines) for c in dlg.layout_.cells) >= 3
+        # they are part of what the model is built from
+        before = dlg.layout_
+        slit.points[1] = Vec2(70, 30)
+        dlg.reload()
+        assert dlg.layout_ is not before
+    finally:
+        dlg.close()
 
 
 def test_each_piece_with_fold_lines_is_offered_biggest_first(qapp):

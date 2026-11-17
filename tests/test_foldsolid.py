@@ -339,6 +339,36 @@ def test_holes_and_cutouts_ride_on_the_faces():
     assert (40.0, 50.0, 1.0) in spots and (40.0, 50.0, -1.0) in spots
 
 
+def test_lines_drawn_on_the_piece_ride_on_the_faces():
+    slit = ("cut", [(20, 30), (140, 30)])                 # across the fold
+    vee = ("line", [(100, 60), (120, 80), (140, 60)])
+    lay = fs.fold_piece(HALF, [fs.FoldLine((80, 0), (80, 100), 180, 1)],
+                        marks=[slit, vee], radius=1.0)
+    want = {"cut": 120.0, "line": 2 * math.hypot(20, 20)}
+    for t in (0.0, 1.0):
+        for face in (bsp.FRONT, bsp.BACK):
+            got = {"cut": 0.0, "line": 0.0}
+            for c in lay.solid([t]):
+                for f in c.faces:
+                    for kind, geo, style in f.decals or ():
+                        if kind == bsp.LINE and f.kind == face:
+                            got[style] += math.dist(*geo)
+            # flat, every bit of each line is there; folded, the slit is a
+            # shade shorter where it goes round the inside or the outside
+            # of the bend
+            assert abs(got["line"] - want["line"]) < 1e-6
+            if t == 0.0:
+                assert abs(got["cut"] - want["cut"]) < 1e-6
+            else:
+                assert 115.0 < got["cut"] < 126.0
+    # a drawing full of lettering shows the first few thousand strokes
+    many = [("line", [(10 + 0.01 * k, 10), (10 + 0.01 * k, 12)])
+            for k in range(7000)]
+    busy = fs.fold_piece(HALF, [fs.FoldLine((80, 0), (80, 100), 180, 1)],
+                         marks=many)
+    assert sum(len(c.lines) for c in busy.cells) == 6000
+
+
 def test_fold_marks_lie_on_the_bend_and_panel_marks_on_the_panels():
     lay = _one(thickness=2.0, radius=1.0)
     a, b, a2, b2, nn = lay.fold_marks([0.0])[0][0]

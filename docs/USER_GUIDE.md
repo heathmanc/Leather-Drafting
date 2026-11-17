@@ -584,10 +584,11 @@ The view shows the leather at its real thickness, with rounded bends: its
 **front** (the side the pattern is drawn on) tan, its **back** pale. Every
 fold line is drawn on it and lettered — **solid blue** if it folds to the
 front, **dashed magenta** to the back — and the panels between the folds
-are numbered. Drag to turn the piece, right-drag (or Shift-drag) to slide
-it, roll the wheel to zoom; **Fit** or a double-click brings it back. Click
-a fold line to choose its row in the table: it lights up through whatever
-is folded over it.
+are numbered. Stitch holes, cutouts, slits and any lines scored or engraved
+on the piece are on it too. Drag to turn the piece, right-drag (or
+Shift-drag) to slide it, roll the wheel to zoom; **Fit** or a double-click
+brings it back. Click a fold line to choose its row in the table: it lights
+up through whatever is folded over it.
 
 Each fold line has a row:
 

@@ -20,7 +20,8 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import polycut as pc
-from .bsp import BACK, DOTS, FRONT, INNER, POLY, WALL, Cell, Face, plane_of
+from .bsp import BACK, DOTS, FRONT, INNER, LINE, POLY, WALL, Cell, Face, \
+    plane_of
 
 Pt = Tuple[float, float]
 P3 = Tuple[float, float, float]
@@ -118,7 +119,7 @@ class _Cell2:
 
     __slots__ = ("pts", "flags", "panel", "hinge", "strip", "place", "area",
                  "box", "edges", "edges_rev", "sides", "tag", "dots",
-                 "polys")
+                 "polys", "lines")
 
     def __init__(self, pts, flags, panel):
         self.pts = pts
@@ -131,6 +132,7 @@ class _Cell2:
         self.box = pc.bounds(pts)
         self.dots = []            # (x, y, diameter, hole index)
         self.polys = []           # rings of points
+        self.lines = []           # (kind, p, q)
 
 
 # -- small vector helpers (tuples) --------------------------------------------
@@ -394,7 +396,7 @@ class Layout:
     def __init__(self, regions, folds: Sequence[FoldLine], lines, *,
                  thickness: float = 2.0, radius: float = 0.0,
                  base: Optional[int] = None, holes=(), cutouts=(),
-                 detail: float = 12.0, sharp=()):
+                 marks=(), detail: float = 12.0, sharp=()):
         self.folds = list(folds)
         self.lines = list(lines)
         self.thickness = max(0.05, float(thickness))
@@ -423,6 +425,7 @@ class Layout:
         self._sharp = set(sharp)
         self.holes = [tuple(h) for h in holes]
         self.cutouts = [pc.ccw([tuple(p) for p in c]) for c in cutouts]
+        self.marks = [(kind, [tuple(p) for p in pts]) for kind, pts in marks]
         self._build_tree()
         self._settle_radii()
         self._build_cells()
@@ -713,6 +716,24 @@ class Layout:
                     part = pc.clip_to_convex(ring, c.pts)
                     if len(part) >= 3 and abs(pc.area(part)) > 1e-6:
                         c.polys.append(part)
+        # lines drawn on the piece (slits, score lines): each bit on the
+        # cell it crosses. A drawing with a great deal of them (lettering)
+        # shows the first few thousand strokes
+        budget = 6000
+        for kind, pts in self.marks:
+            for p, q in zip(pts, pts[1:]):
+                budget -= 1
+                if budget < 0:
+                    break
+                x0, x1 = (p[0], q[0]) if p[0] <= q[0] else (q[0], p[0])
+                y0, y1 = (p[1], q[1]) if p[1] <= q[1] else (q[1], p[1])
+                for c in cells:
+                    b = c.box
+                    if x0 > b[2] or x1 < b[0] or y0 > b[3] or y1 < b[1]:
+                        continue
+                    bit = pc.clip_segment_to_convex(p, q, c.pts)
+                    if bit is not None and math.dist(*bit) > 1e-6:
+                        c.lines.append((kind, bit[0], bit[1]))
 
     def _check_spacing(self):
         """Warn of folds too close together for the bends they need."""
@@ -1140,11 +1161,13 @@ def _cut_zone(flat: List[pc.Poly], h: Hinge, side: float, half: float,
 
 def _decals(c: _Cell2, to3d, bad):
     """The marks on one face of a cell, placed by ``to3d``."""
-    if not (c.dots or c.polys):
+    if not (c.dots or c.polys or c.lines):
         return None
     out = []
     for ring in c.polys:
         out.append((POLY, [to3d(p) for p in ring], "cut"))
+    for kind, p, q in c.lines:
+        out.append((LINE, (to3d(p), to3d(q)), kind))
     if c.dots:
         groups: Dict[tuple, list] = {}
         for x, y, dia, k in c.dots:
@@ -1239,12 +1262,15 @@ def model_outline(outline: Sequence[Pt], smooth: float = 0.03,
 def fold_piece(outline: Sequence[Pt], folds: Sequence[FoldLine], *,
                thickness: float = 2.0, radius: float = 0.0,
                base: Optional[int] = None, holes=(), cutouts=(),
-               detail: float = 12.0, smooth: float = 0.03) -> Layout:
+               marks=(), detail: float = 12.0, smooth: float = 0.03
+               ) -> Layout:
     """Lay a piece out for folding along its fold lines.
 
     ``outline`` is the piece (pattern mm, either way round); ``holes`` its
     stitch holes as ``(x, y, diameter)``; ``cutouts`` the rings cut out of
-    it. ``thickness`` and ``radius`` are the leather's thickness and the
+    it; ``marks`` lines drawn on it, as ``(kind, points)`` with kind
+    ``"cut"`` (a slit) or ``"line"`` (scored or engraved). ``thickness``
+    and ``radius`` are the leather's thickness and the
     inside radius of any fold with none of its own; ``base`` the panel
     that stays still (the biggest if not given). ``detail`` is the degrees
     of bend to a strip, ``smooth`` how closely (mm) a curved outline is
@@ -1252,8 +1278,8 @@ def fold_piece(outline: Sequence[Pt], folds: Sequence[FoldLine], *,
     ring = model_outline(outline, smooth)
     regions, lines = split_piece(ring, folds)
     return Layout(regions, folds, lines, thickness=thickness, radius=radius,
-                  base=base, holes=holes, cutouts=cutouts, detail=detail,
-                  sharp=sharp_corners(ring))
+                  base=base, holes=holes, cutouts=cutouts, marks=marks,
+                  detail=detail, sharp=sharp_corners(ring))
 
 
 def fold_net(outlines: Sequence[Sequence[Pt]], *, angle: float = 90.0,

@@ -126,6 +126,40 @@ def test_crash_handler_logs_and_emergency_saves(qapp, tmp_path):
     assert "boom-for-test" in log and "second-error" in log
 
 
+def test_smoke_checks_what_a_build_can_leave_out(qapp, tmp_path,
+                                                 monkeypatch):
+    """A packaged app can open its main window and still be missing things
+    that are only loaded when asked for. The smoke test looks for those,
+    and says which is missing by its exit code -- never by raising, which
+    would leave the build waiting on the crash dialog."""
+    from leathercad_app import __main__ as entry
+    from leathercad_app import helpdialog, librarywindow
+    monkeypatch.chdir(tmp_path)
+    why = tmp_path / "smoke-failure.txt"
+    assert entry._smoke() == 0 and not why.exists()
+    assert not list(tmp_path.iterdir())             # nothing left behind
+    # the guide shows a picture that isn't in the build
+    guide = tmp_path / "docs" / "USER_GUIDE.md"
+    guide.parent.mkdir()
+    guide.write_text("# Guide\n\n![here](here.png)\n![gone](gone.png)\n")
+    (guide.parent / "here.png").write_bytes(b"png")
+    monkeypatch.setattr(helpdialog, "guide_path", lambda: guide)
+    assert entry._smoke() == 4
+    assert "gone.png" in why.read_text() and "here.png" not in why.read_text()
+    (guide.parent / "gone.png").write_bytes(b"png")
+    assert entry._smoke() == 0
+    # ... or shows none at all (the wrong file, then)
+    guide.write_text("# Guide\n")
+    assert entry._smoke() == 4
+    # a window that is loaded when asked for doesn't open
+    def broken(*a, **k):
+        raise ImportError("No module named 'leathercad.library'")
+    monkeypatch.setattr(librarywindow, "LibraryWindow", broken)
+    assert entry._smoke() == 2
+    assert "No module named 'leathercad.library'" in why.read_text()
+    assert "Traceback" in why.read_text()
+
+
 def test_smoke_flag_launches_and_exits_clean():
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
     r = subprocess.run([sys.executable, "-m", "leathercad_app", "--smoke"],

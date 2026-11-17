@@ -17,7 +17,7 @@ on:
       version:
         description: "Version number (no leading v), e.g. 0.2.0"
         required: true
-        default: "0.4.12"
+        default: "0.4.13"
       publish:
         description: "Publish a public GitHub Release (uncheck to only build artifacts)"
         type: boolean
@@ -83,7 +83,10 @@ jobs:
           $env:QT_QPA_PLATFORM = "offscreen"
           $p = Start-Process -FilePath ".\dist\Stitch Hero\Stitch Hero.exe" `
                  -ArgumentList "--smoke" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { Write-Error "Smoke test failed ($($p.ExitCode))"; exit 1 }
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path "smoke-failure.txt") { Get-Content "smoke-failure.txt" }
+            Write-Error "Smoke test failed ($($p.ExitCode))"; exit 1
+          }
           Write-Host "smoke test passed"
 
       - name: Install Inno Setup
@@ -162,7 +165,8 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          "./dist/Stitch Hero.app/Contents/MacOS/Stitch Hero" --smoke
+          "./dist/Stitch Hero.app/Contents/MacOS/Stitch Hero" --smoke \
+            || { cat smoke-failure.txt 2>/dev/null; exit 1; }
           echo "smoke test passed"
 
       - name: Package the .dmg

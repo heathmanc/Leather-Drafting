@@ -4,7 +4,7 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
-## Unreleased
+## 0.4.13 — 2026-11-17
 
 ### A library of the things you've made
 * **File → Library of finished pieces…** (`Ctrl+L`) keeps what you've
@@ -32,12 +32,6 @@ made only when the release workflow is run by hand with it ticked.
   as ordinary files. Back it up, or keep it in a folder that syncs between
   your computers (*Library folder…* moves it). Nothing is uploaded.
   *Delete entry…* sends a piece to the recycle bin.
-
-### Fixed
-* The pattern name offered for a print or a PDF no longer ends in
-  ".leathercad" when the drawing was saved as `name.leathercad.json`.
-* The pictures of the 3D assembly preview were missing from the guide
-  inside the app (Help → User guide). They're there now.
 
 ### The 3D assembly preview looks like leather
 * **Grain, flesh and edge.** The front of the leather (the side you draw
@@ -68,6 +62,12 @@ made only when the release workflow is run by hand with it ticked.
   hides the marks for a clean picture.
 * The preview window is narrower, and fits a 1366-pixel-wide screen: the
   reminder of how to turn and zoom moved into the view.
+
+### Fixed
+* The pattern name offered for a print or a PDF no longer ends in
+  ".leathercad" when the drawing was saved as `name.leathercad.json`.
+* The pictures of the 3D assembly preview were missing from the guide
+  inside the app (Help → User guide). They're there now.
 
 ## 0.4.12 — 2026-11-17
 

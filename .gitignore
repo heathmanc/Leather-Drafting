@@ -7,6 +7,9 @@ dist/
 .venv/
 venv/
 
+# why a build's smoke test failed (python -m leathercad_app --smoke)
+smoke-failure.txt
+
 # generated exports / saves
 *.svg
 *.dxf

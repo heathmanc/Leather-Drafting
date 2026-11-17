@@ -328,15 +328,21 @@ def _divide(cells, eps):
     return None
 
 
-def build(cells: Sequence[Cell], eps: float = EPS):
+def build(cells: Sequence[Cell], eps: float = EPS, limit: int = 6000):
     """The partition tree of a list of cells. A node is ``[plane, front,
     back]``; a leaf is a tuple of cells (usually one) to paint in any
-    order."""
+    order.
+
+    Leather run through leather over and over could be cut up without end:
+    once the tree holds ``limit`` cells, what is left is not divided any
+    further (``back_to_front`` puts such a leaf in order by distance, which
+    is right for all but the tangle itself)."""
     root = [None]
     todo = [(list(cells), root, 0)]
+    made = len(cells)
     while todo:
         group, parent, slot = todo.pop()
-        if len(group) <= 1:
+        if len(group) <= 1 or made >= limit:
             parent[slot] = tuple(group)
             continue
         found = _divide(group, eps)
@@ -356,6 +362,8 @@ def build(cells: Sequence[Cell], eps: float = EPS):
                     front.append(f)
                 if b is not None:
                     back.append(b)
+                if f is not None and b is not None:
+                    made += 1
         if not front or not back:
             # what crossed the plane had nothing to paint beyond it: they
             # are all on one side now, so another plane must part them
@@ -378,7 +386,11 @@ def back_to_front(tree, vx: float, vy: float, vz: float) -> List[Cell]:
         if node is None:
             continue
         if type(node) is tuple:
-            out.extend(node)
+            if len(node) > 1:                 # nothing parts these: farthest
+                out.extend(sorted(node, key=lambda c: (  # first will do
+                    c.cx * vx + c.cy * vy + c.cz * vz)))
+            else:
+                out.extend(node)
             continue
         plane = node[0]
         if plane[0] * vx + plane[1] * vy + plane[2] * vz >= 0.0:

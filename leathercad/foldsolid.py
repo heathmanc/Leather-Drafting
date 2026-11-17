@@ -375,7 +375,7 @@ class Layout:
     def __init__(self, regions, folds: Sequence[FoldLine], lines, *,
                  thickness: float = 2.0, radius: float = 0.0,
                  base: Optional[int] = None, holes=(), cutouts=(),
-                 detail: float = 15.0, sharp=()):
+                 detail: float = 12.0, sharp=()):
         self.folds = list(folds)
         self.lines = list(lines)
         self.thickness = max(0.05, float(thickness))
@@ -1192,7 +1192,7 @@ def sharp_corners(outline: Sequence[Pt], degrees: float = 35.0):
 def fold_piece(outline: Sequence[Pt], folds: Sequence[FoldLine], *,
                thickness: float = 2.0, radius: float = 0.0,
                base: Optional[int] = None, holes=(), cutouts=(),
-               detail: float = 15.0, smooth: float = 0.03) -> Layout:
+               detail: float = 12.0, smooth: float = 0.03) -> Layout:
     """Lay a piece out for folding along its fold lines.
 
     ``outline`` is the piece (pattern mm, either way round); ``holes`` its
@@ -1213,7 +1213,7 @@ def fold_piece(outline: Sequence[Pt], folds: Sequence[FoldLine], *,
 
 def fold_net(outlines: Sequence[Sequence[Pt]], *, angle: float = 90.0,
              direction: int = 1, thickness: float = 2.0, radius: float = 0.0,
-             base: Optional[int] = None, holes=(), detail: float = 15.0,
+             base: Optional[int] = None, holes=(), detail: float = 12.0,
              smooth: float = 0.03) -> Layout:
     """Lay out panels drawn edge to edge (a paper net) for folding along
     the edges they share, every one by ``angle`` the same way."""

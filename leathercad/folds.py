@@ -2,11 +2,12 @@
 
 A fold consumes material: the leather's neutral fibre travels an arc round
 the bend, so a flat pattern must be LONGER across every fold than the
-finished piece by ``angle * (inside radius + k * thickness)`` (see
-``fold3d.fold_bend_allowance``). ``apply_fold_allowance`` does that to a
-drawn piece: everything on the flap side of a fold line slides away from
-the fold by the allowance, and the fold line moves to the middle of the
-bend zone, so the piece is drawn finished-size and cut true-size.
+finished piece by ``angle * (inside radius + k * thickness)`` -- the same
+length of leather the 3D preview (``foldsolid``) bends into each fold,
+centred on the fold line. ``apply_fold_allowance`` does that to a drawn
+piece: everything on the flap side of a fold line slides away from the
+fold by the allowance, and the fold line moves to the middle of the bend
+zone, so the piece is drawn finished-size and cut true-size.
 """
 
 from __future__ import annotations

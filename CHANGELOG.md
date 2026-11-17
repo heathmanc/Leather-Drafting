@@ -4,7 +4,7 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
-## Unreleased
+## 0.4.10 — 2026-11-17
 
 ### The PDF's details page
 * **Every piece to cut is counted.** A piece drawn on top of another — a

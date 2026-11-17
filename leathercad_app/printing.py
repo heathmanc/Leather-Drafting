@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QRectF, QPointF, QSizeF, QMarginsF
 from PySide6.QtGui import (QPainter, QPen, QColor, QPainterPath, QFont,
@@ -43,6 +43,7 @@ MARGIN_BOTTOM = 16.0
 PAD = 2.0          # pieces stay this far inside the printed area's border
 LINE_SLACK = 0.25  # the printed line's width and the curves' flattening,
                    # kept on top of the gap so the gap holds edge to edge
+LAYOUT_SLACK = 0.05  # the same, for the cutting layout: as Nest on sheet
 INCH = 25.4
 
 
@@ -59,6 +60,13 @@ class PrintOptions:
     note: str = ""                # footer, left: a copyright / licence line
     details: bool = True          # a details page first
     usable_pct: float = 75.0      # hide yield, for the leather to buy
+    # the details page's cutting layout: "best" -- the best fit found, the
+    # smallest piece of leather, ``edge_margin`` clear round the pieces and
+    # ``spacing`` between them -- or "drawn": the layout Nest on sheet left
+    # on the drawing, just as it is
+    cut_layout: str = "best"
+    edge_margin: float = 5.0
+    layout_budget: Optional[float] = 4.0    # seconds of trying (None: all)
 
     @property
     def content_w(self) -> float:
@@ -684,21 +692,108 @@ def _stitching_lines(parts) -> List[str]:
             for line, n in sorted(seen.values(), key=lambda v: -v[1])]
 
 
-def _cutting_layout(plan_):
-    """Every piece on the smallest piece of leather found, the gap apart: the
-    ``NestResult`` (its sheet at the origin), or None. Only the pieces --
-    loose holes, seams and lettering on no piece aren't cut from it."""
-    from leathercad.nesting import nest_smallest
+@dataclass
+class CuttingLayout:
+    """The pieces on one piece of leather, for the details page: where each
+    goes (``placements``, keyed by part), the leather ``(0, 0, w, h)``, how
+    many pieces are on it ``of`` how many, whether it's the sheet Nest on
+    sheet drew (``drawn``) or one worked out for the page, and whether it's
+    the best fit (``best``: the smallest piece found, keeping the edge
+    margin and gap asked for)."""
+    placements: list
+    sheet: Tuple[float, float, float, float]
+    on: int
+    of: int
+    drawn: bool
+    best: bool = False
+
+
+def _on_drawn_sheet(plan_, doc, keys):
+    """The sheet Nest on sheet drew and the pieces (of ``keys``) on it, as a
+    layout, or None."""
+    from leathercad.nesting import Placement, drawn_sheet
+    sheet = drawn_sheet(doc) if doc is not None else None
+    if sheet is None:
+        return None
+    x0, y0, x1, y1 = sheet.bounds()
+    on = []
+    for i in keys:
+        b = plan_.parts[i].bbox()
+        cx, cy = 0.5 * (b[0] + b[2]), 0.5 * (b[1] + b[3])
+        if x0 <= cx <= x1 and y0 <= cy <= y1:
+            on.append(i)
+    if not on:
+        return None
+    return CuttingLayout([Placement(key=i, dx=-x0, dy=-y0) for i in on],
+                         (0.0, 0.0, x1 - x0, y1 - y0), len(on), len(keys),
+                         True), (x0, y0)
+
+
+def _keeps(plan_, layout, origin, margin, gap) -> bool:
+    """Whether a layout on the drawing keeps the edge margin and the gap
+    asked for: every piece ``margin`` in from the edge and ``gap`` from the
+    next, as the nest would have placed it (on the same grid)."""
+    from leathercad.nesting import cell_for_gap, sheet_packer
+    x0, y0 = origin
+    _sx, _sy, w, h = layout.sheet
+    for pl in layout.placements:
+        b = plan_.parts[pl.key].bbox()
+        if (b[0] - x0 < margin - 0.01 or b[1] - y0 < margin - 0.01
+                or x0 + w - b[2] < margin - 0.01
+                or y0 + h - b[3] < margin - 0.01):
+            return False
+    spacing = gap + LAYOUT_SLACK
+    probe = sheet_packer(w, h, margin=margin, spacing=spacing,
+                         cell=cell_for_gap(spacing), sheet_x=x0, sheet_y=y0)
+    for pl in layout.placements:
+        outlines = [(pts, closed) for pts, _c, closed
+                    in plan_.parts[pl.key].outlines if pts]
+        if probe.collides(outlines, slack=0):
+            return False
+        probe.block_outlines(outlines)
+    return True
+
+
+def _cutting_layout(plan_, doc=None) -> Optional[CuttingLayout]:
+    """What the details page shows the pieces on.
+
+    By default the best fit: every piece on the smallest piece of leather,
+    the edge margin clear all round and the gap between pieces -- searched
+    as Nest on sheet's smallest sheet is, for as long as the budget allows.
+    A layout Nest on sheet left on the drawing, with every piece on it,
+    keeping that margin and gap and needing no more leather, is that best
+    fit -- so the page never shows worse than the drawing does.
+
+    With ``cut_layout="drawn"``, the sheet Nest on sheet drew, just as it is
+    (the pieces on it; its size and edge margin), when there is one.
+
+    Only the pieces count: loose holes, seams and lettering on no piece
+    aren't cut from leather. None when there's nothing to show."""
+    from leathercad.nesting import _smaller, nest_smallest
     o = plan_.opts
-    pieces = [pc for pc in _nest_pieces(plan_.parts, o)
-              if any(cl for _p, _c, cl in plan_.parts[pc.key].outlines)]
-    if not pieces:
+    keys = [i for i, part in enumerate(plan_.parts)
+            if any(cl for _p, _c, cl in part.outlines)]
+    if not keys:
         return None
-    res = nest_smallest(pieces, margin=0.0, spacing=o.spacing + LINE_SLACK,
-                        budget=1.0)
-    if res.unplaced or not res.placements:
-        return None
-    return res
+    on_drawing = _on_drawn_sheet(plan_, doc, keys)
+    if o.cut_layout == "drawn" and on_drawing is not None:
+        return on_drawing[0]
+    pieces = [pc for pc in _nest_pieces(plan_.parts, o) if pc.key in keys]
+    res = nest_smallest(pieces, margin=o.edge_margin,
+                        spacing=o.spacing + LAYOUT_SLACK,
+                        budget=o.layout_budget)
+    found = None
+    if not res.unplaced and res.placements:
+        found = CuttingLayout(res.placements, res.sheet, len(res.placements),
+                              len(keys), False, True)
+    if on_drawing is not None:
+        drawn, origin = on_drawing
+        if (drawn.on == drawn.of
+                and (found is None or not _smaller(found.sheet, drawn.sheet))
+                and _keeps(plan_, drawn, origin, o.edge_margin, o.spacing)):
+            drawn.best = True
+            return drawn
+    return found
 
 
 def _draw_layout(painter, D, plan_, layout, number, bx, by, bw, bh):
@@ -795,7 +890,7 @@ def _details(painter, D, plan_, doc):
 
     # the cutting layout, beside the squares when there's room
     table, number = _piece_rows(plan_.parts)
-    layout = _cutting_layout(plan_)
+    layout = _cutting_layout(plan_, doc)
     beside = w - 95.0 >= 55.0
     if layout is not None and beside:
         lx = x + 95.0
@@ -823,10 +918,22 @@ def _details(painter, D, plan_, doc):
         rows.append(("Leather to buy",
                      f"about {buy:.2f} sq ft  ({o.usable_pct:g}% of a hide usable)"))
     if layout is not None:
-        rows.append(("Fits on a piece of",
-                     f"{_mm_in(layout.sheet[2], layout.sheet[3])}, pieces "
-                     f"{_num(o.spacing)} mm apart"
-                     + ("" if beside else " (layout below)")))
+        size = _mm_in(layout.sheet[2], layout.sheet[3])
+        below = "" if beside else " (layout below)"
+        if layout.best:
+            whose = ("your Nest on sheet layout" if layout.drawn
+                     else "the best fit found")
+            rows.append(("Fits on a piece of",
+                         f"{size} ({whose}), pieces {_num(o.spacing)} mm "
+                         f"apart and {_num(o.edge_margin)} mm from the "
+                         f"edge{below}"))
+        elif layout.on == layout.of:
+            rows.append(("Fits on a piece of",
+                         f"{size}, as laid out with Nest on sheet{below}"))
+        else:
+            rows.append(("Laid out on",
+                         f"a piece of {size}: {layout.on} of {layout.of} "
+                         f"pieces, as laid out with Nest on sheet{below}"))
     stitching = _stitching_lines(plan_.parts)
     for i, line in enumerate(stitching[:3]):
         rows.append(("Stitching" if i == 0 else "", line))

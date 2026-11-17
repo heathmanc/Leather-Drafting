@@ -4,6 +4,22 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
+## Unreleased
+
+### The PDF's details page
+* **The best fit, with an edge margin.** The cutting layout was a quick
+  search with the pieces right up to the edge of the leather, so it
+  differed from Nest on sheet's in layout and size. It's now a proper
+  best-fit search, as Nest on sheet's smallest sheet does, a few seconds
+  long, with an **Edge margin** you set on the export options page and the
+  Space between pieces. A Nest on sheet layout on your drawing that holds
+  every piece, keeps that margin and gap and needs no more leather is the
+  one shown, so the page never shows worse than the drawing.
+* **Cutting layout: As laid out with Nest on sheet.** A new choice on the
+  export options page shows the sheet Nest on sheet drew, just as it is:
+  its size, edge margin and the pieces on it (it says so when some
+  aren't). Use it for a layout arranged by hand.
+
 ## 0.4.10 — 2026-11-17
 
 ### The PDF's details page

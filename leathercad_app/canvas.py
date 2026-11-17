@@ -5505,11 +5505,8 @@ class Canvas(QGraphicsView):
     def _nest_sheet_shape(self):
         """The sheet an earlier nest drew (a construction rectangle called
         "Sheet"), the latest one, or None."""
-        for sh in reversed(self.doc.shapes):
-            if (getattr(sh, "construction", False) and sh.name == "Sheet"
-                    and isinstance(sh, Rectangle)):
-                return sh
-        return None
+        from leathercad.nesting import drawn_sheet
+        return drawn_sheet(self.doc)
 
     def _nest_plan(self, cand, sheet_w, sheet_h, *, margin, spacing,
                    allow_rotate, progress=None, smallest=False, keep=True,

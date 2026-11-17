@@ -555,6 +555,18 @@ def nest(pieces: Sequence[NestPiece], sheet_w: float, sheet_h: float, *,
 ALL_TURNS = (0, 1, 2, 3)
 
 
+def drawn_sheet(doc):
+    """The sheet Nest on sheet drew on the drawing (a construction rectangle
+    called "Sheet"; the latest), or None."""
+    from .shapes import Rectangle
+    for sh in reversed(doc.shapes):
+        if (getattr(sh, "construction", False)
+                and getattr(sh, "name", "") == "Sheet"
+                and isinstance(sh, Rectangle)):
+            return sh
+    return None
+
+
 def sheet_packer(sheet_w: float, sheet_h: float, *, margin: float,
                  spacing: float, cell: float, sheet_x: float = 0.0,
                  sheet_y: float = 0.0, from_top: bool = False,

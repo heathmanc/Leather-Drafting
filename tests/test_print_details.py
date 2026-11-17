@@ -258,27 +258,148 @@ def test_the_details_page(qapp, tmp_path):
 
 
 def test_the_cutting_layout_holds_every_piece_on_one_piece(qapp):
+    """The page lays the pieces out on the best fit it finds: the gap
+    between pieces, the edge margin chosen all round."""
     from leathercad_app.printing import (LINE_SLACK, PrintOptions,
                                          _cutting_layout, plan)
-    p = plan(_wallet(), PrintOptions())
-    layout = _cutting_layout(p)
-    assert layout is not None and not layout.unplaced
+    p = plan(_wallet(), PrintOptions(edge_margin=5.0, spacing=8.0,
+                                     layout_budget=1.0))
+    layout = _cutting_layout(p, _wallet())
+    assert layout is not None and not layout.drawn
     pieces = [i for i, part in enumerate(p.parts)
               if any(cl for _p, _c, cl in part.outlines)]
     assert sorted(pl.key for pl in layout.placements) == pieces
+    assert layout.on == layout.of == len(pieces)
     _x, _y, w, h = layout.sheet
     assert max(w, h) / min(w, h) <= 2.0       # a piece of leather, not a strip
     outs = []
     for pl in layout.placements:
         pts = [pl.apply(q) for pts, _c, _cl in p.parts[pl.key].outlines
                for q in pts]
-        assert min(q.x for q in pts) >= -1e-6 and max(q.x for q in pts) <= w
-        assert min(q.y for q in pts) >= -1e-6 and max(q.y for q in pts) <= h
+        assert min(q.x for q in pts) >= 5.0 - 1e-6     # the edge margin
+        assert min(q.y for q in pts) >= 5.0 - 1e-6
+        assert max(q.x for q in pts) <= w - 5.0 + 1e-6
+        assert max(q.y for q in pts) <= h - 5.0 + 1e-6
         outs.append(pts)
     for i in range(len(outs)):
         for j in range(i + 1, len(outs)):
             d = min((a - b).length() for a in outs[i] for b in outs[j])
             assert d >= 8.0 + LINE_SLACK - 0.5
+
+
+def test_the_best_fit_keeps_the_edge_margin_chosen(qapp):
+    """The reports: "why does the pdf export not look like the same nesting
+    as in the app, nor is it the same size? ... and has no edge clearance",
+    then "why wouldn't we try for the best fit for the pdf? with an edge
+    margin selectable on the options page before export?" -- the page's
+    layout was a quick one with no edge margin at all."""
+    from leathercad_app.printing import PrintOptions, _cutting_layout, plan
+    for margin in (0.0, 5.0, 12.0):
+        p = plan(_wallet(), PrintOptions(edge_margin=margin,
+                                         layout_budget=0.5))
+        layout = _cutting_layout(p, _wallet())
+        _x, _y, w, h = layout.sheet
+        for pl in layout.placements:
+            b = p.parts[pl.key].bbox()
+            lo, hi = pl.apply(Vec2(b[0], b[1])), pl.apply(Vec2(b[2], b[3]))
+            xs, ys = sorted((lo.x, hi.x)), sorted((lo.y, hi.y))
+            assert xs[0] >= margin - 1e-6 and ys[0] >= margin - 1e-6
+            assert xs[1] <= w - margin + 1e-6 and ys[1] <= h - margin + 1e-6
+
+
+def test_the_cutting_layout_can_be_the_one_laid_out_on_the_drawing(
+        qapp, tmp_path):
+    """Chosen on the options page, the page shows the sheet Nest on sheet
+    drew, just as it is: the same layout, size and edge margin."""
+    from leathercad.nesting import drawn_sheet
+    from leathercad_app.printing import (PrintOptions, _cutting_layout,
+                                         export_pdf, plan)
+    win = _window(qapp, _wallet())
+    try:
+        win.canvas.nest_selected(600, 450, margin=5, spacing=8,
+                                 smallest=True, budget=0)
+        doc = win.doc
+        sheet = drawn_sheet(doc)
+        x0, y0, x1, y1 = sheet.bounds()
+        p = plan(doc, PrintOptions(cut_layout="drawn"))
+        layout = _cutting_layout(p, doc)
+        assert layout.drawn and layout.on == layout.of == 7
+        assert layout.sheet[2:] == (pytest.approx(x1 - x0),
+                                    pytest.approx(y1 - y0))
+        for pl in layout.placements:           # just where they lie
+            b = p.parts[pl.key].bbox()
+            moved = pl.apply(Vec2(b[0], b[1]))
+            assert (moved.x, moved.y) == (pytest.approx(b[0] - x0),
+                                          pytest.approx(b[1] - y0))
+            assert b[0] - x0 >= 5.0 - 1e-6 and b[1] - y0 >= 5.0 - 1e-6
+        # the best fit otherwise: the drawing's, only when no bigger
+        best = _cutting_layout(plan(doc, PrintOptions(layout_budget=0.5)), doc)
+        assert best.best
+        if best.drawn:
+            assert best.sheet == layout.sheet
+        path = str(tmp_path / "nested.pdf")
+        export_pdf(doc, path, PrintOptions(cut_layout="drawn"))
+        first = _pdf_text(path)[0].replace("\r\n", " ").replace("\n", " ")
+        size = f"{x1 - x0:.0f} × {y1 - y0:.0f} mm"
+        assert f"Fits on a piece of {size}" in first.replace("\ue09f", "×")
+        assert "as laid out with Nest on sheet" in first
+    finally:
+        win.hide()
+
+
+def _on_a_sheet(x, y, w, h, pieces):
+    """A drawing with a sheet laid out by hand: pieces (w, h, cx, cy) on a
+    "Sheet" rectangle at (x, y)."""
+    doc = Document()
+    sheet = Rectangle(width=w, height=h, layer="Cut",
+                      transform=Transform(x + w / 2.0, y + h / 2.0))
+    sheet.name, sheet.construction = "Sheet", True
+    doc.add_shape(sheet)
+    for i, (pw, ph, cx, cy) in enumerate(pieces):
+        _add(doc, Rectangle(width=pw, height=ph, layer="Cut",
+                            transform=Transform(cx, cy)), f"Piece {i + 1}")
+    return doc
+
+
+def test_a_layout_on_the_drawing_as_good_as_any_is_the_best_fit(qapp):
+    from leathercad_app.printing import PrintOptions, _cutting_layout, plan
+    # one 100 x 50 piece 5 mm in from every edge: nothing beats it
+    doc = _on_a_sheet(1000, 1000, 110, 60, [(100, 50, 1055, 1030)])
+    layout = _cutting_layout(plan(doc, PrintOptions(edge_margin=5.0,
+                                                    layout_budget=0.5)), doc)
+    assert layout.best and layout.drawn
+    assert layout.sheet[2:] == (pytest.approx(110), pytest.approx(60))
+    # asked for more clearance than it has, the page finds its own
+    roomy = _cutting_layout(plan(doc, PrintOptions(edge_margin=8.0,
+                                                   layout_budget=0.5)), doc)
+    assert roomy.best and not roomy.drawn
+    assert sorted(roomy.sheet[2:]) == [pytest.approx(66), pytest.approx(116)]
+
+
+def test_a_layout_on_the_drawing_too_tight_is_passed_over(qapp):
+    from leathercad_app.printing import PrintOptions, _cutting_layout, plan
+    # two pieces 3 mm apart: not the 8 mm asked for
+    doc = _on_a_sheet(0, 0, 213, 60, [(100, 50, 55, 30), (100, 50, 158, 30)])
+    layout = _cutting_layout(plan(doc, PrintOptions(spacing=8.0,
+                                                    layout_budget=0.5)), doc)
+    assert layout.best and not layout.drawn
+
+
+def test_pieces_left_off_the_sheet_are_told(qapp):
+    from leathercad.nesting import drawn_sheet
+    from leathercad_app.printing import PrintOptions, _cutting_layout, plan
+    win = _window(qapp, _wallet())
+    try:
+        win.canvas.nest_selected(600, 450, margin=5, spacing=8, budget=0)
+        doc = win.doc
+        strap = next(s for s in doc.shapes if s.name == "Strap")
+        strap.transform.x += 2000                # dragged off the sheet
+        assert drawn_sheet(doc) is not None
+        layout = _cutting_layout(plan(doc, PrintOptions(cut_layout="drawn")),
+                                 doc)
+        assert layout.drawn and (layout.on, layout.of) == (6, 7)
+    finally:
+        win.hide()
 
 
 def test_nest_on_sheet_lays_a_copy_left_on_its_original_apart(qapp):

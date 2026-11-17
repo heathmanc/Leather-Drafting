@@ -947,11 +947,20 @@ Both open the same options first, remembered for next time:
   of every page, beside the page number. Tick **Details page first** for a
   cover page with:
   * squares of 50 mm and 1 inch, to check the print's scale;
-  * a **cutting layout**: every piece on the smallest piece of leather
-    they all fit on with that gap, drawn small beside the squares and
-    numbered as in the list of pieces — as **Nest on sheet** lays them out
-    on the drawing. A long thin strip is passed over for a squarer piece
-    unless it saves a lot of leather;
+  * a **cutting layout**: the pieces on one piece of leather, drawn small
+    beside the squares and numbered as in the list of pieces. Pick it under
+    **Cutting layout**:
+    * **Best fit** (the default) searches for the smallest piece of leather
+      every piece fits on, with the **Edge margin** you set clear all round
+      and the **Space between pieces** between them — as Nest on sheet's
+      smallest sheet does, for a few seconds more. A long thin strip is
+      passed over for a squarer piece unless it saves a lot of leather. If
+      your drawing has a Nest on sheet layout holding every piece, with that
+      margin and gap and needing no more leather, that's the one shown.
+    * **As laid out with Nest on sheet** shows the sheet Nest on sheet drew
+      on your drawing, just as it is: its size and edge margin, and the
+      pieces on it (it says so when some aren't). Use it for a layout
+      you've arranged by hand;
   * pieces to cut, stitch holes, the largest piece, the leather in the
     pieces and the leather to buy (at the hide yield set in the Job
     estimate), the size of that piece of leather, the stitching (spacing

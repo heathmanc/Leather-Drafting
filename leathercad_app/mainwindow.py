@@ -2502,7 +2502,8 @@ class MainWindow(QMainWindow):
          else nested).setChecked(True)
         gap = length_spin(0.0, 100.0, 1, s.value("pdfGap", 8.0, type=float))
         gap.setToolTip("The least space left between neighbouring pieces, "
-                       "outline to outline")
+                       "outline to outline -- on the pages, and in the "
+                       "details page's cutting layout")
         rot = QCheckBox("Turn pieces 90° where that saves paper")
         rot.setChecked(s.value("pdfRotate", True, type=bool))
         rot.setToolTip("Turn off if every piece must keep its direction")
@@ -2512,8 +2513,11 @@ class MainWindow(QMainWindow):
         form.addRow("", rot)
 
         def nested_only(on):
-            gap.setEnabled(on)
+            # the gap is the cutting layout's too, on the details page
+            gap.setEnabled(on or (details is not None
+                                  and details.isChecked()))
             rot.setEnabled(on)
+        details = None
         nested.toggled.connect(nested_only)
         nested_only(nested.isChecked())
         lay.addWidget(box)
@@ -2530,10 +2534,42 @@ class MainWindow(QMainWindow):
                             "spacing, leather needed, a cutting layout, scale "
                             "check")
         details.setChecked(s.value("pdfDetails", True, type=bool))
+        from leathercad.nesting import drawn_sheet
+        cut = QComboBox()
+        cut.addItem("Best fit: the smallest piece of leather", "best")
+        cut.addItem("As laid out with Nest on sheet", "drawn")
+        has_sheet = drawn_sheet(self.doc) is not None
+        if not has_sheet:
+            cut.model().item(1).setEnabled(False)
+        cut.setCurrentIndex(1 if has_sheet and s.value(
+            "pdfCutLayout", "best", type=str) == "drawn" else 0)
+        cut.setToolTip(
+            "Best fit: the pieces are laid out afresh for the details page, "
+            "on the smallest piece of leather they fit on, the edge margin "
+            "round them and the space between pieces between them. As laid "
+            "out: the sheet Nest on sheet drew on your drawing, just as it "
+            "is" + ("" if has_sheet else " (there's none on the drawing "
+                                         "yet)") + ".")
+        edge = length_spin(0.0, 100.0, 1, s.value(
+            "pdfEdgeMargin", s.value("nestMargin", 5.0, type=float),
+            type=float))
+        edge.setToolTip("Clear leather left round the pieces, to the edge of "
+                        "the piece they're cut from")
         form.addRow("Pattern name", name)
         form.addRow("Designer", designer)
         form.addRow("Footer note", note)
         form.addRow(details)
+        form.addRow("Cutting layout", cut)
+        form.addRow("Edge margin", edge)
+
+        def layout_shown(*_a):
+            on = details.isChecked()
+            cut.setEnabled(on)
+            edge.setEnabled(on and cut.currentData() == "best")
+            nested_only(nested.isChecked())
+        details.toggled.connect(layout_shown)
+        cut.currentIndexChanged.connect(layout_shown)
+        layout_shown()
         lay.addWidget(box)
 
         hint = QLabel("A piece that fits on a page is printed whole on one "
@@ -2554,7 +2590,9 @@ class MainWindow(QMainWindow):
                          designer=designer.text().strip(),
                          note=note.text().strip(),
                          details=details.isChecked(),
-                         usable_pct=s.value("leatherUsable", 75.0, type=float))
+                         usable_pct=s.value("leatherUsable", 75.0, type=float),
+                         cut_layout=cut.currentData(),
+                         edge_margin=edge.value())
         if paper:
             i = size.currentIndex()
             _n, w, h = self._PAPER[i]
@@ -2571,6 +2609,8 @@ class MainWindow(QMainWindow):
             s.setValue("pdfCustomH", ch.value())
         s.setValue("pdfLayout", "nested" if o.nested else "drawn")
         s.setValue("pdfGap", o.spacing)
+        s.setValue("pdfCutLayout", o.cut_layout)
+        s.setValue("pdfEdgeMargin", o.edge_margin)
         s.setValue("pdfRotate", o.allow_rotate)
         s.setValue("pdfDesigner", o.designer)
         s.setValue("pdfNote", o.note)

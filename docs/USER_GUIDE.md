@@ -580,15 +580,18 @@ drawn on.
 
 ![The 3D assembly preview: a one-piece wallet part folded](fold_preview.png)
 
-The view shows the leather at its real thickness, with rounded bends: its
-**front** (the side the pattern is drawn on) tan, its **back** pale. Every
-fold line is drawn on it and lettered — **solid blue** if it folds to the
-front, **dashed magenta** to the back — and the panels between the folds
-are numbered. Stitch holes, cutouts, slits and any lines scored or engraved
-on the piece are on it too. Drag to turn the piece, right-drag (or
-Shift-drag) to slide it, roll the wheel to zoom; **Fit** or a double-click
-brings it back. Click a fold line to choose its row in the table: it lights
-up through whatever is folded over it.
+The view shows the leather at its real thickness, with rounded bends, and
+looking like leather: its **front** (the side the pattern is drawn on) is
+the grain side, with a sheen that moves as you turn it; its **back** is the
+paler flesh side; the cut edge is darker, and an edge throws a soft shadow
+on the layer under it. Every fold line is drawn on it and lettered —
+**solid blue** if it folds to the front, **dashed magenta** to the back
+(both lighter on a dark leather) — and the panels between the folds are
+numbered. Stitch holes, cutouts, slits and any lines scored or engraved on
+the piece are on it too. Drag to turn the piece, right-drag (or Shift-drag)
+to slide it, roll the wheel to zoom; **Fit** or a double-click brings it
+back. Click a fold line to choose its row in the table: it lights up
+through whatever is folded over it.
 
 Each fold line has a row:
 
@@ -604,7 +607,10 @@ Each fold line has a row:
 Above the table, **Leather thickness** and **Bend radius** are for the
 whole piece — a bend radius of 0 is a sharp crease, and the leather still
 takes half its thickness to get round — and **Stays still** chooses the
-panel the rest folds about.
+panel the rest folds about. **Leather colour** is the leather the preview
+shows the piece in: natural, tan, chestnut, dark brown, black, burgundy,
+navy or olive. It changes the picture only — nothing about it is saved in
+the drawing — and the preview opens in the one you chose last.
 
 **The order matters.** A fold that closes flat over leather folded in
 before it has to go round that leather, so it bends at a bigger radius and

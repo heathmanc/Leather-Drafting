@@ -344,16 +344,18 @@ class Scene:
 
 def _hidden(pt, discs, eye, m, reach=1e-3) -> bool:
     """Whether something of the model lies between ``pt`` and the eye.
-    ``discs`` is what could be in the way: for each cell its circle on the
-    screen and its faces turned towards the eye -- ``(x, y, radius squared,
-    [(plane, facing, corners on the screen)])``."""
+    ``discs`` is what could be in the way, nearest the eye first: for each
+    cell its circle on the screen, how near the eye it comes, and its faces
+    turned towards the eye -- ``(x, y, radius squared, nearness, [(plane,
+    facing, corners on the screen)])``."""
     ox, ax, ay, az, oy, bx, by, bz = m
     px, py, pz = pt
     sx = ox + ax * px + ay * py + az * pz
     sy = oy + bx * px + by * py + bz * pz
-    for cx, cy, r2, faces in discs:
-        if (cx - sx) ** 2 + (cy - sy) ** 2 > r2:
-            continue
+    near = eye[0] * px + eye[1] * py + eye[2] * pz + reach
+    for cx, cy, r2, front, faces in discs:
+        if front <= near or (cx - sx) ** 2 + (cy - sy) ** 2 > r2:
+            continue                           # behind the point, or beside it
         for (nx, ny, nz, d), facing, flat in faces:
             # how far towards the eye the face's plane is from the point
             if (d - nx * px - ny * py - nz * pz) / facing <= reach:
@@ -433,20 +435,30 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
             nx, ny, nz, _d = f.plane
             edges = f.edges
             facing = nx * ex + ny * ey + nz * ez
+            if kind <= BACK:
+                # the cut edge beyond an edge of this face is turned towards
+                # the eye where this, along that edge, comes out more than 0
+                c0 = ny * ez - nz * ey
+                c1 = nz * ex - nx * ez
+                c2 = nx * ey - ny * ex
             if facing <= 1e-6:
-                # turned away from the eye: not painted, but the far side
-                # of a layer is what its shadow falls from
+                # turned away from the eye, so not painted: but where the
+                # cut edge beside it shows, its rim is the foot of that
+                # edge, and there the shadow of the leather falls from
                 if kind <= BACK and edges is not None and True in edges:
-                    pts = f.pts
-                    n = len(pts)
+                    at = f.pts
+                    n = len(at)
                     for i in range(n):
-                        if edges[i] is True:
-                            x, y, z = pts[i]
+                        if edges[i] is not True:
+                            continue
+                        x, y, z = at[i]
+                        x2, y2, z2 = at[i + 1 if i + 1 < n else 0]
+                        if (x2 - x) * c0 + (y2 - y) * c1 + (z2 - z) * c2 > 0.0:
                             cast.append(QPointF(ox + ax * x + ay * y + az * z,
                                                 oy + bx * x + by * y + bz * z))
-                            x, y, z = pts[i + 1 if i + 1 < n else 0]
-                            cast.append(QPointF(ox + ax * x + ay * y + az * z,
-                                                oy + bx * x + by * y + bz * z))
+                            cast.append(QPointF(
+                                ox + ax * x2 + ay * y2 + az * z2,
+                                oy + bx * x2 + by * y2 + bz * z2))
                 continue
             lum = nx * lx + ny * ly + nz * lz
             level = 0 if lum <= 0.0 else top if lum >= 1.0 \
@@ -465,11 +477,21 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
             rims, soft = [], []
             if kind <= BACK:
                 seam = None
+                at = f.pts
                 for i in range(n):
                     e = edges[i] if edges is not None else False
                     if e is True:
+                        j = i + 1 if i + 1 < n else 0
                         rims.append(pts[i])
-                        rims.append(pts[i + 1 if i + 1 < n else 0])
+                        rims.append(pts[j])
+                        # with the cut edge out of sight, this is the rim
+                        # of the layer: its shadow falls from here
+                        x, y, z = at[i]
+                        x2, y2, z2 = at[j]
+                        if (x2 - x) * c0 + (y2 - y) * c1 \
+                                + (z2 - z) * c2 <= 0.0:
+                            cast.append(pts[i])
+                            cast.append(pts[j])
                     elif e is not False and (
                             e[0] * ex + e[1] * ey + e[2] * ez <= 1e-6
                             or e[0] * nx + e[1] * ny + e[2] * nz < _CREASE):
@@ -483,7 +505,6 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                                 seam = seams[(kind, level)] = QPainterPath()
                         seam.moveTo(pts[i])
                         seam.lineTo(pts[i + 1 if i + 1 < n else 0])
-                cast += rims
             else:
                 for i in range(n):
                     (rims if edges is not None and edges[i] is True
@@ -493,9 +514,12 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
         if faces or cast:
             cells.append((cast, faces))
         if solid:
-            discs.append((ox + ax * cell.cx + ay * cell.cy + az * cell.cz,
-                          oy + bx * cell.cx + by * cell.cy + bz * cell.cz,
-                          cell.rad * cell.rad * s2, solid))
+            x, y, z = cell.cx, cell.cy, cell.cz
+            discs.append((ox + ax * x + ay * y + az * z,
+                          oy + bx * x + by * y + bz * z,
+                          cell.rad * cell.rad * s2,
+                          ex * x + ey * y + ez * z + cell.rad, solid))
+    discs.reverse()                            # nearest the eye first
 
     # Under everything, a line of the leather's own colour along every
     # seam: where a face was cut in two and the one beside it was not, the

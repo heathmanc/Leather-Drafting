@@ -4,6 +4,20 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
+## Unreleased
+
+### The 3D assembly preview looks like leather
+* **Grain, flesh and edge.** The front of the leather (the side you draw
+  on) has a pebbled grain, with a sheen that moves as you turn the piece;
+  the back is the paler, fibrous flesh side; the cut edge is darker; and
+  an edge throws a soft shadow on the layer under it. The grain lies where
+  the pattern puts it, so it runs on from a panel round a bend to the next.
+* **Leather colour.** Show the piece in natural, tan, chestnut, dark
+  brown, black, burgundy, navy or olive. It changes the preview only —
+  nothing is saved in the drawing — and the choice is remembered. Stitch
+  holes, scored lines, panel numbers and fold lines switch to light
+  colours on a dark leather.
+
 ## 0.4.12 — 2026-11-17
 
 ### The 3D assembly preview, rebuilt

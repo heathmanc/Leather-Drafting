@@ -2602,10 +2602,14 @@ class MainWindow(QMainWindow):
                 f"Keep a copy in the library, with “{entry.title}”"
                 if entry is not None else
                 "Keep a copy in the library (this pattern is added to it)")
-            keep.setToolTip("The library (File → Library of finished "
-                            "pieces) keeps the things you've made: a "
-                            "picture of each, your notes, and the pattern "
-                            "and 1:1 PDF it was made from")
+            keep.setToolTip(
+                "The library (File → Library of finished pieces) keeps the "
+                "things you've made: a picture of each, your notes, and "
+                "the pattern and 1:1 PDF it was made from."
+                + ("\n\nThis drawing and its PDF take the place of the "
+                   "ones kept with the piece. Those are moved to “earlier” "
+                   "in the piece's folder, unless they were only put there "
+                   "in the last day." if entry is not None else ""))
             keep.setChecked(entry is not None
                             or s.value("pdfToLibrary", False, type=bool))
             lay.addWidget(keep)
@@ -2779,7 +2783,8 @@ class MainWindow(QMainWindow):
 
     def library_open_pattern(self, item) -> bool:
         """Open a library entry's pattern as a new drawing: a copy, so the
-        library's stays as it was when the piece was made."""
+        library's stays as it was when the piece was made. The copy is no
+        entry's -- what is made from it next is another piece."""
         path = item.pattern_path
         if path is None or not path.is_file():
             QMessageBox.information(self, "Library",
@@ -2796,12 +2801,11 @@ class MainWindow(QMainWindow):
         if (getattr(doc, "name", "") or "").strip() in ("", "Untitled"):
             doc.name = item.title              # what a print of it is called
         self._adopt_document(doc, None, fit=True)
-        self._library_id = item.id
         self.raise_()
         self.activateWindow()
         self.statusBar().showMessage(
-            f"Opened a copy of “{item.title}” from the library. Saving it "
-            "doesn't change the library's copy", 10000)
+            f"Opened a copy of “{item.title}” from the library, as a new "
+            "drawing. The library's own stays as it is", 10000)
         return True
 
     def library_make_pdf(self, item) -> bool:
@@ -2839,15 +2843,18 @@ class MainWindow(QMainWindow):
 
     def _file_pdf_in_library(self, pdf: str, title: str = ""):
         """Keep a copy of a PDF just made of the open drawing with its
-        entry in the library, making the entry if there is none. Returns
-        the entry, or None if it couldn't be done."""
+        entry in the library, making the entry if there is none -- and
+        the drawing as it stands with it, so that the entry's pattern and
+        its PDF are of the same thing. (What they replace isn't lost:
+        see ``Item._set_aside``.) Returns the entry, or None if it
+        couldn't be done."""
         try:
             item = self.library_entry()
             if item is None:
                 item = self.library().add(
                     title or self._pattern_title() or "Untitled")
-                if not self.library_keep_drawing(item):
-                    return None
+            if not self.library_keep_drawing(item):
+                return None
             item.attach_pdf(pdf)
         except OSError as e:
             QMessageBox.warning(self, "Library",

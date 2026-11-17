@@ -4,6 +4,7 @@ and its 1:1 PDF."""
 import datetime
 import json
 import os
+import time
 
 import pytest
 
@@ -116,6 +117,113 @@ def test_the_pattern_and_its_pdf_are_kept_with_the_piece(tmp_path):
     item.remove_pdf()
     assert item.pdf == "" and not (item.folder / "Card wallet.pdf").exists()
     item.remove_pdf()
+
+
+def _aged(path, days):
+    """Make a file look as if it was put there ``days`` ago."""
+    then = time.time() - days * 86400
+    os.utime(path, (then, then))
+    return datetime.date.fromtimestamp(then).isoformat()
+
+
+def test_a_pattern_or_pdf_that_is_replaced_is_kept_not_lost(tmp_path):
+    """A piece in the library is a record of something made. Filing a later
+    pattern or PDF with it must not make the one it was made from vanish:
+    that one goes into the piece's ``earlier`` folder."""
+    shelf = lib.Library(tmp_path / "lib")
+    item = shelf.add("Card wallet")
+    item.attach_pattern(_file(tmp_path / "a.leathercad.json", b"pattern 1"))
+    item.attach_pdf(_file(tmp_path / "a.pdf", b"%PDF 1"))
+    assert item.earlier == []
+    # the day it is put in, a pattern is still being worked on: the next
+    # one just takes its place
+    item.attach_pattern(_file(tmp_path / "b.leathercad.json", b"pattern 2"))
+    item.attach_pdf(_file(tmp_path / "b.pdf", b"%PDF 2"))
+    assert item.earlier == [] and not (item.folder / lib.EARLIER).exists()
+    assert item.pattern_path.read_bytes() == b"pattern 2"
+    # months on, it is the record of the piece
+    day = _aged(item.pattern_path, 200)
+    _aged(item.pdf_path, 200)
+    item.attach_pattern(_file(tmp_path / "c.leathercad.json", b"pattern 3"))
+    _aged(_file(tmp_path / "c.pdf", b"%PDF 3"), 400)   # a PDF made long ago
+    item.attach_pdf(tmp_path / "c.pdf")
+    assert item.pattern_path.read_bytes() == b"pattern 3"
+    assert item.pdf_path.read_bytes() == b"%PDF 3"
+    assert [p.name for p in item.earlier] == [
+        f"{day} Card wallet.leathercad.json", f"{day} Card wallet.pdf"]
+    assert [p.read_bytes() for p in item.earlier] == [b"pattern 2", b"%PDF 2"]
+    # (what is put in is dated when it was put in, however old the file)
+    assert time.time() - item.pdf_path.stat().st_mtime < 60
+    # the same one filed again changes nothing, old as it is
+    _aged(item.pdf_path, 30)
+    item.attach_pdf(_file(tmp_path / "c again.pdf", b"%PDF 3"))
+    assert len(item.earlier) == 2
+    # two replaced that were put in on the same day are both kept
+    _aged(item.pdf_path, 200)
+    item.attach_pdf(_file(tmp_path / "d.pdf", b"%PDF 4"))
+    assert [p.name for p in item.earlier] == [
+        f"{day} Card wallet (2).pdf",
+        f"{day} Card wallet.leathercad.json", f"{day} Card wallet.pdf"]
+    assert item.earlier[0].read_bytes() == b"%PDF 3"
+    # a piece renamed since: the new PDF has the new name, and the one it
+    # replaces doesn't lie about under the old -- put in today, it is gone
+    item.rename("Bifold")
+    assert item.attach_pdf(_file(tmp_path / "e.pdf", b"%PDF 5")) \
+        == "Bifold.pdf"
+    assert sorted(p.name for p in item.folder.iterdir() if p.is_file()) \
+        == ["Bifold.pdf", "Card wallet.leathercad.json", "item.json"]
+    assert len(item.earlier) == 3
+    # ... and put in long ago, it is kept under the name it had
+    item.rename("Card wallet")
+    _aged(item.pdf_path, 50)
+    item.attach_pdf(_file(tmp_path / "f.pdf", b"%PDF 6"))
+    assert not (item.folder / "Bifold.pdf").exists()
+    assert len(item.earlier) == 4
+    assert [p.read_bytes() for p in item.earlier
+            if p.name.endswith("Bifold.pdf")] == [b"%PDF 5"]
+    # the folder of earlier ones is nothing to the library: not a piece,
+    # not this piece's pattern or PDF
+    back = shelf.find(item.id)
+    assert (back.pattern, back.pdf) == ("Card wallet.leathercad.json",
+                                        "Card wallet.pdf")
+    assert back.photos == [] and len(shelf.items()) == 1
+    assert len(back.earlier) == 4
+
+
+def test_a_copy_that_fails_changes_nothing(tmp_path, monkeypatch):
+    shelf = lib.Library(tmp_path / "lib")
+    item = shelf.add("Card wallet")
+    item.attach_pdf(_file(tmp_path / "a.pdf", b"%PDF 1"))
+    _aged(item.pdf_path, 200)
+
+    def full(src, dst, *a, **k):
+        raise OSError("No space left on device")
+
+    # the disk fills as the new one is copied in
+    monkeypatch.setattr(lib.shutil, "copyfile", full)
+    with pytest.raises(OSError):
+        item.attach_pdf(_file(tmp_path / "b.pdf", b"%PDF 2"))
+    monkeypatch.undo()
+    assert item.pdf == "Card wallet.pdf"
+    assert item.pdf_path.read_bytes() == b"%PDF 1" and item.earlier == []
+    assert sorted(p.name for p in item.folder.iterdir()) \
+        == ["Card wallet.pdf", "item.json"]
+    # ... or the old one can't be moved aside (open in a viewer, on Windows)
+    real = lib.os.replace
+
+    def locked(src, dst, *a, **k):
+        if lib.EARLIER in str(dst):
+            raise PermissionError("in use")
+        return real(src, dst, *a, **k)
+
+    monkeypatch.setattr(lib.os, "replace", locked)
+    with pytest.raises(OSError):
+        item.attach_pdf(_file(tmp_path / "b.pdf", b"%PDF 2"))
+    monkeypatch.undo()
+    assert item.pdf_path.read_bytes() == b"%PDF 1"
+    assert [p.name for p in item.folder.iterdir() if p.is_file()
+            and p.name != "item.json"] == ["Card wallet.pdf"]
+    assert shelf.find(item.id).pdf == "Card wallet.pdf"
 
 
 def test_renaming_a_piece_renames_its_folder_and_keeps_its_files(tmp_path):

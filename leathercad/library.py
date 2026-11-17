@@ -7,6 +7,7 @@ The library is a folder, and each finished piece is a folder in it:
         IMG_2041.jpg ...             pictures of it (the first is its cover)
         Card wallet.leathercad.json  the pattern it was cut from
         Card wallet.pdf              the 1:1 PDF of that pattern
+        earlier/                     patterns and PDFs these have replaced
 
 Plain files in plain folders: a piece's pictures and its PDF can be got at
 without the app, and the library can be backed up, moved, or kept in a
@@ -18,10 +19,12 @@ read. Pure Python -- the app puts a window on it.
 from __future__ import annotations
 
 import datetime
+import filecmp
 import json
 import os
 import re
 import shutil
+import time
 import uuid
 from pathlib import Path
 from typing import List, Optional
@@ -31,6 +34,11 @@ INFO = "item.json"
 PICTURES = (".jpg", ".jpeg", ".jfif", ".png", ".webp", ".gif", ".bmp",
             ".tif", ".tiff", ".heic", ".heif")
 PATTERN_END = ".leathercad.json"
+#: The folder, in a piece's own, for the patterns and PDFs it had before.
+EARLIER = "earlier"
+#: A pattern or PDF replaced within this long of being put in was still
+#: being worked on, and isn't kept: a day, in seconds.
+FRESH = 24 * 3600.0
 
 _BAD = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
 _RESERVED = {"CON", "PRN", "AUX", "NUL"} \
@@ -248,24 +256,60 @@ class Item:
 
     def _keep(self, slot: str, source, name: str) -> str:
         """Copy ``source`` in as the piece's pattern or PDF, in place of
-        the one it had."""
+        the one it had -- which is set aside, not lost (see
+        ``_set_aside``). If that can't be done, nothing is changed."""
         source = Path(source)
         old = getattr(self, slot)
         self.folder.mkdir(parents=True, exist_ok=True)
         name = _free(self.folder, name, keep=old)
         target = self.folder / name
+        was = self.folder / old if old else None
         if source.resolve() != target.resolve():
             tmp = self.folder / (name + ".tmp")
-            shutil.copy2(source, tmp)
-            os.replace(tmp, target)
-        if old and old.lower() != name.lower():
             try:
-                (self.folder / old).unlink()
+                shutil.copyfile(source, tmp)   # (dated now: when put in)
+                if was is not None and was.is_file():
+                    self._set_aside(was, tmp)
+                os.replace(tmp, target)
+            except OSError:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+                raise
+        if was is not None and old.lower() != name.lower():
+            try:
+                was.unlink()
             except OSError:
                 pass
         setattr(self, slot, name)
         self.save()
         return name
+
+    def _set_aside(self, was: Path, new: Path) -> None:
+        """A pattern or PDF of the piece is about to be replaced by
+        ``new``: keep the one it had in the piece's ``earlier`` folder,
+        named for the day it was put in. A piece in the library is a
+        record of something made, and the pattern it was made from is
+        not to vanish because a later one is filed with it.
+
+        Not kept: one the same as the new one, and one put in within the
+        last day -- still being worked on, then, not a record yet."""
+        put_in = was.stat().st_mtime
+        if time.time() - put_in < FRESH \
+                or filecmp.cmp(was, new, shallow=False):
+            return
+        folder = self.folder / EARLIER
+        folder.mkdir(exist_ok=True)
+        day = datetime.date.fromtimestamp(put_in).isoformat()
+        os.replace(was, folder / _free(folder, f"{day} {was.name}"))
+
+    @property
+    def earlier(self) -> List[Path]:
+        """The patterns and PDFs this piece had before, oldest first."""
+        folder = self.folder / EARLIER
+        return sorted(p for p in folder.iterdir() if p.is_file()) \
+            if folder.is_dir() else []
 
     def attach_pattern(self, source, origin: Optional[str] = None) -> str:
         """Keep a copy of a pattern file as the one the piece was cut

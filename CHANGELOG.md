@@ -23,6 +23,10 @@ made only when the release workflow is run by hand with it ticked.
   library, *Open a copy* starts a new drawing from a piece's pattern
   (the library's own stays as it was), and *Make…* makes its 1:1 PDF
   again.
+* **What a piece was made from isn't overwritten.** When a later pattern
+  or PDF is filed with a piece, the one it had is moved to a folder called
+  *earlier* in the piece's folder (unless it was only put there in the
+  last day, and so was still being worked on).
 * **It's a folder.** The library is *Stitch Hero Library* in your
   Documents: a folder for each piece, with its pictures, pattern and PDF
   as ordinary files. Back it up, or keep it in a folder that syncs between

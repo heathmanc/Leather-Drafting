@@ -1155,7 +1155,8 @@ it took, what you'd do differently.
 
 * **Open a copy** opens the piece's pattern in the main window as a new,
   unsaved drawing, and closes the library. Change the copy as you like:
-  the library's own stays as it was when the piece was made.
+  the library's own stays as it was when the piece was made, and what you
+  make from the copy is a new piece, to add to the library as one.
 * **Use the open drawing** makes the drawing now open in the main window
   the piece's pattern — for an entry started without one, or a pattern
   corrected since. It asks before replacing one.
@@ -1163,10 +1164,16 @@ it took, what you'd do differently.
   pattern, with the print options of §13, and keeps it with the piece.
   **Attach…** keeps a PDF you already have instead (so does dropping one
   on the window); **Open** shows it in your PDF viewer, to print again.
-* A drawing knows its entry: export the PDF again later from a drawing
-  you added, or from a copy opened from the library, and **Keep a copy in
-  the library** is already ticked and names the piece. The new PDF takes
-  the place of the old one.
+* A drawing you added knows its entry: export its PDF again later, and
+  **Keep a copy in the library** is already ticked and names the piece.
+  The drawing as it now stands and the new PDF take the place of the ones
+  kept with the piece, so the two always match.
+* **Nothing is lost when a pattern or PDF is replaced.** The one the
+  piece had is moved into a folder called *earlier* inside the piece's
+  folder (**Show folder**), named for the day it was put in — so the
+  pattern a finished piece was really cut from survives your going on
+  changing the drawing. Only one that was put in within the last day, and
+  so was still being worked on, is simply replaced.
 
 **Where it's kept.** The library is an ordinary folder on this computer —
 *Stitch Hero Library*, in your Documents — holding one folder for each

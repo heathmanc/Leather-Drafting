@@ -875,6 +875,27 @@ def test_exporting_the_pdf_can_keep_a_copy_in_the_library(qapp, tmp_path,
         assert item.title == "Piece" and item.pdf == "Piece.pdf"
         assert sorted(p.name for p in item.folder.iterdir()) == [
             "Piece.leathercad.json", "Piece.pdf", "item.json"]
+        # months later the drawing is changed and its PDF made again. The
+        # entry follows the drawing, pattern and PDF both -- and what it
+        # had, the record of the piece as made, is kept under "earlier"
+        made = out.read_bytes()
+        then = time.time() - 200 * 86400
+        for f in (item.pattern_path, item.pdf_path):
+            os.utime(f, (then, then))
+        import datetime
+        day = datetime.date.fromtimestamp(then).isoformat()
+        win.doc.shapes.append(Rectangle(width=30, height=20, name="Tab"))
+        win.export_pdf()
+        (item,) = win.library().items()
+        assert item.pdf_path.read_bytes() == out.read_bytes() != made
+        assert len(Document.load(str(item.pattern_path)).shapes) == 2
+        assert [p.name for p in item.earlier] == [
+            f"{day} Piece.leathercad.json", f"{day} Piece.pdf"]
+        assert item.earlier[1].read_bytes() == made
+        assert len(Document.load(str(item.earlier[0])).shapes) == 1
+        # exported again unchanged that day, nothing more is set aside
+        win.export_pdf()
+        assert len(win.library().items()[0].earlier) == 2
     finally:
         _close(win)
 
@@ -882,13 +903,14 @@ def test_exporting_the_pdf_can_keep_a_copy_in_the_library(qapp, tmp_path,
 def test_the_box_in_the_pdf_options(qapp, tmp_path, monkeypatch):
     win = _main(qapp, tmp_path, monkeypatch)
     try:
-        seen = []
+        seen, tips = [], []
 
         def run(dlg):
             from PySide6.QtWidgets import QCheckBox
             boxes = [b for b in dlg.findChildren(QCheckBox)
                      if "library" in b.text()]
             seen.append([(b.text(), b.isChecked()) for b in boxes])
+            tips.extend(b.toolTip() for b in boxes)
             for b in boxes:
                 if tick[0] is not None:
                     b.setChecked(tick[0])
@@ -904,6 +926,7 @@ def test_the_box_in_the_pdf_options(qapp, tmp_path, monkeypatch):
             is False
         (text, on), = seen[-1]
         assert "this pattern is added to it" in text and not on
+        assert "earlier" not in tips[-1]
         # ticked once, it stays ticked for the next pattern
         tick[0] = True
         assert win._print_options("PDF", library=True).file_in_library
@@ -919,6 +942,8 @@ def test_the_box_in_the_pdf_options(qapp, tmp_path, monkeypatch):
         opts = win._print_options("PDF", library=True)
         (text, on), = seen[-1]
         assert item.title in text and on and opts.file_in_library
+        # ... and what becomes of the pattern and PDF the piece has
+        assert "take the place" in tips[-1] and "“earlier”" in tips[-1]
     finally:
         _close(win)
 
@@ -943,9 +968,10 @@ def test_a_pattern_is_opened_from_the_library_as_a_copy(qapp, tmp_path,
         assert win._pattern_title() == "Test piece"
         # the library gets out of the way of it
         assert not lw.isVisible()
-        # ... but the drawing is still that entry's: its PDF goes there,
-        # and shows there at once if the library is open
-        assert win.library_entry().id == item.id
+        # the copy is no entry's: what is made from it is another piece,
+        # and the one in the library stays as it is. Its PDF, kept in the
+        # library, goes in an entry of its own -- shown there at once
+        assert win.library_entry() is None
         lw = win.show_library(select=bare.id)
         assert lw.current.id == bare.id
         out = tmp_path / "x.pdf"
@@ -954,20 +980,24 @@ def test_a_pattern_is_opened_from_the_library_as_a_copy(qapp, tmp_path,
         monkeypatch.setattr(win, "_print_options", lambda *a, **k:
                             PrintOptions(layout_budget=0.2,
                                          file_in_library=True))
+        win.doc.shapes.append(Rectangle(width=20, height=10, name="Tab"))
         win.export_pdf()
-        assert [i.title for i in shelf.items() if i.pdf] == ["Card wallet"]
-        assert lw.current.id == item.id
-        assert lw.lbl_pdf.text() == "Card wallet.pdf"
-        # changing the copy doesn't change the library's pattern
-        win.doc.shapes.clear()
-        assert len(Document.load(str(shelf.find(item.id).pattern_path)
-                                 ).shapes) == 1
+        (new,) = [i for i in shelf.items() if i.pdf]
+        assert new.id not in (item.id, bare.id) and new.title == "Test piece"
+        assert len(shelf.items()) == 3
+        assert len(Document.load(str(new.pattern_path)).shapes) == 2
+        assert lw.current.id == new.id
+        assert lw.lbl_pdf.text() == "Test piece.pdf"
+        # the piece it was copied from has what it had
+        was = shelf.find(item.id)
+        assert was.pdf == "" and was.earlier == []
+        assert len(Document.load(str(was.pattern_path)).shapes) == 1
         # an entry with no pattern has none to open
         lw.reload(select=bare.id)
         assert not lw.btn_open_pattern.isEnabled()
         assert not lw.btn_make_pdf.isEnabled()
         lw.open_pattern()
-        assert lw.isVisible() and len(win.doc.shapes) == 0
+        assert lw.isVisible() and len(win.doc.shapes) == 2   # as it was
         # closing the main window closes the library with it, and what
         # was being typed there is kept
         lw.ed_notes.setPlainText("to do: draw it")

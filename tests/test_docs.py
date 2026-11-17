@@ -58,7 +58,9 @@ def test_key_menu_commands_documented(guide_text):
                 "Area / leather usage", "Nest on sheet", "Parameters",
                 "Card pocket stack", "Zipper opening",
                 "Snap to perfect fit", "Perfect fit", "Use for new shapes",
-                "Details page first", "Space between pieces"):
+                "Details page first", "Space between pieces",
+                "Library of finished pieces", "Add to library",
+                "Keep a copy in the library"):
         assert cmd in guide_text, f"menu command not documented: {cmd}"
 
 
@@ -85,6 +87,19 @@ def test_packaging_files_present(guide_text):
     spec = (root / "packaging/leather-drafting.spec").read_text()
     assert "USER_GUIDE.md" in spec          # the guide ships inside the app
     assert "build_macos.sh" in guide_text   # and the guide explains building
+
+
+def test_every_picture_in_the_guide_ships_with_the_app(guide_text):
+    """Help -> User guide shows the guide from inside the built app: a
+    picture the build leaves out is a blank there."""
+    import re
+    root = GUIDE.parent.parent
+    spec = (root / "packaging/leather-drafting.spec").read_text()
+    shown = re.findall(r"!\[[^\]]*\]\(([^)\s]+)\)", guide_text)
+    assert len(shown) >= 5
+    for name in shown:
+        assert (GUIDE.parent / name).is_file(), f"docs/{name} is missing"
+        assert f'"docs", "{name}"' in spec, f"{name} isn't in the build"
 
 
 def test_help_dialog_renders_guide(qapp):

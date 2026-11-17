@@ -6,6 +6,35 @@ made only when the release workflow is run by hand with it ticked.
 
 ## Unreleased
 
+### A library of the things you've made
+* **File → Library of finished pieces…** (`Ctrl+L`) keeps what you've
+  made: for each piece its photographs, your notes, the pattern it was
+  cut from and that pattern's 1:1 PDF. The pieces are shown as a wall of
+  pictures, the latest first, with a search through names and notes.
+* **Pictures** go in with *Add pictures…*, by dropping the files on the
+  window, or by pasting. The first is the piece's cover, and any other can
+  be made the cover; a piece with no picture yet is shown by its pattern,
+  drawn small. A photograph taken with the phone upright is shown upright.
+* **Name, date and notes** are kept as you type them: there is nothing to
+  save.
+* **File → Add to library…** files the drawing you have open, with a copy
+  of the pattern as it stands. **Export PDF (1:1)** has a new box, *Keep a
+  copy in the library*, that files the PDF with the pattern. In the
+  library, *Open a copy* starts a new drawing from a piece's pattern
+  (the library's own stays as it was), and *Make…* makes its 1:1 PDF
+  again.
+* **It's a folder.** The library is *Stitch Hero Library* in your
+  Documents: a folder for each piece, with its pictures, pattern and PDF
+  as ordinary files. Back it up, or keep it in a folder that syncs between
+  your computers (*Library folder…* moves it). Nothing is uploaded.
+  *Delete entry…* sends a piece to the recycle bin.
+
+### Fixed
+* The pattern name offered for a print or a PDF no longer ends in
+  ".leathercad" when the drawing was saved as `name.leathercad.json`.
+* The pictures of the 3D assembly preview were missing from the guide
+  inside the app (Help → User guide). They're there now.
+
 ### The 3D assembly preview looks like leather
 * **Grain, flesh and edge.** The front of the leather (the side you draw
   on) has a pebbled grain, with a sheen that moves as you turn the piece;

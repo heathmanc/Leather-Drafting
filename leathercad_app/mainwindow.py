@@ -121,6 +121,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.doc = document or Document()
         self.path: Optional[str] = None
+        # the library's entry for this drawing, when it was put there or
+        # opened from there (see the library methods below)
+        self._library_id: Optional[str] = None
         self.setWindowTitle("Stitch Hero")
         self.setWindowIcon(app_icon())
         self.resize(1200, 800)
@@ -267,6 +270,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard("closing"):
             event.ignore()
             return
+        self._close_library()                  # keeps what was being typed
         s = self._settings()
         s.setValue("geometry", self.saveGeometry())
         s.setValue("windowState", self.saveState())
@@ -355,6 +359,7 @@ class MainWindow(QMainWindow):
         """Swap in a new/loaded document and refresh every view of it."""
         self.doc = doc
         self.path = path
+        self._library_id = None
         self.canvas.doc = doc
         # a traced or graded file with hundreds of distinct pieces takes a
         # few seconds of stitch fitting: show the wait cursor meanwhile
@@ -737,6 +742,10 @@ class MainWindow(QMainWindow):
         self._add(fm, "Export DXF…", None, self.export_dxf)
         self._add(fm, "Export PDF (1:1)…", None, self.export_pdf)
         self._add(fm, "Print (1:1)…", "Ctrl+P", self.print_pattern)
+        fm.addSeparator()
+        self._add(fm, "Library of finished pieces…", "Ctrl+L",
+                  lambda: self.show_library())
+        self._add(fm, "Add to library…", None, self.add_to_library)
         fm.addSeparator()
         self._add(fm, "Quit", "Ctrl+Q", self.close)
 
@@ -2448,15 +2457,25 @@ class MainWindow(QMainWindow):
         """The pattern's name for a print: the file's name, else the
         drawing's own name."""
         if self.path:
-            return os.path.splitext(os.path.basename(self.path))[0]
+            base = os.path.basename(self.path)
+            if base.lower().endswith(".leathercad.json"):
+                return base[:-len(".leathercad.json")]
+            return os.path.splitext(base)[0]
         name = (getattr(self.doc, "name", "") or "").strip()
         return "" if name in ("", "Untitled") else name
 
-    def _print_options(self, title: str, *, paper: bool = True):
+    def _print_options(self, title: str, *, paper: bool = True, doc=None,
+                       name: Optional[str] = None, library: bool = False):
         """The 1:1 print / PDF options, remembered: paper (PDF only -- the
         print dialog picks it when printing), nested or as drawn, the gap
         between pieces, turning, the details page, and the header and
-        footer text. Returns a PrintOptions, or None if cancelled."""
+        footer text. Returns a PrintOptions, or None if cancelled.
+
+        They are for the open drawing, unless another ``doc`` is given
+        (with the ``name`` to print on it). With ``library``, the box that
+        keeps a copy of the PDF in the library is offered, and what it was
+        left at comes back as ``file_in_library``."""
+        doc = self.doc if doc is None else doc
         from PySide6.QtWidgets import (QDialog, QVBoxLayout, QFormLayout,
                                        QComboBox, QRadioButton, QCheckBox,
                                        QLineEdit, QDialogButtonBox, QLabel,
@@ -2528,7 +2547,7 @@ class MainWindow(QMainWindow):
 
         box = QGroupBox("Header, footer and first page")
         form = QFormLayout(box)
-        name = QLineEdit(self._pattern_title())
+        name = QLineEdit(self._pattern_title() if name is None else name)
         name.setPlaceholderText("Pattern")
         designer = QLineEdit(s.value("pdfDesigner", "", type=str))
         designer.setPlaceholderText("Your name or shop")
@@ -2542,7 +2561,7 @@ class MainWindow(QMainWindow):
         cut = QComboBox()
         cut.addItem("Best fit: the smallest piece of leather", "best")
         cut.addItem("As laid out with Nest on sheet", "drawn")
-        has_sheet = drawn_sheet(self.doc) is not None
+        has_sheet = drawn_sheet(doc) is not None
         if not has_sheet:
             cut.model().item(1).setEnabled(False)
         cut.setCurrentIndex(1 if has_sheet and s.value(
@@ -2575,6 +2594,21 @@ class MainWindow(QMainWindow):
         cut.currentIndexChanged.connect(layout_shown)
         layout_shown()
         lay.addWidget(box)
+
+        keep = None
+        if library:
+            entry = self.library_entry()
+            keep = QCheckBox(
+                f"Keep a copy in the library, with “{entry.title}”"
+                if entry is not None else
+                "Keep a copy in the library (this pattern is added to it)")
+            keep.setToolTip("The library (File → Library of finished "
+                            "pieces) keeps the things you've made: a "
+                            "picture of each, your notes, and the pattern "
+                            "and 1:1 PDF it was made from")
+            keep.setChecked(entry is not None
+                            or s.value("pdfToLibrary", False, type=bool))
+            lay.addWidget(keep)
 
         hint = QLabel("A piece that fits on a page is printed whole on one "
                       "page; a bigger one is tiled across pages that overlap "
@@ -2619,11 +2653,14 @@ class MainWindow(QMainWindow):
         s.setValue("pdfDesigner", o.designer)
         s.setValue("pdfNote", o.note)
         s.setValue("pdfDetails", o.details)
+        o.file_in_library = keep is not None and keep.isChecked()
+        if keep is not None and self.library_entry() is None:
+            s.setValue("pdfToLibrary", o.file_in_library)
         return o
 
     def export_pdf(self):
         from .printing import export_pdf
-        opts = self._print_options("Export PDF (1:1)")
+        opts = self._print_options("Export PDF (1:1)", library=True)
         if opts is None:
             return
         base = re.sub(r'[\\/:*?"<>|]+', "-", opts.title).strip() or "pattern"
@@ -2639,7 +2676,191 @@ class MainWindow(QMainWindow):
                     f"{plan.pattern_pages} pattern page"
                     f"{'s' if plan.pattern_pages != 1 else ''} "
                     f"({plan.drawn_pages} as drawn)")
+        if opts.file_in_library:
+            kept = self._file_pdf_in_library(fn, opts.title)
+            if kept is not None:
+                msg += f". A copy is in the library with “{kept.title}”"
         self.statusBar().showMessage(msg, 10000)
+
+    # -- the library of finished pieces ------------------------------------
+    def library(self):
+        """The library of finished pieces (see ``leathercad.library``)."""
+        from leathercad.library import Library
+        from .librarywindow import library_folder
+        return Library(library_folder(self._settings()))
+
+    def library_entry(self):
+        """The library's entry for the open drawing, if it has one: the one
+        it was put in or opened from, else the one that was made from this
+        drawing's file."""
+        lib = self.library()
+        if self._library_id:
+            item = lib.find(self._library_id)
+            if item is not None:
+                return item
+            self._library_id = None            # deleted since
+        return lib.holding(self.path) if self.path else None
+
+    def show_library(self, select: Optional[str] = None):
+        """Open the library window (or bring it forward), on the entry
+        with the id ``select`` if one is given."""
+        from .librarywindow import LibraryWindow
+        win = getattr(self, "_library_win", None)
+        try:
+            if win is not None and not win.isVisible():
+                win = None                     # closed: on its way out
+        except RuntimeError:                   # closed and freed
+            win = None
+        if win is None:
+            win = LibraryWindow(self, settings=self._settings(), host=self,
+                                select=select)
+            win.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            self._library_win = win            # keep a ref so it isn't GC'd
+        else:
+            win.reload(select=select)
+        if win.isMinimized():
+            win.showNormal()
+        win.show()
+        win.raise_()
+        win.activateWindow()
+        return win
+
+    def _close_library(self) -> None:
+        win = getattr(self, "_library_win", None)
+        self._library_win = None
+        try:
+            if win is not None:
+                win.close()
+        except RuntimeError:                   # closed and freed already
+            pass
+
+    def add_to_library(self):
+        """Put the open drawing in the library as a new entry, with a copy
+        of the pattern as it stands -- or, if it has an entry, show it."""
+        item = self.library_entry()
+        fresh = item is None
+        if fresh:
+            try:
+                item = self.library().add(self._pattern_title() or "Untitled")
+                self.library_keep_drawing(item)
+            except OSError as e:
+                QMessageBox.critical(self, "Add to library",
+                                     f"Couldn't add it to the library:\n{e}")
+                return None
+        win = self.show_library(select=item.id)
+        if fresh:
+            win.ed_title.setFocus()
+            win.ed_title.selectAll()
+            self.statusBar().showMessage(
+                f"Added to the library as “{item.title}”: give it a "
+                "picture and your notes", 8000)
+        return item
+
+    def library_keep_drawing(self, item) -> bool:
+        """Keep a copy of the open drawing, as it stands, as the pattern
+        of a library entry; the drawing is that entry's from now on."""
+        import tempfile
+        fd, tmp = tempfile.mkstemp(suffix=".leathercad.json")
+        os.close(fd)
+        try:
+            self.doc.save(tmp)
+            item.attach_pattern(tmp, origin=self.path or "")
+        except OSError as e:
+            QMessageBox.critical(self, "Library",
+                                 f"Couldn't keep the pattern:\n{e}")
+            return False
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        self._library_id = item.id
+        return True
+
+    def library_open_pattern(self, item) -> bool:
+        """Open a library entry's pattern as a new drawing: a copy, so the
+        library's stays as it was when the piece was made."""
+        path = item.pattern_path
+        if path is None or not path.is_file():
+            QMessageBox.information(self, "Library",
+                                    f"“{item.title}” has no pattern kept.")
+            return False
+        if not self._confirm_discard("opening a pattern from the library"):
+            return False
+        try:
+            doc = Document.load(str(path))
+        except Exception as e:
+            QMessageBox.critical(self, "Open failed",
+                                 f"Couldn't open {path.name}:\n{e}")
+            return False
+        if (getattr(doc, "name", "") or "").strip() in ("", "Untitled"):
+            doc.name = item.title              # what a print of it is called
+        self._adopt_document(doc, None, fit=True)
+        self._library_id = item.id
+        self.raise_()
+        self.activateWindow()
+        self.statusBar().showMessage(
+            f"Opened a copy of “{item.title}” from the library. Saving it "
+            "doesn't change the library's copy", 10000)
+        return True
+
+    def library_make_pdf(self, item) -> bool:
+        """Make the 1:1 PDF of a library entry's own pattern, and keep it
+        with the entry."""
+        import tempfile
+        from .printing import export_pdf
+        path = item.pattern_path
+        if path is None or not path.is_file():
+            return False
+        try:
+            doc = Document.load(str(path))
+        except Exception as e:
+            QMessageBox.critical(self, "Make 1:1 PDF",
+                                 f"Couldn't read {path.name}:\n{e}")
+            return False
+        opts = self._print_options("Make 1:1 PDF", doc=doc, name=item.title)
+        if opts is None:
+            return False
+        fd, tmp = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        try:
+            self._busy(lambda: export_pdf(doc, tmp, opts))
+            item.attach_pdf(tmp)
+        except OSError as e:
+            QMessageBox.critical(self, "Make 1:1 PDF",
+                                 f"Couldn't keep the PDF:\n{e}")
+            return False
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        return True
+
+    def _file_pdf_in_library(self, pdf: str, title: str = ""):
+        """Keep a copy of a PDF just made of the open drawing with its
+        entry in the library, making the entry if there is none. Returns
+        the entry, or None if it couldn't be done."""
+        try:
+            item = self.library_entry()
+            if item is None:
+                item = self.library().add(
+                    title or self._pattern_title() or "Untitled")
+                if not self.library_keep_drawing(item):
+                    return None
+            item.attach_pdf(pdf)
+        except OSError as e:
+            QMessageBox.warning(self, "Library",
+                                "The PDF was exported, but a copy couldn't "
+                                f"be kept in the library:\n{e}")
+            return None
+        win = getattr(self, "_library_win", None)
+        try:
+            if win is not None and win.isVisible():
+                win.reload(select=item.id)
+        except RuntimeError:
+            pass
+        return item
 
     def print_pattern(self):
         from PySide6.QtPrintSupport import QPrinter, QPrintDialog

@@ -28,8 +28,12 @@ a = Analysis(
     binaries=[],
     datas=[
         (os.path.join(ROOT, "docs", "USER_GUIDE.md"), "docs"),
+        # (every picture the guide shows: tests/test_docs.py checks the list)
         (os.path.join(ROOT, "docs", "app.png"), "docs"),
         (os.path.join(ROOT, "docs", "individual_holes.png"), "docs"),
+        (os.path.join(ROOT, "docs", "fold_preview.png"), "docs"),
+        (os.path.join(ROOT, "docs", "hole_check.png"), "docs"),
+        (os.path.join(ROOT, "docs", "library.png"), "docs"),
         (os.path.join(ROOT, "leathercad_app", "resources", "appicon.png"),
          "leathercad_app/resources"),
         (os.path.join(ROOT, "leathercad_app", "resources", "fonts",

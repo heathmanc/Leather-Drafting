@@ -67,6 +67,9 @@ class PrintOptions:
     cut_layout: str = "best"
     edge_margin: float = 5.0
     layout_budget: Optional[float] = 4.0    # seconds of trying (None: all)
+    # not for the page: whether a copy of the PDF is to be kept in the
+    # library of finished pieces (the Export PDF box)
+    file_in_library: bool = False
 
     @property
     def content_w(self) -> float:

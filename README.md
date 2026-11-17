@@ -256,6 +256,7 @@ Beyond drawing and stitching, Stitch Hero covers the rest of a real bench workfl
 | **Group rotate / scale / flip** | one rotate grip for a group or multi-selection; Arrange → Rotate 90°/180°/by…, Scale…, Move by…, Flip horizontal / vertical, Mirror across selected line; arrow-key nudge |
 | **Units** | View → Units → Inches shows and takes every length in inches (stored in mm); type `10mm` to enter millimetres |
 | **3D assembly preview** | *View → 3D assembly preview*: fold a piece along its fold lines as **solid leather** — real thickness and rounded bends, the grain side and the flesh side each looking the part, in a choice of leather colours, with fold lines coloured by direction and lettered. A table sets each fold's **step, direction, angle and radius**; a fold that closes over earlier layers bends at the radius it needs to go round them. Step or play through the folding. Wherever stitch holes come to lie on other holes, each is marked **green if it lines up, red if it doesn't** — with a ring where the hole it missed is |
+| **Library of finished pieces** | *File → Library of finished pieces*: a wall of what you've made — photographs of each piece, your notes on it, the pattern it was cut from and that pattern's 1:1 PDF, kept together. *Add to library* files the drawing you have open, *Export PDF* can keep a copy with it, and *Open a copy* starts the next one from an old pattern. It's an ordinary folder on your computer — one folder a piece, the pictures and PDF as plain files — to back up or keep in a synced folder |
 | **Fold allowance** | Edit → Fold allowance… lengthens a piece across its fold lines by angle × (radius + ½ thickness) |
 | **Generators** | strap / belt, box and curved gussets, bifold wallet, key tab, hemmed pocket — plus card pocket stacks and zipper openings |
 | **Export options** | outlines / holes / lettering, selection only, SVG grouped by piece or by layer; arcs and curves export as true arcs (SVG `A`/`C`, DXF bulges) |
@@ -264,6 +265,8 @@ Beyond drawing and stitching, Stitch Hero covers the rest of a real bench workfl
 | **Autosave & recovery** | Work is autosaved and offered back after an unexpected quit |
 
 ![3D assembly preview: a one-piece wallet part folding up](docs/fold_preview.png)
+
+![The library of finished pieces: pictures, notes, pattern and 1:1 PDF of each](docs/library.png)
 
 ## Scripting API (no GUI needed)
 
@@ -336,6 +339,7 @@ leathercad/            pure-Python model + engine (no dependencies)
   polycut.py           cut a polygon along a line, convex parts (for folding)
   foldsolid.py         fold a piece as solid leather: thickness, bends, folding order
   bsp.py               back-to-front order of the folded model, for painting
+  library.py           the library of finished pieces: a folder each, with pictures, notes, pattern, PDF
 leathercad_app/        PySide6 desktop app
   canvas.py            mm-accurate Y-up QGraphicsView, tools, grid, zoom/pan, tracing underlay
   items.py             shape/seam graphics items with live hole rendering
@@ -343,6 +347,7 @@ leathercad_app/        PySide6 desktop app
   partspanel.py        parts-library dock
   foldview.py          the 3D view of a folded piece
   preview3d.py         3D assembly preview dialog (fold-line table, stepping)
+  librarywindow.py     the library of finished pieces: the wall of pictures and the chosen piece
   theme.py             light / dark themes
   robustness.py        autosave + crash recovery
   mainwindow.py        window, toolbar, menus, export wiring

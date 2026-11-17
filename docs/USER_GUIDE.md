@@ -21,12 +21,13 @@
 11. [Layers](#11-layers)
 12. [Saving, exporting and cutting](#12-saving-exporting-and-cutting)
 13. [Printing at 1:1](#13-printing-at-11)
-14. [Tutorial 1 — a stitched card holder](#14-tutorial-1--a-stitched-card-holder)
-15. [Tutorial 2 — a curved key fob with the pen tool](#15-tutorial-2--a-curved-key-fob-with-the-pen-tool)
-16. [Tutorial 3 — two pieces sharing one seam](#16-tutorial-3--two-pieces-sharing-one-seam)
-17. [Keyboard shortcuts](#17-keyboard-shortcuts)
-18. [Troubleshooting & FAQ](#18-troubleshooting--faq)
-19. [Glossary](#19-glossary)
+14. [The library of finished pieces](#14-the-library-of-finished-pieces)
+15. [Tutorial 1 — a stitched card holder](#15-tutorial-1--a-stitched-card-holder)
+16. [Tutorial 2 — a curved key fob with the pen tool](#16-tutorial-2--a-curved-key-fob-with-the-pen-tool)
+17. [Tutorial 3 — two pieces sharing one seam](#17-tutorial-3--two-pieces-sharing-one-seam)
+18. [Keyboard shortcuts](#18-keyboard-shortcuts)
+19. [Troubleshooting & FAQ](#19-troubleshooting--faq)
+20. [Glossary](#20-glossary)
 
 ---
 
@@ -230,7 +231,7 @@ Hold **Shift** while placing any line-like point to lock the segment to
 | **Hole** | `H` | One click places a round hardware hole (cut only, no stitching). |
 | **Slot** | `T` | Two clicks; a stadium-shaped slot (for buckle tongues, strap slots). |
 | **Score line** | `K` | Click points; lands on the **Score** layer (fold/skive/decoration). |
-| **Stitch line (seam)** | `M` | A standalone seam of holes — see [Tutorial 3](#16-tutorial-3--two-pieces-sharing-one-seam). |
+| **Stitch line (seam)** | `M` | A standalone seam of holes — see [Tutorial 3](#17-tutorial-3--two-pieces-sharing-one-seam). |
 | **Trim** | `X` | Click the piece of an outline you want gone (red preview on hover, drawn right on the outline). |
 | **Fillet / chamfer corner** | `6` | Set the **radius** and **Round / Chamfer** mode in the toolbar box, then click any corner of a polygon/path to round or bevel it with a true arc — rounding blends into curved sides (arcs, beziers, trimmed ellipses). Works where two pieces' ends meet, and where an outline's own two ends meet (it closes there). |
 | **Extend to intersection** | `7` | Click the **end** of a line/path: it grows until it meets the next outline or guide, landing exactly on it (the opposite of Trim). |
@@ -1084,6 +1085,10 @@ Both open the same options first, remembered for next time:
   placed by hand and attached to a piece are measured, so a spacing nobody
   punched never shows up.
 
+* **Keep a copy in the library** (PDF only) files the PDF with the
+  pattern in the library of finished pieces (§14), where a picture of the
+  finished piece and your notes on it can join it.
+
 Every piece is printed with its **name** in it: give a piece one in
 **Properties → Name** (unnamed pieces are numbered). Several selected pieces
 can be named at once.
@@ -1102,7 +1107,83 @@ tape.
 
 ---
 
-## 14. Tutorial 1 — a stitched card holder
+## 14. The library of finished pieces
+
+**File → Library of finished pieces…** (`Ctrl+L`) keeps what you've made:
+for each piece a photograph or several, your notes, the pattern it was cut
+from and that pattern's 1:1 PDF. It's where you look up what leather and
+thread a piece took, print its pattern again, or start the next one from
+it. (The *Parts library* of §3 is a different thing: shapes to draw with.)
+
+![The library: the pieces on the left, the chosen one on the right](library.png)
+
+The pieces are on the left, the latest made first; click one to see it on
+the right. **Search** looks through names, notes and dates.
+
+**Putting a piece in**
+
+* **File → Add to library…** puts the drawing you have open in the
+  library, with a copy of the pattern as it stands, and opens the library
+  on it with its name ready to change.
+* Or tick **Keep a copy in the library** when you export the 1:1 PDF
+  (§13): the PDF is filed with the pattern, in an entry made for it if it
+  has none. The box stays as you left it for the next pattern.
+* Or press **New entry** for something that has no drawing — made from a
+  bought pattern, say — and give it its pictures and notes.
+
+**Pictures.** Photograph the piece with whatever you have and get the
+picture onto this computer; then press **Add pictures…**, or drag the
+files onto the window, or copy a picture and paste it (`Ctrl+V`). Pictures
+dropped on the window when no piece is chosen start an entry of their own.
+The first picture is the piece's **cover**, the one shown on the left: to
+change it, click another in the strip under the large picture and press
+**Make cover**. Double-click the large picture to open the file itself.
+A piece with no picture yet is shown by its pattern, drawn small.
+
+> JPEG, PNG, WebP, GIF, BMP and TIFF pictures are shown. The HEIC
+> photographs an iPhone takes are kept with the piece, but Windows can't
+> show them here: set the phone's camera to *Most Compatible* (Settings →
+> Camera → Formats), or save the photograph as a JPEG first.
+
+**Name, date and notes.** Type them in. They are kept as you type: there
+is nothing to save. The date is the day you made the piece; the notes are
+for whatever you'll want to know next time — the leather and its
+thickness, the thread, the hardware, how the edges were finished, how long
+it took, what you'd do differently.
+
+**The pattern and its PDF**
+
+* **Open a copy** opens the piece's pattern in the main window as a new,
+  unsaved drawing, and closes the library. Change the copy as you like:
+  the library's own stays as it was when the piece was made.
+* **Use the open drawing** makes the drawing now open in the main window
+  the piece's pattern — for an entry started without one, or a pattern
+  corrected since. It asks before replacing one.
+* In the **1:1 PDF** row, **Make…** makes the PDF from the piece's own
+  pattern, with the print options of §13, and keeps it with the piece.
+  **Attach…** keeps a PDF you already have instead (so does dropping one
+  on the window); **Open** shows it in your PDF viewer, to print again.
+* A drawing knows its entry: export the PDF again later from a drawing
+  you added, or from a copy opened from the library, and **Keep a copy in
+  the library** is already ticked and names the piece. The new PDF takes
+  the place of the old one.
+
+**Where it's kept.** The library is an ordinary folder on this computer —
+*Stitch Hero Library*, in your Documents — holding one folder for each
+piece, with its pictures, pattern and PDF as ordinary files and a small
+`item.json` for the name, date and notes. Nothing is sent anywhere.
+**Show folder** opens a piece's folder; pictures or a PDF you put there by
+hand are taken in the next time the library is opened. **Library folder…**
+keeps the library in another folder — one that is backed up, or one that
+OneDrive, Dropbox or iCloud keeps the same on your other computers — and
+offers to move the pieces there.
+
+**Delete entry…** sends a piece's folder to the recycle bin, with its
+pictures, pattern and PDF.
+
+---
+
+## 15. Tutorial 1 — a stitched card holder
 
 A classic first project: a two-pocket card holder, 105 × 70 mm.
 
@@ -1125,7 +1206,7 @@ A classic first project: a two-pocket card holder, 105 × 70 mm.
 6. **Export.** `Ctrl+E` → SVG (or DXF) → your laser software. Cut the two
    pieces; the holes line up by construction.
 
-## 15. Tutorial 2 — a curved key fob with the pen tool
+## 16. Tutorial 2 — a curved key fob with the pen tool
 
 1. Press `B` (Pen). Click at the top to start. Click-drag the next few points
    to pull smooth curves around a teardrop outline; finish by clicking the
@@ -1140,7 +1221,7 @@ A classic first project: a two-pocket card holder, 105 × 70 mm.
    copy appears with back-to-back matching holes. Move it beside the front.
 6. `Ctrl+E`, cut both, stitch them back to back.
 
-## 16. Tutorial 3 — two pieces sharing one seam
+## 17. Tutorial 3 — two pieces sharing one seam
 
 When two *differently shaped* pieces (say a gusset and a body) share a seam,
 both must be pierced with **identical** holes or nothing lines up. That is
@@ -1158,7 +1239,7 @@ what the **Stitch line** tool is for.
 
 ---
 
-## 17. Keyboard shortcuts
+## 18. Keyboard shortcuts
 
 ### Tools
 
@@ -1196,6 +1277,7 @@ what the **Stitch line** tool is for.
 | `Ctrl+N` / `Ctrl+O` / `Ctrl+S` / `Ctrl+Shift+S` | New / Open / Save / Save As |
 | `Ctrl+E` | Export SVG |
 | `Ctrl+P` | Print (1:1) |
+| `Ctrl+L` | Library of finished pieces |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / Redo |
 | `Ctrl+D` | Duplicate |
 | `Delete` / `Backspace` | Delete selection |
@@ -1224,7 +1306,7 @@ what the **Stitch line** tool is for.
 
 ---
 
-## 18. Troubleshooting & FAQ
+## 19. Troubleshooting & FAQ
 
 **The program crashed / my computer died — is my work gone?**
 No. Unsaved work is auto-saved every two minutes (and again the instant any
@@ -1302,7 +1384,7 @@ just its endpoints).
 
 ---
 
-## 19. Glossary
+## 20. Glossary
 
 | Term | Meaning |
 |---|---|

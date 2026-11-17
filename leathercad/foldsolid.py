@@ -35,13 +35,19 @@ _FLAT_FRAME: Frame = ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
                       (0.0, 0.0, 1.0))
 
 
+# What the check of the folded piece finds for a stitch hole (and LANDS, a
+# mark on a panel that is not a hole of its own: where the hole that one of
+# its holes should have met comes down on it)
+MEETS, OFF, LONE, LANDS = 1, 2, 3, 4
+
+
 @dataclass
 class Lineup:
     """Two panels that lie on each other when folded, with stitch holes in
     both where they overlap: ``holes`` of them in all, ``off`` that come
     down near a hole of the other panel but not on it (``worst`` the
     furthest of those, mm), and ``lone`` with no hole of the other panel
-    anywhere near."""
+    anywhere near. The rest meet, the furthest of them ``gap`` mm apart."""
 
     a: int
     b: int
@@ -49,6 +55,40 @@ class Lineup:
     off: int
     worst: float
     lone: int
+    gap: float = 0.0
+
+    @property
+    def met(self) -> int:
+        return self.holes - self.off - self.lone
+
+
+class Check:
+    """What ``Layout.lineup`` found. ``findings`` has a ``Lineup`` for each
+    pair of panels that are sewn together. ``state`` says of each stitch
+    hole (by index) that lies against another panel with holes whether it
+    ``MEETS`` the holes it is stacked with, is ``OFF`` -- something in its
+    stack is out of line -- or is ``LONE``; a hole it has nothing about
+    lies against no such panel. ``lands`` has, for a hole that is off, the
+    spots on its own panel where the holes it is out of line with come
+    down: ``[(x, y, their diameter)]`` in pattern mm. ``rings`` is the
+    same spots sorted by the cell they are on, for the model."""
+
+    __slots__ = ("findings", "state", "lands", "rings")
+
+    def __init__(self):
+        self.findings: List[Lineup] = []
+        self.state: Dict[int, int] = {}
+        self.lands: Dict[int, List[Tuple[float, float, float]]] = {}
+        self.rings: Dict[int, List[Tuple[float, float, float]]] = {}
+
+    def holes(self, state: int) -> set:
+        """The holes found in one state."""
+        return {k for k, s in self.state.items() if s == state}
+
+    @property
+    def off(self) -> set:
+        """The holes that were meant to meet another and don't."""
+        return self.holes(OFF)
 
 
 @dataclass
@@ -119,7 +159,7 @@ class _Cell2:
 
     __slots__ = ("pts", "flags", "panel", "hinge", "strip", "place", "area",
                  "box", "edges", "edges_rev", "sides", "tag", "dots",
-                 "polys", "lines", "turns")
+                 "polys", "lines", "turns", "index")
 
     def __init__(self, pts, flags, panel):
         self.pts = pts
@@ -134,6 +174,7 @@ class _Cell2:
         self.polys = []           # rings of points
         self.lines = []           # (kind, p, q)
         self.turns = []           # (edge, hinge index, strip) -- see below
+        self.index = -1           # its place in the layout's list of cells
 
 
 # -- small vector helpers (tuples) --------------------------------------------
@@ -686,7 +727,9 @@ class Layout:
         self.cells = cells
         by_panel: Dict[int, List[_Cell2]] = {}
         bends: Dict[int, List[_Cell2]] = {}
-        for c in cells:
+        self._by_panel = by_panel
+        for k, c in enumerate(cells):
+            c.index = k
             by_panel.setdefault(c.panel, []).append(c)
             if c.hinge is not None:
                 bends.setdefault(c.panel, []).append(c)
@@ -883,13 +926,14 @@ class Layout:
             back[(n - 2 - k) % n] = (-bn[0], -bn[1], -bn[2])
         return tuple(front), tuple(back)
 
-    def solid(self, fractions: Sequence[float], bad=()) -> List[Cell]:
+    def solid(self, fractions: Sequence[float],
+              check: Optional[Check] = None) -> List[Cell]:
         """The model with every fold ``fractions`` of its way round, as
-        convex cells. ``bad`` holes (indices) are marked apart."""
+        convex cells. With the ``check`` from ``lineup``, each stitch hole
+        carries what the check found for it (see ``_decals``)."""
         frames = self.frames(fractions)
         arcs = self._arcs(frames, fractions)
         ht = 0.5 * self.thickness
-        bad = set(bad)
         out: List[Cell] = []
         for c in self.cells:
             if c.hinge is None:
@@ -921,12 +965,12 @@ class Layout:
                 faces = [
                     Face(tuple(top), (nx, ny, nz,
                                       nx * pt[0] + ny * pt[1] + nz * pt[2]),
-                         FRONT, fe, _decals(c, up, bad), c.tag, c.area,
+                         FRONT, fe, _decals(c, up, check), c.tag, c.area,
                          ((tx, ty, tz), ex, ey)),
                     Face(tuple(bot[::-1]),
                          (-nx, -ny, -nz,
                           -(nx * pb[0] + ny * pb[1] + nz * pb[2])),
-                         BACK, be, _decals(c, down, bad), c.tag,
+                         BACK, be, _decals(c, down, check), c.tag,
                          c.area, ((ux, uy, uz), ex, ey))]
                 m = len(top)
                 for k in range(m):
@@ -972,14 +1016,14 @@ class Layout:
             pl = plane_of(top)
             if pl is not None:
                 faces.append(Face(tuple(top), pl, FRONT, fe,
-                                  _decals(c, lambda p: up(at(p)), bad),
+                                  _decals(c, lambda p: up(at(p)), check),
                                   c.tag, c.area,
                                   _strip_uv(h, w, step, j, t0, t1, e1)))
             rb = bot[::-1]
             pl = plane_of(rb)
             if pl is not None:
                 faces.append(Face(tuple(rb), pl, BACK, be,
-                                  _decals(c, lambda p: down(at(p)), bad),
+                                  _decals(c, lambda p: down(at(p)), check),
                                   c.tag, c.area,
                                   _strip_uv(h, w, step, j, b0, b1, e1)))
             m = len(top)
@@ -1083,20 +1127,36 @@ class Layout:
 
     # -- do the stitch holes meet? --------------------------------------------
 
-    def lineup(self, tol: float = 0.75, near: float = 4.0):
+    def lineup(self, tol: float = 0.75, near: float = 4.0) -> Check:
         """Check the folded piece: where two panels come to lie on each
         other and both have stitch holes there, do the holes meet?
 
-        Returns ``(findings, bad)``: a ``Lineup`` for each such pair of
-        panels, and the holes (indices) that come down within ``near`` mm
-        of a hole on the other panel but more than ``tol`` mm off it --
-        the ones that were meant to meet and don't. A hole with nothing
-        near it on the other panel is counted (``lone``) but not marked:
-        a flap lies over stitching it isn't sewn to."""
+        A hole meets the nearest hole of the other panel if it comes down
+        within ``tol`` mm of it; it misses it if it comes down within
+        ``near`` mm but not on it -- those two were meant to meet and
+        don't; and with nothing that near it has no hole to meet there,
+        which need not be wrong (a flap lies over stitching it isn't sewn
+        to). Each pair of panels gets a ``Lineup`` with the count of each.
+
+        What a hole itself is given goes by the whole stack it is in --
+        the holes that meet it, the holes that meet those, and so on
+        through every layer -- since that is what a needle has to go
+        through: ``OFF`` if any hole of the stack misses another, ``MEETS``
+        if none does, ``LONE`` for a hole that meets nothing and misses
+        nothing. Returns a ``Check``."""
         t = self.thickness
         frames = self.frames([1.0] * len(self.folds))
-        findings: List[Lineup] = []
-        bad = set()
+        check = Check()
+        seen = set()                           # holes that lie on a panel
+        link: Dict[int, int] = {}              # holes that meet, in stacks
+        misses: List[Tuple[int, int]] = []     # (hole, the one it misses)
+
+        def stack(k):
+            while link.setdefault(k, k) != k:
+                link[k] = link[link[k]]
+                k = link[k]
+            return k
+
         reach = max(3.0 * t, 3.0) + 0.01
         n = len(self.panels)
         for i in range(n):
@@ -1131,33 +1191,73 @@ class Layout:
                 over_j = [(k, p) for k, p in hj_ if pc.inside(p, pi.pts)]
                 if not over_i or not over_j:
                     continue                   # not sewn together here
-                off, lone, worst = 0, 0, 0.0
+                off, lone, worst, apart = 0, 0, 0.0, 0.0
                 for mine, theirs in ((over_i, over_j), (over_j, over_i)):
                     grid: Dict[tuple, list] = {}       # their holes, by square
-                    for _k2, q2 in theirs:
+                    for k2, q2 in theirs:
                         grid.setdefault((math.floor(q2[0] / near),
                                          math.floor(q2[1] / near)),
-                                        []).append(q2)
+                                        []).append((k2, q2))
                     for k, p in mine:
+                        seen.add(k)
                         gx = math.floor(p[0] / near)
                         gy = math.floor(p[1] / near)
-                        d = min((math.hypot(p[0] - q2[0], p[1] - q2[1])
-                                 for ix in (gx - 1, gx, gx + 1)
-                                 for iy in (gy - 1, gy, gy + 1)
-                                 for q2 in grid.get((ix, iy), ())),
-                                default=2.0 * near)
+                        d, k2 = min(
+                            ((math.hypot(p[0] - q3[0], p[1] - q3[1]), k3)
+                             for ix in (gx - 1, gx, gx + 1)
+                             for iy in (gy - 1, gy, gy + 1)
+                             for k3, q3 in grid.get((ix, iy), ())),
+                            default=(2.0 * near, -1))
                         if d <= tol:
-                            continue
-                        if d <= near:
-                            bad.add(k)
+                            apart = max(apart, d)
+                            link[stack(k)] = stack(k2)
+                        elif d <= near:
                             off += 1
                             worst = max(worst, d)
+                            misses.append((k, k2))
                         else:
                             lone += 1
-                findings.append(Lineup(pi.number, pj.number,
-                                       len(over_i) + len(over_j), off, worst,
-                                       lone))
-        return findings, bad
+                check.findings.append(Lineup(
+                    pi.number, pj.number, len(over_i) + len(over_j), off,
+                    worst, lone, apart))
+        # each hole by the stack it is in
+        stacks: Dict[int, List[int]] = {}
+        for k in seen:
+            stacks.setdefault(stack(k), []).append(k)
+        out_of_line = {stack(k) for k, _k2 in misses}
+        for top, members in stacks.items():
+            what = OFF if top in out_of_line \
+                else MEETS if len(members) > 1 else LONE
+            for k in members:
+                check.state[k] = what
+        # ... and for every hole of a stack with a miss in it, where the
+        # hole that was missed comes down on that hole's own panel
+        spots = set()
+        for k, k2 in misses:
+            at = self.hole_panel[k2]
+            x2, y2, dia = self.holes[k2]
+            p3 = place(frames[at], (x2, y2))
+            for m in stacks[stack(k)]:
+                panel = self.hole_panel[m]
+                if panel == at:
+                    continue
+                o, ex, ey, _n = frames[panel]
+                v = (p3[0] - o[0], p3[1] - o[1], p3[2] - o[2])
+                x, y = _dot(v, ex), _dot(v, ey)
+                check.lands.setdefault(m, []).append((x, y, dia))
+                spot = (panel, round(x, 3), round(y, 3))
+                if spot in spots:
+                    continue
+                spots.add(spot)
+                for c in self._by_panel.get(panel, ()):
+                    bx = c.box
+                    if (bx[0] - 1e-6 <= x <= bx[2] + 1e-6
+                            and bx[1] - 1e-6 <= y <= bx[3] + 1e-6
+                            and pc.inside_convex((x, y), c.pts, 1e-6)):
+                        check.rings.setdefault(c.index, []).append(
+                            (x, y, dia))
+                        break
+        return check
 
 
 # -- helpers for the cells ----------------------------------------------------
@@ -1264,21 +1364,28 @@ def _cut_zone(flat: List[pc.Poly], h: Hinge, side: float, half: float,
     return keep, strips
 
 
-def _decals(c: _Cell2, to3d, bad):
-    """The marks on one face of a cell, placed by ``to3d``."""
-    if not (c.dots or c.polys or c.lines):
+def _decals(c: _Cell2, to3d, check: Optional[Check]):
+    """The marks on one face of a cell, placed by ``to3d``. Stitch holes
+    are ``DOTS`` with the style ``(diameter, state)``: 0 for a hole the
+    check has nothing about, else ``MEETS``, ``OFF`` or ``LONE`` -- and
+    ``LANDS`` for the spots where the holes that its own missed come down."""
+    rings = check.rings.get(c.index) if check is not None else None
+    if not (c.dots or c.polys or c.lines or rings):
         return None
     out = []
     for ring in c.polys:
         out.append((POLY, [to3d(p) for p in ring], "cut"))
     for kind, p, q in c.lines:
         out.append((LINE, (to3d(p), to3d(q)), kind))
+    groups: Dict[tuple, list] = {}
+    for x, y, dia in rings or ():              # first, so under the holes
+        groups.setdefault((dia, LANDS), []).append(to3d((x, y)))
     if c.dots:
-        groups: Dict[tuple, list] = {}
+        state = check.state if check is not None else {}
         for x, y, dia, k in c.dots:
-            groups.setdefault((dia, k in bad), []).append(to3d((x, y)))
-        for (dia, wrong), pts in groups.items():
-            out.append((DOTS, pts, (dia, wrong)))
+            groups.setdefault((dia, state.get(k, 0)), []).append(to3d((x, y)))
+    for style, pts in groups.items():
+        out.append((DOTS, pts, style))
     return out
 
 

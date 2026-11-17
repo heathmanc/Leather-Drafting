@@ -30,7 +30,8 @@ from leathercad import foldsolid as fs
 from leathercad import polycut as pc
 
 from . import units as U
-from .foldview import DEFAULT_LEATHER, LEATHERS, FoldView, fold_colour
+from .foldview import (DEFAULT_LEATHER, LEATHERS, FoldView, fold_colour,
+                       hole_colour)
 from .mathspin import MathSpinBox, NoWheelComboBox, NoWheelSpinBox
 
 _SLIDER = 200                     # slider ticks to a folding step
@@ -232,17 +233,69 @@ def foldables(doc) -> List[Foldable]:
 
 # -- the dialog ---------------------------------------------------------------
 
+def _bullet(state: int) -> str:
+    """A dot of the colour the view gives a stitch hole in that state."""
+    return f"<span style='color:{hole_colour(state).name()}'>●</span>"
+
+
+def _tally(off: int, worst: float, met: int, gap: float, lone: int) -> str:
+    """So many stitch holes are out of line, line up and have nothing to
+    meet, in words, each count with a dot of its colour in the view."""
+    bits = []
+    if off:
+        bits.append(f"{_bullet(fs.OFF)} {off} "
+                    + ("is out of line, by " if off == 1
+                       else "are out of line, by up to ") + _len(worst))
+    if met:
+        close = f", to within {_len(gap)}" if gap > 0.05 else ""
+        some = f"all {met}" if met > 1 and not (off or lone) else f"{met}"
+        bits.append(f"{_bullet(fs.MEETS)} {some} "
+                    + ("lines up" if met == 1 else "line up") + close)
+    if lone:
+        bits.append(f"{_bullet(fs.LONE)} "
+                    + (f"none of the {lone} has a hole to meet"
+                       if lone > 1 and not (off or met)
+                       else f"{lone} " + ("has" if lone == 1 else "have")
+                       + " no hole to meet"))
+    return "; ".join(bits) + "."
+
+
 def _finding(f) -> str:
-    """One pair of panels lying together, in words."""
-    both = f"Panels {f.a} and {f.b}"
-    lone = f" {f.lone} more have no hole near them on the other panel." \
-        if f.lone else ""
-    if f.off:
-        return (f"{both}: {f.off} of {f.holes} holes are off, by up to "
-                f"{_len(f.worst)}.{lone}")
-    if f.lone == f.holes:
-        return f"{both}: none of the {f.holes} holes meet."
-    return f"{both}: {f.holes - f.lone} holes meet.{lone}"
+    """One pair of panels lying together, in words: how many of their
+    stitch holes are out of line, line up, and have nothing to meet."""
+    return f"Panels {f.a} and {f.b}: " \
+        + _tally(f.off, f.worst, f.met, f.gap, f.lone)
+
+
+def _hole_report(check) -> str:
+    """What the check of the stitch holes found, for under the table. One
+    pair of panels is said in full. With more, a hole lies in a stack of
+    several and is out of line if any two of them miss: so first what was
+    found for the holes themselves -- which is what the view shows -- and
+    then which panels have holes that meet or miss."""
+    head = "<b>Stitch holes where panels lie on each other:</b> "
+    found = check.findings
+    if len(found) == 1:
+        return head + _finding(found[0])
+    out = head + _tally(len(check.off),
+                        max(f.worst for f in found),
+                        len(check.holes(fs.MEETS)),
+                        max(f.gap for f in found),
+                        len(check.holes(fs.LONE)))
+    for f in found:
+        bits = []
+        if f.off:
+            bits.append(f"{f.off} " + ("misses, by " if f.off == 1
+                                       else "miss, by up to ")
+                        + _len(f.worst))
+        if f.met:
+            bits.append(f"{f.met} " + ("lines up" if f.met == 1
+                                       else "line up")
+                        + (f", to within {_len(f.gap)}" if f.gap > 0.05
+                           else ""))
+        out += f"<br>Panels {f.a} and {f.b}: " \
+            + ("; ".join(bits) or "none line up") + "."
+    return out
 
 
 class _RadiusSpin(MathSpinBox):
@@ -331,10 +384,21 @@ class FoldPreviewDialog(QDialog):
         self.chk_labels.setChecked(True)
         self.chk_labels.toggled.connect(self._labels)
         look.addWidget(self.chk_labels)
+        self.chk_holes = QCheckBox("Hole check")
+        self.chk_holes.setToolTip(
+            "Where panels lie on each other when folded and both have "
+            "stitch holes, mark each hole:\n"
+            "green if the holes stacked there line up, red if any of them "
+            "is out of line (a ring shows where the other hole is),\n"
+            "amber if there is no hole there for it to meet.")
+        shown = True
+        if settings is not None:
+            shown = settings.value("fold3dHoleCheck", True, type=bool)
+        self.chk_holes.setChecked(shown)
+        self.view.show_check(shown)
+        self.chk_holes.toggled.connect(self._holes_shown)
+        look.addWidget(self.chk_holes)
         look.addStretch(1)
-        hint = QLabel("Drag to turn · right-drag to slide · wheel to zoom")
-        hint.setEnabled(False)
-        look.addWidget(hint)
 
         left = QVBoxLayout()
         left.addWidget(self.view, 1)
@@ -795,12 +859,12 @@ class FoldPreviewDialog(QDialog):
         was_end = self.layout_ is not None and self.layout_.n_steps > 0 \
             and self.view.t >= self.layout_.n_steps - 1e-9
         self.layout_ = layout
-        findings, bad = layout.lineup()
+        check = layout.lineup()
         t = float(layout.n_steps) if was_end else None
-        self.view.set_layout(layout, t, bad, refit=refit)
+        self.view.set_layout(layout, t, check, refit=refit)
         self._fill_base()
         self._fill_used()
-        self._fill_readout(findings)
+        self._fill_readout(check)
         self._sync_run()
 
     def _fill_base(self):
@@ -832,7 +896,7 @@ class FoldPreviewDialog(QDialog):
             self._swatch(row)
         self._busy = False
 
-    def _fill_readout(self, findings):
+    def _fill_readout(self, check):
         lay = self.layout_
         out = []
         used = [(f.label, lay.used[k]) for k, f in enumerate(self.folds)
@@ -856,10 +920,8 @@ class FoldPreviewDialog(QDialog):
                     f"folded in before it.")
         for w in lay.warnings:
             out.append(f"<span style='color:#c0392b'>⚠ {w}</span>")
-        if findings:
-            head = "<b>Stitch holes</b> (the ones that are off are red): " \
-                if any(f.off for f in findings) else "<b>Stitch holes:</b> "
-            out.append(head + " ".join(_finding(f) for f in findings))
+        if check.findings:
+            out.append(_hole_report(check))
         self.readout.setText("<br><br>".join(out))
 
     def _measured(self, key, spin):
@@ -892,6 +954,13 @@ class FoldPreviewDialog(QDialog):
     def _labels(self, on):
         self.view.labels = bool(on)
         self.view.update()
+
+    def _holes_shown(self, on):
+        """Mark the stitch holes by whether they line up, or not (kept
+        for next time)."""
+        self.view.show_check(on)
+        if self._settings is not None:
+            self._settings.setValue("fold3dHoleCheck", bool(on))
 
     # -- folding and unfolding ------------------------------------------------
 

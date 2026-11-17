@@ -444,15 +444,18 @@ def test_holes_and_cutouts_ride_on_the_faces():
                                                              False]
     # (folded with no inside radius, the inside of the bend closes to a
     # line: the hole in the bend shows on the outside only)
+    check = fs.Check()                 # as if the second hole were off
+    check.state[1] = fs.OFF
     for t, on_faces in ((0.0, 6), (1.0, 5)):
         dots = polys = marked = 0
-        for c in lay.solid(lay.fractions(t), bad=[1]):
+        for c in lay.solid(lay.fractions(t), check):
             for f in c.faces:
                 for kind, geo, style in f.decals or ():
                     assert f.kind in (bsp.FRONT, bsp.BACK)
                     if kind == bsp.DOTS:
                         dots += len(geo)
-                        marked += len(geo) if style[1] else 0
+                        assert style in ((1.0, 0), (1.2, fs.OFF))
+                        marked += len(geo) if style[1] == fs.OFF else 0
                     else:
                         assert kind == bsp.POLY
                         polys += 1
@@ -529,30 +532,108 @@ def _stitched(shift=0.0, extra=()):
 
 
 def test_holes_mirrored_about_the_fold_meet():
-    findings, bad = _stitched().lineup()
-    assert len(findings) == 1 and not bad
-    f = findings[0]
-    assert (f.a, f.b, f.holes, f.off, f.lone) == (1, 2, 20, 0, 0)
+    check = _stitched().lineup()
+    assert len(check.findings) == 1
+    f = check.findings[0]
+    assert (f.a, f.b, f.holes, f.off, f.lone, f.met) == (1, 2, 20, 0, 0, 20)
+    assert f.gap < 1e-9
+    assert check.holes(fs.MEETS) == set(range(20))
+    assert not check.off and not check.lands and not check.rings
 
 
 def test_holes_a_little_out_are_marked_and_measured():
-    findings, bad = _stitched(shift=1.5).lineup()
-    f = findings[0]
-    assert f.off == 20 and abs(f.worst - 1.5) < 1e-9 and f.lone == 0
-    assert bad == set(range(20))
-    assert not _stitched(shift=0.5).lineup()[1]        # near enough
+    lay = _stitched(shift=1.5)
+    check = lay.lineup()
+    f = check.findings[0]
+    assert (f.off, f.lone, f.met) == (20, 0, 0) and abs(f.worst - 1.5) < 1e-9
+    assert check.off == set(range(20)) == set(check.state)
+    # each has a mark on its own panel where the hole it should have met
+    # comes down: 1.5 mm along the row from it
+    for k in range(20):
+        (x, y, dia), = check.lands[k]
+        hx, hy, _dia = lay.holes[k]
+        assert abs(abs(x - hx) - 1.5) < 1e-9 and abs(y - hy) < 1e-9
+        assert dia == 1.0
+    assert sum(len(v) for v in check.rings.values()) == 20
+    # ... and the model carries those marks, on both faces of the leather
+    styles = {}
+    for c in lay.solid([1.0], check):
+        for face in c.faces:
+            for kind, geo, style in face.decals or ():
+                if kind == bsp.DOTS:
+                    styles[style] = styles.get(style, 0) + len(geo)
+    assert styles == {(1.0, fs.OFF): 40, (1.0, fs.LANDS): 40}
+    near = _stitched(shift=0.5).lineup()               # near enough
+    assert not near.off and len(near.holes(fs.MEETS)) == 20
+    assert abs(near.findings[0].gap - 0.5) < 1e-9
 
 
-def test_a_hole_with_nothing_near_it_is_counted_but_not_marked():
-    findings, bad = _stitched(extra=[(40, 60, 1.0)]).lineup()
-    f = findings[0]
-    assert (f.holes, f.off, f.lone) == (21, 0, 1) and not bad
+def test_a_hole_with_nothing_near_it_is_told_apart():
+    check = _stitched(extra=[(40, 60, 1.0)]).lineup()
+    f = check.findings[0]
+    assert (f.holes, f.off, f.lone, f.met) == (21, 0, 1, 20)
+    assert check.holes(fs.LONE) == {20} and not check.off
     # a flap over a panel with no holes of its own: nothing to report
     lay = fs.fold_piece(HALF, [fs.FoldLine((80, 0), (80, 100), 180, 1)],
                         holes=[(20 + 5 * k, 10, 1.0) for k in range(10)])
-    assert lay.lineup() == ([], set())
+    check = lay.lineup()
+    assert not check.findings and not check.state
     # and nothing lies on anything until it is folded flat
-    assert _one(angle=90.0).lineup() == ([], set())
+    check = _one(angle=90.0).lineup()
+    assert not check.findings and not check.state
+
+
+def _stack_of_three(out=0.0, third=True):
+    """A strip folded in three, with one stitch hole through each layer
+    where they lie together: the hole in the middle panel at (120, 50),
+    the other two coming down ``out`` mm to either side of it."""
+    fr = _folded(_trifold(base=1))
+
+    def over(panel, spot):
+        """The point of a panel that comes down on ``spot`` of panel 2."""
+        o, ex, ey, _n = fr[panel]
+        p3 = fs.place(fr[1], spot)
+        v = (p3[0] - o[0], p3[1] - o[1], p3[2] - o[2])
+        return (v[0] * ex[0] + v[1] * ex[1] + v[2] * ex[2],
+                v[0] * ey[0] + v[1] * ey[1] + v[2] * ey[2], 1.0)
+
+    holes = [over(0, (120 + out, 50)), (120, 50, 1.0)]
+    if third:
+        holes.append(over(2, (120 - out, 50)))
+    return _trifold(base=1, holes=holes)
+
+
+def test_a_hole_is_judged_by_the_whole_stack_it_is_in():
+    # three layers with the holes right over each other
+    check = _stack_of_three().lineup()
+    assert [(f.a, f.b, f.met, f.off) for f in check.findings] \
+        == [(1, 2, 2, 0), (1, 3, 2, 0), (2, 3, 2, 0)]
+    assert check.holes(fs.MEETS) == {0, 1, 2} and not check.lands
+    # the outer two each 0.6 mm from the middle one, on opposite sides:
+    # near enough to it, but 1.2 mm from each other
+    lay = _stack_of_three(out=0.6)
+    check = lay.lineup()
+    found = {(f.a, f.b): f for f in check.findings}
+    assert (found[1, 2].met, found[1, 2].off) == (2, 0)
+    assert (found[2, 3].met, found[2, 3].off) == (2, 0)
+    assert (found[1, 3].met, found[1, 3].off) == (0, 2)
+    assert abs(found[1, 3].worst - 1.2) < 1e-9
+    assert abs(found[1, 2].gap - 0.6) < 1e-9
+    # a needle has to go through all three: so all three are out of line,
+    # the middle one too -- it is the one you see from on top
+    assert check.off == {0, 1, 2}
+    # the middle hole has both of the others marked, either side of it
+    assert sorted(round(x, 6) for x, _y, _d in check.lands[1]) \
+        == [119.4, 120.6]
+    # ... and each outer hole has the other, 1.2 mm from itself
+    for k in (0, 2):
+        (x, y, _dia), = check.lands[k]
+        assert abs(math.hypot(x - lay.holes[k][0], y - lay.holes[k][1])
+                   - 1.2) < 1e-9
+    assert sum(len(v) for v in check.rings.values()) == 4
+    # with only two of them, 0.6 mm apart, there is nothing wrong
+    check = _stack_of_three(out=0.6, third=False).lineup()
+    assert check.holes(fs.MEETS) == {0, 1} and not check.off
 
 
 # -- panels drawn edge to edge ------------------------------------------------
@@ -645,7 +726,8 @@ def test_the_hole_check_agrees_with_measuring_every_pair():
              for _ in range(1500)]
     lay = fs.fold_piece(HALF, [fs.FoldLine((80, 0), (80, 100), 180, 1)],
                         holes=holes)
-    findings, bad = lay.lineup(tol=0.75, near=4.0)
+    check = lay.lineup(tol=0.75, near=4.0)
+    findings, bad = check.findings, check.off
     assert len(findings) == 1
     left = [(k, h) for k, h in enumerate(holes) if lay.hole_panel[k] == 0
             and lay.hole_flat[k]]
@@ -665,3 +747,7 @@ def test_the_hole_check_agrees_with_measuring_every_pair():
     assert bad == want and len(bad) > 100
     assert (findings[0].off, findings[0].lone) == (off, lone)
     assert findings[0].holes == len(left) + len(right)
+    # every hole where the two panels lie together is one of the three
+    assert len(check.state) == findings[0].holes
+    assert len(check.holes(fs.LONE)) == lone
+    assert len(check.holes(fs.MEETS)) == findings[0].met

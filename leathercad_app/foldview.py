@@ -28,12 +28,14 @@ from PySide6.QtWidgets import QToolTip, QWidget
 
 from leathercad import bsp
 from leathercad.bsp import BACK, DOTS, FRONT, INNER, LINE, POLY
+from leathercad.foldsolid import LANDS, LONE, MEETS, OFF
 
 _LEVELS = 24                      # shades of each colour, dark to fully lit
 _SHEEN = 8                        # ... and steps of sheen on top of that
 _TILE = 256                       # a leather texture is this many pixels
 _TILE_MM = 80.0                   # ... square, and covers this much leather
 _CREASE = 0.94                    # cosine of the turn that shows as a crease
+_HINT = "Drag to turn · right-drag to slide · wheel to zoom"
 
 #: Leathers to show the piece in: the colour of the grain side, of the
 #: flesh side and of the cut edge.
@@ -192,7 +194,10 @@ class Look:
         w = self.wall
         self.edge = QColor(*(min(255, int(c + 58)) for c in w)) \
             if dark and _lum(w) <= 70 else QColor(*(int(c * 0.5) for c in w))
-        self.bad = QColor(226, 38, 38)
+        self.bad = QColor(214, 40, 40)
+        # a stitch hole by what the check of the folded piece found for it
+        self.hole = {MEETS: QColor(40, 190, 96), OFF: self.bad,
+                     LONE: QColor(255, 176, 0)}
         self.cut = QColor(52, 54, 60) if dark else QColor(120, 122, 130)
         self.idle = QColor(128, 128, 136)            # a fold that isn't made
         self.pick = QColor(255, 196, 0)
@@ -290,6 +295,12 @@ def fold_colour(fold, live: bool = True) -> QColor:
     return QColor(_PLAIN.fold_colour(fold, live))
 
 
+def hole_colour(state: int) -> QColor:
+    """The colour of a stitch hole that ``MEETS`` the holes it is stacked
+    with, is ``OFF`` them, or is ``LONE``: green, red, amber."""
+    return QColor(_PLAIN.hole[state])
+
+
 class Camera:
     """Where the model is looked at from: turned ``yaw`` about the upright
     of the pattern and tipped back ``pitch`` from looking straight down on
@@ -334,11 +345,11 @@ class Scene:
     side: the partition tree of its cells, and where its fold lines and
     panel numbers go."""
 
-    def __init__(self, layout, t: float, bad=()):
+    def __init__(self, layout, t: float, check=None):
         self.layout = layout
         self.t = t
         self.fractions = layout.fractions(t)
-        self.tree = bsp.build(layout.solid(self.fractions, bad))
+        self.tree = bsp.build(layout.solid(self.fractions, check))
         self.folds = layout.fold_marks(self.fractions)
         self.panels = layout.panel_marks(self.fractions)
 
@@ -607,16 +618,12 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                     continue
                 for dk, geo, style in f.decals:
                     if dk == DOTS:
-                        dia, wrong = style
-                        dot = QPen(look.bad if wrong else inks[kind],
-                                   max(1.6, dia * scale) * (1.5 if wrong
-                                                            else 1.0))
-                        dot.setCapStyle(Qt.RoundCap)
-                        p.setPen(dot)
-                        p.drawPoints(QPolygonF([
+                        dia, state = style
+                        _paint_holes(p, [
                             QPointF(ox + ax * x + ay * y + az * z,
                                     oy + bx * x + by * y + bz * z)
-                            for x, y, z in geo]))
+                            for x, y, z in geo], state,
+                            max(1.6, dia * scale), inks[kind], look)
                     elif dk == LINE:
                         (x, y, z), (x2, y2, z2) = geo
                         mark = QPen(inks[kind], 1.8 if style == "cut"
@@ -690,6 +697,44 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
     if labels:
         _paint_labels(p, scene, look, discs, eye, m, selected)
     return drawn
+
+
+def _paint_holes(p: QPainter, spots, state: int, size: float, ink: QColor,
+                 look: Look):
+    """Paint stitch holes ``size`` pixels across at ``spots``, by what the
+    check of the folded piece found for them. A hole it has nothing about
+    is a plain dot of ``ink``. One whose stack lines up is a green bead,
+    one whose stack is out of line a bigger red one, and one with nothing
+    to meet an amber bead with the hole still showing in it -- each ringed
+    in ``ink`` to stand off any leather, and each a different shape as
+    well as colour. ``LANDS`` spots get a red ring: where a hole that a
+    red one is out of line with comes down."""
+    if not state:
+        dot = QPen(ink, size)
+        dot.setCapStyle(Qt.RoundCap)
+        p.setPen(dot)
+        p.drawPoints(QPolygonF(spots))
+        return
+    bead = max(4.4, 1.35 * size)
+    if state == LANDS:
+        r = 0.5 * bead + 1.2
+        p.setBrush(Qt.NoBrush)
+        for colour, width in ((ink, 2.8), (look.bad, 1.4)):
+            p.setPen(QPen(colour, width))
+            for q in spots:
+                p.drawEllipse(q, r, r)
+        return
+    if state == OFF:
+        bead *= 1.25
+    layers = [(ink, bead + 1.8), (look.hole[state], bead)]
+    if state == LONE:
+        layers.append((ink, 0.5 * bead))
+    poly = QPolygonF(spots)
+    for colour, width in layers:
+        dot = QPen(colour, width)
+        dot.setCapStyle(Qt.RoundCap)
+        p.setPen(dot)
+        p.drawPoints(poly)
 
 
 def fold_pen(look: Look, fold, live: bool, kind: int = FRONT) -> QPen:
@@ -779,9 +824,10 @@ def _paint_labels(p, scene, look, discs, eye, m, selected):
 def render(layout, t: float, w: int = 900, h: int = 620, *, dark: bool = False,
            yaw: Optional[float] = None, pitch: Optional[float] = None,
            zoom: float = 1.0, labels: bool = True, selected: int = -1,
-           bad=(), leather: str = DEFAULT_LEATHER) -> QImage:
+           check=None, leather: str = DEFAULT_LEATHER) -> QImage:
     """A picture of ``layout`` at time ``t`` of its folding (see
-    ``Layout.fractions``), in one of the ``LEATHERS``."""
+    ``Layout.fractions``), in one of the ``LEATHERS``; with the ``check``
+    from ``layout.lineup()``, its stitch holes show what that found."""
     img = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
     cam = Camera()
     cam.centre, cam.radius = layout.extent()
@@ -791,7 +837,7 @@ def render(layout, t: float, w: int = 900, h: int = 620, *, dark: bool = False,
         cam.pitch = pitch
     cam.zoom = zoom
     p = QPainter(img)
-    paint_scene(p, w, h, Scene(layout, t, bad), cam, Look(dark, leather),
+    paint_scene(p, w, h, Scene(layout, t, check), cam, Look(dark, leather),
                 labels=labels, selected=selected)
     p.end()
     return img
@@ -820,7 +866,8 @@ class FoldView(QWidget):
         self.layout_ = None
         self.scene: Optional[Scene] = None
         self.t = 0.0
-        self.bad: frozenset = frozenset()
+        self.check = None             # what ``layout.lineup()`` found
+        self.check_shown = True       # ... and whether the holes show it
         self.selected = -1
         self.hover = -1
         self.labels = True
@@ -835,13 +882,13 @@ class FoldView(QWidget):
 
     # -- what is shown --------------------------------------------------------
 
-    def set_layout(self, layout, t: Optional[float] = None, bad=(),
+    def set_layout(self, layout, t: Optional[float] = None, check=None,
                    refit: bool = False):
         """Show ``layout`` (None for nothing). The view stays as it was
         turned unless ``refit``."""
         first = self.layout_ is None
         self.layout_ = layout
-        self.bad = frozenset(bad)
+        self.check = check
         if t is not None:
             self.t = t
         if layout is None:
@@ -850,7 +897,7 @@ class FoldView(QWidget):
             self.t = min(max(self.t, 0.0), float(layout.n_steps))
             if first or refit:
                 self.follow = True
-            self.scene = Scene(layout, self.t, self.bad)
+            self.scene = Scene(layout, self.t, self._marks())
             self._frame()
         self.update()
 
@@ -861,9 +908,23 @@ class FoldView(QWidget):
         if self.scene is not None and abs(t - self.t) < 1e-9:
             return
         self.t = t
-        self.scene = Scene(self.layout_, t, self.bad)
+        self.scene = Scene(self.layout_, t, self._marks())
         self._frame()
         self.update()
+
+    def _marks(self):
+        """The check of the stitch holes, if the model is to show it."""
+        return self.check if self.check_shown else None
+
+    def show_check(self, on: bool):
+        """Mark the stitch holes by whether they line up, or leave them
+        all plain."""
+        on = bool(on)
+        if on != self.check_shown:
+            self.check_shown = on
+            if self.layout_ is not None:
+                self.scene = Scene(self.layout_, self.t, self._marks())
+            self.update()
 
     def _frame(self):
         """While the view follows the model, keep it centred and filling
@@ -933,12 +994,18 @@ class FoldView(QWidget):
         font.setBold(False)
         font.setPointSizeF(9.0)
         p.setFont(font)
+        fm = p.fontMetrics()
+        used = 0
         if self.caption:
             p.setPen(look.text)
             p.drawText(QRectF(12, 8, w - 24, 22),
                        Qt.AlignLeft | Qt.AlignVCenter, self.caption)
+            used = fm.horizontalAdvance(self.caption) + 24
+        if fm.horizontalAdvance(_HINT) <= w - 24 - used:
+            p.setPen(look.faint)               # how to move it, if it fits
+            p.drawText(QRectF(12, 8, w - 24, 22),
+                       Qt.AlignRight | Qt.AlignVCenter, _HINT)
         x, y = 12.0, h - 16.0
-        fm = p.fontMetrics()
         for kind, text in ((FRONT, "front of the leather"),
                            (BACK, "back")):
             p.setPen(QPen(look.edge, 1.0))
@@ -954,6 +1021,22 @@ class FoldView(QWidget):
             p.setPen(look.faint)
             p.drawText(QPointF(x + 27, y), text)
             x += 27 + fm.horizontalAdvance(text) + 16
+        check = self._marks()
+        if check is None or not check.state:
+            return
+        # ... and above it, what the stitch holes are saying
+        x, y = 12.0, h - 38.0
+        p.setPen(look.faint)
+        p.drawText(QPointF(x, y), "Stitch holes, folded:")
+        x += fm.horizontalAdvance("Stitch holes, folded:") + 12
+        for state, text in ((MEETS, "line up"), (OFF, "out of line"),
+                            (LANDS, "where the other hole is"),
+                            (LONE, "no hole to meet")):
+            _paint_holes(p, [QPointF(x + 6, y - 4)], state, 4.0, look.text,
+                         look)
+            p.setPen(look.faint)
+            p.drawText(QPointF(x + 17, y), text)
+            x += 17 + fm.horizontalAdvance(text) + 14
 
     # -- the mouse ------------------------------------------------------------
 

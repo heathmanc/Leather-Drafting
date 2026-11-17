@@ -434,17 +434,80 @@ def test_clicking_a_fold_line_chooses_its_row(qapp):
         dlg.close()
 
 
-def test_holes_that_miss_are_reported(qapp):
+def _bifold(shift=0.0, pairs=8, extra=()):
+    """The strip with one fold made, and a row of loose stitch holes on
+    each side of it that meet when it is folded -- or miss by ``shift``."""
+    from leathercad.holes import LooseHole
     doc = _trifold()
     doc.shapes[2].fold_dir = ""                       # one fold: a bifold
-    from leathercad.holes import LooseHole
-    for k in range(8):
+    for k in range(pairs):
         doc.holes.append(LooseHole(Vec2(20 + 5 * k, 10)))
-        doc.holes.append(LooseHole(Vec2(160 - (20 + 5 * k) + 1.5, 10)))
+        doc.holes.append(LooseHole(Vec2(160 - (20 + 5 * k) + shift, 10)))
+    for x, y in extra:
+        doc.holes.append(LooseHole(Vec2(x, y)))
+    return doc
+
+
+def _words(dlg) -> str:
+    """What the dialog says under the table, without its markup."""
+    import re
+    return re.sub(r"<[^>]+>", "", dlg.readout.text().replace("<br>", "\n"))
+
+
+def test_holes_that_miss_are_reported(qapp):
+    dlg = _dialog(_bifold(shift=1.5))
+    try:
+        assert "Panels 1 and 2: ● 16 are out of line, by up to 1.5 mm." \
+            in _words(dlg)
+        assert len(dlg.view.check.off) == 16
+    finally:
+        dlg.close()
+
+
+def test_holes_that_line_up_are_reported_too(qapp):
+    from leathercad import foldsolid
+    dlg = _dialog(_bifold())
+    try:
+        assert "Panels 1 and 2: ● all 16 line up." in _words(dlg)
+        check = dlg.view.check
+        assert len(check.holes(foldsolid.MEETS)) == 16 and not check.off
+    finally:
+        dlg.close()
+    # near enough is said with how near; a hole with nothing to meet apart
+    dlg = _dialog(_bifold(shift=0.5, extra=[(40, 60)]))
+    try:
+        assert ("Panels 1 and 2: ● 16 line up, to within 0.5 mm; "
+                "● 1 has no hole to meet.") in _words(dlg)
+    finally:
+        dlg.close()
+    # with no holes lying on each other there is nothing to say
+    dlg = _dialog(_trifold())
+    try:
+        assert "Stitch holes" not in _words(dlg)
+        assert not dlg.view.check.state
+    finally:
+        dlg.close()
+
+
+def test_holes_in_a_stack_of_three_are_counted_once(qapp):
+    # the strip folded in three, stitched all round: its three thirds
+    # come to lie on each other
+    doc = _trifold()
+    doc.shapes[0].stitch = StitchSettings(enabled=True, pitch_mm=5.0,
+                                          inset=4.0)
     dlg = _dialog(doc)
     try:
-        assert "16 of 16 holes are off, by up to 1.5 mm" in dlg.readout.text()
-        assert len(dlg.view.bad) == 16
+        check = dlg.view.check
+        assert len(check.findings) == 3
+        says = _words(dlg).split("Stitch holes where panels lie on each "
+                                 "other: ")[1].split("\n")
+        # first the holes as the view colours them, then the panels
+        n = {state: len(check.holes(state)) for state in (1, 2, 3)}
+        assert sum(n.values()) == len(check.state) > 60
+        assert says[0].startswith(f"● {n[2]} are out of line, by up to ")
+        assert f"● {n[3]} have no hole to meet." in says[0]
+        assert [line.split(":")[0] for line in says[1:]] \
+            == ["Panels 1 and 2", "Panels 1 and 3", "Panels 2 and 3"]
     finally:
         dlg.close()
 
@@ -515,6 +578,109 @@ def test_the_view_paints_the_leather_and_its_fold_lines(qapp):
                       leather="Black")
     assert math.dist(_patch(black, *at(40, 50)),
                      fv.LEATHERS["Black"][0]) < 30
+
+
+def _shows(img, x, y, colour, reach=3, tol=45) -> bool:
+    """Whether a picture has ``colour``, or near it, within ``reach``
+    pixels of a spot."""
+    want = (colour.red(), colour.green(), colour.blue())
+    return any(math.dist(_rgb(img.pixelColor(x + dx, y + dy)), want) < tol
+               for dx in range(-reach, reach + 1)
+               for dy in range(-reach, reach + 1))
+
+
+def test_the_view_marks_each_hole_by_whether_it_lines_up(qapp):
+    from leathercad_app import foldview as fv
+    # two rows that fold on to each other: the first two pairs meet, the
+    # next two are 1.5 mm out, then a hole with nothing to meet -- and one
+    # more that lies on no other holes at all
+    holes = [(20, 10, 1.2), (140, 10, 1.2), (30, 10, 1.2), (130, 10, 1.2),
+             (40, 10, 1.2), (121.5, 10, 1.2), (50, 10, 1.2), (111.5, 10, 1.2),
+             (60, 40, 1.2)]
+    lay = fs.fold_piece([(0, 0), (160, 0), (160, 100), (0, 100)],
+                        [fs.FoldLine((80, 0), (80, 100), 180, 1)],
+                        holes=holes)
+    check = lay.lineup()
+    assert [check.state[k] for k in range(9)] \
+        == [fs.MEETS] * 4 + [fs.OFF] * 4 + [fs.LONE]
+    cam = fv.Camera()
+    cam.centre, cam.radius = lay.extent()
+    cam.yaw = cam.pitch = 0.0
+    ox, ax, ay, _az, oy, bx, by, _bz = cam.mapping(900, 600)
+
+    def at(x, y):                      # the pixel a point of it is in
+        return (int(ox + ax * x + ay * y), int(oy + bx * x + by * y))
+
+    look = fv.Look()
+    green, red, amber = (fv.hole_colour(s)
+                         for s in (fs.MEETS, fs.OFF, fs.LONE))
+    assert len({green.name(), red.name(), amber.name()}) == 3
+    kw = dict(yaw=0.0, pitch=0.0, labels=False)
+    plain = fv.render(lay, 0.0, 900, 600, **kw)
+    marked = fv.render(lay, 0.0, 900, 600, check=check, **kw)
+    for k, (x, y, _dia) in enumerate(holes):
+        spot = at(x, y)
+        want = {fs.MEETS: green, fs.OFF: red, fs.LONE: amber}[check.state[k]]
+        assert _shows(marked, *spot, want), k
+        for other in (green, red, amber):
+            assert not _shows(plain, *spot, other), k
+            if other != want:
+                assert not _shows(marked, *spot, other, reach=1), k
+        # the hole itself still shows in one with nothing to meet
+        dark = _shows(marked, *spot, look.ink(fv.FRONT), reach=1, tol=30)
+        assert dark == (check.state[k] == fs.LONE), k
+    # where the hole a red one should have met comes down, 1.5 mm from it,
+    # there is a ring: red round the spot, the leather showing inside it
+    scale = cam.scale(900, 600)
+    for k in (4, 5, 6, 7):
+        (x, y, _dia), = check.lands[k]
+        cx, cy = at(x, y)
+        bead = max(4.4, 1.35 * 1.2 * scale)
+        r = int(round(0.5 * bead + 1.2))
+        away = -1 if lay.holes[k][0] > x else 1    # the side off the hole
+        assert _shows(marked, cx + away * r, cy, red, reach=1), k
+        assert not _shows(plain, cx + away * r, cy, red, reach=1), k
+    # folded, the holes on top show it as well, on the back of the leather
+    top = fv.render(lay, 1.0, 900, 600, check=check, **kw)
+    assert top != fv.render(lay, 1.0, 900, 600, **kw)
+    # a hole that lies on no other holes is left as it was
+    assert 8 in check.state and len(check.state) == 9
+    lone = fs.fold_piece([(0, 0), (160, 0), (160, 100), (0, 100)],
+                         [fs.FoldLine((80, 0), (80, 100), 180, 1)],
+                         holes=holes[:1])
+    assert fv.render(lone, 0.0, 300, 200, check=lone.lineup(), **kw) \
+        == fv.render(lone, 0.0, 300, 200, **kw)
+
+
+def test_the_hole_check_can_be_put_away_and_is_remembered(qapp, tmp_path):
+    ini = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+    dlg = _dialog(_bifold(shift=1.5), settings=ini)
+    try:
+        assert dlg.chk_holes.isChecked() and dlg.view.check_shown
+        shown = dlg.view.grab().toImage()
+        dlg.chk_holes.setChecked(False)
+        QApplication.processEvents()
+        assert not dlg.view.check_shown
+        hidden = dlg.view.grab().toImage()
+        assert hidden != shown
+        # what it found is still there, and still said under the table
+        assert len(dlg.view.check.off) == 16
+        assert "16 are out of line" in _words(dlg)
+        # ... and still left out after the piece is folded again
+        dlg.spin_t.setValue(3.0)
+        QApplication.processEvents()
+        assert not dlg.view.check_shown and len(dlg.view.check.off) == 16
+    finally:
+        dlg.close()
+    again = _dialog(_bifold(shift=1.5), settings=ini)
+    try:
+        assert not again.chk_holes.isChecked() and not again.view.check_shown
+        again.chk_holes.setChecked(True)
+        QApplication.processEvents()
+        assert again.view.check_shown
+        assert again.view.grab().toImage() != hidden
+    finally:
+        again.close()
 
 
 class _Way:

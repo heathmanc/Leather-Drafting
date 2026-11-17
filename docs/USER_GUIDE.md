@@ -588,7 +588,9 @@ on the layer under it. Every fold line is drawn on it and lettered —
 **solid blue** if it folds to the front, **dashed magenta** to the back
 (both lighter on a dark leather) — and the panels between the folds are
 numbered. Stitch holes, cutouts, slits and any lines scored or engraved on
-the piece are on it too. Drag to turn the piece, right-drag (or Shift-drag)
+the piece are on it too, and where holes come to lie on other holes they
+are coloured by [whether they line up](#do-the-stitch-holes-line-up).
+Drag to turn the piece, right-drag (or Shift-drag)
 to slide it, roll the wheel to zoom; **Fit** or a double-click brings it
 back. Click a fold line to choose its row in the table: it lights up
 through whatever is folded over it.
@@ -631,11 +633,8 @@ Below the table the preview reports:
   sum [Fold allowance](#fold-allowance) adds to a piece drawn at its
   finished size.
 * **Folds too close together** for the bends they need.
-* **Stitch holes** — where two panels come to lie on each other and both
-  have holes there, whether the holes meet. Holes that come down near a
-  partner but not on it are drawn **red**, with how far out they are; a
-  hole with nothing near it on the other panel is only counted (a flap
-  lies over stitching it isn't sewn to).
+* **Stitch holes** — whether the ones that should meet do: see
+  [Do the stitch holes line up?](#do-the-stitch-holes-line-up)
 
 What you set here — step, direction, angle, radius — is kept on the fold
 lines and saved with the drawing; a run of changes is one **Undo** in the
@@ -647,6 +646,31 @@ With no fold lines, panels drawn edge to edge fold along the edges they
 share, like a paper net (what you set for a net lasts while the preview is
 open). Folds that cross are folded one after the other, as you would by
 hand; the layers inside the second fold are shown cut along it.
+
+#### Do the stitch holes line up?
+
+Where panels come to lie on each other when the piece is folded, and both
+have stitch holes there, the preview checks those holes and marks every
+one of them — on the flat pattern and on the folded piece alike:
+
+![Stitch holes marked by whether they line up](hole_check.png)
+
+| | |
+|---|---|
+| **green** | it lines up with the holes stacked with it, to within 0.75 mm |
+| **red**, and bigger | something in its stack is out of line. A red **ring** beside it is where the other hole comes down, so you can see which way it is out, and how far |
+| **amber**, with the hole showing in the middle | there is no hole within 4 mm for it to meet on the panel it lies on. That needn't be wrong: a flap lies over stitching it isn't sewn to |
+
+A hole is judged by its whole stack, because that is what the needle has
+to go through. With three layers, if the top and bottom holes each sit near
+enough to the middle one but too far from each other, all three are red —
+so a fault under the top layer shows from on top. Holes that lie on no
+other holes are left plain.
+
+Under the table the preview counts each kind, says how far out the worst
+is, and — when more than two panels are stacked — which panels the holes
+that line up or miss are on. **Hole check**, under the view, puts the marks
+away when you want a clean picture.
 
 ### Generators
 

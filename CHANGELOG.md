@@ -18,6 +18,24 @@ made only when the release workflow is run by hand with it ticked.
   holes, scored lines, panel numbers and fold lines switch to light
   colours on a dark leather.
 
+### Do the stitch holes line up?
+* **Every hole says so.** Where panels come to lie on each other when
+  folded and both have stitch holes, the 3D preview now marks each of
+  those holes, flat or folded: **green** if it lines up with the holes
+  stacked with it, **red** if something in the stack is out of line, and
+  **amber** if there is no hole there for it to meet. Before, only the
+  near misses were marked; a hole that lined up looked like any other.
+* **Which way it's out.** Beside a red hole, a red ring shows where the
+  hole it should have met comes down.
+* **Judged by the whole stack.** With three or more layers, a hole is red
+  if any two holes stacked with it miss each other — so a fault between
+  the lower layers shows on the top one, where you can see it.
+* The report under the table counts each kind and says how far out the
+  worst is, and which panels are involved. **Hole check**, under the view,
+  hides the marks for a clean picture.
+* The preview window is narrower, and fits a 1366-pixel-wide screen: the
+  reminder of how to turn and zoom moved into the view.
+
 ## 0.4.12 — 2026-11-17
 
 ### The 3D assembly preview, rebuilt

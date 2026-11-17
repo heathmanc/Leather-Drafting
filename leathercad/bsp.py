@@ -32,15 +32,21 @@ class Face:
     view needs to paint it. ``INNER`` faces are where two cells meet inside
     the leather: never painted, but they bound the cell.
 
-    ``edges`` marks the edges to draw a line along (one per corner, for the
-    edge leaving it); ``decals`` are ``(kind, geometry, style)`` marks on
-    the face -- ``DOTS`` with a list of points, ``LINE`` with two, ``POLY``
-    with a ring of them."""
+    ``edges`` says what each edge is (one per corner, for the edge leaving
+    it): True for one to draw a line along -- an edge of the leather --
+    False for a seam with nothing to show, or the normal of the face the
+    surface goes on to there, where it turns (round a bend). ``decals``
+    are ``(kind, geometry, style)`` marks on the face -- ``DOTS`` with a
+    list of points, ``LINE`` with two, ``POLY`` with a ring of them. ``uv``
+    places a texture on the face: ``(o, u, v)`` with ``o + x * u + y * v``
+    the point of the face at ``(x, y)`` mm of the pattern (splitting a face
+    leaves it as it is)."""
 
-    __slots__ = ("pts", "plane", "kind", "edges", "decals", "tag", "size")
+    __slots__ = ("pts", "plane", "kind", "edges", "decals", "tag", "size",
+                 "uv")
 
     def __init__(self, pts, plane, kind, edges=None, decals=None, tag=None,
-                 size=0.0):
+                 size=0.0, uv=None):
         self.pts = pts
         self.plane = plane
         self.kind = kind
@@ -48,6 +54,7 @@ class Face:
         self.decals = decals
         self.tag = tag
         self.size = size
+        self.uv = uv
 
 
 class Cell:
@@ -170,7 +177,7 @@ def _split_decals(decals, plane, eps):
 def split_face(face: Face, plane: Plane, eps: float = EPS
                ) -> Tuple[Optional[Face], Optional[Face]]:
     """The parts of a face in front of and behind a plane (either may be
-    None). The new edge along the plane is never one to draw a line on."""
+    None). The new edge along the plane is a seam: nothing to show."""
     nx, ny, nz, d = plane
     pts = face.pts
     dist = [nx * x + ny * y + nz * z - d for x, y, z in pts]
@@ -218,11 +225,11 @@ def split_face(face: Face, plane: Plane, eps: float = EPS
     if len(fp) >= 3:
         front = Face(tuple(fp), face.plane, face.kind,
                      tuple(fe) if edges is not None else None, fd, face.tag,
-                     face.size)
+                     face.size, face.uv)
     if len(bp) >= 3:
         back = Face(tuple(bp), face.plane, face.kind,
                     tuple(be) if edges is not None else None, bd, face.tag,
-                    face.size)
+                    face.size, face.uv)
     return front, back
 
 

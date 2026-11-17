@@ -1,6 +1,7 @@
 """The 3D assembly preview: what in a drawing folds, the dialog's table of
 fold lines, the view, and its changes going back to the drawing."""
 
+import math
 import os
 
 import pytest
@@ -43,6 +44,32 @@ def _trifold():
     doc.shapes.append(_rect(0, 0, 240, 100, "Tri-fold"))
     doc.shapes.append(_line((80, 0), (80, 100), "Left fold", order=1))
     doc.shapes.append(_line((160, 0), (160, 100), "Right fold", order=2))
+    return doc
+
+
+def _tray():
+    """A 60 x 40 base with a 30 mm side to fold up on each of its edges."""
+    doc = Document("tray")
+    pts = [(0, 0), (0, -30), (60, -30), (60, 0), (90, 0), (90, 40), (60, 40),
+           (60, 70), (0, 70), (0, 40), (-30, 40), (-30, 0)]
+    doc.shapes.append(Polygon(points=[Vec2(*p) for p in pts], close_path=True,
+                              name="Tray"))
+    for a, b in (((0, 0), (0, 40)), ((60, 0), (60, 40)), ((0, 0), (60, 0)),
+                 ((0, 40), (60, 40))):
+        doc.shapes.append(_line(a, b, angle=90.0))
+    return doc
+
+
+def _wallet():
+    """The fold-over wallet template with its three folds made."""
+    from leathercad.templates import fold_over_wallet
+    doc = fold_over_wallet()
+    order = 0
+    for sh in doc.shapes:
+        if sh.name.endswith("fold"):
+            order += 1
+            sh.fold_dir, sh.fold_angle, sh.fold_order = "front", 180.0, order
+    assert order == 3
     return doc
 
 
@@ -273,6 +300,43 @@ def test_thickness_and_bend_radius_change_the_model(qapp, tmp_path):
         again.close()
 
 
+def test_the_leather_it_is_shown_in_is_chosen_and_remembered(qapp, tmp_path):
+    from leathercad_app import foldview as fv
+    ini = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+    doc = _trifold()
+    dlg = _dialog(doc, settings=ini)
+    try:
+        box = dlg.cmb_leather
+        assert [box.itemText(i) for i in range(box.count())] \
+            == list(fv.LEATHERS)
+        assert box.currentText() == dlg.view.look.leather \
+            == fv.DEFAULT_LEATHER
+        before = dlg.view.grab().toImage()
+        lay = dlg.layout_
+        box.setCurrentText("Black")
+        QApplication.processEvents()
+        assert dlg.view.look.leather == "Black"
+        assert dlg.view.grab().toImage() != before
+        # only the picture changes: the model and the drawing are as they were
+        assert dlg.layout_ is lay and not dlg._unsaved
+    finally:
+        dlg.close()
+    again = _dialog(_trifold(), settings=ini)
+    try:
+        assert again.cmb_leather.currentText() == "Black"
+        assert again.view.look.leather == "Black"
+    finally:
+        again.close()
+    # a leather saved by some other version, that this one doesn't have
+    ini.setValue("fold3dLeather", "Snakeskin")
+    other = _dialog(_trifold(), settings=ini)
+    try:
+        assert other.cmb_leather.currentText() == fv.DEFAULT_LEATHER
+        assert other.view.look.leather == fv.DEFAULT_LEATHER
+    finally:
+        other.close()
+
+
 def test_earlier_later_flip_and_untick(qapp):
     doc = _trifold()
     doc.shapes.append(_line((40, 0), (40, 100), "Extra", angle=90.0, order=3))
@@ -387,6 +451,20 @@ def test_holes_that_miss_are_reported(qapp):
 
 # -- the view -----------------------------------------------------------------
 
+def _patch(img, cx, cy, half=6):
+    """The colour of a bit of a picture, on average."""
+    r = g = b = n = 0
+    for x in range(cx - half, cx + half + 1):
+        for y in range(cy - half, cy + half + 1):
+            c = img.pixelColor(x, y)
+            r, g, b, n = r + c.red(), g + c.green(), b + c.blue(), n + 1
+    return (r / n, g / n, b / n)
+
+
+def _rgb(c):
+    return (c.red(), c.green(), c.blue())
+
+
 def test_the_view_paints_the_leather_and_its_fold_lines(qapp):
     from leathercad_app import foldview as fv
     from leathercad_app.preview3d import fold_lines, foldables
@@ -400,29 +478,222 @@ def test_the_view_paints_the_leather_and_its_fold_lines(qapp):
         return (abs(c.red() - want.red()) + abs(c.green() - want.green())
                 + abs(c.blue() - want.blue())) < tol
 
-    # straight on to the front, flat: tan leather with a line down each fold
+    # straight on to the front, flat: the grain side of a tan leather, with
+    # a line down each fold
     img = fv.render(lay, 0.0, 600, 400, yaw=0.0, pitch=0.0, labels=False)
     cam = fv.Camera()
     cam.centre, cam.radius = lay.extent()
     cam.yaw = cam.pitch = 0.0
     ox, ax, ay, _az, oy, bx, by, _bz = cam.mapping(600, 400)
 
-    def pixel(x, y):
-        return img.pixelColor(int(round(ox + ax * x + ay * y)),
-                              int(round(oy + bx * x + by * y)))
+    def at(x, y):
+        return (int(round(ox + ax * x + ay * y)),
+                int(round(oy + bx * x + by * y)))
 
-    assert near(pixel(40, 50), look.shade(fv.FRONT, 23)[0].color(), 60)
-    assert near(pixel(80, 25), look.to_front)         # fold A: to the front
-    assert near(pixel(160, 25), look.to_back)         # fold B: to the back
+    front = _patch(img, *at(40, 50))
+    assert math.dist(front, look.front) < 30 < math.dist(front, look.back)
+    assert near(img.pixelColor(*at(80, 25)),
+                fv.fold_colour(lay.folds[0]))         # fold A: to the front
+    assert near(img.pixelColor(*at(160, 25)),
+                fv.fold_colour(lay.folds[1]))         # fold B: to the back
+    assert fv.fold_colour(lay.folds[0]) != fv.fold_colour(lay.folds[1])
     assert near(img.pixelColor(5, 5), look.ground, 5)
+    # it is not one flat colour: the grain shows
+    grain = {_rgb(img.pixelColor(x, at(40, 50)[1]))
+             for x in range(at(20, 50)[0], at(60, 50)[0])}
+    assert len(grain) > 12
     # from behind, the pale back of the leather
     back = fv.render(lay, 0.0, 600, 400, yaw=0.0, pitch=3.14159, labels=False)
-    assert near(back.pixelColor(300, 200), look.shade(fv.BACK, 23)[0].color(),
-                60)
+    flesh = _patch(back, 300, 200)
+    assert math.dist(flesh, look.back) < 50 < math.dist(flesh, look.front)
     # folded, it is a different picture
     assert fv.render(lay, 2.0, 600, 400) != fv.render(lay, 0.0, 600, 400)
     assert fv.render(lay, 0.0, 300, 200, dark=True).pixelColor(3, 3) \
         == fv.Look(True).ground
+    # ... and so it is in another leather
+    black = fv.render(lay, 0.0, 600, 400, yaw=0.0, pitch=0.0, labels=False,
+                      leather="Black")
+    assert math.dist(_patch(black, *at(40, 50)),
+                     fv.LEATHERS["Black"][0]) < 30
+
+
+class _Way:
+    def __init__(self, direction):
+        self.direction = direction
+
+
+def test_marks_and_fold_lines_stand_off_every_leather(qapp):
+    from PySide6.QtGui import QColor
+    from leathercad_app import foldview as fv
+    assert fv.DEFAULT_LEATHER in fv.LEATHERS and len(fv.LEATHERS) >= 6
+    for name in fv.LEATHERS:
+        look = fv.Look(leather=name)
+        assert look.leather == name
+        assert (look.front, look.back, look.wall) == fv.LEATHERS[name]
+        for kind in (fv.FRONT, fv.BACK):
+            leather = look.flat(kind)
+            to_front = look.fold_colour(_Way(1), True, kind)
+            to_back = look.fold_colour(_Way(-1), True, kind)
+            for mark in (look.ink(kind), to_front, to_back):
+                assert math.dist(_rgb(mark), leather) > 100, (name, kind)
+            assert to_front != to_back
+            assert look.fold_colour(_Way(1), False, kind) == look.idle
+        # the line along an edge of the leather shows on its cut edge
+        assert math.dist(_rgb(look.edge), look.wall) > 60
+    # a dark leather takes light marks, a pale one dark marks
+    assert fv.Look(leather="Black").is_dark(fv.FRONT)
+    assert fv.Look(leather="Black").ink(fv.FRONT).lightness() > 150
+    assert not fv.Look(leather="Natural").is_dark(fv.FRONT)
+    assert fv.Look(leather="Natural").ink(fv.FRONT).lightness() < 80
+    # the colour a fold has in lists and keys does not change with it
+    assert fv.fold_colour(_Way(1)) == QColor(24, 104, 232)
+    # a leather this version has never heard of is the usual one
+    assert fv.Look(leather="Snakeskin").leather == fv.DEFAULT_LEATHER
+
+
+def _lightness(tile, step=4):
+    """How light a tile is on average, and how much it varies."""
+    vals = []
+    for x in range(0, tile.width(), step):
+        for y in range(0, tile.height(), step):
+            c = tile.pixelColor(x, y)
+            vals.append(0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue())
+    mean = sum(vals) / len(vals)
+    return mean, math.sqrt(sum((v - mean) ** 2 for v in vals) / len(vals))
+
+
+def _jump(tile, i, j, down):
+    """How much a tile changes from column (or row) ``i`` to ``j``."""
+    total = 0
+    for k in range(tile.width()):
+        a = tile.pixelColor(i, k) if down else tile.pixelColor(k, i)
+        b = tile.pixelColor(j, k) if down else tile.pixelColor(k, j)
+        total += (abs(a.red() - b.red()) + abs(a.green() - b.green())
+                  + abs(a.blue() - b.blue()))
+    return total / tile.width()
+
+
+def test_the_leather_has_a_grain_and_its_front_a_sheen(qapp):
+    from leathercad import bsp
+    from leathercad_app import foldview as fv
+    look = fv.Look()
+    last = fv._LEVELS - 1
+    for kind in (fv.FRONT, fv.BACK):
+        tile = look.texture(kind, 20)
+        assert (tile.width(), tile.height()) == (fv._TILE, fv._TILE)
+        assert _lightness(tile)[1] > 3.0          # not one flat colour
+        # it joins up with itself: no line shows where it repeats
+        for down in (True, False):
+            usual = max(_jump(tile, i, i + 1, down) for i in (10, 100, 200))
+            assert _jump(tile, fv._TILE - 1, 0, down) < 1.5 * usual
+        # the fill for a face is that tile, and the pen that goes with it
+        # is the colour the tile comes to
+        brush, pen = look.shade(kind, 20)
+        assert brush.textureImage() == tile
+        assert pen.isCosmetic()
+        assert math.dist(_rgb(pen.color()), _patch(tile, 128, 128, 127)) < 3
+    # the more light on a face the lighter, and on the front of the leather
+    # the sheen comes on top of that
+    seen = [_lightness(look.texture(fv.FRONT, lv))[0]
+            for lv in (0, 12, last, last + 1, last + fv._SHEEN)]
+    assert seen == sorted(seen) and len(set(seen)) == 5
+    assert look.texture(fv.BACK, last + fv._SHEEN) \
+        == look.texture(fv.BACK, last)            # the back takes no sheen
+    assert _lightness(look.texture(fv.BACK, 0))[0] \
+        < _lightness(look.texture(fv.BACK, last))[0]
+    # the cut edge is a plain colour
+    brush, pen = look.shade(bsp.WALL, last)
+    assert brush.style() == Qt.SolidPattern
+    assert _rgb(brush.color()) == look.wall == _rgb(pen.color())
+    # the maps the textures are made from are made once
+    assert fv.texture_maps() is fv.texture_maps()
+    assert set(fv.texture_maps()) == {"grain", "relief", "fibres", "front",
+                                      "back"}
+
+
+def _unfilled(img, scene, cam):
+    """The pixels left the colour of the ground (which must have no green
+    in it) though the middle of each lies inside a face that was painted:
+    ``[(x, y)]``."""
+    from leathercad import bsp
+    w, h = img.width(), img.height()
+    bits = bytes(img.constBits())
+    stride = img.bytesPerLine()
+    green = [bits[y * stride + 1:y * stride + 4 * w:4] for y in range(h)]
+    spots = []
+    for y in range(1, h - 1):
+        row = green[y]
+        lo = w - len(row.lstrip(b"\0"))
+        hi = len(row.rstrip(b"\0"))
+        x = row.find(0, lo, hi)
+        while x >= 0:
+            if 0 < x < w - 1:
+                round_it = sum(1 for yy in (y - 1, y, y + 1)
+                               for xx in (x - 1, x, x + 1) if green[yy][xx])
+                if round_it >= 5:
+                    spots.append((x, y))
+            x = row.find(0, x + 1, hi)
+    if not spots:
+        return []
+    ox, ax, ay, az, oy, bx, by, bz = cam.mapping(w, h)
+    eye = cam.axes()[2]
+    faces = []
+    for cell in bsp.back_to_front(scene.tree, *eye):
+        for f in cell.faces:
+            n = f.plane
+            if f.kind != bsp.INNER \
+                    and n[0] * eye[0] + n[1] * eye[1] + n[2] * eye[2] > 1e-6:
+                faces.append([(ox + ax * x + ay * y + az * z,
+                               oy + bx * x + by * y + bz * z)
+                              for x, y, z in f.pts])
+    out = []
+    for x, y in spots:
+        cx, cy = x + 0.5, y + 0.5
+        for pts in faces:
+            sign = 0.0
+            x0, y0 = pts[-1]
+            for x1, y1 in pts:
+                c = (x1 - x0) * (cy - y0) - (y1 - y0) * (cx - x0)
+                if abs(c) > 1e-9:
+                    if sign == 0.0:
+                        sign = c
+                    elif (c > 0.0) != (sign > 0.0):
+                        break
+                x0, y0 = x1, y1
+            else:
+                out.append((x, y))
+                break
+    return out
+
+
+def test_no_pixel_of_a_face_is_left_unpainted(qapp):
+    # The faces are filled without smoothing, in the pieces the model is
+    # cut into; where a piece was cut and the one beside it was not, the
+    # odd pixel between them would show the ground. Each of these views
+    # does, without the line that is laid under such seams.
+    from PySide6.QtGui import QColor, QImage, QPainter
+    from leathercad_app import foldview as fv
+    look = fv.Look()
+    look.ground = QColor(255, 0, 255)
+    w, h = 900, 620
+    for doc, t, yaw, pitch in ((_wallet(), 0.0, -0.45, 0.3),
+                               (_wallet(), 0.8, -0.45, 0.3),
+                               (_tray(), 1.0, 2.6916, 0.8217),
+                               (_tray(), 0.8, 0.3354, 1.213)):
+        dlg = _dialog(doc)
+        try:
+            lay = dlg.layout_
+            scene = fv.Scene(lay, lay.n_steps * t)
+            cam = fv.Camera()
+            cam.centre, cam.radius = lay.extent()
+            cam.yaw, cam.pitch, cam.zoom = yaw, pitch, 1.7
+            img = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+            p = QPainter(img)
+            fv.paint_scene(p, w, h, scene, cam, look, labels=False)
+            p.end()
+            assert _unfilled(img, scene, cam) == []
+        finally:
+            dlg.close()
 
 
 def test_turning_sliding_and_zooming_the_view_with_the_mouse(qapp):

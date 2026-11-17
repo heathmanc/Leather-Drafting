@@ -19,7 +19,7 @@ import time
 from typing import List, Optional
 
 from PySide6.QtCore import QEvent, Qt, QTimer
-from PySide6.QtGui import QColor, QKeySequence, QShortcut
+from PySide6.QtGui import QColor, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QDialog,
                                QFormLayout, QHBoxLayout, QHeaderView, QLabel,
                                QPushButton, QSlider, QStyle, QTableWidget,
@@ -30,7 +30,7 @@ from leathercad import foldsolid as fs
 from leathercad import polycut as pc
 
 from . import units as U
-from .foldview import FoldView
+from .foldview import DEFAULT_LEATHER, LEATHERS, FoldView, fold_colour
 from .mathspin import MathSpinBox, NoWheelComboBox, NoWheelSpinBox
 
 _SLIDER = 200                     # slider ticks to a folding step
@@ -355,10 +355,27 @@ class FoldPreviewDialog(QDialog):
         self.cmb_base.setToolTip("The panel that stays where it is while "
                                  "the rest folds")
         self.cmb_base.currentIndexChanged.connect(self._base_chosen)
+        self.cmb_leather = NoWheelComboBox()
+        self.cmb_leather.setToolTip("The leather the piece is shown in. Only "
+                                    "the preview changes: nothing is saved "
+                                    "in the drawing")
+        for name, (front, _back, _edge) in LEATHERS.items():
+            chip = QPixmap(14, 14)
+            chip.fill(QColor(*front))
+            self.cmb_leather.addItem(QIcon(chip), name)
+        leather = DEFAULT_LEATHER
+        if settings is not None:
+            leather = str(settings.value("fold3dLeather", DEFAULT_LEATHER))
+        if leather not in LEATHERS:
+            leather = DEFAULT_LEATHER
+        self.cmb_leather.setCurrentText(leather)
+        self.view.set_leather(leather)
+        self.cmb_leather.currentTextChanged.connect(self._leather_chosen)
         form = QFormLayout()
         self._piece_label = QLabel("Piece")
         form.addRow(self._piece_label, self.cmb_piece)
         form.addRow("Leather thickness", self.spin_t)
+        form.addRow("Leather colour", self.cmb_leather)
         form.addRow("Bend radius", self.spin_r)
         form.addRow("Stays still", self.cmb_base)
 
@@ -476,7 +493,7 @@ class FoldPreviewDialog(QDialog):
         w.setValue(min(hi, max(lo, v)))
         w.setToolTip(tip)
         w.setKeyboardTracking(False)
-        w.valueChanged.connect(lambda _v, k=key, s=w: self._leather(k, s))
+        w.valueChanged.connect(lambda _v, k=key, s=w: self._measured(k, s))
         return w
 
     @property
@@ -697,8 +714,7 @@ class FoldPreviewDialog(QDialog):
         if it is not None:
             was = self._busy
             self._busy = True
-            it.setData(Qt.DecorationRole,
-                       QColor(self.view.look.fold_colour(f, live)))
+            it.setData(Qt.DecorationRole, fold_colour(f, live))
             self._busy = was
 
     def selected_fold(self) -> int:
@@ -846,11 +862,20 @@ class FoldPreviewDialog(QDialog):
             out.append(head + " ".join(_finding(f) for f in findings))
         self.readout.setText("<br><br>".join(out))
 
-    def _leather(self, key, spin):
+    def _measured(self, key, spin):
+        """The thickness or the bend radius was changed: fold it again."""
         if self._settings is not None:
             self._settings.setValue(key, spin.value())
         if not self._busy:
             self.rebuild()
+
+    def _leather_chosen(self, name):
+        """Show the piece in another leather (kept for next time)."""
+        if name not in LEATHERS:
+            return
+        self.view.set_leather(name)
+        if self._settings is not None:
+            self._settings.setValue("fold3dLeather", name)
 
     def _base_chosen(self, index):
         if self._busy or index < 0:

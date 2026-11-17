@@ -146,6 +146,31 @@ def test_split_face_keeps_lines_off_the_new_edge_and_marks_on_their_side():
     assert bsp.split_face(face, (1.0, 0.0, 0.0, -1.0)) == (face, None)
 
 
+def test_split_face_keeps_what_its_edges_are_and_where_its_texture_lies():
+    pts = ((0.0, 0.0, 0.0), (4.0, 0.0, 0.0), (4.0, 2.0, 0.0), (0.0, 2.0, 0.0))
+    turn = (0.0, 0.6, 0.8)        # the way the face round the bend is turned
+    uv = ((1.0, 2.0, 3.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+    face = bsp.Face(pts, bsp.plane_of(pts), bsp.FRONT,
+                    (True, False, turn, False), uv=uv)
+    assert face.uv is uv
+    for part in bsp.split_face(face, (1.0, 0.0, 0.0, 2.0)):    # x = 2
+        assert part.uv is uv
+        n = len(part.pts)
+        assert n == 4
+        for i in range(n):
+            a, b = part.pts[i], part.pts[(i + 1) % n]
+            if a[1] == b[1] == 0.0:
+                assert part.edges[i] is True      # the edge of the leather
+            elif a[1] == b[1] == 2.0:
+                assert part.edges[i] == turn      # still goes on round
+            else:
+                assert part.edges[i] is False     # an end, or the cut
+    # a face with nothing said about its edges or its texture stays so
+    plain = bsp.Face(pts, bsp.plane_of(pts), bsp.WALL)
+    for part in bsp.split_face(plain, (1.0, 0.0, 0.0, 2.0)):
+        assert part.edges is None and part.uv is None
+
+
 def test_split_cell_gives_two_solids_without_a_face_on_the_cut():
     cell = _box((0, 0, 0), *_AXES, 4, 2, 1)
     front, back = bsp.split_cell(cell, (1.0, 0.0, 0.0, 1.0))

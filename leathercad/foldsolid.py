@@ -119,7 +119,7 @@ class _Cell2:
 
     __slots__ = ("pts", "flags", "panel", "hinge", "strip", "place", "area",
                  "box", "edges", "edges_rev", "sides", "tag", "dots",
-                 "polys", "lines")
+                 "polys", "lines", "turns")
 
     def __init__(self, pts, flags, panel):
         self.pts = pts
@@ -133,6 +133,7 @@ class _Cell2:
         self.dots = []            # (x, y, diameter, hole index)
         self.polys = []           # rings of points
         self.lines = []           # (kind, p, q)
+        self.turns = []           # (edge, hinge index, strip) -- see below
 
 
 # -- small vector helpers (tuples) --------------------------------------------
@@ -684,8 +685,45 @@ class Layout:
                 else ("bend", self.tree[c.hinge].fold)
         self.cells = cells
         by_panel: Dict[int, List[_Cell2]] = {}
+        bends: Dict[int, List[_Cell2]] = {}
         for c in cells:
             by_panel.setdefault(c.panel, []).append(c)
+            if c.hinge is not None:
+                bends.setdefault(c.panel, []).append(c)
+        # Where the leather goes on round a bend from a cell: the edges
+        # along the lines the strips of a bend meet at, each with the strip
+        # across it (-1 and the number of strips stand for the flat panel
+        # before the first and after the last). The view wants these: such
+        # an edge is the rim of what shows when the next strip has turned
+        # out of sight.
+        for c in cells:
+            n = len(c.pts)
+            if c.hinge is not None:
+                for k in range(n):
+                    if c.flags[k] == pc.OUTLINE:
+                        continue
+                    t0, t1 = c.place[k][1], c.place[(k + 1) % n][1]
+                    if t0 <= 1e-9 and t1 <= 1e-9:
+                        c.turns.append((k, c.hinge, c.strip - 1))
+                    elif t0 >= 1.0 - 1e-9 and t1 >= 1.0 - 1e-9:
+                        c.turns.append((k, c.hinge, c.strip + 1))
+                continue
+            near = bends.get(c.panel)
+            if not near:
+                continue
+            for k in range(n):
+                if c.flags[k] == pc.OUTLINE:
+                    continue
+                p, q = c.pts[k], c.pts[(k + 1) % n]
+                wx, wy = c.sides[k][0], c.sides[k][1]
+                x = 0.5 * (p[0] + q[0]) + 2e-4 * wx    # just across the edge
+                y = 0.5 * (p[1] + q[1]) + 2e-4 * wy
+                for s in near:
+                    b = s.box
+                    if (b[0] <= x <= b[2] and b[1] <= y <= b[3]
+                            and pc.inside_convex((x, y), s.pts, 0.0)):
+                        c.turns.append((k, s.hinge, s.strip))
+                        break
         # stitch holes go on the cell they are in
         self.hole_panel = [-1] * len(self.holes)
         self.hole_flat = [False] * len(self.holes)
@@ -765,8 +803,12 @@ class Layout:
     # -- the solid ------------------------------------------------------------
 
     def _arcs(self, frames, fractions):
-        """For each hinge: the direction along the fold, and the lines the
-        bend's strips meet at, on the front and on the back face."""
+        """For each hinge: the direction along the fold, the lines the
+        bend's strips meet at on the front and on the back face, the way
+        the front of the leather faces on each strip -- with the panel
+        before the first strip and the one after the last at either end --
+        and whether the strips are too narrow to see, on the front and on
+        the back (the inside of a bend with no radius is a crease)."""
         ht = 0.5 * self.thickness
         out = []
         for hi, h in enumerate(self.tree):
@@ -803,8 +845,43 @@ class Layout:
                              mid[2] + ht * nn[2]))
                 bots.append((mid[0] - ht * nn[0], mid[1] - ht * nn[1],
                              mid[2] - ht * nn[2]))
-            out.append((e1, tops, bots))
+            if phi < 1e-9:
+                faces = [n] * (M + 2)
+            else:
+                faces = [n]
+                for j in range(M):
+                    al = phi * (j + 0.5) / M
+                    faces.append(_mix(math.cos(al), n, -s * math.sin(al), cc))
+                faces.append(_mix(math.cos(phi), n, -s * math.sin(phi), cc))
+            out.append((e1, tops, bots, faces,
+                        math.dist(tops[0], tops[1]) < _SHARP,
+                        math.dist(bots[0], bots[1]) < _SHARP))
         return out
+
+    @staticmethod
+    def _edges(c: _Cell2, arcs):
+        """What each edge of a cell's front face is, and of its back face:
+        True for an edge of the leather, False for a seam inside it, and
+        where the leather goes on round a bend, the way the face it goes on
+        to is turned (its normal). From a flat panel that is the first
+        strip of the bend -- or, where the strips are too narrow to see,
+        the panel on the far side of it."""
+        if not c.turns:
+            return c.edges, c.edges_rev
+        n = len(c.pts)
+        front, back = list(c.edges), list(c.edges_rev)
+        for k, hinge, strip in c.turns:
+            _e1, _tops, _bots, faces, no_top, no_bot = arcs[hinge]
+            fn = bn = faces[strip + 1]
+            if c.hinge is None and (no_top or no_bot):
+                far = faces[-1] if 2 * strip < len(faces) - 2 else faces[0]
+                if no_top:
+                    fn = far
+                if no_bot:
+                    bn = far
+            front[k] = fn
+            back[(n - 2 - k) % n] = (-bn[0], -bn[1], -bn[2])
+        return tuple(front), tuple(back)
 
     def solid(self, fractions: Sequence[float], bad=()) -> List[Cell]:
         """The model with every fold ``fractions`` of its way round, as
@@ -840,15 +917,17 @@ class Layout:
                             uz + p[0] * az + p[1] * bz)
 
                 pt, pb = top[0], bot[0]
+                fe, be = self._edges(c, arcs)
                 faces = [
                     Face(tuple(top), (nx, ny, nz,
                                       nx * pt[0] + ny * pt[1] + nz * pt[2]),
-                         FRONT, c.edges, _decals(c, up, bad), c.tag, c.area),
+                         FRONT, fe, _decals(c, up, bad), c.tag, c.area,
+                         ((tx, ty, tz), ex, ey)),
                     Face(tuple(bot[::-1]),
                          (-nx, -ny, -nz,
                           -(nx * pb[0] + ny * pb[1] + nz * pb[2])),
-                         BACK, c.edges_rev, _decals(c, down, bad), c.tag,
-                         c.area)]
+                         BACK, be, _decals(c, down, bad), c.tag,
+                         c.area, ((ux, uy, uz), ex, ey))]
                 m = len(top)
                 for k in range(m):
                     j = k + 1 if k + 1 < m else 0
@@ -863,7 +942,7 @@ class Layout:
                         kind, edges, None, c.tag, size))
                 out.append(Cell(faces, c.tag))
                 continue
-            e1, tops, bots = arcs[c.hinge]
+            e1, tops, bots = arcs[c.hinge][:3]
             j = c.strip
             t0, t1, b0, b1 = tops[j], tops[j + 1], bots[j], bots[j + 1]
 
@@ -889,17 +968,20 @@ class Layout:
                 return _strip_place(p, h, w, step, j)
 
             faces = []
+            fe, be = self._edges(c, arcs)
             pl = plane_of(top)
             if pl is not None:
-                faces.append(Face(tuple(top), pl, FRONT, c.edges,
+                faces.append(Face(tuple(top), pl, FRONT, fe,
                                   _decals(c, lambda p: up(at(p)), bad),
-                                  c.tag, c.area))
+                                  c.tag, c.area,
+                                  _strip_uv(h, w, step, j, t0, t1, e1)))
             rb = bot[::-1]
             pl = plane_of(rb)
             if pl is not None:
-                faces.append(Face(tuple(rb), pl, BACK, c.edges_rev,
+                faces.append(Face(tuple(rb), pl, BACK, be,
                                   _decals(c, lambda p: down(at(p)), bad),
-                                  c.tag, c.area))
+                                  c.tag, c.area,
+                                  _strip_uv(h, w, step, j, b0, b1, e1)))
             m = len(top)
             for k in range(m):
                 jj = k + 1 if k + 1 < m else 0
@@ -1089,6 +1171,27 @@ def _strip_place(p: Pt, h: Hinge, w: float, step: float, j: int
     u = dy * h.e[0] - dx * h.e[1]
     tau = (u + 0.5 * w - j * step) / step
     return along, 0.0 if tau < 0.0 else 1.0 if tau > 1.0 else tau
+
+
+def _strip_uv(h: Hinge, w: float, step: float, j: int, p0: P3, p1: P3,
+              e1: P3):
+    """Where the pattern lies on one face of strip ``j`` of a bend: ``(o,
+    u, v)`` with ``o + x * u + y * v`` the point of the face (which runs
+    from the line through ``p0`` to the one through ``p1``, both along
+    ``e1``) at ``(x, y)`` mm of the pattern."""
+    ex, ey = h.e
+    cx, cy = -ey, ex                           # across the fold
+    ax, ay = h.a
+    d = ((p1[0] - p0[0]) / step, (p1[1] - p0[1]) / step,
+         (p1[2] - p0[2]) / step)               # a mm across, on this face
+    k = 0.5 * w - j * step - ax * cx - ay * cy
+    m = ax * ex + ay * ey
+    return ((p0[0] + d[0] * k - e1[0] * m, p0[1] + d[1] * k - e1[1] * m,
+             p0[2] + d[2] * k - e1[2] * m),
+            (d[0] * cx + e1[0] * ex, d[1] * cx + e1[1] * ex,
+             d[2] * cx + e1[2] * ex),
+            (d[0] * cy + e1[0] * ey, d[1] * cy + e1[1] * ey,
+             d[2] * cy + e1[2] * ey))
 
 
 def _cut_zone(flat: List[pc.Poly], h: Hinge, side: float, half: float,

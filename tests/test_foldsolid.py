@@ -282,6 +282,132 @@ def test_the_solid_is_closed_convex_cells_at_every_stage():
         assert bsp.count(tree)[1] >= len(cells)
 
 
+def _dot(u, v):
+    return u[0] * v[0] + u[1] * v[1] + u[2] * v[2]
+
+
+def _shared(cells, kind):
+    """The faces of one side of the leather, and for every edge the faces
+    that have it: ``(faces, {edge: [face]})``."""
+    faces = [f for c in cells for f in c.faces if f.kind == kind]
+    by_edge = {}
+    for f in faces:
+        for i in range(len(f.pts)):
+            by_edge.setdefault(_edge(f, i), []).append(f)
+    return faces, by_edge
+
+
+def _edge(f, i):
+    a, b = f.pts[i], f.pts[(i + 1) % len(f.pts)]
+    return frozenset((tuple(round(v, 5) for v in a),
+                      tuple(round(v, 5) for v in b)))
+
+
+def test_each_edge_of_a_face_says_what_is_across_it():
+    # one 90 degree bend in eight strips: every strip and both panels run
+    # the full height, so each edge is shared with just one other face
+    lay = _one(angle=90.0, radius=2.0)
+    for t in (0.0, 0.5, 1.0):
+        cells = lay.solid(lay.fractions(t))
+        for kind in (bsp.FRONT, bsp.BACK):
+            faces, by_edge = _shared(cells, kind)
+            assert len(faces) == 10
+            turns = 0
+            for f in faces:
+                n = f.plane[:3]
+                for i, e in enumerate(f.edges):
+                    others = [g for g in by_edge[_edge(f, i)] if g is not f]
+                    if e is True:
+                        assert not others          # an edge of the leather
+                        continue
+                    # where the leather goes on round the bend: the way
+                    # the next face along is turned
+                    assert e is not False
+                    turns += 1
+                    assert len(others) == 1
+                    assert _near(e, others[0].plane[:3], 1e-9)
+                    step = math.degrees(math.acos(min(1.0, _dot(e, n))))
+                    assert step <= 90.0 * t / 8 + 1e-6
+            assert turns == 18          # one a panel, two a strip
+    # ... and the cut edge of the leather has only lines to draw or not
+    for c in lay.solid([1.0]):
+        for f in c.faces:
+            if f.kind == bsp.WALL:
+                assert all(e is True or e is False for e in f.edges)
+
+
+def test_the_inside_of_a_bend_with_no_radius_is_a_crease():
+    lay = _one(angle=90.0, radius=0.0, thickness=2.0)   # front to front
+
+    def onward(cells, kind):
+        """For each flat panel: the way its face is turned, and the way
+        the face its bend edge leads on to is."""
+        out = []
+        for c in cells:
+            if c.tag[0] != "panel":
+                continue
+            (f,) = [f for f in c.faces if f.kind == kind]
+            (e,) = [e for e in f.edges if e is not True and e is not False]
+            out.append((f.plane[:3], e))
+        return out
+
+    full = lay.solid([1.0])
+    # folded right up, the fronts of the two panels meet in a crease: each
+    # leads straight on to the other, a right angle away
+    (n0, e0), (n1, e1) = onward(full, bsp.FRONT)
+    assert _near(e0, n1, 1e-9) and _near(e1, n0, 1e-9)
+    assert abs(_dot(n0, n1)) < 1e-9
+    # the back is the outside of the bend: the leather goes round in strips
+    for n, e in onward(full, bsp.BACK):
+        assert 0.99 < _dot(n, e) < 1.0
+    # part folded there is still room inside the bend, so strips there too
+    for n, e in onward(lay.solid([0.5]), bsp.FRONT):
+        assert 0.99 < _dot(n, e) < 1.0
+
+
+def _pattern(face, p):
+    """Where on the pattern the texture of a face puts its point ``p``."""
+    o, u, v = face.uv
+    d = (p[0] - o[0], p[1] - o[1], p[2] - o[2])
+    uu, uv, vv = _dot(u, u), _dot(u, v), _dot(v, v)
+    du, dv = _dot(d, u), _dot(d, v)
+    det = uu * vv - uv * uv
+    return ((du * vv - dv * uv) / det, (dv * uu - du * uv) / det)
+
+
+def test_the_texture_lies_as_the_pattern_does_and_runs_on_round_a_bend():
+    lay = _trifold(base=1, radius=1.5)
+    # flat, the model is the pattern: every corner of the leather has the
+    # texture of its own place on it, at full size
+    for kind in (bsp.FRONT, bsp.BACK):
+        faces, _by_edge = _shared(lay.solid(lay.fractions(0.0)), kind)
+        for f in faces:
+            _o, u, v = f.uv
+            assert abs(_dot(u, u) - 1.0) < 1e-9
+            assert abs(_dot(v, v) - 1.0) < 1e-9
+            assert abs(_dot(u, v)) < 1e-9
+            for p in f.pts:
+                assert _near(_pattern(f, p), p[:2], 1e-9)
+    # folded, the texture of one face carries on in the next: both put the
+    # edge they share at the same place on the pattern
+    for t in (0.6, 2.0):
+        for kind in (bsp.FRONT, bsp.BACK):
+            faces, by_edge = _shared(lay.solid(lay.fractions(t)), kind)
+            pairs = 0
+            for f in faces:
+                for i in range(len(f.pts)):
+                    for g in by_edge[_edge(f, i)]:
+                        if g is f:
+                            continue
+                        pairs += 1
+                        for p in (f.pts[i], f.pts[(i + 1) % len(f.pts)]):
+                            assert _near(_pattern(f, p), _pattern(g, p), 1e-6)
+            assert pairs >= 2 * (len(faces) - 1)
+    # the cut edge and the faces inside the leather have none
+    assert all(f.uv is None for c in lay.solid([1.0, 1.0]) for f in c.faces
+               if f.kind in (bsp.WALL, bsp.INNER))
+
+
 def test_a_bend_is_an_arc_of_the_radius_asked_for():
     r, t = 3.0, 2.0
     lay = _one(radius=r, thickness=t)

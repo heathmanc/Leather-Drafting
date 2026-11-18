@@ -17,7 +17,7 @@ from leathercad.geometry import Vec2
 from leathercad.shapes import Rectangle, Ellipse, Circle, Polygon, PathShape
 from leathercad.layers import Layer, ROLES
 from .items import ShapeItem, StitchLineItem, HoleItem, DimensionItem, TextItem
-from .mathspin import NoWheelComboBox, NoWheelSpinBox
+from .mathspin import MathSpinBox, NoWheelComboBox, NoWheelSpinBox
 
 try:
     import shiboken6
@@ -36,9 +36,18 @@ except Exception:  # pragma: no cover
 _GEOM_DECIMALS = 4
 
 
-def _spin(lo, hi, step=1.0, decimals=2, suffix=" mm") -> QDoubleSpinBox:
-    from .mathspin import MathSpinBox
-    s = MathSpinBox()
+class _OrNotSet(MathSpinBox):
+    """A length, or Not set (its lowest value)."""
+
+    def valueFromText(self, text: str) -> float:   # noqa: N802
+        if text.strip().lower().startswith("not") or not text.strip():
+            return self.minimum()
+        return super().valueFromText(text)
+
+
+def _spin(lo, hi, step=1.0, decimals=2, suffix=" mm",
+          cls=MathSpinBox) -> QDoubleSpinBox:
+    s = cls()
     s.setRange(lo, hi)
     s.setSingleStep(step)
     s.setDecimals(decimals)
@@ -270,6 +279,15 @@ class PropertiesPanel(QWidget):
             "Stitch holes keep this far from the shape's centre: the cap or "
             "flange of a piece of hardware plus clearance. 0 = none.")
         fa.addRow("Stitch keep-out", self.keepout)
+        # the leather a piece is cut from: what it is as thick as when
+        # the pieces are put together in the 3D assembly preview
+        self.thickness = _spin(0.0, 12.0, 0.1, _GEOM_DECIMALS, cls=_OrNotSet)
+        self.thickness.setSpecialValueText("Not set")
+        self.thickness.setToolTip(
+            "How thick this piece's leather is: the 3D assembly preview "
+            "stacks and folds it at this thickness. Not set (0) = the "
+            "preview gives it one when the piece is put on a stack.")
+        fa.addRow("Leather thickness", self.thickness)
         self._appear_form = fa
         root.addWidget(self.g_appear)
 
@@ -382,6 +400,8 @@ class PropertiesPanel(QWidget):
             wdg.editingFinished.connect(self._commit)
         self.keepout.valueChanged.connect(self._apply)
         self.keepout.editingFinished.connect(self._commit)
+        self.thickness.valueChanged.connect(self._apply)
+        self.thickness.editingFinished.connect(self._commit)
         self.row_spacing.valueChanged.connect(self._apply)
         self.row_spacing.editingFinished.connect(self._commit)
         self.backstitch.valueChanged.connect(self._apply)
@@ -538,6 +558,13 @@ class PropertiesPanel(QWidget):
             self._appear_form.setRowVisible(
                 self.keepout, bool(getattr(sh, "hardware", ""))
                 or float(getattr(sh, "keepout", 0.0) or 0.0) > 0)
+            # shown for leather: closed outlines on a cut layer (with
+            # several things selected, if any of them is one)
+            pieces = self._leather()
+            self.thickness.setValue(
+                float(getattr(pieces[0], "thickness", 0.0) or 0.0)
+                if pieces else 0.0)
+            self._appear_form.setRowVisible(self.thickness, bool(pieces))
             self.pos_x.setValue(sh.transform.x)
             self.pos_y.setValue(sh.transform.y)
             self.rot.setValue(sh.transform.rotation)
@@ -929,6 +956,7 @@ class PropertiesPanel(QWidget):
                     sh.layer = self.layer_combo.currentData() or sh.layer
                 if self.opacity in self._dirty:
                     sh.opacity = self.opacity.value() / 100.0
+                self._apply_thickness(sh)
                 if self.g_stitch in self._dirty and not sh.baked_holes:
                     if self.g_stitch.isChecked():
                         if sh.stitch is None:
@@ -950,6 +978,31 @@ class PropertiesPanel(QWidget):
             it.sync_from_model()
         self.canvas.update_dimensions()
         self.canvas.documentChangedSig.emit()
+
+    def _leather(self) -> list:
+        """The selected shapes that are pieces of leather (closed outlines
+        on a cut layer), the leading one first."""
+        from leathercad.assembly import is_outline
+        doc = self.canvas.doc
+        return [it.model for it in [self._item] + list(self._multi)
+                if _alive(it) and isinstance(it, ShapeItem)
+                and is_outline(doc, it.model)]
+
+    def _apply_thickness(self, sh) -> None:
+        """The Leather thickness box, if it was changed, written to a
+        piece of leather. 0 is Not set; the thinnest leather it takes is
+        the 3D preview's own, 0.2 mm."""
+        if self.thickness not in self._dirty:
+            return
+        from leathercad.assembly import is_outline
+        v = self.thickness.value()
+        if 0.0 < v < 0.2:
+            v = 0.2
+            self.thickness.blockSignals(True)     # show what is kept
+            self.thickness.setValue(v)
+            self.thickness.blockSignals(False)
+        if is_outline(self.canvas.doc, sh):
+            sh.thickness = v
 
     def _stitch_dirty(self) -> bool:
         return bool(self._dirty & set(self._stitch_setters()))
@@ -1012,6 +1065,7 @@ class PropertiesPanel(QWidget):
             self._apply_transform(sh)
             sh.opacity = self.opacity.value() / 100.0
             sh.layer = self.layer_combo.currentData() or sh.layer
+            self._apply_thickness(sh)
             self._apply_shape_geometry(sh)
             if sh.stitch is None:
                 sh.stitch = StitchSettings(enabled=False)
@@ -1026,6 +1080,7 @@ class PropertiesPanel(QWidget):
             self._apply_transform(sh)
             sh.opacity = self.opacity.value() / 100.0
             sh.layer = self.layer_combo.currentData() or sh.layer
+            self._apply_thickness(sh)
             if self.keepout in self._dirty:
                 sh.keepout = self.keepout.value()
                 self.canvas._refresh_keepout_dependents()

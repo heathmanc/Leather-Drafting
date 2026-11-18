@@ -26,8 +26,9 @@ from PySide6.QtGui import QPixmapCache
 from leathercad.geometry import Vec2
 from leathercad.document import Document
 from leathercad.shapes import (copy_shape_attrs, Rectangle, Ellipse, Circle,
-                               Polygon, PathShape,
+                               Polygon, PathShape, carry_placement,
                                EditablePath, Edge, Transform, arc_through)
+from leathercad.assembly import keep_placement
 from leathercad.stitchsettings import StitchSettings
 from leathercad.stitchline import StitchLine
 from leathercad.holes import LooseHole
@@ -4776,6 +4777,8 @@ class Canvas(QGraphicsView):
                     self._reach_further(items, nodes, edges, closed, corner,
                                         got)
         ep = _editpath_from_world(nodes, edges, closed, base)
+        # welded from a piece that lies in a stack, it lies there still
+        keep_placement([base] + [old.model for old in items], [ep])
         self._distribute_holes([old.model for old in items], [ep])
         for old in items:
             self.doc.remove_shape(old.model)
@@ -4941,6 +4944,11 @@ class Canvas(QGraphicsView):
             sh.stitch = keep_stitch if k == 0 else None
             sh.layer, sh.opacity = layer, opacity
             made.append(sh)
+        # the biggest part is the piece it was in its stack; what is cut
+        # away takes no place with it, and a merged piece keeps the place
+        # of whichever of its parts had one
+        keep_placement([it.model for _i, it, _r in ordered] if op == "union"
+                       else [base], made)
         self._distribute_holes([it.model for _i, it, _r in ordered], made)
         for k, sh in enumerate(made):
             self.doc.add_shape(sh)
@@ -5113,6 +5121,9 @@ class Canvas(QGraphicsView):
             carry(sh.transform, Vec2(*it.pivot_center()))
             sh.shape_id = _sid("shape")
             sh.group_id = regroup(it.model.group_id)
+            # another piece of the same leather, but not yet put together
+            # with anything: one place in a stack is one piece's
+            sh.placed = None
             self.doc.add_shape(sh)
             return self._add_item(ShapeItem(sh, self))
         if isinstance(it, HoleItem):
@@ -5987,6 +5998,7 @@ class Canvas(QGraphicsView):
             sh.transform.x += (o_maxx + 20.0) - m_minx
             sh.shape_id = _next_id("shape")
             sh.group_id = None
+            sh.placed = None        # a new piece: in no stack yet
             if sh.name:
                 sh.name = sh.name + " (back)"
             new_items.append(self.add_shape(sh))
@@ -7196,6 +7208,8 @@ class Canvas(QGraphicsView):
                 copy_shape_attrs(model, sh)
                 self.doc.add_shape(sh)
                 made.append(self._add_item(ShapeItem(sh, self)))
+            # cut in two, the longer run is the piece in its stack
+            keep_placement([model], [m.model for m in made])
             self._distribute_holes([model], [m.model for m in made])
             for m in made:
                 m.sync_from_model()
@@ -7233,12 +7247,17 @@ class Canvas(QGraphicsView):
             if res and res.count:
                 made += self._explode(res, style, it.model.group_id,
                                       mirrored=it.model.transform.mirror_x)
+            edges = []
             for kind, wpts in segs:
                 new = _segment_shape(kind, wpts, it.model.layer)
                 copy_shape_attrs(it.model, new)
                 new.stitch = None             # its holes are loose holes now
                 self.doc.add_shape(new)
+                edges.append(new)
                 made.append(self._add_item(ShapeItem(new, self)))
+            # one edge, the longest, keeps the piece's place in its stack
+            # for Join to give back to the outline
+            keep_placement([it.model], edges)
             self.doc.remove_shape(it.model)
             self._remove_item(it)
         # A text explodes into one editable node path per glyph contour (decision
@@ -7339,6 +7358,7 @@ class Canvas(QGraphicsView):
         for m in made:
             copy_shape_attrs(first, m)
             m.stitch = copy.deepcopy(stitched.stitch)
+        self._leather_home([it.model for it in shapes], made, tol)
         self._distribute_holes([it.model for it in shapes], made)
 
         self._suppress_commit = True
@@ -7362,6 +7382,40 @@ class Canvas(QGraphicsView):
         self.selectionChangedSig.emit()
         self._emit_commit()
         self.statusMessage.emit(joined)
+
+    def _leather_home(self, sources, made, tol: float) -> None:
+        """After a weld, each path among ``made`` is still the leather its
+        pieces were: the thickness, the leather and the place in a stack of
+        a source go to the path its own line runs along. A path holds one
+        of each: the first source's that has it, in the order of the
+        drawing."""
+        for m in made:
+            m.placed, m.thickness, m.leather = None, 0.0, ""
+        lines = [m.world_polyline()[0] for m in made]
+        order = {id(s): i for i, s in enumerate(self.doc.shapes)}
+        for src in sorted(sources, key=lambda s: order.get(id(s), 0)):
+            placed = getattr(src, "placed", None) is not None
+            if not (placed or src.thickness > 0.0 or src.leather):
+                continue
+            segs = self._segments_world(src)
+            if not segs:
+                continue
+            kind, wpts = segs[0]              # a point on its first edge
+            on = (wpts[1] if kind == "arc" and len(wpts) == 3 else wpts[0]
+                  if kind == "bezier" else
+                  Vec2((wpts[0].x + wpts[-1].x) / 2.0,
+                       (wpts[0].y + wpts[-1].y) / 2.0))
+            near = [(_point_polyline_dist(on, ln), k)
+                    for k, ln in enumerate(lines) if len(ln) >= 2]
+            if not near or min(near)[0] > tol + 0.05:
+                continue
+            m = made[min(near)[1]]
+            if placed and m.placed is None:
+                carry_placement(src, m)
+            if src.thickness > 0.0 and not m.thickness > 0.0:
+                m.thickness = src.thickness
+            if src.leather and not m.leather:
+                m.leather = src.leather
 
     def _join_holes_home(self, parts, holes, welded, joined) -> None:
         """Join's second half: the selected loose ``holes`` go back to the

@@ -67,6 +67,26 @@ def _next_id(prefix: str) -> str:
 
 
 @dataclass
+class Placement:
+    """Where a piece lies in a stack of pieces put together (see
+    ``leathercad.assembly``). Plain values only: undo compares them."""
+    of: str = ""        # the stack it belongs to ("stack7")
+    order: int = 0      # its place in the pile, 1 at the bottom
+    main: bool = False  # the others are placed against this piece, and
+                        # the stack folds along its fold lines
+    ax: float = 0.5     # which point of its box: 0 left, 0.5 middle, 1 right
+    ay: float = 0.5     # ... 0 bottom, 0.5 middle, 1 top
+    x: float = 0.0      # that point, from the same point of the main
+    y: float = 0.0      # piece's box (mm, on the bench)
+    turn: float = 0.0   # degrees counter-clockwise, as it lies
+    over: bool = False  # flesh side up: turned over like a page
+    flip: bool = False  # drawn as seen from its flesh side: shown the
+                        # other way round without being turned over
+    cx: float = 0.0     # where its box centre lay, from the main piece's
+    cy: float = 0.0     # box centre, when last written
+
+
+@dataclass
 class Shape:
     name: str = ""
     transform: Transform = field(default_factory=Transform)
@@ -105,6 +125,13 @@ class Shape:
     fold_angle: float = 90.0
     fold_order: int = 0
     fold_radius: float = -1.0
+    # A piece of leather: its ``thickness`` in mm (0 = not given), the name
+    # of its ``leather`` among the ones the 3D preview paints ("" = the usual
+    # one), and where it lies in a stack of pieces put together (``placed``;
+    # None = in no stack).
+    thickness: float = 0.0
+    leather: str = ""
+    placed: Optional[Placement] = None
 
     @property
     def is_fold_line(self) -> bool:
@@ -177,6 +204,7 @@ _NON_GEOMETRY_FIELDS = frozenset({
     "name", "transform", "layer", "stitch", "opacity", "shape_id", "kind",
     "baked_holes", "stitch_edges", "hardware", "keepout", "construction",
     "group_id", "fold_dir", "fold_angle", "fold_order", "fold_radius",
+    "thickness", "leather", "placed",
 })
 
 
@@ -285,15 +313,17 @@ class Circle(Ellipse):
 
 def copy_shape_attrs(src, dst, *, holes: bool = False):
     """Give ``dst`` the identity ``src`` had beyond its geometry -- name,
-    layer, opacity, stitching, construction (guide) flag, group, fold -- so a
-    command that rebuilds a shape (trim, join, convert to nodes...) doesn't
-    quietly turn a guide into a cut line or drop it out of its group.
-    ``holes`` also carries attached holes (only valid in the same local
-    frame). Returns ``dst``."""
+    layer, opacity, stitching, construction (guide) flag, group, fold, the
+    leather it is cut from and its place in a stack -- so a command that
+    rebuilds a shape (trim, join, convert to nodes...) doesn't quietly turn a
+    guide into a cut line or drop it out of its group. ``holes`` also carries
+    attached holes (only valid in the same local frame). ``dst`` must have
+    its transform already: the place is re-based on it (see
+    ``carry_placement``). Returns ``dst``."""
     import copy
     for name in ("name", "layer", "opacity", "construction", "group_id",
                  "fold_dir", "fold_angle", "fold_order", "fold_radius",
-                 "hardware", "keepout"):
+                 "hardware", "keepout", "thickness", "leather"):
         if hasattr(src, name):
             setattr(dst, name, getattr(src, name))
     dst.stitch = copy.deepcopy(src.stitch)
@@ -301,6 +331,27 @@ def copy_shape_attrs(src, dst, *, holes: bool = False):
         dst.stitch_edges = list(src.stitch_edges)   # ignored if it no longer fits
     if holes:
         dst.baked_holes = copy.deepcopy(src.baked_holes)
+    carry_placement(src, dst)
+    return dst
+
+
+def carry_placement(src, dst):
+    """Give ``dst``, a shape rebuilt from ``src`` where it is drawn, a copy
+    of the place ``src`` has in its stack (none if it has none). A piece's
+    place is kept in its own frame, the drawing's with the shape's place and
+    turn on it taken off, and a rebuilt shape is seldom turned on the
+    drawing as the one it was made from: only the turn is re-based, by the
+    difference between the two, so the leather lies as it lay. ``dst`` must
+    have its transform already. Returns ``dst``."""
+    from dataclasses import replace
+    p = getattr(src, "placed", None)
+    if p is None:
+        dst.placed = None
+        return dst
+    d = src.transform.rotation - dst.transform.rotation
+    # lying mirrored, the piece's own frame turns the other way on the bench
+    turn = p.turn + d if p.over != p.flip else p.turn - d
+    dst.placed = replace(p, turn=turn % 360.0)
     return dst
 
 

@@ -718,5 +718,9 @@ def break_path_at(ep: EditablePath, idx: int):
                      [ep.edges[(idx + k) % n] for k in range(n)])]
     if idx <= 0 or idx >= n - 1:
         return []
-    return [make(ep.nodes[:idx + 1], ep.edges[:idx]),
-            make(ep.nodes[idx:], ep.edges[idx:])]
+    parts = [make(ep.nodes[:idx + 1], ep.edges[:idx]),
+             make(ep.nodes[idx:], ep.edges[idx:])]
+    # one place in a stack is one piece's: the longer run keeps it
+    from .assembly import keep_placement
+    keep_placement([ep], parts)
+    return parts

@@ -13,7 +13,7 @@ from typing import List, Optional
 from .geometry import Vec2
 from .layers import Layer, default_layers
 from .shapes import (Shape, Rectangle, Ellipse, Circle, Polygon, PathShape,
-                     EditablePath, Edge, Transform)
+                     EditablePath, Edge, Placement, Transform)
 from .stitchsettings import StitchSettings
 from .stitchline import StitchLine
 from .holes import LooseHole
@@ -57,10 +57,11 @@ def _advance_id_counters(doc) -> None:
         return n
     groups = [o.group_id for o in (*doc.shapes, *doc.holes, *doc.stitch_lines,
                                    *doc.texts)]
-    # shapes, texts and groups all draw on the one shape counter
+    stacks = [s.placed.of for s in doc.shapes if s.placed is not None]
+    # shapes, texts, groups and stacks all draw on the one shape counter
     used = max(top([s.shape_id for s in doc.shapes], "shape"),
                top([t.text_id for t in doc.texts], "text"),
-               top(groups, "group"))
+               top(groups, "group"), top(stacks, "stack"))
     shapes._shape_counter[0] = max(shapes._shape_counter[0], used)
     stitchline._sl_counter[0] = max(
         stitchline._sl_counter[0], top([l.line_id for l in doc.stitch_lines],
@@ -79,6 +80,34 @@ def _stitch_from_dict(d: Optional[dict]) -> Optional[StitchSettings]:
     # round-trip across releases instead of raising on an unexpected kwarg
     valid = {f.name for f in dc_fields(StitchSettings)}
     return StitchSettings(**{k: v for k, v in d.items() if k in valid})
+
+
+def _placed_to_dict(p: Placement) -> dict:
+    """A piece's place in its stack: only what differs from a Placement
+    with nothing set, as plain values in a dict of its own (the snapshot
+    it goes into outlives every later edit of the live piece)."""
+    out = {}
+    for f in dc_fields(Placement):
+        v = getattr(p, f.name)
+        if v != f.default:
+            out[f.name] = type(f.default)(v)
+    return out
+
+
+def _placed_from_dict(d) -> Optional[Placement]:
+    """The place a shape's dict gives it, or None. Keys this version does
+    not know are passed over, and a value it cannot read counts as not
+    given, so a file from another release still opens."""
+    if not isinstance(d, dict):
+        return None
+    p = Placement()
+    for f in dc_fields(Placement):
+        if f.name in d:
+            try:
+                setattr(p, f.name, type(f.default)(d[f.name]))
+            except (TypeError, ValueError):
+                pass
+    return p
 
 
 def _shape_to_dict(sh: Shape) -> dict:
@@ -105,6 +134,12 @@ def _shape_to_dict(sh: Shape) -> dict:
         base["hardware"] = sh.hardware
     if sh.keepout:
         base["keepout"] = float(sh.keepout)
+    if sh.thickness > 0.0:
+        base["thickness"] = float(sh.thickness)
+    if sh.leather:
+        base["leather"] = sh.leather
+    if sh.placed is not None:
+        base["placed"] = _placed_to_dict(sh.placed)
     if isinstance(sh, Rectangle):
         base.update(width=sh.width, height=sh.height,
                     corner_radius=sh.corner_radius)
@@ -162,6 +197,9 @@ def _shape_from_dict(d: dict) -> Shape:
                       if d.get("stitch_edges") is not None else None),
         hardware=str(d.get("hardware", "") or ""),
         keepout=float(d.get("keepout", 0.0) or 0.0),
+        thickness=max(0.0, float(d.get("thickness", 0.0) or 0.0)),
+        leather=str(d.get("leather", "") or ""),
+        placed=_placed_from_dict(d.get("placed")),
     )
     if "shape_id" in d:
         common["shape_id"] = d["shape_id"]

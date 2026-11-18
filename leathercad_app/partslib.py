@@ -55,9 +55,12 @@ def save_part(name: str, shapes: List[Shape], texts=None,
               base: Optional[str] = None, stitch_lines=None,
               holes=None) -> Path:
     """Write a part: its shapes, lettering, drawn seams and loose holes (the
-    last two used to be dropped silently, so a saved pocket lost its seam)."""
+    last two used to be dropped silently, so a saved pocket lost its seam).
+    A piece's thickness and leather go with it; its place in a stack of
+    the drawing it was saved from does not."""
     payload = {"part": 1, "name": name,
-               "shapes": [_shape_to_dict(s) for s in shapes],
+               "shapes": [{k: v for k, v in _shape_to_dict(s).items()
+                           if k != "placed"} for s in shapes],
                "texts": [t.to_dict() for t in (texts or [])],
                "stitch_lines": [_stitchline_to_dict(sl)
                                 for sl in (stitch_lines or [])],
@@ -101,6 +104,7 @@ def load_part_all(path: Path):
         sh = _shape_from_dict(d)
         sh.shape_id = _next_id("shape")     # never collide with existing shapes
         sh.group_id = None
+        sh.placed = None                    # a copy is in no stack yet
         shapes.append(sh)
     texts = [TextShape.from_dict(d) for d in data.get("texts", [])]
     for t in texts:

@@ -432,6 +432,13 @@ def _reach(parts_a, parts_b, enough: float = math.inf) -> float:
         ax0, ay0, ax1, ay1 = pc.bounds(A)
         for B, (bx0, by0, bx1, by1) in zip(parts_b, boxes):
             if ax0 < bx1 and bx0 < ax1 and ay0 < by1 and by0 < ay1:
+                # Two parts reach into each other by no more than the
+                # boxes round them do -- than one box would have to slide,
+                # across or up, to come off the other: a pair that could
+                # not better what is found already is not tried
+                if best > 0.0 and (min(ax1 - bx0, bx1 - ax0) <= best
+                                   or min(ay1 - by0, by1 - ay0) <= best):
+                    continue
                 d = _depth(A, B)
                 if d > best:
                     best = d
@@ -510,11 +517,13 @@ def _split(pts: Sequence[Pt], p: Pt, q: Pt):
     return left, right
 
 
-def _minus(bits, parts, least: float = LAP):
+def _minus(bits, parts, least: float = LAP, boxes=None):
     """What is left of some convex polygons once the convex ``parts`` of a
     piece are taken out of them, as convex polygons. Whatever is left
-    narrower than ``least`` is dropped."""
-    boxes = [pc.bounds(B) for B in parts]
+    narrower than ``least`` is dropped. (``boxes`` are the boxes round the
+    parts, for a caller that has them.)"""
+    if boxes is None:
+        boxes = [pc.bounds(B) for B in parts]
     out = []
     for P in bits:
         px0, py0, px1, py1 = pc.bounds(P)
@@ -544,12 +553,15 @@ def _minus(bits, parts, least: float = LAP):
     return out
 
 
-def _common(bits, parts, least: float = LAP, any_will_do: bool = False):
+def _common(bits, parts, least: float = LAP, any_will_do: bool = False,
+            boxes=None):
     """The convex polygons that some convex polygons and the convex
     ``parts`` of a piece have in common, wider than ``least`` -- or, if
-    ``any_will_do``, the first of them found."""
+    ``any_will_do``, the first of them found. (``boxes`` as for
+    ``_minus``.)"""
     out = []
-    boxes = [pc.bounds(B) for B in parts]
+    if boxes is None:
+        boxes = [pc.bounds(B) for B in parts]
     for P in bits:
         px0, py0, px1, py1 = pc.bounds(P)
         for B, (bx0, by0, bx1, by1) in zip(parts, boxes):
@@ -736,18 +748,39 @@ def _gaps(s: Sheet, under, ground, sheets) -> List[Tuple[int, float]]:
     """What a sheet stands clear of: every piece that is the highest
     leather under some part of it and yet lower than what it rests on, as
     ``[(piece, gap)]`` with the widest gap first."""
-    out = []
-    bits = list(s.parts)                       # of it, with nothing under yet
-    for hi, j in sorted(under, reverse=True):             # the tallest first
-        if not bits:
+    below = sorted(under, reverse=True)                   # the tallest first
+    # what it could stand clear of, in that order: the main piece last
+    lower = [j + 1 for hi, j in below if hi < s.lo - 1e-9]
+    if s.lo > 1e-9 and ground:
+        lower.append(0)
+    gap = {j + 1: s.lo - hi for hi, j in below}
+    gap[0] = s.lo
+    boxes = {j: [pc.bounds(B) for B in sheets[j].parts] for _hi, j in below}
+    clear = set()
+    # Each is looked for under one convex part of the sheet after another,
+    # until all are found (a sheet in many parts is seldom gone right
+    # through)
+    for part in s.parts:
+        if len(clear) == len(lower):
             break
-        if hi < s.lo - 1e-9 and _common(bits, sheets[j].parts, HAIR, True):
-            out.append((j + 1, s.lo - hi))
-        bits = _minus(bits, sheets[j].parts)
-    if s.lo > 1e-9 and _common(bits, ground, HAIR, True):
-        out.append((0, s.lo))
-    out.reverse()
-    return out
+        bits = [part]                  # of the part, with nothing under yet
+        n = 0                          # how many of ``lower`` are gone past
+        for hi, j in below:
+            if hi < s.lo - 1e-9:
+                n += 1
+                if j + 1 not in clear and _common(
+                        bits, sheets[j].parts, HAIR, True, boxes[j]):
+                    clear.add(j + 1)
+            if all(k in clear for k in lower[n:]):
+                break                  # nothing lower is still looked for
+            bits = _minus(bits, sheets[j].parts, LAP, boxes[j])
+            if not bits:
+                break
+        else:
+            if 0 in lower and 0 not in clear \
+                    and _common(bits, ground, HAIR, True):
+                clear.add(0)
+    return [(k, gap[k]) for k in reversed(lower) if k in clear]
 
 
 def _thickest(ground, thickness: float, sheets, over) -> Note:
@@ -764,7 +797,7 @@ def _thickest(ground, thickness: float, sheets, over) -> Note:
         if a and b and sheets[a - 1].side == sheets[b - 1].side:
             return b - 1 in over[a - 1]
         if (a, b) not in known:
-            known[a, b] = _reach(parts(a), parts(b)) > LAP
+            known[a, b] = _reach(parts(a), parts(b), LAP) > LAP
         return known[a, b]
 
     live = [k for k, s in enumerate(sheets, 1) if s.parts]
@@ -784,6 +817,7 @@ def _thickest(ground, thickness: float, sheets, over) -> Note:
     pairs.sort(key=lambda pair: -pair[0])      # (the first of equals stays)
     tall, top, foot = next((pair for pair in pairs if pair[1] == pair[2]
                             or is_over(pair[1], pair[2])), (0.0, 0, 0))
+
     def biggest(bits):
         # (a place in very many bits is followed by its biggest only: it
         # is a point of it that is wanted, not all of it)

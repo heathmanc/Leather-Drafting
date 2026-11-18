@@ -288,6 +288,44 @@ def test_the_grain_of_one_piece_does_not_run_on_into_the_next(qapp):
                      _patch(b, *_pixel(cam, 600, 400, (140, 50, 2.0)))) < 12
 
 
+def test_a_sheet_slid_along_the_bench_is_painted_with_the_same_grain(qapp):
+    from leathercad_app import foldview as fv
+    lay = fs.fold_piece(MAIN, [], thickness=2.0)
+    w, h = 600, 400
+    cam = fv.Camera()
+    cam.yaw = cam.pitch = 0.0
+    cam.centre, cam.radius = (100.0, 50.0, 0.0), 110.0
+    slide = 24.0 / cam.scale(w, h)             # 24 pixels along the bench
+
+    def picture(dx):
+        stack = sh.FlatStack(lay, [sh.Sheet(_rect(30 + dx, 30, 90 + dx, 70),
+                                            1.0)], MAIN)
+        img = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+        p = QPainter(img)
+        fv.paint_scene(p, w, h, fv.Scene(stack, 0.0), cam, fv.Look(),
+                       labels=False)
+        p.end()
+        return img
+
+    here, there = picture(0.0), picture(slide)
+    x0, y0 = _pixel(cam, w, h, (36.0, 64.0, 2.0))
+    x1, y1 = _pixel(cam, w, h, (84.0, 36.0, 2.0))
+    spots = [(x, y) for x in range(int(x0), int(x1))
+             for y in range(int(y0), int(y1))]
+    assert len(spots) > 3000
+
+    def alike(dx):
+        return sum(math.dist(_rgb(here.pixelColor(x, y)),
+                             _rgb(there.pixelColor(x + dx, y))) <= 2
+                   for x, y in spots) / len(spots)
+
+    # the same grain at the same place on the piece, 24 pixels along; and
+    # not the same at one place on the bench: the piece does not slide
+    # over its own grain
+    assert alike(24) > 0.99
+    assert alike(0) < 0.2
+
+
 def test_the_shadow_of_a_piece_reaches_as_far_as_that_piece_is_thick(qapp):
     from leathercad_app import foldview as fv
     lay = fs.fold_piece(MAIN, [], thickness=2.0)
@@ -1411,6 +1449,49 @@ def test_alt_click_picks_the_next_piece_down_under_the_pointer(qapp):
         assert click(Qt.AltModifier, QPoint(3, 3)) == (-1, False)
     finally:
         view.close()
+
+
+def test_a_piece_is_under_the_pointer_once_however_many_cells_it_is_in(qapp):
+    from leathercad_app import foldview as fv
+    # a piece folded shut on itself: from above, both its panels are
+    # under a point of it, and it is one piece there all the same
+    lay = fs.fold_piece(MAIN, [fs.FoldLine((100, 0), (100, 100), 180, 1)],
+                        thickness=2.0)
+    w, h = 400, 300
+    cam = fv.Camera()
+    cam.centre, cam.radius = lay.extent()
+    cam.yaw = cam.pitch = 0.0
+    scene = fv.Scene(lay, 1.0)
+    frames = lay.frames(lay.fractions(1.0))
+    spots = [fs.place(frames[i], (50.0 + 100 * i, 50.0), 0.0)
+             for i in (0, 1)]
+    (x0, y0), (x1, y1) = (_pixel(cam, w, h, p) for p in spots)
+    # (the two panels lie one over the other: a point of each, 50 mm from
+    # the fold, shows within a few pixels of the other)
+    assert math.hypot(x1 - x0, y1 - y0) < 12
+    assert abs(spots[0][2] - spots[1][2]) > 2.0
+    assert fv.pieces_at(scene, cam, w, h, x0, y0) == [0]
+    assert fv.piece_at(scene, cam, w, h, x0, y0) == 0
+    # and so is a sheet whose outline is kept in several parts, seen from
+    # the side through two arms of it
+    arms = [(40, 20), (160, 20), (160, 80), (130, 80), (130, 40), (70, 40),
+            (70, 80), (40, 80)]
+    stack = sh.FlatStack(fs.fold_piece(MAIN, [], thickness=2.0),
+                         [sh.Sheet(arms, 6.0)], MAIN)
+    assert len(stack.sheets[0].parts) > 1
+    scene = fv.Scene(stack, 0.0)
+    cam = fv.Camera()
+    cam.centre, cam.radius = stack.extent()
+    most = 0
+    for yaw in (0.0, 0.8, 1.6, 2.4):
+        cam.yaw, cam.pitch = yaw, 1.45
+        for x in range(0, w, 4):
+            for y in range(0, h, 4):
+                under = fv.pieces_at(scene, cam, w, h, x, y)
+                assert len(set(under)) == len(under), (yaw, x, y, under)
+                assert under in ([], [0], [1], [0, 1], [1, 0])
+                most = max(most, len(under))
+    assert most == 2
 
 
 def test_what_the_view_is_told_of_a_stack_it_keeps_for_the_next_model(qapp):

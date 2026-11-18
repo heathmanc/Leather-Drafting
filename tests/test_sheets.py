@@ -188,6 +188,39 @@ def test_a_piece_across_two_others_rests_on_the_higher_and_bridges_the_rest():
     assert pocket.rests == [1] and pocket.clear == [(0, 0.8)]
 
 
+def test_a_piece_in_many_parts_is_told_clear_of_each_thing_it_bridges():
+    # a comb across three piles and the gaps between them: its back along
+    # y = 40 to 50, a tooth up over each pile
+    comb = [(20, 40), (190, 40), (190, 50), (160, 50), (160, 70), (140, 70),
+            (140, 50), (100, 50), (100, 70), (80, 70), (80, 50), (40, 50),
+            (40, 70), (20, 70)]
+    (a, d, b, c, top), notes = _laid((_rect(10, 10, 50, 90), 2.0),
+                                     (_rect(75, 15, 105, 85), 0.3),
+                                     (_rect(70, 10, 110, 90), 1.5),
+                                     (_rect(130, 10, 170, 90), 0.5),
+                                     (comb, 1.0))
+    assert len(top.parts) >= 4
+    assert (b.lo, b.hi, b.clear) == (0.3, 1.8, [(0, 0.3)])
+    assert (top.lo, top.rests, top.rank) == (2.0, [1], 3)
+    # the widest gap first: the main piece between the piles, then the
+    # thin pile, then the pile 0.2 mm lower than the one it rests on.
+    # Piece 2 is wholly under piece 3: nothing stands clear of it
+    assert [k for k, _gap in top.clear] == [0, 4, 3]
+    assert [gap for _k, gap in top.clear] == pytest.approx([2.0, 1.5, 0.2])
+    assert notes[-1] == sh.Note("clear", 5, -1, 2.0, other=(0, 4, 3))
+    # laid the other way round along the bench it is the same
+    flip = [(210 - x, y) for x, y in comb]
+    (_a, _d, _b, _c, top), _notes = _laid((_rect(160, 10, 200, 90), 2.0),
+                                          (_rect(105, 15, 135, 85), 0.3),
+                                          (_rect(100, 10, 140, 90), 1.5),
+                                          (_rect(40, 10, 80, 90), 0.5),
+                                          (flip, 1.0))
+    assert [k for k, _gap in top.clear] == [0, 4, 3]
+    # with its back on the tall pile alone it stands clear of nothing
+    (_a, top), _notes = _laid((_rect(10, 10, 195, 90), 2.0), (comb, 1.0))
+    assert top.rests == [1] and top.clear == []
+
+
 def test_what_is_laid_last_goes_on_top_whatever_its_size():
     # a strap across a pile of three that stands lower than the piece it
     # rests on: one more than the highest rank of anything under it, so
@@ -433,6 +466,15 @@ def test_a_busy_outline_is_thinned_in_its_hollows_too_and_inwards_only():
     # made ready a second time, it stays as it is
     again = sh.Sheet(s.ring, 1.0)
     assert again.ring == s.ring and again.frame == s.frame
+    # Round a bulge a corner is dropped only where the line between its
+    # neighbours cuts it off. One that stands ever so little to the left
+    # of that line, where the leather is, stays however near it is: to
+    # drop it would add leather
+    assert sh._chords([(0, 0), (5, -0.01), (10, 0)], 0.03) == [(0, 0),
+                                                              (10, 0)]
+    assert sh._chords([(0, 0), (5, 0.01), (10, 0)], 0.03) == [
+        (0, 0), (5, 0.01), (10, 0)]
+    assert len(sh._chords([(0, 0), (5, -0.04), (10, 0)], 0.03)) == 3
     # an outline with few corners is not touched
     box = sh.Sheet([(0, 0), (30, 0), (30, 10), (10, 10), (10, 30), (0, 30)],
                    1.0)
@@ -442,20 +484,26 @@ def test_a_busy_outline_is_thinned_in_its_hollows_too_and_inwards_only():
 
 
 def test_piled_busy_outlines_settle_without_clipping_everything(monkeypatch):
-    calls = []
-    clip = pc.clip_to_convex
+    calls, tried = [], []
+    clip, overlap = pc.clip_to_convex, pc.convex_overlap
     monkeypatch.setattr(pc, "clip_to_convex",
                         lambda *a: calls.append(1) or clip(*a))
+    monkeypatch.setattr(pc, "convex_overlap",
+                        lambda *a: tried.append(1) or overlap(*a))
     sheets = [sh.Sheet(_scalloped(120 + 8 * i, 100 + 5 * i, 60 - 6 * i), 1.0)
               for i in range(3)]
     notes = sh.settle([(0, 0), (300, 0), (300, 200), (0, 200)], 2.0, sheets)
     assert [s.lo for s in sheets] == [0.0, 1.0, 2.0]
+    assert [s.clear for s in sheets] == [[], [(0, 1.0)], [(0, 2.0), (1, 1.0)]]
     assert [(n.kind, n.sheet) for n in notes] == [("thick", 0), ("clear", 2),
                                                   ("clear", 3)]
     assert _near(notes[0].a, 5.0) and notes[0].other == (0, 1, 2, 3)
     # (125 751 clips before each bit was tried against the box round each
-    # part first, and the thickest place followed by its biggest bits)
+    # part first, and the thickest place followed by its biggest bits;
+    # 40 688 parts tried against each other before what a sheet stands
+    # clear of was looked for part by part, until found)
     assert len(calls) < 20000
+    assert len(tried) < 10000
 
 
 def test_a_piece_moved_after_it_was_made_is_laid_where_it_now_is():
@@ -540,6 +588,21 @@ def test_a_rest_on_under_a_millimetre_is_told_as_a_sliver_and_no_other():
         slivers = [n for n in notes if n.kind == "sliver"]
         assert slivers == ([sh.Note("sliver", 2, -1, b.lap, other=(1,))]
                            if told else []), over
+    # how far a piece is on another is the most that any part of the one
+    # reaches into any part of the other, whichever part is tried first:
+    # a T whose bar is 20 mm in from the edge of the piece under it and
+    # whose stem, narrow as it is, would have to slide 28 mm to come off
+    big, bar, stem = (_rect(0, 0, 100, 100), _rect(60, 80, 90, 90),
+                      _rect(72, 30, 78, 80))
+    assert _near(sh._reach([bar], [big]), 20.0)
+    assert _near(sh._reach([stem], [big]), 28.0)
+    for parts in ([bar, stem], [stem, bar]):
+        assert _near(sh._reach(parts, [big]), 28.0)
+        assert _near(sh._reach([big], parts), 28.0)
+    tee = [(72, 30), (78, 30), (78, 80), (90, 80), (90, 90), (60, 90),
+           (60, 80), (72, 80)]
+    (_low, top), notes = _laid((big, 1.0), (tee, 1.0))
+    assert _near(top.lap, 28.0) and [n.kind for n in notes] == ["thick"]
     # a piece that is on the main piece by as little is not told so: it
     # is told as standing past its edge
     (s,), notes = _laid((_rect(199.4, 10, 260, 90), 1.0))

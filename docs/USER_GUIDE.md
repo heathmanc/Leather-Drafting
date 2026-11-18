@@ -804,12 +804,22 @@ warnings go. **Make room for the fold**, in the Bifold wallet
 generator, sizes the shell, the lining and the pockets that way from
 the two thicknesses you give it.
 
-Last it gives the size folded and how much leather a needle goes
-through, most and least. In red, with the names and how deep, is
-anything it has had to draw through something else — and a piece the
-folds would part: one laid across the end of a narrow flap's fold, or
-over two folds that cross, cannot follow both sides, and the report
-says where and for how long it would have to be slit.
+Last it gives the size folded and, once every fold is shut, how much
+leather a needle goes through, most and least. Where pieces that go
+round a fold have stitch holes of their own, it says how it read them
+— punched to meet lying flat, or punched to meet when shut, whichever
+has more holes meeting — and how many of each piece's holes meet either
+way; the marks on the model show that reading.
+
+In red, with the names and how deep, is anything that stays drawn
+through something else where the leather ends up: *at rest*, when a
+step of the folding is done. What the picture draws through something
+only on the way through a step is said plainly, with *at rest they are
+clear* — the preview turns each panel as one stiff piece, where leather
+gives. In red too is a piece the folds would part: one laid across the
+end of a narrow flap's fold, or over two folds that cross, cannot
+follow both sides, and the report says where and for how long it would
+have to be slit.
 
 What you set is kept in the drawing with each piece — its thickness,
 its leather, where it lies — and a run of changes is one **Undo** in

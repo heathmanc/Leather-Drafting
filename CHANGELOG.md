@@ -36,14 +36,23 @@ made only when the release workflow is run by hand with it ticked.
   begins). A lining that goes round the inside of a fold has less far to
   go than the shell: *Cut it 3.77 mm shorter across the fold and it lies
   smooth and comes level when shut* — and once it is, the report says so.
-  It gives the size folded and the most and least leather a needle goes
-  through; and in red, by name and with how deep, anything that cannot
-  be where it is drawn — two piles that meet, or a piece laid across the
+  It gives the size folded and, once every fold is shut, the most and
+  least leather a needle goes through (windows and other cut-outs left
+  out); and in red, by name and with how deep, anything that cannot be
+  where it is drawn — two piles that meet, or a piece laid across the
   end of a narrow flap's fold that would have to be slit there.
+* **At rest, and on the way.** Red is kept for what stays drawn through
+  something else where the leather ends up, when a step of the folding
+  is done. What the picture draws through something only on the way
+  through a step is said plainly — *at rest they are clear* — because
+  the preview turns each panel as one stiff piece, where leather gives.
 * **Stitch holes through the layers.** Where pieces lie on each other the
   holes are checked hole against hole, and where a hole goes through a
   piece that has none there the report counts them: *The laser will not
-  cut them in those pieces.*
+  cut them in those pieces.* A lining with holes of its own that goes
+  round a fold is read both ways — punched to meet lying flat, or
+  punched to meet when shut — and the report says which reading the
+  marks show and how many holes meet in each.
 * **Generated wallets arrive put together.** The Bifold wallet and Card
   pocket stack generators and the Card holder and Slim card holder
   templates come as stacks, ready to look at. The bifold dialog asks for

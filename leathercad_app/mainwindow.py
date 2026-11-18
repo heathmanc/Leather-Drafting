@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from leathercad.document import Document
-from leathercad import export
+from leathercad import assembly, export
 from . import canvas as canvas_mod
 from . import units as _units
 from .canvas import Canvas
@@ -1198,6 +1198,9 @@ class MainWindow(QMainWindow):
 
     # -- undo / redo ----------------------------------------------------
     def commit(self):
+        # where each piece of a stack lies is kept fresh with the drawing,
+        # so a deleted main piece leaves the rest where they lay
+        assembly.refresh(self.doc)
         self.history.push(self.doc.to_dict())
         self._update_undo_actions()
         self._mark_dirty()

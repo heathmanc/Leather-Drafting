@@ -141,8 +141,8 @@ class PiecesPanel(QWidget):
                          "becomes grain down",
             lambda: self._do(lambda doc: asm.turn_over(doc, self._ins())))
         self.btn_under = self._button(
-            "Underneath", "Put the chosen pieces under the main piece, at "
-                          "the bottom of the pile -- or back on top of it",
+            "Underneath", "Put the chosen pieces under the main piece, next "
+                          "to it -- or, if they lie under it, on it",
             self._to_side)
         self.btn_mirror = self._button(
             "Mirror", "Show the chosen pieces the other way round without "
@@ -595,20 +595,14 @@ class PiecesPanel(QWidget):
         return True
 
     def _to_side(self):
-        """The chosen pieces go under the main piece, to the bottom of
-        the pile -- or, if they are under it, back on top."""
+        """The chosen pieces go under the main piece, next to it -- or,
+        if they all lie under it, on it, next to it."""
         movers = self._movers()
         keys = [r.key for r in movers]
-        step = asm.lower if any(r.above for r in movers) else asm.higher
-
-        def change(doc):
-            done = False
-            for _ in range(len(self.rows()) + 1):
-                if not step(doc, keys):
-                    break
-                done = True
-            return done
-        self._do(change)
+        if any(r.above for r in movers):
+            self._do(lambda doc: asm.put_under(doc, keys))
+        else:
+            self._do(lambda doc: asm.put_over(doc, keys))
 
     def _make_main(self):
         ins = self._ins()

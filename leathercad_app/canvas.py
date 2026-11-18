@@ -26,9 +26,9 @@ from PySide6.QtGui import QPixmapCache
 from leathercad.geometry import Vec2
 from leathercad.document import Document
 from leathercad.shapes import (copy_shape_attrs, Rectangle, Ellipse, Circle,
-                               Polygon, PathShape, carry_placement,
+                               Polygon, PathShape,
                                EditablePath, Edge, Transform, arc_through)
-from leathercad.assembly import keep_placement
+from leathercad.assembly import carry_spot, keep_placement
 from leathercad.stitchsettings import StitchSettings
 from leathercad.stitchline import StitchLine
 from leathercad.holes import LooseHole
@@ -7432,7 +7432,9 @@ class Canvas(QGraphicsView):
         pieces were: the thickness, the leather and the place in a stack of
         a source go to the path its own line runs along. A path holds one
         of each: the first source's that has it, in the order of the
-        drawing."""
+        drawing -- but a place comes with the thickness and leather of the
+        source it is taken from, and where that leather lay it stays
+        (``assembly.carry_spot``)."""
         for m in made:
             m.placed, m.thickness, m.leather = None, 0.0, ""
         lines = [m.world_polyline()[0] for m in made]
@@ -7455,7 +7457,13 @@ class Canvas(QGraphicsView):
                 continue
             m = made[min(near)[1]]
             if placed and m.placed is None:
-                carry_placement(src, m)
+                # the place comes with the thickness and leather it had
+                carry_spot(src, m)
+                if src.thickness > 0.0:
+                    m.thickness = src.thickness
+                if src.leather:
+                    m.leather = src.leather
+                continue
             if src.thickness > 0.0 and not m.thickness > 0.0:
                 m.thickness = src.thickness
             if src.leather and not m.leather:

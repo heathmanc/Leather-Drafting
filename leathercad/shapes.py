@@ -350,8 +350,9 @@ def carry_placement(src, dst):
         return dst
     d = src.transform.rotation - dst.transform.rotation
     # lying mirrored, the piece's own frame turns the other way on the bench
-    turn = p.turn + d if p.over != p.flip else p.turn - d
-    dst.placed = replace(p, turn=turn % 360.0)
+    turn = (p.turn + d if p.over != p.flip else p.turn - d) % 360.0
+    # a hair below 0 comes back as 360.0 itself: kept in 0 to 360
+    dst.placed = replace(p, turn=turn if turn < 360.0 else 0.0)
     return dst
 
 

@@ -433,10 +433,24 @@ def report(stack, parts: Parts, model) -> List[str]:
             text += (f" Only {length(note.b)} of that is leather: a piece "
                      "there stands clear of what lies under it.")
         out.append(text)
-    if stack.lost:
+    opened = [sh for sh in getattr(stack, "cut_open", ())
+              if sh.placed is not None and sh.placed.main]
+    if opened:
+        out.append(f"{opened[0].name or 'The main piece'}, the piece the "
+                   "others are placed against, is cut open on the drawing. "
+                   f"Until it is a closed outline again {main} stands in "
+                   "for it; closed again, it comes back where it lay.")
+    elif stack.lost:
         out.append("The piece the others were placed against is gone from "
                    f"the drawing. {main} stands in for it, and every piece "
                    "lies where it last lay.")
+    others = [sh.name or "A piece" for sh in getattr(stack, "cut_open", ())
+              if sh.placed is not None and not sh.placed.main]
+    if others:
+        out.append(listed(others) + (" is" if len(others) == 1 else " are")
+                   + " cut open on the drawing and left out until "
+                   + ("it is" if len(others) == 1 else "they are")
+                   + " a closed outline again.")
     # pieces that stand the same distance past the edge are told together
     past: Dict[str, List[int]] = {}
     for note in notes:

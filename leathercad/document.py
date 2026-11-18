@@ -7,6 +7,7 @@ of truth the GUI edits and the exporters read.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, fields as dc_fields
 from typing import List, Optional
 
@@ -97,17 +98,43 @@ def _placed_to_dict(p: Placement) -> dict:
 def _placed_from_dict(d) -> Optional[Placement]:
     """The place a shape's dict gives it, or None. Keys this version does
     not know are passed over, and a value it cannot read counts as not
-    given, so a file from another release still opens."""
+    given, so a file from another release still opens: a yes or no is read
+    only from true or false, a number only if it is finite, the point of
+    the box held by only from 0 to 1, and the turn is brought into 0 to
+    360. A place with no stack named (or one named by anything but text)
+    is no place at all."""
     if not isinstance(d, dict):
         return None
-    p = Placement()
+    of = d.get("of")
+    if not isinstance(of, str) or not of:
+        return None
+    p = Placement(of=of)
     for f in dc_fields(Placement):
-        if f.name in d:
-            try:
-                setattr(p, f.name, type(f.default)(d[f.name]))
-            except (TypeError, ValueError):
-                pass
+        if f.name == "of" or f.name not in d:
+            continue
+        v = d[f.name]
+        if isinstance(f.default, bool):
+            if isinstance(v, bool):
+                setattr(p, f.name, v)
+        elif isinstance(v, (int, float)) and not isinstance(v, bool) \
+                and math.isfinite(v):
+            if f.name in ("ax", "ay"):
+                v = min(1.0, max(0.0, float(v)))
+            elif f.name == "turn":
+                v = float(v) % 360.0
+                v = 0.0 if v >= 360.0 else v
+            setattr(p, f.name, type(f.default)(v))
     return p
+
+
+def _thickness_from(v) -> float:
+    """A thickness read from a file: a finite number above 0, else 0 (not
+    given), so a value written by hand cannot stop the file opening."""
+    try:
+        v = float(v or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return v if math.isfinite(v) and v > 0.0 else 0.0
 
 
 def _shape_to_dict(sh: Shape) -> dict:
@@ -197,7 +224,7 @@ def _shape_from_dict(d: dict) -> Shape:
                       if d.get("stitch_edges") is not None else None),
         hardware=str(d.get("hardware", "") or ""),
         keepout=float(d.get("keepout", 0.0) or 0.0),
-        thickness=max(0.0, float(d.get("thickness", 0.0) or 0.0)),
+        thickness=_thickness_from(d.get("thickness")),
         leather=str(d.get("leather", "") or ""),
         placed=_placed_from_dict(d.get("placed")),
     )

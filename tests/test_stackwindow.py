@@ -1052,8 +1052,9 @@ def test_two_pieces_open_the_window_and_opening_it_writes_nothing(
         dlg.cmb_piece.setCurrentIndex(0)
         assert win.doc.to_dict() == was and _steps(win) == 0
         # the pocket ticked: a stack is started on the panel, the pocket
-        # lands on it corner to corner, and both are given the thickness
-        # showing -- one undo step
+        # lands on it corner to corner (as wide as the panel, it is held by
+        # its middle across), and both are given the thickness showing --
+        # one undo step
         dlg.spin_t.blockSignals(True)
         dlg.spin_t.setValue(1.2)                  # (shown, not typed)
         dlg.spin_t.blockSignals(False)
@@ -1062,13 +1063,13 @@ def test_two_pieces_open_the_window_and_opening_it_writes_nothing(
         assert panel.placed.main and panel.placed.of == pocket.placed.of
         assert (panel.placed.order, pocket.placed.order) == (1, 2)
         assert (pocket.placed.ax, pocket.placed.ay, pocket.placed.x,
-                pocket.placed.y) == (0.0, 0.0, 0.0, 0.0)
+                pocket.placed.y) == (0.5, 0.0, 0.0, 0.0)
         assert (panel.thickness, pocket.thickness) == (1.2, 1.2)
         assert _steps(win) == 1 and win._unsaved_changes
         assert (dlg.current.kind, dlg.current.title) == \
             ("stack", "Panel + 1 piece")
         assert dlg.cmb_piece.count() == 1 and not dlg.cmb_piece.isVisible()
-        assert _lies(dlg) == {"Pocket": "on Panel · bottom left",
+        assert _lies(dlg) == {"Pocket": "on Panel · bottom centre",
                               "Panel": "on the bench"}
         assert dlg.view.caption == ("Put together  ·  2 pieces, 2.4 mm "
                                     "thick  ·  nothing folds")
@@ -1114,8 +1115,9 @@ def test_ticking_a_piece_puts_it_on_the_stack_and_unticking_takes_it_off(
             ("stack", "Outer shell + 1 piece")
         assert dlg.tabs.currentWidget() is dlg.pieces
         assert _names(dlg)[:2] == ["Bill pocket liner", "Outer shell"]
+        # as wide as the shell: held by its middle, not its left end
         assert _lies(dlg)["Bill pocket liner"] == \
-            "on Outer shell · bottom left"
+            "on Outer shell · bottom centre"
         assert t.cellWidget(2, 0).text() == "Not in the stack yet"
         assert dlg.view.caption == ("Put together  ·  2 pieces, 4 mm thick"
                                     "  ·  nothing folds yet")
@@ -1223,7 +1225,8 @@ def test_higher_lower_turn_over_underneath_mirror_and_main_piece(
             "mirrored · on Left pocket backing · bottom left"
         panel.btn_mirror.click()
         assert _steps(win) == 6
-        # Underneath: under the main piece, at the bottom of the pile
+        # Underneath: under the main piece, next to it (here the bottom
+        # of the pile, as nothing else lies under it)
         _choose(dlg, "Right pocket 1 (front)")
         assert panel.btn_under.text() == "Underneath"
         panel.btn_under.click()
@@ -1237,11 +1240,16 @@ def test_higher_lower_turn_over_underneath_mirror_and_main_piece(
         assert dlg.layout_.sheets[-1].name == "Right pocket 1 (front)"
         assert dlg.layout_.sheets[-1].side == 1   # on the shell's own front
         assert _steps(win) == 7                   # one step, all the way
-        # ... and On top again
+        # ... and On top again: on the main piece, next to it
         assert panel.btn_under.text() == "On top"
         panel.btn_under.click()
-        assert placed("Right pocket 1 (front)").order == 10
-        assert _names(dlg) == ROWS and _steps(win) == 8
+        assert (placed("Outer shell").order,
+                placed("Right pocket 1 (front)").order,
+                placed("Bill pocket liner").order) == (1, 2, 3)
+        assert _names(dlg) == ROWS[1:9] + [ROWS[0], ROWS[9]]
+        assert _lies(dlg)["Right pocket 1 (front)"] == \
+            "on Outer shell · bottom right"
+        assert _steps(win) == 8
         assert panel.btn_under.text() == "Underneath"
         # Main piece: the others are placed against the liner now, and
         # nothing has moved
@@ -1252,16 +1260,17 @@ def test_higher_lower_turn_over_underneath_mirror_and_main_piece(
         assert not placed("Outer shell").main and _steps(win) == 9
         assert dlg.current.title == "Bill pocket liner + 9 pieces"
         t = panel.pieces
-        assert t.item(8, 0).text() == "Bill pocket liner"
-        assert t.item(8, 0).font().bold() and not t.item(9, 0).font().bold()
+        assert t.item(7, 0).text() == "Bill pocket liner"
+        assert t.item(7, 0).font().bold() and not t.item(9, 0).font().bold()
         moved = {p.name: p.box for p in dlg.current.stack.pieces}
         dx, dy = (moved["Outer shell"][k] - boxes["Outer shell"][k]
                   for k in (0, 1))
         assert all(moved[n] == _near((b[0] + dx, b[1] + dy, b[2] + dx,
                                       b[3] + dy)) for n, b in boxes.items())
-        assert _lies(dlg)["Bill pocket liner"] == "on Outer shell"
+        # (the pocket put on the shell lies between the two now)
+        assert _lies(dlg)["Bill pocket liner"] == "on Right pocket 1 (front)"
         assert _lies(dlg)["Outer shell"] == \
-            "grain down · under Bill pocket liner · bottom centre"
+            "grain down · under Right pocket 1 (front) · bottom centre"
         # the liner lies grain up, as it is drawn: the bench is the frame
         assert not dlg.view.cam.turned
         # ... and the spine fold is the shell's, which is not the main
@@ -1965,5 +1974,200 @@ def test_a_net_and_a_plain_piece_are_made_again_as_they_were(qapp, mm):
         assert dlg.layout_ is not model and len(dlg.layout_.cutouts) == 1
         assert dlg.pieces.pieces.item(0, 1).text() == "(0.079 in)"
         mm.set_current("mm")
+    finally:
+        dlg.close()
+
+
+# -- what the check of the window found ---------------------------------------
+
+def test_the_generated_bifold_opens_on_its_stack_with_ten_rows(qapp, mm):
+    doc = _drawing(*bifold_wallet(shell_t=1.6, inner_t=0.8))
+    was = doc.to_dict()
+    dlg = _dialog(doc)
+    try:
+        assert (dlg.current.kind, dlg.current.title) == \
+            ("stack", "Outer shell + 9 pieces")
+        assert _names(dlg) == ROWS
+        assert [r.thickness for r in dlg.pieces.rows()] == [0.8] * 9 + [1.6]
+        assert [round(s.lo, 6) for s in dlg.layout_.sheets] == [
+            0.0, 0.8, 1.6, 2.4, 3.2, 0.8, 1.6, 2.4, 3.2]
+        assert dlg.layout_.notes[0].a == _near(5.6)
+        assert dlg.view.caption == ("Put together  ·  10 pieces, 5.6 mm "
+                                    "thick  ·  nothing folds yet")
+        assert doc.to_dict() == was
+    finally:
+        dlg.close()
+
+
+def test_a_stack_with_no_thickness_shows_at_the_window_s_and_writes_none(
+        qapp, mm):
+    doc = _drawing(*bifold_wallet())            # called with no thickness
+    assert {s.thickness for s in doc.shapes} == {0.0}
+    was = doc.to_dict()
+    settings = QSettings(QSettings.IniFormat, QSettings.UserScope,
+                         "stitch-hero-tests", "no-thickness")
+    settings.setValue("fold3dThickness", 1.5)
+    dlg = _dialog(doc, settings=settings)
+    try:
+        assert dlg.current.kind == "stack" and _names(dlg) == ROWS
+        assert dlg.spin_t.value() == 1.5
+        t = dlg.pieces.pieces
+        assert [t.item(r, 1).text() for r in range(10)] == ["(1.5 mm)"] * 10
+        # every piece at 1.5 mm: 6 layers at the thickest
+        assert dlg.layout_.notes[0].a == _near(9.0)
+        assert doc.to_dict() == was
+    finally:
+        dlg.close()
+        settings.clear()
+
+
+def test_underneath_puts_a_piece_next_to_the_main_piece_on_its_far_side(
+        qapp, tmp_path, monkeypatch, mm):
+    doc, by = _bifold()
+    win, dlg = _opened(qapp, doc, tmp_path, monkeypatch)
+    try:
+        dlg.tabs.setCurrentWidget(dlg.pieces)
+
+        def order(name):
+            return _named(win.doc, name).placed.order
+        _choose(dlg, "Right pocket 1 (front)")
+        dlg.pieces.btn_under.click()
+        _choose(dlg, "Left pocket 1 (front)")
+        dlg.pieces.btn_under.click()
+        # the second goes between the first and the shell: next to it
+        assert [order(n) for n in ("Right pocket 1 (front)",
+                                   "Left pocket 1 (front)",
+                                   "Outer shell")] == [1, 2, 3]
+        assert _steps(win) == 2
+        # both chosen, both under: On top puts them on the shell, next
+        # to it, in the order they had
+        _choose(dlg, "Right pocket 1 (front)", "Left pocket 1 (front)")
+        assert dlg.pieces.btn_under.text() == "On top"
+        dlg.pieces.btn_under.click()
+        assert [order(n) for n in ("Outer shell", "Right pocket 1 (front)",
+                                   "Left pocket 1 (front)",
+                                   "Bill pocket liner")] == [1, 2, 3, 4]
+        assert _steps(win) == 3
+        win.undo()
+        _reread(dlg)
+        assert [order(n) for n in ("Right pocket 1 (front)",
+                                   "Left pocket 1 (front)",
+                                   "Outer shell")] == [1, 2, 3]
+        assert _names(dlg)[-3:] == ["Outer shell", "Left pocket 1 (front)",
+                                    "Right pocket 1 (front)"]
+    finally:
+        _shut(win)
+
+
+def test_see_through_paints_what_lies_over_the_chosen_pieces_faint(
+        qapp, mm):
+    doc, by = _bifold()
+    settings = QSettings(QSettings.IniFormat, QSettings.UserScope,
+                         "stitch-hero-tests", "see-through")
+    settings.clear()
+    was = doc.to_dict()
+    dlg = _dialog(doc, settings=settings)
+    try:
+        assert dlg.chk_through.text() == "See through"
+        assert not dlg.chk_through.isChecked() and dlg.chk_through.isEnabled()
+        _choose(dlg, "Left pocket backing")
+        assert dlg.view.wash == {}
+        dlg.chk_through.setChecked(True)
+        assert settings.value("fold3dSeeThrough", type=bool) is True
+        # the three pockets over the backing, and none on the other side
+        over = {dlg.parts.number(by[f"Left pocket {k}"].shape_id)
+                for k in ("3", "2", "1 (front)")}
+        assert set(n for n, _f in dlg.view.wash) == over
+        veil = next(iter(dlg.view.wash.values()))
+        assert veil.alpha() == 184                 # 28 % of it shows
+        assert _rgb(veil) == _rgb(dlg.view.look.ground)
+        # a pixel of the front pocket over it comes nearer the colour
+        # behind the model
+        dlg.view.look_from("top")
+        ground = _rgb(dlg.view.look.ground)
+        x = 50.8 if dlg.parts.turned else -50.8
+        on, _at = _seen(dlg, (x, -28.0, 4.0))
+        dlg.chk_through.setChecked(False)
+        assert dlg.view.wash == {}
+        off, _at = _seen(dlg, (x, -28.0, 4.0))
+
+        def far(c):
+            return sum(abs(a - b) for a, b in zip(c, ground))
+        assert far(on) < 0.5 * far(off)
+        dlg.chk_through.setChecked(True)
+        # the main piece chosen: all nine lie over it
+        _choose(dlg, "Outer shell")
+        assert len(dlg.view.wash) == 9
+        _choose(dlg)
+        assert dlg.view.wash == {}
+        assert doc.to_dict() == was
+    finally:
+        dlg.close()
+    # remembered for next time
+    dlg = _dialog(doc, settings=settings)
+    try:
+        assert dlg.chk_through.isChecked()
+    finally:
+        dlg.close()
+        settings.clear()
+    # a piece shown alone has nothing to see through
+    one = _drawing(_piece("Panel", 120, 90),
+                   _line((0, -45), (0, 45), "Fold"))
+    dlg = _dialog(one)
+    try:
+        assert not dlg.chk_through.isEnabled()
+    finally:
+        dlg.close()
+
+
+def test_a_main_piece_cut_open_is_said_to_be_cut_open_not_gone(qapp, mm):
+    doc, by = _bifold()
+    shell = by["Outer shell"]
+    # the shell's outline opened, as Trim or Break apart leaves it (its
+    # last stretch gone)
+    opened = PathShape(points=[Vec2(p.x, p.y)
+                               for p in shell.world_polyline()[0][:-2]],
+                       close_path=False, name="Outer shell", layer="Cut")
+    opened.placed = shell.placed
+    doc.shapes[doc.shapes.index(shell)] = opened
+    st, = asm.stacks(doc)
+    assert st.lost and st.cut_open == [opened]
+    dlg = _dialog(doc)
+    try:
+        assert dlg.current.title == "Bill pocket liner + 8 pieces"
+        assert ("Outer shell, the piece the others are placed against, is "
+                "cut open on the drawing. Until it is a closed outline "
+                "again Bill pocket liner stands in for it; closed again, "
+                "it comes back where it lay.") in _lines(dlg)
+        assert not any("gone from the drawing" in line
+                       for line in _lines(dlg))
+    finally:
+        dlg.close()
+    # a pocket cut open is left out, and said so
+    doc, by = _bifold()
+    pocket = by["Left pocket 2"]
+    opened = PathShape(points=[Vec2(p.x, p.y)
+                               for p in pocket.world_polyline()[0][:-2]],
+                       close_path=False, name="Left pocket 2", layer="Cut")
+    opened.placed = pocket.placed
+    doc.shapes[doc.shapes.index(pocket)] = opened
+    dlg = _dialog(doc)
+    try:
+        assert ("Left pocket 2 is cut open on the drawing and left out "
+                "until it is a closed outline again.") in _lines(dlg)
+    finally:
+        dlg.close()
+
+
+def test_the_window_fits_in_1220_by_740_with_the_see_through_tick(qapp, mm):
+    doc, _by = _bifold()
+    dlg = _dialog(doc)
+    try:
+        dlg.resize(1220, 740)
+        QApplication.processEvents()
+        assert dlg.minimumSizeHint().width() <= 1220
+        assert (dlg.width(), dlg.height()) == (1220, 740)
+        assert min(dlg.btn_views[k].width() for k in dlg.btn_views) >= 56
+        assert dlg.chk_through.width() >= dlg.chk_through.sizeHint().width()
     finally:
         dlg.close()

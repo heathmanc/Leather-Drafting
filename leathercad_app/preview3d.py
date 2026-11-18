@@ -525,6 +525,9 @@ class FoldPreviewDialog(QDialog):
                             ("Back", "back"), ("Side", "side")):
             b = QPushButton(text)
             b.setAutoDefault(False)
+            # (narrower than a push button usually is: with the ticks
+            # beside them they must leave the view its room at 1220 px)
+            b.setMinimumWidth(56)
             b.clicked.connect(lambda _=False, w=where: self._look(w))
             look.addWidget(b)
             self.btn_views[where] = b
@@ -532,6 +535,7 @@ class FoldPreviewDialog(QDialog):
         fit.setToolTip("Bring the piece back to fill the view "
                        "(or double-click the view)")
         fit.setAutoDefault(False)
+        fit.setMinimumWidth(56)
         fit.clicked.connect(self.view.fit)
         look.addWidget(fit)
         self._name_views()
@@ -558,6 +562,16 @@ class FoldPreviewDialog(QDialog):
         look.addWidget(self.chk_holes)
         look.addStretch(1)
 
+        self.chk_through = QCheckBox("See through")
+        self.chk_through.setToolTip(
+            "Paint the pieces that lie over the chosen ones faint, so that "
+            "a piece under others can be seen")
+        through = False
+        if settings is not None:
+            through = settings.value("fold3dSeeThrough", False, type=bool)
+        self.chk_through.setChecked(through)
+        self.chk_through.toggled.connect(self._see_through_set)
+
         self.slider_apart = QSlider(Qt.Horizontal)
         self.slider_apart.setRange(0, 100)
         self.slider_apart.setToolTip("Lift the layers of the stack off each "
@@ -567,7 +581,9 @@ class FoldPreviewDialog(QDialog):
         apart = QHBoxLayout()
         apart.addWidget(self._apart_label)
         apart.addWidget(self.slider_apart, 1)
-        apart.addStretch(2)
+        apart.addStretch(1)
+        apart.addWidget(self.chk_through)
+        apart.addStretch(1)
 
         left = QVBoxLayout()
         left.addWidget(self.view, 1)
@@ -1164,6 +1180,7 @@ class FoldPreviewDialog(QDialog):
         stack = self.current is not None and self.current.kind == "stack"
         self.view.set_chosen([r.number for r in rows if stack
                               and r.where == sm.IN and r.number >= 0])
+        self._see_through()
         if rows:
             t = rows[0].thickness
         elif stack:
@@ -1180,6 +1197,49 @@ class FoldPreviewDialog(QDialog):
         piece was put on one that is not shown."""
         self._wrote(soon)
         self.reload(show=show, front=False)
+
+    # how much of a piece's leather shows when it is seen through: the
+    # rest of it is the colour behind the model
+    _THROUGH = 0.28
+
+    def _over_chosen(self) -> List[int]:
+        """The pieces of the stack shown (their numbers in the model) that
+        lie over a chosen piece: higher in the pile, and over it on the
+        bench."""
+        if self.current is None or self.current.kind != "stack" \
+                or self.parts is None:
+            return []
+        pile = self.current.stack.pieces
+        keys = set(self.pieces.chosen_keys())
+        chosen = [k for k, p in enumerate(pile) if p.key in keys]
+        out = []
+        for k, p in enumerate(pile):
+            if p.key in keys or not chosen or k < chosen[0]:
+                continue
+            x0, y0, x1, y1 = p.box
+            if any(j < k and x0 < pile[j].box[2] and pile[j].box[0] < x1
+                   and y0 < pile[j].box[3] and pile[j].box[1] < y1
+                   for j in chosen):
+                n = self.parts.number(p.key)
+                if n >= 0:
+                    out.append(n)
+        return out
+
+    def _see_through(self):
+        """With "See through" ticked, the pieces lying over the chosen ones
+        are painted faint: the colour behind the model laid over them, so
+        that little of their leather shows."""
+        wash = {}
+        if self.chk_through.isChecked():
+            veil = QColor(self.view.look.ground)
+            veil.setAlpha(int(round(255 * (1.0 - self._THROUGH))))
+            wash = {(n, None): veil for n in self._over_chosen()}
+        self.view.set_wash(wash)
+
+    def _see_through_set(self, on: bool):
+        if self._settings is not None:
+            self._settings.setValue("fold3dSeeThrough", bool(on))
+        self._see_through()
 
     def _thickness_typed(self, key, spin):
         """A thickness was typed. It goes to the pieces chosen on the
@@ -1435,6 +1495,7 @@ class FoldPreviewDialog(QDialog):
         self.btn_play.setEnabled(n > 0 or apart > 0.0)
         for w in (self.slider_apart, self._apart_label):
             w.setEnabled(layers and self.view.t <= 1e-9)
+        self.chk_through.setEnabled(layers)
         self.btn_play.setIcon(self.style().standardIcon(
             QStyle.StandardPixmap.SP_MediaPause if self._playing
             else QStyle.StandardPixmap.SP_MediaPlay))

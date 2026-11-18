@@ -3,6 +3,7 @@ fold lines, the view, and its changes going back to the drawing."""
 
 import math
 import os
+from pathlib import Path
 
 import pytest
 
@@ -60,8 +61,9 @@ def _tray():
     return doc
 
 
-def _wallet():
-    """The fold-over wallet template with its three folds made."""
+def _wallet(right="front"):
+    """The fold-over wallet template with its three folds made: all to
+    the front, or the right wing the way ``right`` says."""
     from leathercad.templates import fold_over_wallet
     doc = fold_over_wallet()
     order = 0
@@ -69,7 +71,39 @@ def _wallet():
         if sh.name.endswith("fold"):
             order += 1
             sh.fold_dir, sh.fold_angle, sh.fold_order = "front", 180.0, order
+            if sh.name == "Right wing fold":
+                sh.fold_dir = right
     assert order == 3
+    return doc
+
+
+def _four_panels():
+    """A 90 x 60 piece with rounded corners, stitched all round, and three
+    fold lines down it: the first to the front, then the others to the
+    back. Its middle two panels are drawn the same width, 18.5 mm."""
+    doc = Document("four panels")
+    body = _rect(-45, -30, 90, 60, "Body", r=8)
+    body.stitch = StitchSettings(enabled=True, pitch_mm=3.85, inset=3.5)
+    doc.shapes.append(body)
+    for x, way, order in ((-18.5, "front", 1), (0.0, "back", 2),
+                          (18.5, "back", 3)):
+        doc.shapes.append(_line((x, 30), (x, -30), way=way, order=order))
+    return doc
+
+
+def _strip(widths, ways, orders=None, angles=None, high=60.0):
+    """A strip ``high`` mm high with fold lines across it that leave
+    panels as wide as ``widths``: each to the front (1) or the back (-1),
+    right over unless ``angles`` says, one after the other from the left
+    unless ``orders`` does."""
+    doc = Document("strip")
+    doc.shapes.append(_rect(0, 0, sum(widths), high, "Strip"))
+    for k, way in enumerate(ways):
+        x = sum(widths[:k + 1])
+        doc.shapes.append(_line(
+            (x, 0), (x, high), way="front" if way > 0 else "back",
+            angle=angles[k] if angles else 180.0,
+            order=orders[k] if orders else k + 1))
     return doc
 
 
@@ -337,6 +371,319 @@ def test_the_leather_it_is_shown_in_is_chosen_and_remembered(qapp, tmp_path):
         other.close()
 
 
+def test_a_fold_that_forms_off_its_line_is_reported(qapp):
+    from leathercad_app import units
+    doc = _four_panels()
+    dlg = _dialog(doc)
+    try:
+        dlg.cmb_base.setCurrentIndex(3)               # panel 4 stays still
+        # folded up, panels 1 and 2 lie inside fold C with the fold between
+        # them too far along: fold C forms 3.14 mm on, at the radius and
+        # with the leather it would have had on its line
+        assert abs(dlg.layout_.shift[2] - math.pi) < 1e-6
+        assert dlg.table.cellWidget(2, 4).text() == "Auto (2 mm)"
+        assert dlg.table.item(2, 5).text() == "9.42 mm"
+        says = _words(dlg)
+        assert "Fold C bends at 2 mm to go round 2 layers folded in " \
+            "before it." in says
+        sentence = ("Fold C folds 3.14 mm off its line, towards panel 4, to "
+                    "go round what is folded inside it. To have it fold on "
+                    "its line, shorten panel 2 by 3.14 mm where it reaches "
+                    "into the fold.")
+        assert sentence in says.split("\n")
+        # (the guide and the changelog quote it as it is said)
+        root = Path(__file__).resolve().parent.parent
+        for name in ("docs/USER_GUIDE.md", "CHANGELOG.md"):
+            text = (root / name).read_text(encoding="utf-8")
+            assert f"*{sentence}*" in " ".join(text.split())
+        assert says.count("off its line") == 1        # the other two don't
+        # (the leather of a bend is taken about the place it forms at)
+        assert "Half comes from each side of where a fold forms." in says
+        # the panels are numbered as they are on the lines as drawn
+        assert [dlg.cmb_base.itemText(i) for i in range(4)] \
+            == ["Panel 1", "Panel 2", "Panel 3", "Panel 4"]
+        assert dlg.cmb_base.currentIndex() == dlg.layout_.base == 3
+        # ... and the holes are checked where the leather really puts
+        # them: the outer panels no longer finish level, so the holes
+        # along their edges, drawn to meet, don't
+        found = {(f.a, f.b): f for f in dlg.view.check.findings}
+        assert found[1, 4].met == 0 and found[1, 4].off > 0
+        assert found[2, 3].off == 0 and found[2, 3].met > 0
+        # in inches
+        units.set_current("in")
+        try:
+            dlg.rebuild()
+            assert ("Fold C folds 0.124 in off its line, towards panel 4, "
+                    "to go round what is folded inside it. To have it fold "
+                    "on its line, shorten panel 2 by 0.124 in where it "
+                    "reaches into the fold.") in _words(dlg)
+        finally:
+            units.set_current("mm")
+        # with a bend radius the folds hold the layers apart, so there is
+        # more for fold C to go round, further off its line: layers are
+        # not counted then
+        dlg.spin_r.setValue(1.0)
+        assert dlg.table.cellWidget(2, 4).text() == "Auto (4 mm)"
+        says = _words(dlg)
+        assert "Fold C bends at 4 mm to go round what is folded in " \
+            "before it." in says
+        assert "Fold C folds 4.71 mm off its line, towards panel 4" in says
+        assert "shorten panel 2 by 4.71 mm where it reaches into" in says
+        dlg.spin_r.setValue(0.0)
+        # take the 3.14 mm it names off panel 2 -- move the first fold line
+        # towards the second -- and fold C is on its line, with no more
+        # said about it
+        first = _folds(doc)[0]
+        first.points[:] = [Vec2(-18.5 + 3.14, 30), Vec2(-18.5 + 3.14, -30)]
+        dlg.reload()
+        assert dlg.layout_.shift == [0.0, 0.0, 0.0]
+        assert dlg.layout_.base == 3                  # still panel 4
+        says = _words(dlg)
+        assert "off its line" not in says and "⚠" not in says
+        assert "Fold C bends at 2 mm to go round 2 layers" in says
+        assert "Half comes from each side of a fold line." in says
+    finally:
+        dlg.close()
+    # layers are counted wherever the room is just their thickness: a
+    # letter fold whose flap stops 6 mm short, each fold bending at 1 mm
+    dlg = _dialog(_strip([74, 80, 80], (1, 1)))
+    try:
+        dlg.spin_r.setValue(1.0)
+        assert _near_all(dlg.layout_.radius, [1.0, 2.0])
+        assert dlg.layout_.layers == [0, 1]
+        assert "Fold B bends at 2 mm to go round the layer folded in " \
+            "before it." in _words(dlg)
+    finally:
+        dlg.close()
+
+
+def test_the_wallet_folds_its_right_wing_round_the_left_one(qapp):
+    # The template's left wing is 78 mm and the column it folds on to 70:
+    # it runs 8 mm past the line the right wing folds on. Folded over it,
+    # the right wing can only fold where the left one ends
+    dlg = _dialog(_wallet())
+    try:
+        lay = dlg.layout_
+        assert [f.name for f in dlg.folds] == ["Left wing fold", "Flap fold",
+                                               "Right wing fold"]
+        assert lay.steps == [1, 3, 2]
+        # (8 mm, and half the 6.28 mm of leather its bend takes)
+        assert _near_all(lay.shift, [0.0, 0.0, 8.0 + math.pi])
+        assert lay.shift_toward == [None, None, 4]    # the right wing
+        assert lay.shift_for == [None, None, 1]       # the left
+        assert ("Fold C folds 11.14 mm off its line, towards panel 4, to "
+                "go round what is folded inside it. To have it fold on its "
+                "line, shorten panel 1 by 11.14 mm where it reaches into the "
+                "fold.") in _words(dlg)
+        assert not lay.warnings
+    finally:
+        dlg.close()
+    # with the right wing folded to the back instead nothing is inside it
+    dlg = _dialog(_wallet(right="back"))
+    try:
+        assert dlg.layout_.shift == [0.0, 0.0, 0.0]
+        assert "off its line" not in _words(dlg)
+    finally:
+        dlg.close()
+
+
+def test_what_is_left_in_the_way_of_a_fold_is_said_in_red(qapp):
+    from leathercad_app import units
+    # the four panels' folds on a strip whose last panel is only 6 mm:
+    # fold C has not the room there to clear what is inside it
+    dlg = _dialog(_strip([26.5, 18.5, 18.5, 6], (1, -1, -1)))
+    try:
+        dlg.cmb_base.setCurrentIndex(3)
+        assert dlg.layout_.stuck == [False, False, True]
+        says = _words(dlg).split("\n")
+        # (it has moved, but not round what is inside it)
+        assert "Fold C folds 1.29 mm off its line, towards panel 4." in says
+        warning = ("⚠ What is folded inside fold C reaches 3.14 mm into its "
+                   "bend, and the fold cannot move further out of its way: "
+                   "its bend would not fit before the edge of panel 4. "
+                   "Shorten panel 2 by 3.14 mm where it reaches into the "
+                   "fold.")
+        assert warning in says
+        assert f"<span style='color:#c0392b'>{warning}</span>" \
+            in dlg.readout.text()
+        # every length of it in inches when those are chosen
+        units.set_current("in")
+        try:
+            dlg.rebuild()
+            says = _words(dlg).split("\n")
+            assert "Fold C folds 0.051 in off its line, towards panel 4." \
+                in says
+            assert ("⚠ What is folded inside fold C reaches 0.124 in into "
+                    "its bend, and the fold cannot move further out of its "
+                    "way: its bend would not fit before the edge of panel "
+                    "4. Shorten panel 2 by 0.124 in where it reaches into "
+                    "the fold.") in says
+            assert not any(" mm" in line for line in says)
+        finally:
+            units.set_current("mm")
+    finally:
+        dlg.close()
+    # flaps of 38 and 40 mm folded in from either side of fold B: it goes
+    # half way between them, and there is no one panel to shorten for it
+    dlg = _dialog(_strip([38, 40, 40, 40], (1, 1, 1), orders=(1, 3, 2)))
+    try:
+        dlg.cmb_base.setCurrentIndex(1)
+        says = _words(dlg).split("\n")
+        assert "Fold B folds 1 mm off its line, towards panel 2." in says
+        assert ("⚠ What is folded inside fold B reaches into its bend from "
+                "both sides: panel 1 by 2.71 mm and panel 4 by 4.71 mm. "
+                "Shorten each by that much where it reaches into the fold.") \
+            in says
+        assert "None" not in _words(dlg)
+    finally:
+        dlg.close()
+    # a wall stood up first, and a stack folded under that ends short of
+    # it: with fold B off its line the stack ends in the wall
+    dlg = _dialog(_strip([28, 28, 30, 15], (-1, -1, -1), orders=(2, 3, 1),
+                         angles=(180, 180, 90), high=30))
+    try:
+        dlg.cmb_base.setCurrentIndex(2)
+        says = _words(dlg).split("\n")
+        assert ("Fold B folds 3.14 mm off its line, towards panel 3, to go "
+                "round what is folded inside it. To have it fold on its "
+                "line, shorten panel 1 by 3.14 mm where it reaches into the "
+                "fold.") in says
+        assert ("⚠ With fold B off its line, panel 2 and panel 4 are drawn "
+                "3.5 mm into each other (and they are not the only ones).") \
+            in says
+    finally:
+        dlg.close()
+    # folds too close for their bends, in inches too
+    dlg = _dialog(_strip([80, 2, 158], (1, -1)))
+    try:
+        dlg.spin_r.setValue(1.0)
+        assert ("⚠ Folds A and B are 2 mm apart, but their bends need 6.28 "
+                "mm between them.") in _words(dlg)
+        units.set_current("in")
+        try:
+            dlg.rebuild()
+            assert ("⚠ Folds A and B are 0.079 in apart, but their bends "
+                    "need 0.247 in between them.") in _words(dlg)
+        finally:
+            units.set_current("mm")
+    finally:
+        dlg.close()
+
+
+def test_a_fold_is_not_said_to_go_round_what_is_still_in_its_bend(qapp):
+    # a 15 mm hem folded down, and then a letter fold in thirds across it:
+    # the cover's fold moves for the flap, but the hem is cut by it and
+    # lies in its bend wherever it forms
+    doc = Document("hemmed")
+    doc.shapes.append(_rect(0, 0, 120, 75, "Hemmed"))
+    doc.shapes.append(_line((0, 60), (120, 60), order=1))
+    doc.shapes.append(_line((40, 0), (40, 75), order=2))
+    doc.shapes.append(_line((80, 0), (80, 75), order=3))
+    dlg = _dialog(doc)
+    try:
+        lay = dlg.layout_
+        assert [f.order for f in dlg.folds] == [2, 1, 3]     # A, hem, C
+        assert lay.stuck == [True, False, True]
+        says = _words(dlg).split("\n")
+        assert "Fold C folds 4.39 mm off its line, towards panel 6." in says
+        assert "to go round what is folded inside it" not in _words(dlg)
+        assert "To have it fold on its line" not in _words(dlg)
+        assert ("⚠ Fold C runs across panels 3 and 5, which are folded "
+                "inside it: each is shown cut along the fold and 7.85 mm "
+                "into its bend. Cutting each back by that much at the fold "
+                "clears it.") in says
+        assert _words(dlg).count("⚠") == 2            # fold A the same
+    finally:
+        dlg.close()
+
+
+def test_a_fold_that_closes_over_one_off_its_line_says_to_see_to_that(qapp):
+    # three 18.5 mm panels rolled up on a longer one: fold B is off its
+    # line for panel 1, and fold C, which closes over fold B, further --
+    # with no measure of its own for the drawing
+    dlg = _dialog(_strip([18.5, 18.5, 18.5, 60], (1, 1, 1)))
+    try:
+        dlg.cmb_base.setCurrentIndex(3)
+        says = _words(dlg).split("\n")
+        assert ("Fold B folds 3.14 mm off its line, towards panel 3, to go "
+                "round what is folded inside it. To have it fold on its "
+                "line, shorten panel 1 by 3.14 mm where it reaches into the "
+                "fold.") in says
+        assert ("Fold C folds 9.42 mm off its line, towards panel 4, to go "
+                "round what is folded inside it. It closes over fold B, "
+                "which is off its line as well: put that right first.") \
+            in says
+        assert "⚠" not in _words(dlg)
+    finally:
+        dlg.close()
+    # panel 1 that much shorter: fold C says the rest (panel 2, and then
+    # panel 1 again for fold B) -- and with that done nothing is said
+    dlg = _dialog(_strip([18.5 - 3.14, 18.5, 18.5, 60], (1, 1, 1)))
+    try:
+        dlg.cmb_base.setCurrentIndex(3)
+        says = _words(dlg)
+        assert says.count("off its line") == 1
+        assert ("Fold C folds 3.14 mm off its line, towards panel 4, to go "
+                "round what is folded inside it. To have it fold on its "
+                "line, shorten panel 2 by 3.14 mm where it reaches into the "
+                "fold, and then panel 1 by 3.14 mm where it reaches into "
+                "fold B.") in says.split("\n")
+    finally:
+        dlg.close()
+    dlg = _dialog(_strip([18.5 - 6.28, 18.5 - 3.14, 18.5, 60], (1, 1, 1)))
+    try:
+        dlg.cmb_base.setCurrentIndex(3)
+        assert dlg.layout_.shift == [0.0, 0.0, 0.0]
+        assert "off its line" not in _words(dlg) and "⚠" not in _words(dlg)
+    finally:
+        dlg.close()
+    # the four panels with fold A switched to the back like the others:
+    # panel 2 is 18.5 mm, and no more than that is asked of any panel
+    doc = _four_panels()
+    _folds(doc)[0].fold_dir = "back"
+    dlg = _dialog(doc)
+    try:
+        dlg.cmb_base.setCurrentIndex(3)
+        says = _words(dlg).split("\n")
+        assert "Fold B folds 10.65 mm off its line, towards panel 3." in says
+        assert ("⚠ What is folded inside fold B reaches 11.14 mm into its "
+                "bend, and the fold cannot move further out of its way: its "
+                "bend would not fit before fold C. Shorten panel 1 by 11.14 "
+                "mm where it reaches into the fold.") in says
+        assert ("⚠ Fold C closes over what is left in the way of fold B: "
+                "put fold B right first.") in says
+        assert dlg.layout_.shift[2] == 0.0 and "panel 2 by" not in _words(dlg)
+    finally:
+        dlg.close()
+
+
+def test_a_net_says_what_is_in_the_way_and_stays_as_it_is_drawn(qapp):
+    # three 80 mm panels drawn edge to edge and folded as a letter: the
+    # flap reaches the line the cover folds on, but the edges panels share
+    # are where they are
+    doc = Document("net")
+    doc.shapes += [_rect(x, 0, 80, 100) for x in (0, 80, 160)]
+    dlg = _dialog(doc)
+    try:
+        for row in range(2):
+            dlg.table.cellWidget(row, 3).setValue(180.0)
+        lay = dlg.layout_
+        assert lay.steps == [1, 2] and _near_all(lay.radius, [0.0, 1.0])
+        assert lay.shift == [0.0, 0.0] and lay.stuck == [False, True]
+        assert lay.lines[1][0] == (160.0, 0.0)
+        says = _words(dlg)
+        assert ("⚠ What is folded inside fold B reaches 3.14 mm into its "
+                "bend. Shorten panel 1 by 3.14 mm where it reaches into the "
+                "fold.") in says.split("\n")
+        assert "off its line" not in says
+    finally:
+        dlg.close()
+
+
+def _near_all(a, b, tol=1e-6):
+    return len(a) == len(b) and all(abs(x - y) <= tol for x, y in zip(a, b))
+
+
 def test_earlier_later_flip_and_untick(qapp):
     doc = _trifold()
     doc.shapes.append(_line((40, 0), (40, 100), "Extra", angle=90.0, order=3))
@@ -490,11 +837,12 @@ def test_holes_that_line_up_are_reported_too(qapp):
 
 
 def test_holes_in_a_stack_of_three_are_counted_once(qapp):
-    # the strip folded in three, stitched all round: its three thirds
-    # come to lie on each other
+    # the strip folded in three, as a zigzag, and stitched all round: its
+    # three thirds come to lie on each other
     doc = _trifold()
     doc.shapes[0].stitch = StitchSettings(enabled=True, pitch_mm=5.0,
                                           inset=4.0)
+    _folds(doc)[1].fold_dir = "back"
     dlg = _dialog(doc)
     try:
         check = dlg.view.check
@@ -854,8 +1202,8 @@ def test_no_pixel_of_a_face_is_left_unpainted(qapp):
     look = fv.Look()
     look.ground = QColor(255, 0, 255)
     w, h = 900, 620
-    for doc, t, yaw, pitch in ((_wallet(), 0.0, -0.45, 0.3),
-                               (_wallet(), 0.8, -0.45, 0.3),
+    for doc, t, yaw, pitch in ((_wallet(right="back"), 0.0, -0.45, 0.3),
+                               (_wallet(right="back"), 0.8, -0.45, 0.3),
                                (_tray(), 1.0, 2.6916, 0.8217),
                                (_tray(), 0.8, 0.3354, 1.213)):
         dlg = _dialog(doc)
@@ -1019,6 +1367,22 @@ def test_the_preview_keeps_up_with_the_drawing(qapp, tmp_path, monkeypatch):
         dlg._refresh.stop()
         dlg.reload()
         assert dlg.layout_ is layout
+        # a fold line that is moved in the drawing is followed
+        from leathercad_app.items import ShapeItem
+        win.canvas.scene_obj.clearSelection()
+        for it in win.canvas.scene_obj.items():
+            if isinstance(it, ShapeItem) and it.model.name == "Right fold":
+                it.setSelected(True)
+        win.canvas.nudge_selected(-5.0, 0.0)
+        assert dlg._refresh.isActive()
+        dlg._refresh.stop()
+        dlg.reload()
+        assert dlg.layout_ is not layout
+        assert [f.a for f in dlg.folds] == [(80.0, 0.0), (155.0, 0.0),
+                                            (200.0, 0.0)]
+        assert dlg.layout_.lines[1][0] == (155.0, 0.0)
+        assert dlg.selected_fold() == 1                   # still chosen
+        assert dlg.table.item(0, 0).checkState() == Qt.Unchecked
         # and when the piece goes, the preview says how to start again
         win.doc.shapes[:] = [s for s in win.doc.shapes if s.is_fold_line]
         win.canvas.rebuild()

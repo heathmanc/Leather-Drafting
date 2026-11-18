@@ -4,6 +4,55 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
+## Unreleased
+
+### Folds that close over other folds
+* **A fold makes room for what is inside it — all of it.** The 3D assembly
+  preview already bent a fold that closes flat at a bigger radius, to go
+  round the layers folded in before it. But those layers can be too long
+  for it as well: a flap as long as the panel it lies on, or a fold inside
+  the fold, whose rounded end needs room. The preview used to draw the
+  outer fold on its line, straight through them. Now the fold forms where
+  it clears, a little further along the leather, and the fold line, the
+  edges, the stitch holes and the hole check all go by where the leather
+  really ends up.
+* **The report says how far, and what to change.** *Fold C folds 3.14 mm
+  off its line, towards panel 4, to go round what is folded inside it. To
+  have it fold on its line, shorten panel 2 by 3.14 mm where it reaches
+  into the fold.* The preview tries that on a copy of the piece before it
+  says it, so the fold is on its line when you have done it. Where one
+  panel isn't enough it names each — rolled up, a panel made shorter
+  pushes the one folded on to it into the fold before: *… and then panel 1
+  by 3.14 mm where it reaches into fold B* — and of a fold that closes
+  over another one off its line it says only to put that one right first.
+  The panels keep their numbers.
+* **Where a fold can't move** — its bend would run off the leather or into
+  the next fold, it is at the foot of a flap, or leather comes into it
+  from both sides — the preview says so in red, with what to shorten if
+  that puts it right. Panels drawn edge to edge (a net) fold where they
+  are drawn, and say the same.
+* **A fold across a hem says what it has always shown.** Leather folded in
+  first and then folded across — a hem, a turned edge, a square folded in
+  four — is shown cut along the second fold, its cut ends inside that
+  fold's bend. The report now says so, and by how much to cut it back
+  there to clear the bend: *Fold B runs across panels 1 and 3, which are
+  folded inside it: each is shown cut along the fold and 4.71 mm into its
+  bend. Cutting each back by that much at the fold clears it.*
+* **What a moved fold brings down in other leather is said too.** A lip
+  that came down just past a folded edge may come down in it once the
+  fold forms further along: *With fold B off its line, panel 4 and fold A
+  are drawn 1.5 mm into each other.*
+* **A gap is in the way as much as a layer.** With a bend radius, a fold
+  holds its two panels apart. A fold that closed over one took that gap
+  for room, and a panel came out on the wrong side of another. It now goes
+  round the fold inside and the gap it holds open; what ends short of the
+  round of such a fold still lies in the gap.
+* **Every length in the report is in the unit you work in** — the
+  warnings too, which stayed in millimetres with inches chosen.
+* **The preview follows a fold line you move.** With the preview open, a
+  fold line moved in the drawing was not noticed until the preview was
+  opened again.
+
 ## 0.4.13 — 2026-11-17
 
 ### A library of the things you've made

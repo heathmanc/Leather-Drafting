@@ -51,19 +51,23 @@ class Foldable:
         self.cutouts = []
         self.marks = []            # slits and scored lines on it
         self.lines = []            # the fold-line shapes across it
+        self.ends = []             # ... and where each ran when it was read
         self.outlines = []         # a net: its panels
         self.rings = []            # ... thinned for the model
         self.holes = []
         self.area = 0.0
 
     def signature(self):
-        """Everything the model is built from: unchanged, nothing to redo."""
+        """Everything the model is built from: unchanged, nothing to redo.
+        (A fold line goes by where it ran when the drawing was read: moved
+        since, it is still the same line.)"""
         return (self.kind, self.key, tuple(self.outline),
                 tuple(tuple(c) for c in self.cutouts),
                 tuple((k, tuple(pts)) for k, pts in self.marks),
                 tuple(tuple(o) for o in self.outlines), tuple(self.holes),
-                tuple((_fold_ends(s), s.fold_dir, s.fold_angle, s.fold_order,
-                       s.fold_radius, s.name) for s in self.lines))
+                tuple((ends, s.fold_dir, s.fold_angle, s.fold_order,
+                       s.fold_radius, s.name)
+                      for ends, s in zip(self.ends, self.lines)))
 
 
 def _ring(pts) -> list:
@@ -211,6 +215,7 @@ def foldables(doc) -> List[Foldable]:
         f.cutouts = [_ring(rings[j]) for j in range(len(rings))
                      if parent[j] == i and not is_piece[j]]
         f.lines = across
+        f.ends = [_fold_ends(s) for s in across]
         f.marks = _marks_in(drawn, ring)
         f.holes = _holes_in(holes(), ring)
         f.area = areas[i]
@@ -903,22 +908,38 @@ class FoldPreviewDialog(QDialog):
                 if lay.steps[k]]
         if used:
             total = sum(u for _l, u in used)
+            # (a fold that has moved is drawn where it forms)
+            where = "where a fold forms" if any(lay.shift) \
+                else "a fold line"
             out.append("<b>Leather the bends take:</b> "
                        + ", ".join(f"{lbl} {_len(u)}" for lbl, u in used)
                        + (f" — {_len(total)} in all" if len(used) > 1
                           else "")
-                       + ". Half comes from each side of a fold line. "
+                       + f". Half comes from each side of {where}. "
                          "Edit → Fold allowance… adds it to a piece drawn "
                          "at its finished size.")
         for k, f in enumerate(self.folds):
             if lay.steps[k] and lay.wrap[k] > 1e-6:
-                layers = lay.wrap[k] / (0.5 * lay.thickness)
-                n = int(round(layers))
+                # so many layers, if the room is just their thickness (a
+                # fold inside with a radius of its own holds them apart)
+                n = lay.layers[k]
+                tight = n and abs(lay.wrap[k] - 0.5 * n * lay.thickness) \
+                    < 1e-6
+                what = "what is" if not tight else "the layer" if n == 1 \
+                    else f"{n} layers"
                 out.append(
                     f"Fold {f.label} bends at {_len(lay.radius[k])} to "
-                    f"go round {'the layer' if n == 1 else f'{n} layers'} "
-                    f"folded in before it.")
-        for w in lay.warnings:
+                    f"go round {what} folded in before it.")
+            if lay.steps[k] and lay.shift[k] > 0.0:
+                # what is folded inside it was too long for it to form
+                # on its line: where it formed, and how to put it back
+                text = (f"Fold {f.label} folds {_len(lay.shift[k])} off "
+                        f"its line, towards panel {lay.shift_toward[k]}")
+                text += "." if lay.stuck[k] \
+                    else ", to go round what is folded inside it."
+                out.append(" ".join(filter(None, (text,
+                                                  lay.remedy(k, _len)))))
+        for w in lay.warned(_len):
             out.append(f"<span style='color:#c0392b'>⚠ {w}</span>")
         if check.findings:
             out.append(_hole_report(check))

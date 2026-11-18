@@ -87,7 +87,7 @@ def test_cache_ignores_appearance_settings():
 def test_cache_bounded():
     from leathercad import stitching
     st = StitchSettings(pitch_mm=3.0, inset=0.0)
-    for k in range(600):                              # > _CACHE_MAX distinct keys
+    for k in range(600):                          # > _CACHE_MAX distinct keys
         pts = [Vec2(0, 0), Vec2(30 + k * 0.01, 0)]
         stitch_polyline(pts, [], False, st)
     assert len(stitching._stitch_cache) <= stitching._CACHE_MAX
@@ -178,7 +178,8 @@ def test_multiselect_coalesces_panel_and_keeps_o1_grip_test(qapp):
         it.setSelected(True)
     # the tally tracks every selected shape without a scene scan
     assert len(c._selected_shapes) == 36
-    # many selected -> no box grips, and only a single coalesced emit is pending
+    # many selected -> no box grips, and only a single coalesced emit is
+    # pending
     assert not c._resize_handles
     assert c._selchg_emit_pending
     qapp.processEvents()
@@ -221,7 +222,8 @@ def test_delete_batch_is_single_pass(qapp):
     from leathercad_app.items import HoleItem
     doc = Document()
     for i in range(400):
-        doc.holes.append(LooseHole(point=Vec2((i % 20) * 3.0, (i // 20) * 3.0)))
+        doc.holes.append(
+            LooseHole(point=Vec2((i % 20) * 3.0, (i // 20) * 3.0)))
     from leathercad_app.mainwindow import MainWindow
     win = MainWindow(doc)
     c = win.canvas
@@ -330,8 +332,9 @@ def test_stitchlineitem_batches_holes(qapp):
 
 
 def test_resize_skips_stitch_fit_until_release(qapp):
-    """Dragging a resize grip on a stitched shape must NOT re-fit the holes each
-    move (that made big stitched shapes lag); they recompute once at the end."""
+    """Dragging a resize grip on a stitched shape must NOT re-fit the holes
+    each move (that made big stitched shapes lag); they recompute once at
+    the end."""
     from leathercad.shapes import Rectangle, Transform
     from leathercad.stitchsettings import StitchSettings
     from leathercad_app.items import ShapeItem, ResizeHandle
@@ -351,11 +354,11 @@ def test_resize_skips_stitch_fit_until_release(qapp):
                 if isinstance(g, ResizeHandle) and g.grip == (1, 1))
 
     hx0, hy0 = shp.resize_extents()
-    grip._apply_resize(Vec2(200, 140))               # a move: holes skipped
-    assert shp.resize_extents()[0] > hx0             # the shape did grow
-    assert shp._holes is None                        # ...but no re-fit yet
+    grip._apply_resize(Vec2(200, 140))              # a move: holes skipped
+    assert shp.resize_extents()[0] > hx0            # the shape did grow
+    assert shp._holes is None                       # ...but no re-fit yet
 
-    shp.sync_from_model()                            # release -> full recompute
+    shp.sync_from_model()                           # release -> full recompute
     assert shp._holes and shp._holes.count > 0
 
 
@@ -393,11 +396,11 @@ def test_move_snap_cache_does_not_reflatten(qapp):
     from leathercad_app.items import ShapeItem
     doc = Document()
     for i in range(12):
-        doc.add_shape(Rectangle(width=90, height=60, corner_radius=8,
-                                transform=Transform(x=(i % 4) * 120, y=(i // 4) * 90),
-                                layer="Cut",
-                                stitch=StitchSettings(enabled=True, pitch_mm=3.85,
-                                                      inset=3.5)))
+        doc.add_shape(Rectangle(
+            width=90, height=60, corner_radius=8,
+            transform=Transform(x=(i % 4) * 120, y=(i // 4) * 90),
+            layer="Cut",
+            stitch=StitchSettings(enabled=True, pitch_mm=3.85, inset=3.5)))
     c = Canvas(doc); c.rebuild()
     shapes = [it for it in c.scene_obj.items() if isinstance(it, ShapeItem)]
     # prime the outline caches (as a first paint/read would)
@@ -418,7 +421,7 @@ def test_move_snap_cache_does_not_reflatten(qapp):
         c.end_move_snap()
     finally:
         Shape.world_polyline = orig
-    assert calls["n"] == 0        # zero re-flattens: the cache carried the drag
+    assert calls["n"] == 0       # zero re-flattens: the cache carried the drag
 
 
 def test_snap_node_dedup_is_linear_not_quadratic(qapp):
@@ -430,6 +433,7 @@ def test_snap_node_dedup_is_linear_not_quadratic(qapp):
     makes it linear, so a dense outline builds in milliseconds -- and the
     dedup invariant (no two kept points within the tolerance) still holds.
     """
+    import gc
     import math
     import time
     from leathercad.shapes import Polygon
@@ -462,9 +466,13 @@ def test_snap_node_dedup_is_linear_not_quadratic(qapp):
         grid.setdefault(key, []).append(p)
 
     # scaling check: 4x the points must not cost ~16x the time (quadratic).
-    # Timed generously so it pins the complexity, not the machine.
+    # Timed generously so it pins the complexity, not the machine -- and with
+    # the garbage collector run before the clock starts: this far into the
+    # whole suite a full collection takes a quarter of a second, and one that
+    # fell inside the larger build read as 50x the time.
     def cost(n):
         sh = build(n)
+        gc.collect()
         t = time.perf_counter()
         ShapeItem(sh)
         return time.perf_counter() - t
@@ -497,7 +505,8 @@ def test_hover_snap_is_spatially_indexed(qapp):
         cx, cy = (i % 10) * 40 + 30, (i // 10) * 40 + 30
         d.add_shape(Polygon(
             points=[V(15 * math.cos(2 * math.pi * k / 120),
-                      15 * math.sin(2 * math.pi * k / 120)) for k in range(120)],
+                      15 * math.sin(2 * math.pi * k / 120))
+                    for k in range(120)],
             close_path=True, transform=Transform(x=cx, y=cy), layer="Cut"))
     c = cm.Canvas(d)
     c.rebuild()
@@ -519,7 +528,8 @@ def test_hover_snap_is_spatially_indexed(qapp):
     for k in range(20):
         c._smart_snap(QPointF(30 + k * 0.2, 30 + k * 0.1))
     per = (time.perf_counter() - t0) / 20
-    assert per < 0.030, f"hover snap {per*1000:.1f} ms/move on a dense document"
+    assert per < 0.030, (
+        f"hover snap {per*1000:.1f} ms/move on a dense document")
 
 
 def test_snap_index_refreshes_when_geometry_moves(qapp):
@@ -547,10 +557,13 @@ def test_snap_index_refreshes_when_geometry_moves(qapp):
     item.sync_from_model()
 
     # the OLD corner must no longer snap, and the NEW one must
-    p2, vtx2, _g2, _k2 = c._smart_snap(QPointF(corner.x() + 0.4, corner.y() + 0.4))
-    assert not (vtx2 and abs(p2.x() - corner.x()) < 1e-6), "snapped to a stale node"
+    p2, vtx2, _g2, _k2 = c._smart_snap(
+        QPointF(corner.x() + 0.4, corner.y() + 0.4))
+    assert not (vtx2 and abs(p2.x() - corner.x()) < 1e-6), \
+        "snapped to a stale node"
     moved = QPointF(corner.x() + 25, corner.y())
-    p3, vtx3, _g3, _k3 = c._smart_snap(QPointF(moved.x() + 0.4, moved.y() + 0.4))
+    p3, vtx3, _g3, _k3 = c._smart_snap(
+        QPointF(moved.x() + 0.4, moved.y() + 0.4))
     assert vtx3 and abs(p3.x() - moved.x()) < 1e-6
 
 
@@ -598,7 +611,8 @@ def test_drag_start_reuses_the_snap_index(qapp):
 
     own = {(round(p.x, 6), round(p.y, 6)) for p in lead.world_snap_nodes()}
     got = {(round(p.x, 6), round(p.y, 6)) for p in pts}
-    assert not (own & got), "dragged item's own nodes leaked into its snap targets"
+    assert not (own & got), \
+        "dragged item's own nodes leaked into its snap targets"
     assert len(got) > 100                 # the other 11 pieces are still there
 
 

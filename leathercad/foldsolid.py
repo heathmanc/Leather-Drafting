@@ -6,7 +6,9 @@ half taken from each side of the line -- the same sum, about the same
 line, as Edit > Fold allowance works with. Between the bends the panels
 stay flat. Each fold has its own angle, direction, radius and place in the
 folding order; a fold that closes flat over layers folded in before it is
-given the room to go round them.
+given the room to go round them -- a bigger radius for their thickness,
+and, where they run on into its bend, a place further along the leather
+to form at.
 
 ``Layout`` holds a piece cut up ready to fold: ``solid`` gives the model at
 any moment of the folding as convex cells for ``bsp`` to order and the view
@@ -16,7 +18,7 @@ to paint. Pure Python, no Qt.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import polycut as pc
@@ -31,6 +33,9 @@ Frame = Tuple[P3, P3, P3, P3]
 
 _FLAT = math.radians(175.0)     # a fold this far round lies flat on its panel
 _SHARP = 0.02                   # a bend narrower than this (mm) is a crease
+_REACH = 0.02                   # leather this far (mm) into a bend is let be
+_TOUCH = 0.05                   # ... and this far into other leather, not said
+_LAP = 0.3                      # layers this far (mm) over each other lie flat
 _FLAT_FRAME: Frame = ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
                       (0.0, 0.0, 1.0))
 
@@ -151,6 +156,29 @@ class Hinge:
         self.a = self.e = None
         self.k0 = self.k1 = 0.0
         self.moves: frozenset = frozenset()
+
+
+class _Found:
+    """What ``Layout._inside`` finds folded inside a fold that closes
+    flat. ``left`` and ``right``: how far the fold would have to move
+    that way for all of it to fit, as ``(mm, panel, hinge, via, way)``
+    -- less than nothing is room to spare. The panel is the one that
+    reaches furthest, the one to shorten instead; the hinge is the
+    stretch of the fold it was measured at; ``via`` the hinge that panel
+    ends in there (None for a cut edge) and ``way`` the direction it
+    reaches in, on the pattern. With nothing folded in from a side the
+    room is without end, and the rest None. ``cut``: ``(mm, panels)``
+    for leather the fold line itself cuts across, which no move brings
+    clear -- how far it is into the bend -- else None. ``layers``: how
+    many panels lie inside the fold."""
+
+    __slots__ = ("left", "right", "cut", "layers")
+
+    def __init__(self, left, right, cut, layers):
+        self.left = left
+        self.right = right
+        self.cut = cut
+        self.layers = layers
 
 
 class _Cell2:
@@ -432,22 +460,67 @@ class Layout:
     meet. For each fold: ``crosses`` (whether it cuts this piece),
     ``steps`` (when it folds, 0 if it doesn't), ``radius`` (the inside
     radius it bends at), ``wrap`` (how much of that is room for layers
-    folded in earlier) and ``used`` (the leather the bend takes).
+    folded in earlier), ``layers`` (how many panels lie inside a fold
+    that closes flat) and ``used`` (the leather the bend takes).
+
+    A fold that closes flat needs room for the length of what is folded
+    inside it as well: where that runs on into the bend, the fold can only
+    form further along the leather. ``fold_piece`` moves such a fold, and
+    then, for each fold again: ``shift`` is how far from its drawn line it
+    folds (mm, else 0) and ``shift_toward`` the number of the panel it
+    moved towards (else None). ``shift_trim`` is what to change in the
+    drawing to have it fold on its line: ``[(panel, mm, fold)]``, the
+    number of each panel to shorten where it reaches into a fold and by
+    how much -- into this fold (``fold`` None), or into another (its
+    index) that a panel made shorter pushes leather into. It is found by
+    trying it on a copy of the piece (``_tried``), and is empty where
+    that does not come right; ``shift_for`` is the first of those
+    panels (else None). A fold that closes over an earlier one which is
+    off its line as well has no such remedy but ``shift_after``, that
+    fold's index, to be put right first. ``stuck`` is whether leather
+    is left in the fold's bend all the same, moved or not (a warning
+    says what).
+
+    What is still in the way of a fold -- one with no room to move, or
+    one of a layout that can't move its folds (a net) -- is in
+    ``warnings``, with lengths in mm; ``warned`` gives the same with the
+    lengths written another way.
     """
 
     def __init__(self, regions, folds: Sequence[FoldLine], lines, *,
                  thickness: float = 2.0, radius: float = 0.0,
                  base: Optional[int] = None, holes=(), cutouts=(),
-                 marks=(), detail: float = 12.0, sharp=()):
+                 marks=(), detail: float = 12.0, sharp=(),
+                 numbered: bool = False,
+                 moved: Optional[Sequence[float]] = None, held=(),
+                 fixed=(), least: Sequence[float] = (),
+                 bare: bool = False):
+        # ``numbered``: the regions come in the order to number the panels
+        # in (else they are numbered by where they lie, left to right).
+        # The rest are ``fold_piece``'s, which cuts a piece again to move
+        # a fold: ``moved``, how far each fold line now is to the left of
+        # where it was drawn (mm); ``held``, the folds that can go no
+        # further, and ``fixed``, those to be left just where they are;
+        # ``least``, a radius each fold is to have at least; ``bare``,
+        # what to shorten is worked out later, and the holes, cut-outs
+        # and marks put on (see ``_advise``, ``_dress``). With ``moved``
+        # None the folds stay on the lines given.
         self.folds = list(folds)
         self.lines = list(lines)
         self.thickness = max(0.05, float(thickness))
         self.base_radius = max(0.0, float(radius))
         self.detail = max(3.0, float(detail))
         self.warnings: List[str] = []
-        order = sorted(range(len(regions)), key=lambda i: (
-            round(pc.centroid(regions[i][0])[0], 1),
-            -round(pc.centroid(regions[i][0])[1], 1)))
+        self._said: List[Tuple[str, tuple, int]] = []
+        self.moved = None if moved is None else [float(d) for d in moved]
+        self._held = set(held)
+        self._fixed = set(fixed)
+        self._least = list(least)
+        order = range(len(regions)) if numbered else sorted(
+            range(len(regions)), key=lambda i: (
+                round(pc.centroid(regions[i][0])[0], 1),
+                -round(pc.centroid(regions[i][0])[1], 1)))
+        self._order = list(order)
         self.panels = [Panel(k, list(regions[i][0]), list(regions[i][1]))
                        for k, i in enumerate(order)]
         self.hinges = find_hinges([(p.pts, p.flags) for p in self.panels],
@@ -465,13 +538,39 @@ class Layout:
                 else 0
         self.base = base
         self._sharp = set(sharp)
-        self.holes = [tuple(h) for h in holes]
-        self.cutouts = [pc.ccw([tuple(p) for p in c]) for c in cutouts]
-        self.marks = [(kind, [tuple(p) for p in pts]) for kind, pts in marks]
+        self.holes: List[tuple] = []
+        self.cutouts: List[List[Pt]] = []
+        self.marks: List[tuple] = []
         self._build_tree()
         self._settle_radii()
         self._build_cells()
         self._check_spacing()
+        self._check_inside()
+        if not bare:
+            self._advise(self)
+            self._dress(holes, cutouts, marks)
+
+    def _say(self, text: str, *lengths: float, digits: int = 2):
+        """Add a warning: ``text`` with ``{}`` where each of ``lengths``
+        (mm) goes."""
+        self._said.append((text, lengths, digits))
+        self.warnings.append(text.format(
+            *(f"{mm:.{digits}f} mm" for mm in lengths)))
+
+    def warned(self, length=None) -> List[str]:
+        """The warnings, each length in them written by ``length`` (a
+        function of mm) -- for a reader who works in other units. As
+        ``warnings`` has them if it is not given."""
+        if length is None:
+            return list(self.warnings)
+        return [text.format(*(length(mm) for mm in lengths))
+                for text, lengths, _digits in self._said]
+
+    def _name(self, fold: int) -> str:
+        """What a fold is called in a warning: its label, else its
+        number."""
+        label = str(self.folds[fold].label or fold + 1)
+        return label.replace("{", "{{").replace("}", "}}")
 
     # -- the folding tree -----------------------------------------------------
 
@@ -530,6 +629,12 @@ class Layout:
             for k in kids[h.child]:
                 moves |= k.moves
             h.moves = frozenset(moves)
+        self._kept: dict = {}          # what ``_bent`` and ``_deep`` found
+        # the panels each panel is joined to, and through which hinge
+        self._joins: Dict[int, List[Tuple[int, Hinge]]] = {}
+        for h in self.tree:
+            self._joins.setdefault(h.parent, []).append((h.child, h))
+            self._joins.setdefault(h.child, []).append((h.parent, h))
         # a hinge left out (folds that cross make a ring of them) is a cut:
         # the leather shows its edge there
         for h in self.hinges:
@@ -586,6 +691,10 @@ class Layout:
         self.radius = [max(0.0, f.radius) if f.radius >= 0.0
                        else self.base_radius for f in self.folds]
         self.wrap = [0.0] * n
+        for i, least in enumerate(self._least):      # (see ``fold_piece``)
+            if least > self.radius[i]:
+                self.wrap[i] = least - self.radius[i]
+                self.radius[i] = least
         theta = [math.radians(min(max(f.angle, 0.0), 180.0)) if self.steps[i]
                  else 0.0 for i, f in enumerate(self.folds)]
         done = [0.0] * n
@@ -601,7 +710,8 @@ class Layout:
                     widths = [theta[k] * (self.radius[k] + 0.5 * t)
                               for k in range(n)]
                     fr = self.frames(None, widths, angles)
-                    need = max(self._clearance(h, fr) for h in by_fold[fi])
+                    need = max(self._clearance(h, fr, widths, angles)
+                               for h in by_fold[fi])
                     if need <= 1e-6:
                         break
                     self.radius[fi] += 0.5 * need
@@ -612,9 +722,22 @@ class Layout:
             if self.used[k] < _SHARP:
                 self.used[k] = 0.0
 
-    def _clearance(self, h: Hinge, frames: List[Frame]) -> float:
+    def _clearance(self, h: Hinge, frames: List[Frame],
+                   widths: Sequence[float], angles: Sequence[float]
+                   ) -> float:
         """How much further out the panels this hinge carries must lie to
-        clear the leather they have come down on."""
+        clear the leather they have come down on.
+
+        A panel lies at one height, and two that overlap must be a
+        thickness apart. A bend that is shut flat joins its two panels
+        through every height between them: but for that, a panel with
+        room to lie between two layers would be left there even where
+        they are joined at its own end -- through the bend that joins
+        them. Leather that lies between the two may run on as far as the
+        round of the bend, and leather outside it may come as near; where
+        this fold itself bends, nothing may cross such a bend at all.
+        ``widths`` and ``angles`` are the leather each bend takes and how
+        far round it is, as the frames have them."""
         t = self.thickness
         o, ex, ey, n = frames[h.parent]
         s = float(self.folds[h.fold].direction)
@@ -623,6 +746,9 @@ class Layout:
         cc = _mix(-h.e[1], ex, h.e[0], ey)
         foot = {}
 
+        def flat(points):              # as seen from over the parent panel
+            return pc.ccw([(_dot(q, e1), _dot(q, cc)) for q in points])
+
         def footprint(i):
             if i not in foot:
                 fr = frames[i]
@@ -630,11 +756,8 @@ class Layout:
                     foot[i] = None
                 else:
                     panel = self.panels[i]
-                    parts = []
-                    for part in panel.parts:
-                        pts3 = [place(fr, p) for p in part]
-                        parts.append(pc.ccw([(_dot(q, e1), _dot(q, cc))
-                                             for q in pts3]))
+                    parts = [flat([place(fr, p) for p in part])
+                             for part in panel.parts]
                     q = place(fr, panel.pts[0])
                     height = (q[0] - o[0]) * d[0] + (q[1] - o[1]) * d[1] \
                         + (q[2] - o[2]) * d[2]
@@ -642,32 +765,170 @@ class Layout:
                     foot[i] = (parts, height, boxes)
             return foot[i]
 
+        def across(g, panel, x0, x1, k0=None, k1=None):
+            """The leather of bend ``g`` from ``x0`` to ``x1`` mm past
+            the line the bend starts on, as it lies with ``panel`` (all
+            along the hinge, or from ``k0`` to ``k1`` mm along it)."""
+            w = widths[g.fold]
+            c2 = (-g.e[1], g.e[0])
+            if k0 is None:
+                k0, k1 = g.k0, g.k1
+            return flat([place(frames[panel],
+                               (g.a[0] + k * g.e[0] + (x - 0.5 * w) * c2[0],
+                                g.a[1] + k * g.e[1] + (x - 0.5 * w) * c2[1]))
+                         for k, x in ((k0, x0), (k1, x0), (k1, x1),
+                                      (k0, x1))])
+
+        def over(A, B, depth):
+            a, b = pc.bounds(A), pc.bounds(B)
+            return (a[0] < b[2] and b[0] < a[2] and a[1] < b[3]
+                    and b[1] < a[3] and pc.convex_overlap(A, B, depth))
+
+        # Where folds cross, another stretch of this fold may carry some
+        # of what stays here: more room for the fold raises that as well.
+        swept = set()
+        for g in self.tree:
+            if g.fold == h.fold and g is not h:
+                swept |= g.moves
+        # The panels that lie flat, each as (panel, its polygons, their
+        # boxes, its height): what the hinge carries, and what stays
+        carried, still = [], []
+        for i in range(len(self.panels)):
+            fp = footprint(i)
+            if fp is not None:
+                (carried if i in h.moves else still).append(
+                    (i, fp[0], fp[2], fp[1]))
         need = 0.0
-        for m in h.moves:
-            fm = footprint(m)
-            if fm is None:
-                continue
-            for g in range(len(self.panels)):
-                if g in h.moves:
-                    continue
-                fg = footprint(g)
-                if fg is None:
-                    continue
-                gap = fm[1] - fg[1]
+        for _i, mine, boxes, high in carried:
+            for _j, theirs, others, low in still:
+                # (a thickness apart; no more than is asked for already)
+                gap = high - low
                 if abs(gap) >= t - 1e-6 or t - gap <= need:
                     continue
-                hit = False
-                for A, ba in zip(fm[0], fm[2]):
-                    for B, bb in zip(fg[0], fg[2]):
-                        if (ba[0] < bb[2] and bb[0] < ba[2] and ba[1] < bb[3]
-                                and bb[1] < ba[3]
-                                and pc.convex_overlap(A, B, 0.3)):
-                            hit = True
-                            break
-                    if hit:
-                        break
-                if hit:
+                if any(ba[0] < bb[2] and bb[0] < ba[2] and ba[1] < bb[3]
+                       and bb[1] < ba[3] and pc.convex_overlap(A, B, _LAP)
+                       for A, ba in zip(mine, boxes)
+                       for B, bb in zip(theirs, others)):
                     need = t - gap
+        # The bends shut flat that the hinge carries whole or leaves
+        # whole, each with the heights of its two panels and its two
+        # radii -- but not one that another stretch of this fold carries
+        # as well, or half of: more room for the fold may then move both
+        # sides of a gap (and none at all if this hinge's own parent is
+        # carried so)
+        bends = []
+        for g in self.tree:
+            if (g.fold == h.fold or angles[g.fold] < math.pi - 1e-9
+                    or (g.parent in h.moves) != (g.child in h.moves)
+                    or h.parent in swept or g.parent in swept
+                    or g.child in swept):
+                continue
+            ends = footprint(g.parent), footprint(g.child)
+            if ends[0] is None or ends[1] is None:
+                continue
+            rho = widths[g.fold] / math.pi
+            bends.append((g, min(ends[0][1], ends[1][1]),
+                          max(ends[0][1], ends[1][1]), rho - 0.5 * t,
+                          rho + 0.5 * t))
+        if not bends:
+            return need
+        # The leather a panel has in a bend that is made does not lie
+        # flat with it -- nor does what it has in this fold's own bend,
+        # which nothing may cross (where it is a whole bend: ``_bent``)
+        bent: Dict[int, list] = {}
+        for g in self.tree:
+            w = widths[g.fold]
+            if angles[g.fold] > 1e-9 and w > 0.0:
+                bent.setdefault(g.parent, []).append(
+                    across(g, g.parent, 0.0, 0.5 * w))
+                bent.setdefault(g.child, []).append(
+                    across(g, g.child, 0.5 * w, w))
+        wh = widths[h.fold]
+        own: Dict[int, list] = {h.parent: [], h.child: []}
+        for k0, k1 in self._bent(h, wh) if wh > 0.0 else ():
+            own[h.parent].append(across(h, h.parent, 0.0, 0.5 * wh, k0, k1))
+            own[h.child].append(across(h, h.child, 0.5 * wh, wh, k0, k1))
+        for g, low, top, r, R in bends:
+            moving = g.child in h.moves
+            mid = 0.5 * (low + top)
+            for i, parts, _boxes, high in (still if moving else carried):
+                if i in swept:             # (it rises as well, or twice)
+                    continue
+                # how far from the middle of the bend's gap the panel's
+                # two faces are: the nearer of it, and the further
+                v0, v1 = high - 0.5 * t - mid, high + 0.5 * t - mid
+                near = 0.0 if v0 < 0.0 < v1 else min(abs(v0), abs(v1))
+                far = max(abs(v0), abs(v1))
+                want = t - (low - high) if moving else t - (high - top)
+                if near >= R - 1e-6 or want <= need:
+                    continue                 # (clear above or below it)
+                whole = across(g, g.parent, 0.0, R)
+                if any(over(whole, mine, _LAP) for mine in own.get(i, ())):
+                    need = want
+                    continue
+                # the bend where the panel's faces meet it: its inside
+                # for a panel in the gap, its outside for one beyond
+                u0 = math.sqrt(max(0.0, (r + _LAP) ** 2 - far * far))
+                u1 = math.sqrt(max(0.0, (R - _LAP) ** 2 - near * near))
+                if u1 - u0 <= 1e-6:
+                    continue
+                band = across(g, g.parent, u0, u1)
+                for part in parts:
+                    both = pc.clip_to_convex(part, band) \
+                        if over(part, band, 1e-3) else None
+                    if both and not any(
+                            all(pc.inside_convex(q, zone, 1e-6)
+                                for q in both) for zone in bent.get(i, ())):
+                        need = want
+                        break
+        # ... and two such bends, one carried and one that stays. Side
+        # by side they are two rounds, seen end on: each a ring between
+        # its two radii, and they meet where the rings do -- unless one
+        # lies within the hollow of the other, or they bulge apart.
+        # (Bends that cross are taken as the strips they stand over.)
+        def start(g):
+            """Where bend ``g`` starts, seen from over the parent panel:
+            a point of that line, the way it runs, its length, and the
+            way the bend bulges from it."""
+            w = widths[g.fold]
+            c2 = (-g.e[1], g.e[0])
+            (px, py), (qx, qy), (bx, by) = (
+                (_dot(q, e1), _dot(q, cc)) for q in (
+                    place(frames[g.parent],
+                          (g.a[0] + k * g.e[0] + (x - 0.5 * w) * c2[0],
+                           g.a[1] + k * g.e[1] + (x - 0.5 * w) * c2[1]))
+                    for k, x in ((g.k0, 0.0), (g.k1, 0.0), (g.k0, 1.0))))
+            ln = math.hypot(qx - px, qy - py) or 1e-12
+            return ((px, py), ((qx - px) / ln, (qy - py) / ln), ln,
+                    (bx - px, by - py))
+
+        for g, low, top, r, R in bends:
+            if g.child not in h.moves:
+                continue
+            for g2, floor, roof, r2, R2 in bends:
+                if (g2.child in h.moves or low - roof >= t - 1e-6
+                        or floor - top >= t - 1e-6
+                        or t - (low - roof) <= need):
+                    continue
+                (pa, ea, la, ba), (pb, eb, lb, bb) = start(g), start(g2)
+                if abs(ea[0] * eb[1] - ea[1] * eb[0]) > 0.05:
+                    meet = over(across(g, g.parent, 0.0, R),
+                                across(g2, g2.parent, 0.0, R2), _LAP)
+                else:
+                    dx, dy = pb[0] - pa[0], pb[1] - pa[1]
+                    k = dx * ea[0] + dy * ea[1]        # along the first
+                    k2 = k + lb * (ea[0] * eb[0] + ea[1] * eb[1])
+                    ahead = dx * ba[0] + dy * ba[1]    # the way it bulges
+                    apart = math.hypot(ahead, 0.5 * (floor + roof - low
+                                                     - top))
+                    meet = (min(la, max(k, k2)) - max(0.0, min(k, k2)) > _LAP
+                            and (ahead > 0.0
+                                 or ba[0] * bb[0] + ba[1] * bb[1] > 0.0)
+                            and apart < R + R2 - _LAP
+                            and apart + R2 > r + _LAP
+                            and apart + R > r2 + _LAP)
+                if meet:
+                    need = t - (low - roof)
         return need
 
     # -- cells ----------------------------------------------------------------
@@ -698,7 +959,7 @@ class Layout:
             h = self.tree[hi]
             w = self.used[h.fold]
             step = w / (2 * self._halves[hi])
-            for cp, cf in pc.convex_parts(pts, flags):
+            for cp, cf in _strip_parts(pts, flags, h):
                 c = _Cell2(cp, cf, panel)
                 c.hinge, c.strip = hi, j
                 c.place = [_strip_place(p, h, w, step, j) for p in cp]
@@ -767,6 +1028,18 @@ class Layout:
                             and pc.inside_convex((x, y), s.pts, 0.0)):
                         c.turns.append((k, s.hinge, s.strip))
                         break
+        self.hole_panel: List[int] = []
+        self.hole_flat: List[bool] = []
+
+    def _dress(self, holes=(), cutouts=(), marks=()):
+        """Put the stitch holes, the cut-outs and the lines drawn on the
+        piece on the cells they are on. (Last, and once: ``fold_piece``
+        may cut a piece several times over before its folds are where
+        they can form.)"""
+        cells, by_panel = self.cells, self._by_panel
+        self.holes = [tuple(h) for h in holes]
+        self.cutouts = [pc.ccw([tuple(p) for p in c]) for c in cutouts]
+        self.marks = [(kind, [tuple(p) for p in pts]) for kind, pts in marks]
         # stitch holes go on the cell they are in
         self.hole_panel = [-1] * len(self.holes)
         self.hole_flat = [False] * len(self.holes)
@@ -818,7 +1091,7 @@ class Layout:
 
     def _check_spacing(self):
         """Warn of folds too close together for the bends they need."""
-        seen = set()
+        seen = self._close = set()
         for i, h in enumerate(self.tree):
             for g in self.tree[i + 1:]:
                 shared = {h.parent, h.child} & {g.parent, g.child}
@@ -837,11 +1110,720 @@ class Layout:
                 key = (min(h.fold, g.fold), max(h.fold, g.fold))
                 if gap < room - 1e-6 and key not in seen:
                     seen.add(key)
-                    a, b = self.folds[key[0]], self.folds[key[1]]
-                    self.warnings.append(
-                        f"Folds {a.label or key[0] + 1} and "
-                        f"{b.label or key[1] + 1} are {gap:.1f} mm apart, but "
-                        f"their bends need {room:.1f} mm between them.")
+                    self._say(f"Folds {self._name(key[0])} and "
+                              f"{self._name(key[1])} are {{}} apart, but "
+                              f"their bends need {{}} between them.",
+                              gap, room, digits=1)
+
+    # -- what is folded inside a fold -----------------------------------------
+
+    def _check_inside(self):
+        """See that what is folded inside each fold that closes flat fits
+        there. Its radius gives such a fold room for the thickness of
+        what it closes over; but those layers may run on past the line
+        the bend starts on, and a fold of their own has a rounded end. All
+        of it has to lie within the round of the bend.
+
+        Leather that comes into the bend from the child's side is cleared
+        by a fold formed nearer the parent, and the other way about; if it
+        comes in from both sides nowhere clears both, and the fold goes
+        half way between. A fold that should move, and can, is left in
+        ``to_move`` as ``(fold, mm to its left, whether it is then to
+        stay there)`` for ``fold_piece`` to cut the piece again -- the
+        folds in the order they are made, as a later one is measured with
+        the earlier ones where they end up. Of the rest this says what
+        was found: ``shift`` and so on for a fold that has moved, a
+        warning for leather still in the way. What to shorten is worked
+        out last of all, for the layout that is kept (``_advise``).
+
+        A fold left with leather in its bend is not folded as it would
+        be, and nothing that closes over the same leather later can be
+        measured against it: such a fold stays where it is, and is said
+        to wait for the first."""
+        n = len(self.folds)
+        self.shift = [0.0] * n
+        self.shift_toward: List[Optional[int]] = [None] * n
+        self.shift_for: List[Optional[int]] = [None] * n
+        self.shift_trim: List[List[tuple]] = [[] for _ in range(n)]
+        self.shift_after: List[Optional[int]] = [None] * n
+        self.stuck = [False] * n
+        self.layers = [0] * n
+        self.to_move: Optional[Tuple[int, float, bool]] = None
+        self._found: Dict[int, _Found] = {}
+        # the folds to work out a remedy for: (fold, the place of its
+        # warning in the list -- None for a fold that has moved clear --
+        # and, for leather from both sides, what the warning names)
+        self._asks: List[Tuple[int, Optional[int], Optional[list]]] = []
+        self._by_fold: Dict[int, List[Hinge]] = {}
+        for h in self.tree:
+            self._by_fold.setdefault(h.fold, []).append(h)
+        # First of all, a fold that has moved and whose bend no longer
+        # fits where it stopped (it bends wider there than it did): back
+        # with it, before anything is measured against it
+        for fi in self._by_fold if self.moved is not None else ():
+            at = self.moved[fi]
+            if abs(at) > 1e-9 and fi not in self._fixed:
+                room, _what = self._room(fi, at > 0.0)
+                if room < -0.5 * _REACH:
+                    back = max(room, -abs(at))
+                    self.to_move = (fi, back if at > 0.0 else -back, True)
+                    return
+        # the folds that are not as they were drawn, in the order they
+        # are made: True for one with leather left in its bend
+        upset: Dict[int, bool] = {}
+        for fi in sorted((i for i in range(n) if self.steps[i]),
+                         key=lambda i: (self.steps[i], i)):
+            got = self._look(fi)
+            if got is None:
+                continue
+            self.layers[fi] = got.layers
+            left, right = got.left[0], got.right[0]
+            name = self._name(fi)
+            at = self.moved[fi] if self.moved is not None else 0.0
+            # The earlier folds that are not as drawn, between this one
+            # and the leather that reaches furthest into it: what was
+            # measured goes by where they are. (Where folds can move: a
+            # layout whose folds all stay on their lines is measured as
+            # it is drawn throughout.)
+            leans = set()
+            for mm, side, here in ((left, got.left, at > 1e-9),
+                                   (right, got.right, at < -1e-9)):
+                if mm > _REACH or here:      # (in its way, or was)
+                    leans |= self._leans(side)
+            before = [g for g in upset if g in leans] \
+                if self.moved is not None else []
+            first = next((g for g in before if upset[g]), None)
+            if left + right > _REACH:          # no room for both: half way
+                step = 0.5 * (left - right)
+            elif left > _REACH:
+                step = left
+            elif right > _REACH:
+                step = -right
+            else:
+                step = 0.0
+            room, what = self._room(fi, step > 0.0) if step else (0.0, "")
+            room = max(0.0, room)
+            short = abs(step) > room + 1e-9
+            step = min(step, room) if step > 0.0 else max(step, -room)
+            free = (self.moved is not None and first is None
+                    and fi not in self._held and fi not in self._fixed)
+            if free and abs(step) > 0.5 * _REACH:
+                self.to_move = (fi, step, short)
+                return
+            if abs(at) > 1e-9:
+                h = (got.left[2] if at > 0.0 else got.right[2]) \
+                    or self._by_fold[fi][0]
+                self.shift[fi] = abs(at)
+                self.shift_toward[fi] = self.panels[
+                    h.left if at > 0.0 else h.right].number
+                upset[fi] = False
+            if got.cut is not None:
+                self.stuck[fi] = True
+                mm, panels = got.cut
+                names = _listed([self.panels[p].number for p in panels])
+                self._say(f"Fold {name} runs across panels {names}, which "
+                          f"are folded inside it: each is shown cut along "
+                          f"the fold and {{}} into its bend. Cutting each "
+                          f"back by that much at the fold clears it.", mm)
+            # on each side: how far the leather is in the way of the fold
+            # where it now is, how far it would be with the fold on its
+            # line, and what reaches furthest
+            over = [(now, drawn, side)
+                    for now, drawn, side in ((left, left + at, got.left),
+                                             (right, right - at, got.right))
+                    if now > _TOUCH]
+            if not over:
+                if self.shift[fi] and before:
+                    self.shift_after[fi] = before[0]
+                elif self.shift[fi]:
+                    self._asks.append((fi, None, None))
+                continue
+            upset[fi] = self.stuck[fi] = True
+            if first is not None:
+                self._say(f"Fold {name} closes over what is left in the "
+                          f"way of fold {self._name(first)}: put fold "
+                          f"{self._name(first)} right first.")
+                continue
+            more = " further" if self.shift[fi] else ""
+            # (with an earlier fold off its line in between, what to
+            # shorten can't be told)
+            wait = f" Put fold {self._name(before[0])} right first." \
+                if before else ""
+            if len(over) == 2:
+                (_now, d1, s1), (_now, d2, s2) = sorted(
+                    over, key=lambda side: side[2][1])
+                p1, p2 = (self.panels[s[1]].number for s in (s1, s2))
+                if min(d1, d2) > _TOUCH:
+                    # (where folds cross, one panel may do both)
+                    both = f"panel {p1} by {{}} and by {{}} again" \
+                        if p1 == p2 \
+                        else f"panel {p1} by {{}} and panel {p2} by {{}}"
+                    self._say(f"What is folded inside fold {name} reaches "
+                              f"into its bend from both sides: {both}."
+                              f"{wait}", d1, d2)
+                    if not wait:
+                        self._asks.append((fi, len(self._said) - 1,
+                                           [(p1, d1), (p2, d2)]))
+                    continue
+                if d2 > d1:
+                    d1, p2 = d2, p1
+                self._say(f"What is folded inside fold {name} reaches {{}} "
+                          f"into its bend, and the fold cannot move{more} "
+                          f"out of its way: panel {p2} is folded in from "
+                          f"the other side.{wait}", d1)
+            else:
+                now, drawn, _side = over[0]
+                why = ""
+                if self.moved is not None:
+                    why = f", and the fold cannot move{more} out of its way"
+                    if short and what and room <= 0.5 * _REACH:
+                        why += f": its bend would not fit before {what}"
+                self._say(f"What is folded inside fold {name} reaches {{}} "
+                          f"into its bend{why}.{wait}", max(now, drawn))
+            if not wait:
+                self._asks.append((fi, len(self._said) - 1, None))
+
+    def _look(self, fi: int) -> Optional[_Found]:
+        """What is folded inside fold ``fi`` when it has closed, the
+        folds before it made (``_inside``): None for a fold that isn't
+        made, has no bend, or does not close flat."""
+        if fi not in self._found:
+            f = self.folds[fi]
+            if (not self.steps[fi] or fi not in self._by_fold
+                    or self.used[fi] <= 0.0
+                    or math.radians(min(f.angle, 180.0)) < _FLAT):
+                return None
+            at = (self.steps[fi], fi)
+            made = [1.0 if step and (step, k) <= at else 0.0
+                    for k, step in enumerate(self.steps)]
+            self._found[fi] = self._inside(fi, self._by_fold[fi], made)
+        return self._found[fi]
+
+    def _leans(self, side: tuple) -> set:
+        """The folds that a measure of ``_inside`` goes by: those between
+        the hinge it was taken at and the panel that reaches furthest,
+        and the one that panel ends in there."""
+        _mm, panel, h, via, _way = side
+        if panel is None:
+            return set()
+        out = {via.fold} if via is not None else set()
+        away = self._away(h)
+        while away[panel]:
+            panel, g = next((q, g) for q, g in self._joins[panel]
+                            if away[q] < away[panel])
+            out.add(g.fold)
+        return out
+
+    def _advise(self, drawn: "Layout"):
+        """Work out what to change in the drawing for each fold that is
+        off its line, or has leather left in its bend -- by trying it
+        (``_tried``) on ``drawn``, the same piece with every fold on its
+        line. What comes right goes into ``shift_trim``, or on to the end
+        of the fold's warning; of what does not, nothing is said."""
+        for fi, warning, named in self._asks:
+            trim = self._tried(drawn, fi)
+            if warning is None:
+                self.shift_trim[fi] = trim
+                self.shift_for[fi] = trim[0][0] if trim else None
+                continue
+            text, lengths = self._shorten(trim)
+            text = text[:1].upper() + text[1:] + "."
+            # (both sides: as a rule it is just what the warning has named)
+            if named is not None \
+                    and sorted((p, round(mm, 2), g) for p, mm, g in trim) \
+                    == sorted((p, round(mm, 2), None) for p, mm in named):
+                text, lengths = ("Shorten each by that much where it "
+                                 "reaches into the fold."), []
+            if trim:
+                said, had, digits = self._said[warning]
+                said, had = f"{said} {text}", had + tuple(lengths)
+                self._said[warning] = (said, had, digits)
+                self.warnings[warning] = said.format(
+                    *(f"{mm:.{digits}f} mm" for mm in had))
+        self._asks = []
+
+    def _tried(self, drawn: "Layout", fi: int) -> List[tuple]:
+        """What to shorten in the drawing for fold ``fi`` to form on its
+        line with nothing in its bend -- ``[(panel number, mm, fold)]``
+        as ``shift_trim`` has it -- found by trying it.
+
+        ``drawn`` is the piece with every fold on its line. The panel
+        that reaches furthest into the fold there is made that much
+        shorter on a copy of the piece (``_shortened``), and the copy is
+        laid out to fold. If something is in the way then -- more of what
+        is inside this fold, or leather in the bend of another that folds
+        on its line as things are (a panel that is shortened at one end
+        comes nearer whatever its other end is folded inside) -- that is
+        shortened as well, and so on, until all of them fold where they
+        are drawn. Empty if it does not come to that, or leaves two folds
+        too close for their bends."""
+        # this fold, and those that fold on their lines as it is (one
+        # that is off its line has its own remedy), in the order made
+        ours = [k for k in sorted(range(len(self.folds)),
+                                  key=lambda k: (self.steps[k], k))
+                if k == fi or not (self.shift[k] or self.stuck[k])]
+        trim: Dict[tuple, float] = {}
+        piece: Optional[Layout] = drawn
+        for _try in range(2 * len(self.panels)):
+            # the first of them with leather in its way, and what
+            # reaches furthest into it
+            for k in ours:
+                got = piece._look(k)
+                side = max(got.left, got.right, key=lambda m: m[0]) \
+                    if got is not None else (0.0,)
+                if side[0] > _REACH:
+                    break
+            else:
+                if piece._close - self._close:
+                    break
+                return [(panel, mm, fold)
+                        for (panel, fold), mm in trim.items()]
+            if not trim and k != fi:
+                break                  # (it is not this fold's to mend)
+            mm, panel, _h, _via, way = side
+            piece = piece._shortened(panel, mm, way)
+            if piece is None:
+                break
+            key = (self.panels[panel].number, None if k == fi else k)
+            trim[key] = trim.get(key, 0.0) + mm
+        return []
+
+    def _shortened(self, panel: int, mm: float, way: Pt
+                   ) -> Optional["Layout"]:
+        """This piece with one panel ``mm`` shorter, laid out afresh with
+        every fold on its line -- to see how it would fold then (see
+        ``_tried``). The panel is cut back at the end that reaches
+        ``way`` (a direction on the pattern): at the fold line it ends on
+        there, all the leather beyond that line coming ``mm`` nearer with
+        it -- or, if it ends in no fold, at its cut edge. The bends of
+        the copy are cut in few strips: it is only there to be measured.
+
+        None where that can't be done so simply: the panel has not that
+        much lying flat, or ends on two fold lines there; folds cross on
+        the piece; a fold line would have to move with some of the
+        leather along it and stay with the rest; or the piece would no
+        longer be hinged as it is."""
+        if len(self.tree) != len(self.hinges):
+            return None
+        flat = [q[0] * way[0] + q[1] * way[1]
+                for c in self._by_panel.get(panel, ()) if c.hinge is None
+                for q in c.pts]
+        if not flat or mm > max(flat) - min(flat) - 1e-6:
+            return None
+        # the folds the panel ends on that way, and the panels beyond
+        end, n, vias, beyond = max(flat), way, [], set()
+        for other, g in self._joins.get(panel, ()):
+            (ax, ay), e, _ln = self.lines[g.fold]
+            out = (e[1], -e[0]) if panel == g.left else (-e[1], e[0])
+            at = ax * out[0] + ay * out[1]
+            if out[0] * way[0] + out[1] * way[1] > 0.99 \
+                    and at > max(flat) - 1e-6:
+                if vias and abs(at - end) > 1e-6:
+                    return None
+                end, n = at, out
+                vias.append(g)
+                beyond.add(other)
+        todo = list(beyond)
+        for p in todo:
+            for q, _g in self._joins.get(p, ()):
+                if q != panel and q not in beyond:
+                    beyond.add(q)
+                    todo.append(q)
+
+        def cut_back(q):
+            over = q[0] * n[0] + q[1] * n[1] - end + mm
+            if over <= 0.0 or vias and over > mm + 1e-6:
+                return q
+            return (q[0] - over * n[0], q[1] - over * n[1])
+
+        regions = []
+        for k, p in enumerate(self.panels):
+            pts = p.pts
+            if k == panel:
+                pts = [cut_back(q) for q in pts]
+            elif k in beyond:
+                pts = [(q[0] - mm * n[0], q[1] - mm * n[1]) for q in pts]
+            pts, flags = pc.tidy(pts, p.flags)
+            if len(pts) < 3:
+                return None
+            regions.append((pts, flags))
+        lines = list(self.lines)
+        for g, line in enumerate(lines):
+            goes = [h in vias or h.left in beyond and h.right in beyond
+                    for h in self.hinges if h.fold == g]
+            if not any(goes):
+                continue
+            (ax, ay), ge, ln = line
+            if all(goes):
+                lines[g] = ((ax - mm * n[0], ay - mm * n[1]), ge, ln)
+            elif abs(ge[0] * n[0] + ge[1] * n[1]) < 1.0 - 1e-9:
+                return None        # (one along the way slides in itself)
+        new = Layout(regions, self.folds, lines, thickness=self.thickness,
+                     radius=self.base_radius, base=self.base, detail=90.0,
+                     numbered=True, bare=True)
+
+        def hinged(lay):
+            return sorted((h.fold, h.left, h.right) for h in lay.hinges)
+
+        return new if hinged(new) == hinged(self) else None
+
+    def _shorten(self, trim: Sequence[tuple]) -> Tuple[str, List[float]]:
+        """``trim`` (see ``shift_trim``) in words: a text with ``{}`` for
+        each length, and the lengths."""
+        here = [(panel, mm) for panel, mm, fold in trim if fold is None]
+        if not here:
+            return "", []
+        text = "shorten " + " and ".join(
+            f"panel {panel} by {{}}" for panel, _mm in here) + (
+            " where it reaches into the fold" if len(here) == 1
+            else " where they reach into the fold")
+        lengths = [mm for _panel, mm in here]
+        for panel, mm, fold in trim:
+            if fold is not None:
+                text += (f", and then panel {panel} by {{}} where it "
+                         f"reaches into fold {self._name(fold)}")
+                lengths.append(mm)
+        return text, lengths
+
+    def remedy(self, fold: int, length=None) -> str:
+        """What to change in the drawing for a fold that has moved to
+        fold on its line again, as a sentence -- empty if there is
+        nothing sure to say. ``length`` writes a length in mm out (as
+        ``warned`` has it)."""
+        if length is None:
+            def length(mm):
+                return f"{mm:.2f} mm"
+        if self.shift_trim[fold]:
+            text, lengths = self._shorten(self.shift_trim[fold])
+            return "To have it fold on its line, " + text.format(
+                *(length(mm) for mm in lengths)) + "."
+        after = self.shift_after[fold]
+        if after is not None:
+            return (f"It closes over fold "
+                    f"{self.folds[after].label or after + 1}, which is off "
+                    f"its line as well: put that right first.")
+        return ""
+
+    def _inside(self, fi: int, hinges: Sequence[Hinge],
+                made: Sequence[float]) -> "_Found":
+        """What is folded inside fold ``fi``, and how far the fold would
+        have to move to its left, and to its right, for it to fit -- a
+        ``_Found``.
+
+        The fold is closed, the folds made before it are made (``made``
+        has 1 for those, and for this one) and the rest lie flat. Seen
+        along a hinge, the leather between the faces of its two panels
+        may reach as far as the round of the bend and no further: ``v``
+        mm off the middle of the gap it may run ``sqrt(r * r - v * v)``
+        past the line the bend starts on (``r`` the inside radius), and
+        not at all where it lies against a panel -- see ``_reach``.
+
+        What counts is the leather of the panels that lie inside the fold
+        -- some of each between its two panels where they lie over each
+        other, no further on than the round of the bend, or in the
+        leather of the bend itself (it lay across the line when the fold
+        was made) -- and of the bends that join those. The panels the
+        hinge itself joins don't: they go round the bend, not inside it.
+        Nor does a panel the fold runs along elsewhere and now closes
+        over (where folds cross): the fold line cuts it, wherever the
+        line is, and no move brings that clear -- it is found, and kept
+        apart."""
+        f = self.folds[fi]
+        t = self.thickness
+        w = self.used[fi]
+        rho = w / math.radians(min(f.angle, 180.0))
+        r = rho - 0.5 * t
+        s = float(f.direction)
+        frames = self.frames(made)
+        arcs = self._arcs(frames, made)
+        along = set()                  # the panels the fold runs along
+        for h in self.hinges:
+            if h.fold == fi:
+                along.update((h.left, h.right))
+        sides: Dict[bool, list] = {True: [], False: []}     # left, right
+        cut: List[Tuple[float, int]] = []
+        layers = set()
+        for h in hinges:
+            spans = self._bent(h, w)
+            o, ex, ey, n = frames[h.parent]
+            c2 = (-h.e[1], h.e[0])
+            e1 = _mix(h.e[0], ex, h.e[1], ey)
+            # a point of the line the bend goes round
+            axis = place(frames[h.parent], (h.a[0] - 0.5 * w * c2[0],
+                                            h.a[1] - 0.5 * w * c2[1]),
+                         s * rho)
+            # Leather is measured against the panel it came in on: across
+            # that panel on into the bend, and out of its face. What the
+            # hinge carries came in on the child (which lies a few degrees
+            # off the parent if the fold is not quite shut).
+            _o, cx, cy, cn = frames[h.child]
+            lie = {False: (_mix(c2[0], ex, c2[1], ey), n),
+                   True: (_mix(-c2[0], cx, -c2[1], cy), cn)}
+            away = self._away(h)
+
+            def past(points, carried):
+                """How far past the round of the bend the furthest of
+                some corners is (None: none of them is in the bend)."""
+                on, out = lie[carried]
+                most = None
+                for q in points:
+                    dq = (q[0] - axis[0], q[1] - axis[1], q[2] - axis[2])
+                    k, v = _dot(dq, e1), _dot(dq, out)
+                    if abs(v) < r + t - 1e-6 and any(
+                            k0 <= k <= k1 for k0, k1 in spans):
+                        mm = _dot(dq, on) - math.sqrt(max(0.0, r * r - v * v))
+                        if most is None or mm > most:
+                            most = mm
+                return most
+
+            # how far back the two panels lie over each other, flat
+            depth = max(0.0, min(self._deep(h, False), self._deep(h, True))
+                        - 0.5 * w)
+            got = []
+            clear: Dict[int, bool] = {}
+            for c in self.cells:
+                p = c.panel
+                if p in (h.parent, h.child) or p not in away:
+                    continue
+                carried = p in h.moves
+                if c.hinge is None:
+                    # (a panel that lies flat with the fold's two, in
+                    # the sheet of one of them or beyond: none of it is
+                    # between them, and there is no more to work out)
+                    if p not in clear:
+                        out = lie[carried][1]
+                        q = place(frames[p], self.panels[p].pts[0])
+                        v = _dot((q[0] - axis[0], q[1] - axis[1],
+                                  q[2] - axis[2]), out)
+                        clear[p] = abs(_dot(frames[p][3], out)) > 1 - 1e-9 \
+                            and abs(v) - 0.5 * t >= r - 1e-6
+                    if clear[p]:
+                        continue
+                front, back = self._corners(c, frames, arcs)
+                reach = _reach(front, back, axis, e1, *lie[carried], spans,
+                               r, t, depth)
+                if reach is not None:
+                    got.append((c, carried, front, back) + reach)
+            inside = {c.panel for c, _car, _fr, _bk, _mm, within in got
+                      if within}
+            layers |= inside
+            for c, carried, front, back, mm, _within in got:
+                if c.panel not in inside:
+                    continue
+                if c.panel in along:
+                    if mm > _TOUCH:
+                        cut.append((mm, c.panel))
+                    continue
+                # The panel to shorten is the cell's own -- or, for a
+                # strip of another bend that is made, the one of that
+                # fold's two panels that is nearer this hinge (unless
+                # that is the hinge's own). ``via``: the fold the leather
+                # ends in here, if it is not a cut edge -- for a flat
+                # cell, the bend that starts at its furthest corners.
+                panel, via = c.panel, None
+                if c.hinge is not None:
+                    g = self.tree[c.hinge]
+                    near = g.parent if away[g.parent] < away[g.child] \
+                        else g.child
+                    if away[near] and made[g.fold]:
+                        panel, via = near, g
+                else:
+                    m = len(c.pts)
+                    for k, hinge, _strip in c.turns:
+                        g = self.tree[hinge]
+                        far = g.child if g.parent == panel else g.parent
+                        if made[g.fold] and away.get(far, 0) > away[panel]:
+                            j = k + 1 if k + 1 < m else 0
+                            end = past((front[k], front[j], back[k],
+                                        back[j]), carried)
+                            if end is not None and end > mm - 1e-6:
+                                via = g
+                # what came in on the child wants the fold nearer the
+                # parent, and the other way about
+                left = (h.child == h.left) != carried
+                sides[left].append((mm, away[panel], panel, via is None, h,
+                                    via, lie[carried][0]))
+        out = []
+        for left in (True, False):
+            if not sides[left]:
+                out.append((-math.inf, None, None, None, None))
+                continue
+            # the leather that reaches furthest -- and of all that reaches
+            # as far, the nearest through the leather (one that ends in a
+            # fold before one that is cut off there): shortening it draws
+            # the rest back with it
+            most = max(m[0] for m in sides[left])
+            mm, _steps, panel, _edge, h, via, way = min(
+                (m for m in sides[left] if m[0] > most - 1e-6),
+                key=lambda m: m[1:4])
+            _o, px, py, _n = frames[panel]
+            out.append((mm, panel, h, via, (_dot(way, px), _dot(way, py))))
+        across = None
+        if cut:
+            across = (max(mm for mm, _p in cut),
+                      sorted({p for _mm, p in cut}))
+        return _Found(out[0], out[1], across, len(layers))
+
+    def _bent(self, h: Hinge, w: float) -> List[Tuple[float, float]]:
+        """The stretches of a hinge the fold has a whole bend along, for
+        leather to be inside of: where both its panels are deep enough
+        for their half of it, ``w`` mm in all -- or half as deep as they
+        get, for a panel that is not so deep anywhere. (Where a panel
+        comes to a point at the end of the hinge, as the corner flap of
+        an envelope does, there is no bend to speak of.) Each as ``(from,
+        to)`` mm along the hinge, a hair in from its ends: leather that
+        only touches the end of a hinge is beside it."""
+        key = (id(h), w)
+        if key not in self._kept:
+            c2 = (-h.e[1], h.e[0])
+            out = [(h.k0, h.k1)]
+            for child, side in ((False, -1.0), (True, 1.0)):
+                deep = side * min(0.5 * w, 0.5 * self._deep(h, child))
+                panel = self.panels[h.child if child else h.parent]
+                runs = pc.spans(panel.pts, (h.a[0] + deep * c2[0],
+                                            h.a[1] + deep * c2[1]), h.e)
+                out = [(max(lo, p), min(hi, q)) for lo, hi in out
+                       for p, q in runs if min(hi, q) > max(lo, p)]
+            self._kept[key] = [(lo + _REACH, hi - _REACH) for lo, hi in out
+                               if hi - lo > 2.0 * _REACH]
+        return self._kept[key]
+
+    def _deep(self, h: Hinge, child: bool) -> float:
+        """How deep the child of a hinge is (or its parent), square to
+        the fold: the furthest from the line of what the panel has behind
+        that stretch of it."""
+        key = (id(h), child)
+        if key not in self._kept:
+            a, e = h.a, h.e
+            side = 1.0 if child else -1.0
+            panel = self.panels[h.child if child else h.parent]
+            b = panel.box
+            far = math.hypot(b[2] - b[0], b[3] - b[1]) + 1.0
+
+            def at(along, deep):
+                return (a[0] + along * e[0] - side * deep * e[1],
+                        a[1] + along * e[1] + side * deep * e[0])
+
+            band = pc.ccw([at(h.k0, 0.0), at(h.k1, 0.0), at(h.k1, far),
+                           at(h.k0, far)])
+            self._kept[key] = max(
+                (side * ((q[1] - a[1]) * e[0] - (q[0] - a[0]) * e[1])
+                 for part in panel.parts
+                 for q in pc.clip_to_convex(part, band)), default=0.0)
+        return self._kept[key]
+
+    def _corners(self, c: _Cell2, frames: Sequence[Frame], arcs):
+        """Where a cell's corners are: ``(front, back)``, the ring of them
+        on either face of the leather."""
+        if c.hinge is None:
+            fr = frames[c.panel]
+            ht = 0.5 * self.thickness
+            return ([place(fr, p, ht) for p in c.pts],
+                    [place(fr, p, -ht) for p in c.pts])
+        e1, tops, bots = arcs[c.hinge][:3]
+        j = c.strip
+        return tuple([_strip_point(q, p0, p1, e1) for q in c.place]
+                     for p0, p1 in ((tops[j], tops[j + 1]),
+                                    (bots[j], bots[j + 1])))
+
+    def _away(self, h: Hinge) -> Dict[int, int]:
+        """How many folds from a hinge each panel is, going through the
+        leather: 0 for the two the hinge joins. Only the panels of its
+        own piece are there."""
+        away = {h.parent: 0, h.child: 0}
+        todo = [h.parent, h.child]
+        for p in todo:
+            for q, _g in self._joins.get(p, ()):
+                if q not in away:
+                    away[q] = away[p] + 1
+                    todo.append(q)
+        return away
+
+    def _room(self, fi: int, left: bool) -> Tuple[float, str]:
+        """How far fold ``fi`` can move to its left (or to its right)
+        before its bend no longer fits on the panel there, and what it
+        would run into: the next fold line -- which has a bend of its own
+        to fit -- or the edge of the panel. Less than nothing: the bend
+        does not fit where the fold is, by that much."""
+        a, e, _ln = self.lines[fi]
+        side = 1.0 if left else -1.0
+        half = 0.5 * self.used[fi]
+        room, what = math.inf, ""
+        for h in self.tree:
+            if h.fold != fi:
+                continue
+            index = h.left if left else h.right
+            here = self._deep(h, index == h.child) - half
+            by = f"the edge of panel {self.panels[index].number}"
+            for g in self.hinges:
+                if g.fold == fi or index not in (g.left, g.right):
+                    continue
+                ga, ge, _gl = self.lines[g.fold]
+                if abs(e[0] * ge[1] - e[1] * ge[0]) > 0.26:
+                    continue                  # not nearly side by side
+                mid = 0.5 * (g.lo + g.hi)
+                q = (ga[0] + ge[0] * mid, ga[1] + ge[1] * mid)
+                gap = side * ((q[1] - a[1]) * e[0] - (q[0] - a[0]) * e[1])
+                bend = 0.5 * self.used[g.fold] if g.tree else 0.0
+                if gap > 0.0 and gap - half - bend <= here:
+                    here = gap - half - bend
+                    by = f"fold {self._name(g.fold)}"
+            if here < room:
+                room, what = here, by
+        return (room, what) if what else (0.0, "")
+
+    def _landing(self, drawn: "Layout"):
+        """Warn where a fold that has moved brings what it carries down
+        in other leather. A flap ended short of a wall, a lip came down
+        just past a folded edge: with a fold further along the piece
+        they may no longer. Only what the piece folded on its lines --
+        ``drawn`` -- does not have as deep is the fold's doing (its own
+        bend apart, and any with leather left in it: ``_check_inside``
+        has seen to those)."""
+        def name(tag):
+            return f"panel {self.panels[tag[1]].number}" \
+                if tag[0] == "panel" else f"fold {self._name(tag[1])}"
+
+        # the deepest of each two panels or bends: (mm, the fold)
+        found: Dict[tuple, Tuple[float, int]] = {}
+        model = _Folded(self)
+        for h in self.tree:
+            if not self.shift[h.fold]:
+                continue
+            stays, comes = [], []
+            for k, c in enumerate(self.cells):
+                g = self.tree[c.hinge] if c.hinge is not None else None
+                if g is None or g is not h and not self.stuck[g.fold]:
+                    (comes if c.panel in h.moves else stays).append(k)
+            for i in comes:
+                for j in stays:
+                    deep = model.into(i, j)
+                    # (panels before folds: the same two are named the
+                    # same way whichever of them the fold carries)
+                    pair = tuple(sorted(
+                        (self.cells[i].tag, self.cells[j].tag),
+                        key=lambda tag: (tag[0] != "panel", tag[1])))
+                    if deep > found.get(pair, (_TOUCH, 0))[0]:
+                        found[pair] = (deep, h.fold)
+        if not found:
+            return
+        model = _Folded(drawn)
+        by_tag: Dict[tuple, List[int]] = {}
+        for k, c in enumerate(drawn.cells):
+            by_tag.setdefault(c.tag, []).append(k)
+        new: Dict[int, list] = {}
+        for (ta, tb), (deep, fold) in found.items():
+            if not any(model.into(i, j) >= deep - _TOUCH
+                       for i in by_tag.get(ta, ())
+                       for j in by_tag.get(tb, ())):
+                new.setdefault(fold, []).append((deep, name(ta), name(tb)))
+        for fold in sorted(new):
+            deep, one, other = max(new[fold])
+            more = "" if len(new[fold]) == 1 \
+                else " (and they are not the only ones)"
+            self._say(f"With fold {self._name(fold)} off its line, {one} "
+                      f"and {other} are drawn {{}} into each other{more}.",
+                      deep)
 
     # -- the solid ------------------------------------------------------------
 
@@ -933,108 +1915,102 @@ class Layout:
         carries what the check found for it (see ``_decals``)."""
         frames = self.frames(fractions)
         arcs = self._arcs(frames, fractions)
+        cells = (self._cell(c, frames, arcs, check) for c in self.cells)
+        return [cell for cell in cells if cell is not None]
+
+    def _cell(self, c: _Cell2, frames: Sequence[Frame], arcs,
+              check: Optional[Check] = None) -> Optional[Cell]:
+        """One bit of the pattern as a cell of the model (None for a
+        strip the bend has closed to nothing)."""
         ht = 0.5 * self.thickness
-        out: List[Cell] = []
-        for c in self.cells:
-            if c.hinge is None:
-                o, ex, ey, n = frames[c.panel]
-                ax, ay, az = ex
-                bx, by, bz = ey
-                nx, ny, nz = n
-                tx, ty, tz = o[0] + ht * nx, o[1] + ht * ny, o[2] + ht * nz
-                ux, uy, uz = o[0] - ht * nx, o[1] - ht * ny, o[2] - ht * nz
-                top = [(tx + x * ax + y * bx, ty + x * ay + y * by,
-                        tz + x * az + y * bz) for x, y in c.pts]
-                bot = [(ux + x * ax + y * bx, uy + x * ay + y * by,
-                        uz + x * az + y * bz) for x, y in c.pts]
+        if c.hinge is None:
+            o, ex, ey, n = frames[c.panel]
+            ax, ay, az = ex
+            bx, by, bz = ey
+            nx, ny, nz = n
+            tx, ty, tz = o[0] + ht * nx, o[1] + ht * ny, o[2] + ht * nz
+            ux, uy, uz = o[0] - ht * nx, o[1] - ht * ny, o[2] - ht * nz
+            top = [(tx + x * ax + y * bx, ty + x * ay + y * by,
+                    tz + x * az + y * bz) for x, y in c.pts]
+            bot = [(ux + x * ax + y * bx, uy + x * ay + y * by,
+                    uz + x * az + y * bz) for x, y in c.pts]
 
-                def up(p, tx=tx, ty=ty, tz=tz, ax=ax, ay=ay, az=az, bx=bx,
-                       by=by, bz=bz):
-                    return (tx + p[0] * ax + p[1] * bx,
-                            ty + p[0] * ay + p[1] * by,
-                            tz + p[0] * az + p[1] * bz)
+            def up(p):
+                return (tx + p[0] * ax + p[1] * bx,
+                        ty + p[0] * ay + p[1] * by,
+                        tz + p[0] * az + p[1] * bz)
 
-                def down(p, ux=ux, uy=uy, uz=uz, ax=ax, ay=ay, az=az, bx=bx,
-                         by=by, bz=bz):
-                    return (ux + p[0] * ax + p[1] * bx,
-                            uy + p[0] * ay + p[1] * by,
-                            uz + p[0] * az + p[1] * bz)
+            def down(p):
+                return (ux + p[0] * ax + p[1] * bx,
+                        uy + p[0] * ay + p[1] * by,
+                        uz + p[0] * az + p[1] * bz)
 
-                pt, pb = top[0], bot[0]
-                fe, be = self._edges(c, arcs)
-                faces = [
-                    Face(tuple(top), (nx, ny, nz,
-                                      nx * pt[0] + ny * pt[1] + nz * pt[2]),
-                         FRONT, fe, _decals(c, up, check), c.tag, c.area,
-                         ((tx, ty, tz), ex, ey)),
-                    Face(tuple(bot[::-1]),
-                         (-nx, -ny, -nz,
-                          -(nx * pb[0] + ny * pb[1] + nz * pb[2])),
-                         BACK, be, _decals(c, down, check), c.tag,
-                         c.area, ((ux, uy, uz), ex, ey))]
-                m = len(top)
-                for k in range(m):
-                    j = k + 1 if k + 1 < m else 0
-                    wx, wy, size, kind, edges = c.sides[k]
-                    px = wx * ax + wy * bx
-                    py = wx * ay + wy * by
-                    pz = wx * az + wy * bz
-                    b0 = bot[k]
-                    faces.append(Face(
-                        (b0, bot[j], top[j], top[k]),
-                        (px, py, pz, px * b0[0] + py * b0[1] + pz * b0[2]),
-                        kind, edges, None, c.tag, size))
-                out.append(Cell(faces, c.tag))
-                continue
-            e1, tops, bots = arcs[c.hinge][:3]
-            j = c.strip
-            t0, t1, b0, b1 = tops[j], tops[j + 1], bots[j], bots[j + 1]
-
-            def up(q, t0=t0, t1=t1, e1=e1):
-                al, tau = q
-                return (t0[0] + (t1[0] - t0[0]) * tau + al * e1[0],
-                        t0[1] + (t1[1] - t0[1]) * tau + al * e1[1],
-                        t0[2] + (t1[2] - t0[2]) * tau + al * e1[2])
-
-            def down(q, b0=b0, b1=b1, e1=e1):
-                al, tau = q
-                return (b0[0] + (b1[0] - b0[0]) * tau + al * e1[0],
-                        b0[1] + (b1[1] - b0[1]) * tau + al * e1[1],
-                        b0[2] + (b1[2] - b0[2]) * tau + al * e1[2])
-
-            top = [up(q) for q in c.place]
-            bot = [down(q) for q in c.place]
-            h = self.tree[c.hinge]
-            w = self.used[h.fold]
-            step = w / (2 * self._halves[c.hinge])
-
-            def at(p, h=h, w=w, step=step, j=j):
-                return _strip_place(p, h, w, step, j)
-
-            faces = []
+            pt, pb = top[0], bot[0]
             fe, be = self._edges(c, arcs)
-            pl = plane_of(top)
-            if pl is not None:
-                faces.append(Face(tuple(top), pl, FRONT, fe,
-                                  _decals(c, lambda p: up(at(p)), check),
-                                  c.tag, c.area,
-                                  _strip_uv(h, w, step, j, t0, t1, e1)))
-            rb = bot[::-1]
-            pl = plane_of(rb)
-            if pl is not None:
-                faces.append(Face(tuple(rb), pl, BACK, be,
-                                  _decals(c, lambda p: down(at(p)), check),
-                                  c.tag, c.area,
-                                  _strip_uv(h, w, step, j, b0, b1, e1)))
+            faces = [
+                Face(tuple(top), (nx, ny, nz,
+                                  nx * pt[0] + ny * pt[1] + nz * pt[2]),
+                     FRONT, fe, _decals(c, up, check), c.tag, c.area,
+                     ((tx, ty, tz), ex, ey)),
+                Face(tuple(bot[::-1]),
+                     (-nx, -ny, -nz,
+                      -(nx * pb[0] + ny * pb[1] + nz * pb[2])),
+                     BACK, be, _decals(c, down, check), c.tag,
+                     c.area, ((ux, uy, uz), ex, ey))]
             m = len(top)
             for k in range(m):
-                jj = k + 1 if k + 1 < m else 0
-                _wx, _wy, size, kind, edges = c.sides[k]
-                faces += _side_faces(bot[k], bot[jj], top[jj], top[k], kind,
-                                     edges, c.tag, size)
-            if faces:
-                out.append(Cell(faces, c.tag))
-        return out
+                j = k + 1 if k + 1 < m else 0
+                wx, wy, size, kind, edges = c.sides[k]
+                px = wx * ax + wy * bx
+                py = wx * ay + wy * by
+                pz = wx * az + wy * bz
+                b0 = bot[k]
+                faces.append(Face(
+                    (b0, bot[j], top[j], top[k]),
+                    (px, py, pz, px * b0[0] + py * b0[1] + pz * b0[2]),
+                    kind, edges, None, c.tag, size))
+            return Cell(faces, c.tag)
+        e1, tops, bots = arcs[c.hinge][:3]
+        j = c.strip
+        t0, t1, b0, b1 = tops[j], tops[j + 1], bots[j], bots[j + 1]
+
+        def up(q):
+            return _strip_point(q, t0, t1, e1)
+
+        def down(q):
+            return _strip_point(q, b0, b1, e1)
+
+        top = [up(q) for q in c.place]
+        bot = [down(q) for q in c.place]
+        h = self.tree[c.hinge]
+        w = self.used[h.fold]
+        step = w / (2 * self._halves[c.hinge])
+
+        def at(p):
+            return _strip_place(p, h, w, step, j)
+
+        faces = []
+        fe, be = self._edges(c, arcs)
+        pl = plane_of(top)
+        if pl is not None:
+            faces.append(Face(tuple(top), pl, FRONT, fe,
+                              _decals(c, lambda p: up(at(p)), check),
+                              c.tag, c.area,
+                              _strip_uv(h, w, step, j, t0, t1, e1)))
+        rb = bot[::-1]
+        pl = plane_of(rb)
+        if pl is not None:
+            faces.append(Face(tuple(rb), pl, BACK, be,
+                              _decals(c, lambda p: down(at(p)), check),
+                              c.tag, c.area,
+                              _strip_uv(h, w, step, j, b0, b1, e1)))
+        m = len(top)
+        for k in range(m):
+            jj = k + 1 if k + 1 < m else 0
+            _wx, _wy, size, kind, edges = c.sides[k]
+            faces += _side_faces(bot[k], bot[jj], top[jj], top[k], kind,
+                                 edges, c.tag, size)
+        return Cell(faces, c.tag) if faces else None
 
     # -- marks for the view ---------------------------------------------------
 
@@ -1262,6 +2238,103 @@ class Layout:
 
 # -- helpers for the cells ----------------------------------------------------
 
+def _reach(front: Sequence[P3], back: Sequence[P3], axis: P3, e1: P3,
+           cc: P3, n: P3, spans: Sequence[Tuple[float, float]], r: float,
+           thick: float, depth: float
+           ) -> Optional[Tuple[float, bool]]:
+    """How far a cell -- ``front`` and ``back`` the rings of corners on
+    its two faces -- reaches into a closed bend: mm past where the round
+    of the bend lets it lie (less than nothing: short of that); and
+    whether any of it is inside the fold -- between the two panels where
+    they lie over each other, no further on than the round of the bend,
+    or in the leather of the bend itself. None for a cell that isn't
+    between the planes of the fold's two panels.
+
+    ``axis`` is a point of the line the bend goes round, ``e1`` the way
+    the hinge runs, ``cc`` across it (from the line the bend starts on,
+    on into the bend) and ``n`` out of the panel there; the hinge is the
+    stretches ``spans`` (each ``(from, to)`` along ``e1``), the bend has
+    inside radius ``r`` in leather ``thick`` mm thick, and its two
+    panels lie over each other for ``depth`` mm back from the line it
+    starts on. What is measured is the part of the cell along the hinge:
+    its corners there, and where its edges cross the ends of a stretch."""
+    pts = []
+    for x, y, z in (*front, *back):
+        d = (x - axis[0], y - axis[1], z - axis[2])
+        pts.append((_dot(d, e1), _dot(d, cc), _dot(d, n)))
+    off = [p[2] for p in pts]
+    if min(off) >= r - 1e-6 or max(off) <= 1e-6 - r:
+        return None                # in the sheet of one of the two panels
+    lim = r + thick - 1e-6         # between the outer faces of the panels
+    skin = (r + thick - _TOUCH) ** 2        # (less far in only touches)
+
+    def along(p, q, k0, k1):       # the part of an edge along the hinge
+        dk = q[0] - p[0]
+        if abs(dk) > 1e-12:
+            ta, tb = (k0 - p[0]) / dk, (k1 - p[0]) / dk
+            return max(0.0, min(ta, tb)), min(1.0, max(ta, tb))
+        return (0.0, 1.0) if k0 <= p[0] <= k1 else (1.0, 0.0)
+
+    most = None
+    near, far = math.inf, -math.inf        # the least and the most across
+    inside = False
+    m = len(front)
+    for (k0, k1), i in ((span, i) for span in spans for i in range(m)):
+        j = i + 1 if i + 1 < m else 0
+        for p, q in ((pts[i], pts[j]), (pts[m + i], pts[m + j]),
+                     (pts[i], pts[m + i])):
+            t0, t1 = along(p, q, k0, k1)
+            if t0 > t1:
+                continue
+            for tt in (t0, t1):
+                v = p[2] + (q[2] - p[2]) * tt
+                if abs(v) >= lim:
+                    continue
+                u = p[1] + (q[1] - p[1]) * tt
+                mm = u - math.sqrt(max(0.0, r * r - v * v))
+                if most is None or mm > most:
+                    most = mm
+                near, far = min(near, u), max(far, u)
+        # ... and the leather from face to face, where this edge of the
+        # front lies along the hinge: is any of it, past the line the bend
+        # starts on, within the outside of the bend? (Its two ends, and
+        # the nearest of it to the line the bend goes round.)
+        t0, t1 = along(pts[i], pts[j], k0, k1)
+        if inside or t0 > t1:
+            continue
+        for tt in (t0, t1):
+            (fu, fv), (bu, bv) = (
+                (p[1] + (q[1] - p[1]) * tt, p[2] + (q[2] - p[2]) * tt)
+                for p, q in ((pts[i], pts[j]), (pts[m + i], pts[m + j])))
+            du, dv = bu - fu, bv - fv
+            dd = du * du + dv * dv
+            s = min(1.0, max(0.0, -(fu * du + fv * dv) / dd)) if dd else 0.0
+            for u, v in ((fu, fv), (bu, bv), (fu + s * du, fv + s * dv)):
+                if u > 0.0 and u * u + v * v < skin:
+                    inside = True
+    if most is None:
+        return None
+    return most, inside or (near <= r and far >= -depth)
+
+
+def _listed(numbers: Sequence[int]) -> str:
+    """1 and 3; 1, 3 and 5."""
+    words = [str(k) for k in numbers]
+    return words[0] if len(words) == 1 \
+        else ", ".join(words[:-1]) + " and " + words[-1]
+
+
+def _strip_point(q: Tuple[float, float], p0: P3, p1: P3, e1: P3) -> P3:
+    """Where a point of a bend's strip lies on one face of the leather:
+    ``q`` is ``(how far along the fold, how far across the strip from 0
+    to 1)`` as ``_strip_place`` gives it, and the face runs from the line
+    through ``p0`` to the one through ``p1``, both along ``e1``."""
+    al, tau = q
+    return (p0[0] + (p1[0] - p0[0]) * tau + al * e1[0],
+            p0[1] + (p1[1] - p0[1]) * tau + al * e1[1],
+            p0[2] + (p1[2] - p0[2]) * tau + al * e1[2])
+
+
 def _strip_place(p: Pt, h: Hinge, w: float, step: float, j: int
                  ) -> Tuple[float, float]:
     """A pattern point of strip ``j`` of a bend as (how far along the fold
@@ -1362,6 +2435,29 @@ def _cut_zone(flat: List[pc.Poly], h: Hinge, side: float, half: float,
         # strips are numbered across the whole bend, from the parent's side
         strips.append((m - 1 - k if side < 0 else m + k, (pts, flags)))
     return keep, strips
+
+
+def _strip_parts(pts: List[Pt], flags: List[int], h: Hinge
+                 ) -> List[pc.Poly]:
+    """One strip of a bend in convex parts. Where its outline turns in
+    -- at the neck of a flap on a wider panel, say -- it is first parted
+    square to the fold: a seam running aslant across a strip is twisted
+    by the bend, and the parts either side of it would not meet along
+    it."""
+    if pc.is_convex(pts):
+        return [(pts, flags)]
+    c2 = (-h.e[1], h.e[0])
+    n = len(pts)
+    turns_in = []
+    for k in range(n):
+        (ax, ay), (bx, by), (cx, cy) = pts[k - 1], pts[k], pts[(k + 1) % n]
+        if (bx - ax) * (cy - by) - (by - ay) * (cx - bx) < -1e-9:
+            turns_in.append(pts[k])
+    polys = [(pts, flags)]
+    for corner in turns_in:
+        polys = [piece for P, F in polys
+                 for piece in pc.cut(P, F, corner, c2, None, pc.INNER)]
+    return [part for P, F in polys for part in pc.convex_parts(P, F)]
 
 
 def _decals(c: _Cell2, to3d, check: Optional[Check]):
@@ -1486,12 +2582,299 @@ def fold_piece(outline: Sequence[Pt], folds: Sequence[FoldLine], *,
     inside radius of any fold with none of its own; ``base`` the panel
     that stays still (the biggest if not given). ``detail`` is the degrees
     of bend to a strip, ``smooth`` how closely (mm) a curved outline is
-    followed."""
+    followed.
+
+    A fold that closes flat on leather that reaches into its bend is
+    moved along the piece to where it can form -- the piece is cut again
+    along the moved line, so the model, the marks and the hole check all
+    go by where the leather really folds -- and the layout says how far
+    (``Layout.shift``), and what to shorten in the drawing to have it
+    fold on its line (``Layout.shift_trim``). The panels keep the numbers
+    they have with every fold on its line."""
     ring = model_outline(outline, smooth)
     regions, lines = split_piece(ring, folds)
-    return Layout(regions, folds, lines, thickness=thickness, radius=radius,
-                  base=base, holes=holes, cutouts=cutouts, marks=marks,
-                  detail=detail, sharp=sharp_corners(ring))
+    kw = dict(thickness=thickness, radius=radius, detail=detail,
+              sharp=sharp_corners(ring), bare=True)
+    n = len(folds)
+    first = lay = Layout(regions, folds, lines, base=base,
+                         moved=[0.0] * n, **kw)
+    # (from here on the regions come in the order of its panels)
+    cut = ([regions[i] for i in first._order], lines)
+    kw.update(base=first.base, numbered=True)
+    held: set = set()
+    fixed: set = set()
+    goes = [0] * n
+    # One fold at a time, in the order they are made. A fold moves once,
+    # as a rule: the leather inside it comes clear by just as much as the
+    # fold has moved. It may have a little further to go -- it bends at
+    # another radius where it now is -- but after four moves it stays;
+    # so it does once it is stopped for want of room, and when it has
+    # been put back because its bend grew too wide for where it stopped.
+    # That is five rounds a fold at the most. A fold that has moved keeps
+    # the radius it moved at, at the least: it goes round the same
+    # leather wherever it forms.
+    for _round in range(5 * n):
+        if lay.to_move is None:
+            break
+        fi, step, stay = lay.to_move
+        back = step * lay.moved[fi] < 0.0
+        goes[fi] += 1
+        moved, new = lay.moved, None
+        for _try in range(4):
+            trial = list(lay.moved)
+            trial[fi] += step
+            new = _recut(ring, first, lay, fi, trial)
+            if new is not None:
+                moved = trial
+                break
+            stay = True            # not that far: half, and then no more
+            step *= 0.5
+        if back:
+            fixed.add(fi)
+        elif stay or goes[fi] >= 4:
+            held.add(fi)
+        was = lay
+        if new is not None:
+            lay = Layout(new[0], folds, new[1], moved=moved, held=held,
+                         fixed=fixed, **kw,
+                         least=[r if d else 0.0
+                                for r, d in zip(was.radius, moved)])
+            # A move that leaves the fold wanting to go as far again has
+            # not brought anything clear (what is in its way moves with
+            # it): back where it was, then, and no more of that
+            far = lay.to_move
+            if (far is None or back or far[0] != fi or far[1] * step <= 0.0
+                    or abs(far[1]) <= 0.5 * abs(step)):
+                cut = new
+                continue
+            held.add(fi)
+        lay = Layout(cut[0], folds, cut[1], moved=was.moved, held=held,
+                     fixed=fixed, least=was._least, **kw)
+    if any(lay.shift):
+        lay._landing(first)
+    lay._advise(first)
+    lay._dress(holes, cutouts, marks)
+    return lay
+
+
+def _recut(ring: Sequence[Pt], first: Layout, was: Layout, fi: int,
+           moved: Sequence[float]):
+    """Cut a piece again with each fold line ``moved`` mm to the left of
+    where its first layout has it -- fold ``fi`` on from where the layout
+    ``was`` has it: ``(regions, lines)``, the regions in the order of the
+    first layout's panels, so that every panel keeps its number.
+
+    None if the piece no longer comes apart into the same panels, hinged
+    along the same folds, each stretch of the fold that moved ending
+    where its ends slide to along the edges of the panels. (A fold moved
+    off the foot of a flap, into the wider panel the flap stands on,
+    would run right across that panel instead.)"""
+    folds = []
+    for f, line, d in zip(first.folds, first.lines, moved):
+        if line is None:
+            folds.append(replace(f, b=f.a))    # it cuts nothing, as before
+            continue
+        (ax, ay), (ex, ey), ln = line
+        ax, ay = ax - d * ey, ay + d * ex
+        folds.append(replace(f, a=(ax, ay), b=(ax + ln * ex, ay + ln * ey)))
+    regions, lines = split_piece(ring, folds, 0.0)
+    hinges = find_hinges(regions, lines)
+    n = len(first.panels)
+    if len(regions) != n or len(hinges) != len(first.hinges):
+        return None
+
+    def sides(found):
+        """For each panel, the folds it lies along and on which side."""
+        out = [set() for _ in range(n)]
+        for h in found:
+            out[h.left].add((h.fold, 1))
+            out[h.right].add((h.fold, -1))
+        return out
+
+    # a region is the panel that lay along the same folds on the same
+    # sides -- and of two that did, the one it shares most leather with
+    before, now = sides(first.hinges), sides(hinges)
+    panel = []
+    for k, (pts, _flags) in enumerate(regions):
+        same = [i for i in range(n) if before[i] == now[k]
+                and i not in panel]
+        if not same:
+            return None
+        panel.append(same[0] if len(same) == 1 else max(
+            same, key=lambda i: _shared(pts, first.panels[i])))
+    # ... and every hinge is one that was there -- one of the fold that
+    # moved with its ends where the old one's have slid to
+    step = moved[fi] - was.moved[fi]
+    a, e, _ln = was.lines[fi]
+    b = lines[fi][0]
+    old = list(was.hinges)
+    for h in hinges:
+        for g in old:
+            if ((g.fold, g.left, g.right)
+                    == (h.fold, panel[h.left], panel[h.right])
+                    and min(g.hi, h.hi) - max(g.lo, h.lo) > 1e-6):
+                break
+        else:
+            return None
+        old.remove(g)
+        if h.fold != fi:
+            continue
+        into, other = (g.left, g.right) if step > 0.0 else (g.right, g.left)
+        for k0, k1, ahead in ((g.hi, h.hi, step > 0.0),
+                              (g.lo, h.lo, step < 0.0)):
+            end = _slide(was.panels[into].pts, was.panels[other].pts,
+                         (a[0] + k0 * e[0], a[1] + k0 * e[1]), step, e,
+                         ahead)
+            if end is None or math.dist(end, (b[0] + k1 * e[0],
+                                              b[1] + k1 * e[1])) > 1e-5:
+                return None
+    order = sorted(range(n), key=lambda k: panel[k])
+    return [regions[k] for k in order], lines
+
+
+def _slide(into: Sequence[Pt], other: Sequence[Pt], p: Pt, step: float,
+           e: Pt, ahead: bool) -> Optional[Pt]:
+    """Where the end ``p`` of a stretch of a fold comes to when the fold
+    line (along unit ``e``) moves ``step`` mm to its left -- to its right
+    if that is less than 0.
+
+    It slides along the outline of the panel the line moves into:
+    ``into``, with ``ahead`` the way to follow that from ``p`` (the way
+    its points run, or against). Where that panel runs on past ``p``
+    along the line -- another fold meets this one there -- it follows
+    the edge of the ``other`` panel that ends at ``p``, carried on. None
+    if no edge leads that way from ``p``: the line would run on into the
+    panel, and across it."""
+    side = 1.0 if step > 0.0 else -1.0
+    left = abs(step)
+
+    def gain(q, r):                # how far that way, from q to r
+        return side * ((r[1] - q[1]) * e[0] - (r[0] - q[0]) * e[1])
+
+    n = len(into)
+    k = min(range(n), key=lambda i: math.dist(into[i], p))
+    if math.dist(into[k], p) <= 1e-6:
+        q = into[k]
+        for _edge in range(n):
+            k = (k + 1) % n if ahead else (k - 1) % n
+            more = gain(q, into[k])
+            if more <= 1e-9:
+                return None
+            if more >= left:
+                return (q[0] + (into[k][0] - q[0]) * left / more,
+                        q[1] + (into[k][1] - q[1]) * left / more)
+            left -= more
+            q = into[k]
+        return None
+    n = len(other)
+    k = min(range(n), key=lambda i: math.dist(other[i], p))
+    if math.dist(other[k], p) > 1e-6:
+        return None
+    q = other[(k - 1) % n if ahead else (k + 1) % n]
+    more = gain(q, p)
+    if more <= 1e-9:
+        return None
+    return (p[0] + (p[0] - q[0]) * left / more,
+            p[1] + (p[1] - q[1]) * left / more)
+
+
+class _Folded:
+    """A layout folded right up, to see how far two of its cells are
+    into each other (``into``, by their places in ``Layout.cells``). A
+    cell is only built for a pair whose boxes are into each other: most
+    of a folded piece is layers that lie on each other and no more."""
+
+    def __init__(self, lay: Layout):
+        self.lay = lay
+        made = [1.0 if s else 0.0 for s in lay.steps]
+        self.frames = lay.frames(made)
+        self.arcs = lay._arcs(self.frames, made)
+        self.boxes = []
+        for c in lay.cells:
+            front, back = lay._corners(c, self.frames, self.arcs)
+            pts = front + back
+            self.boxes.append(tuple(f(p[k] for p in pts)
+                                    for f in (min, max) for k in range(3)))
+        self.cells: Dict[int, Optional[Cell]] = {}
+        self.ways: dict = {}
+
+    def into(self, a: int, b: int) -> float:
+        """How far the two are into each other (mm) if that is more than
+        a little, else 0."""
+        p, q = self.boxes[a], self.boxes[b]
+        if any(min(p[k + 3], q[k + 3]) - max(p[k], q[k]) <= _TOUCH
+               for k in range(3)):
+            return 0.0
+        for k in (a, b):
+            if k not in self.cells:
+                self.cells[k] = self.lay._cell(self.lay.cells[k],
+                                               self.frames, self.arcs)
+        if self.cells[a] is None or self.cells[b] is None:
+            return 0.0
+        deep = _into(self.cells[a], self.cells[b], self.ways, _TOUCH)
+        return deep if deep > _TOUCH else 0.0
+
+
+def _parting(cell: Cell, edges: bool) -> List[P3]:
+    """The ways a convex cell can be parted from another: the normals of
+    its faces -- or, with ``edges``, the directions its edges run in. (Of
+    a cell with a great many edges -- a rounded corner has one every few
+    degrees -- sixteen of the directions are kept, evenly spread: there
+    are as many ways to try as one cell has of these times the other.)"""
+    kept: List[P3] = []
+    for f in cell.faces:
+        for v in ([(q[0] - p[0], q[1] - p[1], q[2] - p[2])
+                   for p, q in zip(f.pts, f.pts[1:] + f.pts[:1])]
+                  if edges else [f.plane[:3]]):
+            ln = math.sqrt(_dot(v, v))
+            if ln > 1e-9 and not any(abs(_dot(v, u)) > (1.0 - 1e-9) * ln
+                                     for u in kept):
+                kept.append((v[0] / ln, v[1] / ln, v[2] / ln))
+    return kept[::-(-len(kept) // 16)] if edges and kept else kept
+
+
+def _into(a: Cell, b: Cell, ways: dict, tol: float) -> float:
+    """How far two convex cells are into each other (mm): the least they
+    overlap along any way of parting them -- square to a face of either,
+    or to an edge of each. It stops at the first way along which that is
+    ``tol`` or less: cells no further in than that only touch. ``ways``
+    keeps what is worked out for each cell."""
+    if math.dist((a.cx, a.cy, a.cz), (b.cx, b.cy, b.cz)) \
+            >= a.rad + b.rad - tol:
+        return 0.0
+
+    def parting(cell, edges):
+        if (id(cell), edges) not in ways:
+            ways[id(cell), edges] = _parting(cell, edges)
+        return ways[id(cell), edges]
+
+    def across(v):
+        pa = [_dot(v, q) for q in a.verts]
+        pb = [_dot(v, q) for q in b.verts]
+        return min(max(pa) - min(pb), max(pb) - min(pa))
+
+    least = math.inf
+    for v in parting(a, False) + parting(b, False):
+        least = min(least, across(v))
+        if least <= tol:
+            return least
+    for u in parting(a, True):
+        for w in parting(b, True):
+            v = (u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2],
+                 u[0] * w[1] - u[1] * w[0])
+            ln = math.sqrt(_dot(v, v))
+            if ln > 1e-6:
+                least = min(least, across((v[0] / ln, v[1] / ln,
+                                           v[2] / ln)))
+                if least <= tol:
+                    return least
+    return least
+
+
+def _shared(pts: Sequence[Pt], panel: Panel) -> float:
+    """The area a polygon has in common with a panel."""
+    parts = (pc.clip_to_convex(pts, part) for part in panel.parts)
+    return sum(abs(pc.area(p)) for p in parts if p)
 
 
 def fold_net(outlines: Sequence[Sequence[Pt]], *, angle: float = 90.0,

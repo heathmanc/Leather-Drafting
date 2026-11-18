@@ -622,6 +622,27 @@ it in the Radius column (*Auto (1 mm)*) and says which fold goes round
 what. Swap the steps of a wallet's two flaps and the other one takes the
 outside.
 
+**What is folded inside can be too long, too.** A flap as long as the
+panel it lies on reaches the next fold line, and a fold inside another has
+a rounded end that needs room: the outer fold can't form on the line you
+drew, only a little further along the leather, where it clears. The
+preview folds it there — the fold line is drawn where the leather really
+bends, and edges and stitch holes are shown where they then land — and
+reports it: *Fold C folds 3.14 mm off its line, towards panel 4, to go
+round what is folded inside it. To have it fold on its line, shorten panel
+2 by 3.14 mm where it reaches into the fold.* The preview has tried that
+on a copy of the piece before it says it: take that much off the panel at
+that end and the fold is back on its line. Sometimes one panel isn't
+enough — roll a strip up, and a panel made shorter pushes the one folded
+on to it into the fold before — and then each is named in turn; a fold
+that closes over another one that is off its line says only to put that
+one right first. Where a fold has no room to move — its bend would run off
+the leather or into the next fold, it is at the foot of a flap, or leather
+comes into it from both sides — the report says so in red, with what to
+shorten if that puts it right; and if a fold that has moved brings what it
+carries down in other leather (a flap that stopped short of a wall, say),
+it says which.
+
 Under the view, the buttons and the slider fold the piece up a step at a
 time, or play it through. With the view clicked: `Space` plays, `←` `→`
 step, `Home` and `End` jump to flat and folded. The view keeps the piece
@@ -630,10 +651,15 @@ centred as it closes up, until you zoom or slide it yourself.
 Below the table the preview reports:
 
 * **Leather the bends take** — each bend is *angle × (inside radius + ½
-  thickness)* of leather, half from each side of its fold line. It's the
-  sum [Fold allowance](#fold-allowance) adds to a piece drawn at its
-  finished size.
+  thickness)* of leather, half from each side of its fold line (of the
+  place it forms at, if that is off its line). It's the sum
+  [Fold allowance](#fold-allowance) adds to a piece drawn at its finished
+  size.
 * **Folds too close together** for the bends they need.
+* **A fold that forms off its line** to go round what is folded inside it:
+  how far, which way, and what to shorten to put it back.
+* **Leather left in the bend of a fold**, in red: what the fold had no
+  room to go round, or leather it runs across.
 * **Stitch holes** — whether the ones that should meet do: see
   [Do the stitch holes line up?](#do-the-stitch-holes-line-up)
 
@@ -646,7 +672,9 @@ fold (it opens on the one that's selected).
 With no fold lines, panels drawn edge to edge fold along the edges they
 share, like a paper net (what you set for a net lasts while the preview is
 open). Folds that cross are folded one after the other, as you would by
-hand; the layers inside the second fold are shown cut along it.
+hand; the layers inside the second fold are shown cut along it, and the
+report says how far the cut ends reach into its bend — that much cut back
+at the fold (a notch in a hem, where the piece folds across it) clears it.
 
 #### Do the stitch holes line up?
 

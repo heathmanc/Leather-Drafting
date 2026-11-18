@@ -47,7 +47,8 @@ def _smoke() -> int:
 
     try:
         from PySide6.QtGui import QImageReader
-        from . import helpdialog, preview3d      # noqa: F401
+        from . import (helpdialog, preview3d, stackmodel,   # noqa: F401
+                       stackpanel)
         from .librarywindow import LibraryWindow, Thumbs
         with tempfile.TemporaryDirectory() as tmp:
             LibraryWindow(root=os.path.join(tmp, "library"),

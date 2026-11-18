@@ -368,7 +368,12 @@ class Scene:
 
     A layout with ``sheets`` is a stack of pieces. Its ``solid``,
     ``fold_marks``, ``panel_marks`` and ``bounds3`` take ``apart`` as
-    well: how far (mm) to lift each layer off the one under it."""
+    well: how far (mm) to lift each layer off the one under it.
+
+    A layout may say with ``grain`` which side of its leather its own
+    piece -- the main piece of a stack -- is drawn from: -1 for the flesh
+    side. The front of the model is then that piece's flesh side, and its
+    faces are painted so."""
 
     def __init__(self, layout, t: float, check=None, apart: float = 0.0):
         self.layout = layout
@@ -376,6 +381,7 @@ class Scene:
         self.fractions = layout.fractions(t)
         self.sheets = getattr(layout, "sheets", None) or ()
         self.apart = max(0.0, float(apart)) if self.sheets else 0.0
+        self.grain = 1 if getattr(layout, "grain", 1) >= 0 else -1
         if self.sheets:
             cells = layout.solid(self.fractions, check, self.apart)
             self.folds = layout.fold_marks(self.fractions, self.apart)
@@ -384,6 +390,17 @@ class Scene:
             cells = layout.solid(self.fractions, check)
             self.folds = layout.fold_marks(self.fractions)
             self.panels = layout.panel_marks(self.fractions)
+        if self.grain < 0:
+            # the model is made with the grain on the front of the main
+            # piece: here it is on its back
+            for cell in cells:
+                if sheet_of(cell.tag):
+                    continue
+                for f in cell.faces:
+                    if f.kind == FRONT:
+                        f.kind = BACK
+                    elif f.kind == BACK:
+                        f.kind = FRONT
         self.tree = bsp.build(cells)
 
     def bounds(self):
@@ -397,7 +414,8 @@ class Scene:
         the way the main piece's front is turned (or, not ``front``, its
         back): ``FRONT`` for the grain side, ``BACK`` for the flesh."""
         grain = self.sheets[piece - 1].grain \
-            if 0 < piece <= len(self.sheets) else 1
+            if 0 < piece <= len(self.sheets) \
+            else self.grain if piece == 0 else 1
         return FRONT if (grain > 0) == front else BACK
 
     def thickness_of(self, piece: int) -> float:

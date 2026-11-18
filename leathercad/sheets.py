@@ -663,13 +663,20 @@ class FlatStack:
     -- the sheets cut along the main piece's bends and carried round them
     -- and when ``Layout`` takes sheets it does all of this itself. So it
     is kept small: it cuts nothing and borrows the layout's own helpers
-    for a cell of the pattern and the marks on it."""
+    for a cell of the pattern and the marks on it.
+
+    ``grain`` says which side of its leather the main piece is drawn
+    from: 1 its grain side, as a piece shown alone is taken to be, or -1
+    its flesh side -- the front of the model is then the flesh side of
+    the main piece, and the view paints it so (``Scene.face_of``). The
+    sheets say the same of themselves, each with its own ``grain``."""
 
     def __init__(self, layout, sheets: Sequence[Sheet] = (), outline=None,
-                 name: str = ""):
+                 name: str = "", grain: int = 1):
         self.layout = layout
         self.sheets = list(sheets)
         self.name = name
+        self.grain = 1 if grain >= 0 else -1
         self.outline = fs.model_outline(outline) \
             if outline is not None and len(outline) >= 3 \
             else outline_of(layout)

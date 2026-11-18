@@ -104,7 +104,16 @@ def register_spin(spin) -> None:
 
 
 def on_change(callback) -> None:
+    """Call ``callback(unit)`` whenever the display unit is switched."""
     _listeners.append(callback)
+
+
+def off_change(callback) -> None:
+    """Stop calling ``callback`` (a window that was listening has shut)."""
+    try:
+        _listeners.remove(callback)
+    except ValueError:
+        pass
 
 
 def set_current(unit: str) -> None:

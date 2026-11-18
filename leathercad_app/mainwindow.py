@@ -1254,10 +1254,11 @@ class MainWindow(QMainWindow):
                                 self.canvas.seam_mate_report())
 
     def _assembly_preview(self):
-        """The 3D assembly preview: fold a piece along its fold lines (or panels
-        drawn edge to edge along the edges they share), with the leather's
-        thickness and bend radius, each fold in its turn."""
-        from .preview3d import FoldPreviewDialog, foldables
+        """The 3D assembly preview: put the pieces of the drawing together,
+        each with its own thickness, and fold a piece along its fold lines (or
+        panels drawn edge to edge along the edges they share), each fold in
+        its turn."""
+        from .preview3d import FoldPreviewDialog, worth_showing
         dlg = getattr(self, "_assembly_dlg", None)
         try:
             if dlg is not None and dlg.isVisible():
@@ -1267,7 +1268,9 @@ class MainWindow(QMainWindow):
                 return
         except RuntimeError:                 # closed and freed
             pass
-        if not foldables(self.doc):
+        # (a stack, a piece or a net that folds, or two pieces at least, of
+        # which one can be put on the other)
+        if not worth_showing(self.doc):
             QMessageBox.information(
                 self, "3D assembly preview",
                 "Nothing to fold yet.\n\n"

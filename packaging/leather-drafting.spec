@@ -33,6 +33,8 @@ a = Analysis(
         (os.path.join(ROOT, "docs", "individual_holes.png"), "docs"),
         (os.path.join(ROOT, "docs", "fold_preview.png"), "docs"),
         (os.path.join(ROOT, "docs", "hole_check.png"), "docs"),
+        (os.path.join(ROOT, "docs", "assembly_apart.png"), "docs"),
+        (os.path.join(ROOT, "docs", "assembly_folding.png"), "docs"),
         (os.path.join(ROOT, "docs", "library.png"), "docs"),
         (os.path.join(ROOT, "leathercad_app", "resources", "appicon.png"),
          "leathercad_app/resources"),

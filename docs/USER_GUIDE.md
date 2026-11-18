@@ -574,7 +574,9 @@ each fold.
 
 **View → 3D assembly preview…** (`Ctrl+Shift+3`) folds a piece along its
 fold lines and shows it as solid leather, so you can see what a pattern
-makes before you cut it. Mark each crease first: draw a line across the
+makes before you cut it. (It can also lay several pieces on each other
+and fold them together: see
+[Putting pieces together](#putting-pieces-together).) Mark each crease first: draw a line across the
 piece where it folds, right-click it → **Mark as fold line**. The line
 needn't reach the edges — a fold always runs right across the leather it's
 drawn on.
@@ -666,7 +668,7 @@ Below the table the preview reports:
 What you set here — step, direction, angle, radius — is kept on the fold
 lines and saved with the drawing; a run of changes is one **Undo** in the
 main window. You can leave the preview open while you draw: it follows the
-drawing. When several pieces have fold lines, **Piece** chooses which to
+drawing. When several pieces have fold lines, **Show** chooses which to
 fold (it opens on the one that's selected).
 
 With no fold lines, panels drawn edge to edge fold along the edges they
@@ -701,6 +703,127 @@ is, and — when more than two panels are stacked — which panels the holes
 that line up or miss are on. **Hole check**, under the view, puts the marks
 away when you want a clean picture.
 
+### Putting pieces together
+
+Most things are more than one piece of leather: a wallet is a shell, a
+lining and two piles of pockets. The 3D assembly preview can lay those
+pieces on each other the way they will be sewn, each at its own
+thickness, and fold the lot — so you see the finished thing, how thick
+it comes out, and what the fold does to everything inside it, before
+you cut.
+
+![A bifold put together in the 3D assembly preview, its layers pulled apart](assembly_apart.png)
+
+The drawing stays your cutting pattern, with the pieces drawn apart.
+Where a piece lies in the finished thing is kept with the piece, not
+read from where it is drawn: move the pieces about, turn them, or
+**Nest on sheet**, and what you have put together stays together.
+
+**Give each piece its leather.** Select a piece and type its **Leather
+thickness** in Properties, or right-click it → **Leather thickness…**;
+with several selected it goes to all of them. A piece that has none
+takes the preview's own Leather thickness when it is put on a stack.
+
+**Put them on.** With two or more pieces in the drawing, **View → 3D
+assembly preview…** has a **Pieces** tab that lists every piece. Tick
+one to put it on the stack. The first you tick is the **main piece**:
+the others are placed against it, and the stack folds along *its* fold
+lines — for a wallet, the outer shell with its spine fold. Each piece
+you tick after that lands on the piece chosen in the list, their
+bottom-left corners together — or, if it is drawn overlapping the main
+piece, where it is drawn. Then put it where it goes:
+
+| | |
+|---|---|
+| **Line up** — Left, Centre, Right, Bottom, Middle, Top | lines the chosen pieces up with the main piece, or with the piece chosen in **Line up with**. They stay lined up when either piece changes size |
+| **Across**, **Up** | how far the piece lies from the edge (or middle) it is held by; the label beside them says which. 0 is level |
+| **Turned**, **⟲ 90°**, **⟳ 90°** | how far it lies turned from the way it is cut |
+| **▲ Higher**, **▼ Lower** | which of two pieces is on top |
+| **Turn over** | lays it grain down, turned like a page |
+| **Underneath** / **On top** | puts it on the other side of the main piece, next to it — a patch on the outside of a wallet goes underneath |
+| **Mirror** | for a piece drawn as seen from its flesh side |
+| **Main piece** | makes the chosen piece the one the others are placed against. Nothing moves |
+| **As drawn** | lays the chosen pieces where they are drawn on the main piece; with none chosen, every piece drawn on it |
+| **Take along what lies on it** | a piece that is moved takes the pieces lying on it with it, so a pile of pockets moves as one |
+| **This piece's leather** | shows that piece in a leather of its own, saved with the drawing |
+
+Several rows can be chosen at once, and a value typed goes to all of
+them. Click a piece in the picture to choose its row. **Pull apart**,
+under the view, lifts the layers off each other to show what lies on
+what; **See through** paints the pieces lying over the chosen ones
+faint; **Top** and **Under** look straight down at each side. When a
+drawing holds more than one stack, **Show** chooses between them. A
+small outline drawn inside another — a pocket drawn on its panel, a
+key fob nested in the waste of a window — is listed apart, under
+*Drawn inside a piece*, and goes on when you tick it.
+
+Some things arrive put together: **Edit → Generate → Bifold wallet** and
+**Card pocket stack**, and the **Card holder** and **Slim card holder**
+templates.
+
+**What it tells you while the stack lies flat.** How many pieces there
+are and how thick the thickest place is, and what is in it; pieces that
+stand past the edge of the main piece; a piece that lies half on
+another and stands clear of what is under the rest of it. And the
+stitch holes, layer by layer: holes that meet are marked as when one
+piece is [folded on itself](#do-the-stitch-holes-line-up), and where a
+hole goes through a piece that has none there the report counts them —
+*Outer shell's holes pass through Bill pocket liner (142)…, which have
+no holes there. The laser will not cut them in those pieces.*
+
+**Fold it.** The **Folds** tab works for a stack as it does for one
+piece, on the main piece's fold lines, and Play closes the whole thing:
+every layer goes round the bend together.
+
+![The same wallet half way closed, with what the fold needs](assembly_folding.png)
+
+A fold with leather inside it needs room, and the preview gives it what
+the pile needs: *Fold A (Spine fold) closes over 8 mm of leather, 4 mm
+on each half: Left pocket 1 (front) comes to rest on Right pocket 1
+(front). It bends at 4 mm and takes 15.08 mm of Outer shell, 7.54 mm
+each side of the fold line.* Then it says what is in the way of that
+bend, and marks it amber on the model:
+
+* **Pieces that reach into the bend**, where leather cannot lie flat:
+  *Left pocket backing (and 7 more) reach 5.54 mm into the bend of fold
+  A… Stop them 7.54 mm from the fold line: make them 5.54 mm narrower.*
+  While the stack lies flat, a dashed line each side of every fold
+  shows where its bend begins.
+* **A piece that goes round the inside of the bend** — a lining — has
+  less far to go than the shell: *Bill pocket liner goes round the
+  inside of fold A and has 3.77 mm too much leather there. Cut it
+  3.77 mm shorter across the fold and it lies smooth and comes level
+  when shut; sewn in flat at this length it wrinkles inside the fold.*
+  Once it is that much shorter the line reads *shut, it comes level*.
+  A piece round the outside of a fold needs that much more instead.
+
+The picture keeps every layer where you laid it and squeezes it to fit
+round the bend; the millimetres in the report are the true ones.
+Change the pieces in the drawing — the preview follows — and the
+warnings go. **Make room for the fold**, in the Bifold wallet
+generator, sizes the shell, the lining and the pockets that way from
+the two thicknesses you give it.
+
+Last it gives the size folded and how much leather a needle goes
+through, most and least. In red, with the names and how deep, is
+anything it has had to draw through something else — and a piece the
+folds would part: one laid across the end of a narrow flap's fold, or
+over two folds that cross, cannot follow both sides, and the report
+says where and for how long it would have to be slit.
+
+What you set is kept in the drawing with each piece — its thickness,
+its leather, where it lies — and a run of changes is one **Undo** in
+the main window. Version 0.4.13 and earlier open such a drawing, but
+do not know these three things and leave them out when they save it:
+the pieces are unharmed, the stack is gone.
+
+**What it doesn't do.** A piece is shown lying flat on the highest
+thing under it — it isn't bedded down over a step. A piece with a fold
+of its own (a hemmed pocket) goes on unfolded. Pieces sewn at an angle
+— gussets — can't be put on. Pieces are placed with the buttons and
+typed numbers, not dragged in the picture. And it won't punch one
+piece's holes through the pieces under it for you.
+
 ### Generators
 
 **Edit → Generate** drafts whole parts from a few numbers, grouped and
@@ -709,9 +832,15 @@ placed at the view centre: **Card pocket stack**, **Zipper opening**,
 turn-back fold, hole ladder), **Box gusset** and **Curved gusset** (strip
 length worked out from the body, with corner folds or curve marks),
 **Bifold wallet** (shell, spine fold, bill liner and a pocket stack per
-side), **Key tab** (fold-over ring tab with rivet holes) and **Hemmed
+side; give it the **Shell leather** and the **Lining and pocket leather**
+and tick **Make room for the fold** to have the spine, the lining and
+the pockets sized for the bend those leathers need), **Key tab** (fold-over ring tab with rivet holes) and **Hemmed
 pocket** (folded top edge: cut taller by the hem plus its bend allowance,
-mouth left unsewn). Every dialog remembers your last values.
+mouth left unsewn). Every dialog remembers your last values. The bifold
+and the card pocket stack arrive [put together](#putting-pieces-together),
+ready to look at in the 3D assembly preview; folds that close a piece
+on itself — the wallet's spine, the key tab's ring fold, the strap's
+turn-back — fold to the back, so the grain ends up outside.
 
 ## 8. Precision drawing: snapping and guides
 
@@ -1436,3 +1565,5 @@ just its endpoints).
 | **Engrave** | Raster/vector marking of the surface, e.g. lettering. |
 | **Backstitch** | Re-sewing back through the last few holes of a seam to lock the thread. |
 | **Construction line** | A dashed reference guide used for snapping; never exported. |
+| **Stack** | Pieces laid on each other in the 3D assembly preview the way they will be sewn, each at its own leather thickness. |
+| **Main piece** | The piece of a stack the others are placed against; the stack folds along its fold lines. |

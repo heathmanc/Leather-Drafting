@@ -6,6 +6,62 @@ made only when the release workflow is run by hand with it ticked.
 
 ## Unreleased
 
+### Putting pieces together
+* **Stack the pieces of a pattern and see the finished thing.** The 3D
+  assembly preview has a new **Pieces** tab. Tick the pieces of a drawing
+  on to a stack — the first is the main piece, the others are placed
+  against it — and they are shown lying on each other as they will be
+  sewn, each at its own thickness and in its own leather. Line a piece up
+  with the main piece or another piece (left, centre, right, bottom,
+  middle, top), type how far across and up it lies, turn it, turn it over
+  grain down, put it underneath, or lay it where it is drawn. **Pull
+  apart** lifts the layers to show what lies on what, **See through**
+  shows a piece under others, and clicking a piece in the picture chooses
+  it. The drawing stays the cutting pattern: where a piece lies in the
+  stack is kept with the piece, so moving pieces or **Nest on sheet**
+  changes nothing in it.
+* **Every piece has its leather.** A piece's **Leather thickness** is in
+  Properties and on the right-click menu, and is saved with the drawing,
+  like the place it lies at and the leather it is shown in.
+* **Fold the whole thing.** A stack folds along the main piece's fold
+  lines, every layer round the bend together, and the fold is given the
+  room the pile inside it needs. The generated bifold in 1.6 mm leather
+  with 0.8 mm lining and pockets closes over 8 mm of leather: its spine
+  bends at 4 mm, takes 15.08 mm of the shell, and the wallet comes out
+  97.66 × 90 × 11.2 mm.
+* **The report says what the fold needs — in what to cut.** Pieces that
+  reach into a bend, where leather cannot lie flat, are marked amber and
+  told where to stop (*Stop them 7.54 mm from the fold line: make them
+  5.54 mm narrower*; dashed lines on the flat stack show where each bend
+  begins). A lining that goes round the inside of a fold has less far to
+  go than the shell: *Cut it 3.77 mm shorter across the fold and it lies
+  smooth and comes level when shut* — and once it is, the report says so.
+  It gives the size folded and the most and least leather a needle goes
+  through; and in red, by name and with how deep, anything that cannot
+  be where it is drawn — two piles that meet, or a piece laid across the
+  end of a narrow flap's fold that would have to be slit there.
+* **Stitch holes through the layers.** Where pieces lie on each other the
+  holes are checked hole against hole, and where a hole goes through a
+  piece that has none there the report counts them: *The laser will not
+  cut them in those pieces.*
+* **Generated wallets arrive put together.** The Bifold wallet and Card
+  pocket stack generators and the Card holder and Slim card holder
+  templates come as stacks, ready to look at. The bifold dialog asks for
+  the **Shell leather** and the **Lining and pocket leather**, and **Make
+  room for the fold** sizes the spine, the lining and the pockets for the
+  bend those leathers need (210.28 mm shell, 206.51 mm lining, pockets
+  ending at the edge of the bend, for 1.6 and 0.8 mm).
+* **Generated folds close grain out.** The bifold's spine, the key tab's
+  ring fold and the strap's turn-back now fold to the back, so the grain
+  side ends up outside; they folded to the front.
+* **Older versions.** 0.4.13 and earlier open a drawing made with stacks
+  and show its pieces as before, but leave the thickness, the leather and
+  the place of each piece out when they save it.
+* **Esc no longer applies a half-typed number.** In the 3D assembly
+  preview, a number still being typed when the window was shut reached
+  the fold line with no undo step. It is now let go; what was changed
+  before stays one undo step.
+
 ### Folds that close over other folds
 * **A fold makes room for what is inside it — all of it.** The 3D assembly
   preview already bent a fold that closes flat at a bigger radius, to go

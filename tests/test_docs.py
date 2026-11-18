@@ -60,7 +60,10 @@ def test_key_menu_commands_documented(guide_text):
                 "Snap to perfect fit", "Perfect fit", "Use for new shapes",
                 "Details page first", "Space between pieces",
                 "Library of finished pieces", "Add to library",
-                "Keep a copy in the library"):
+                "Keep a copy in the library",
+                "Leather thickness", "Make room for the fold",
+                "Pull apart", "See through", "Main piece", "Line up",
+                "Turn over", "Take along what lies on it"):
         assert cmd in guide_text, f"menu command not documented: {cmd}"
 
 

@@ -215,38 +215,65 @@ def open_seams(cells, slit=()):
 
 
 def slit_sheets(lay):
-    return {n.sheet for n in lay.notes if n.kind == "slit"}
+    """The sheets a note says are parted: slit, or over a crossing of
+    folds."""
+    return {n.sheet for n in getattr(lay, "notes", ())
+            if n.kind in ("slit", "crossing")}
 
 
-def witnesses(lay, moments=9, slit_pass=False):
+def named(lay):
+    """How deep the notes of a layout say each two pieces are drawn into
+    each other, at the deepest: ``{(piece, piece): mm}``. A ``"clash"``
+    names its two; a ``"limit"`` or a ``"landing"`` the main piece in
+    itself; a ``"slit"`` or ``"crossing"`` the sheet in itself and the
+    main piece in it, there."""
+    out = {}
+
+    def say(a, b, mm):
+        key = tuple(sorted((a, b)))
+        out[key] = max(out.get(key, 0.0), mm)
+
+    for n in getattr(lay, "notes", ()):
+        if n.kind == "clash":
+            say(n.sheet, n.other[0], n.a)
+        elif n.kind in ("limit", "landing"):
+            say(0, 0, n.a)
+        elif n.kind in ("slit", "crossing"):
+            say(n.sheet, n.sheet, n.b)
+            say(0, n.sheet, n.b)
+    return out
+
+
+def witnesses(lay, moments=9, inside=0, slack=1e-3):
     """Everything the four witnesses find wrong with a layout, at
-    ``moments`` moments of its folding, as a list of words.
+    ``moments`` moments of its folding (and, with ``inside``, that many
+    more moments evenly inside each step), as a list of words.
 
-    A sheet said to be slit at the end of a hinge is drawn where leather
-    cannot go there, and is said to be: what it runs into itself is not
-    news. With ``slit_pass`` what any other piece runs into it is not
-    either (the random stacks: a piece resting on a slit one is carried
-    off it by the flap). Where a fold forms off its line, what the
-    released engine lets a lone piece keep is let pass as well: 0.05 mm,
-    as ``tests/test_foldsolid.py`` measures it."""
+    Two cells drawn into each other are no fault of the witnesses' to
+    find when a note of the layout names those two pieces at least as
+    deep (``named``, to ``slack`` mm): the judge has said it. A sheet a
+    note says is parted (``slit_sheets``) may have seams that open.
+    Where a fold forms off its line, what the released engine lets a
+    lone piece keep is let pass as well: 0.05 mm, as
+    ``tests/test_foldsolid.py`` measures it."""
     out = [f"sheet {k} cells cover {got:.3f} of {want:.3f}, {twice:.2e} "
            f"twice" for k, got, want, twice in covered(lay)]
     slit = slit_sheets(lay)
+    said = named(lay)
     share = 0.05 if any(lay.shift) else SHARE
-
-    def excuse(ta, tb):
-        a, b = sh.sheet_of(ta), sh.sheet_of(tb)
-        return a == b and a in slit or slit_pass and (a in slit
-                                                      or b in slit)
-
     n = lay.n_steps
-    for j in range(moments if n else 1):
-        t = n * j / (moments - 1) if n else 0.0
+    times = [n * j / (moments - 1) for j in range(moments)] if n else [0.0]
+    for step in range(n):
+        times += [step + (j + 1) / (inside + 1) for j in range(inside)]
+    for t in sorted(set(times)):
         cells = lay.solid(lay.fractions(t))
         io = inside_out(cells)
         if io > FLAT_ENOUGH:
             out.append(f"t {t:.2f}: a cell is inside out by {io:.2e}")
-        bad = [x for x in overlaps(cells, excuse) if x[0] > share]
+        bad = [(d, ta, tb) for d, ta, tb in overlaps(cells) if d > share
+               and d > said.get(tuple(sorted((sh.sheet_of(ta),
+                                              sh.sheet_of(tb)))),
+                                -1.0) + slack]
         if bad:
             d, ta, tb = max(bad)
             out.append(f"t {t:.2f}: {ta} in {tb} by {d:.4f} "
@@ -344,6 +371,38 @@ def random_stack(rng, family):
         folds = [fold(a, 0, a, H, 180.0, way, order=1),
                  fold(b, 0, b, H, 180.0, way, order=2, label="B")]
         base = 1
+    elif family == "ell":
+        # an L-shaped piece with a fold across each arm, the two not side
+        # by side: their lines cross past the piece's inside corner
+        H = rng.uniform(120, 200)
+        nw, nh = W * rng.uniform(0.3, 0.5), H * rng.uniform(0.3, 0.5)
+        out = ell(0, 0, W, H, nw, nh)
+        y = rng.uniform(nh + 10, H - 10)
+        x = rng.uniform(nw + 10, W - 10)
+        folds = [fold(0, y, W, y, rng.choice([180.0, 135.0, 90.0]), way,
+                      order=1),
+                 fold(x, 0, x, H, rng.choice([180.0, 135.0, 90.0]),
+                      rng.choice([1, -1]), order=2, label="B")]
+    elif family == "wings":
+        # a T-shaped piece with a liner wider than its flap, and pieces
+        # on the liner's wings and elsewhere
+        out, W, H = TEE, 100.0, 120.0
+        y = rng.choice([60.0, 62.0, 65.0, 70.0])
+        folds = [fold(0, y, 100, y, rng.choice([180.0, 180.0, 90.0]), way,
+                      radius=rng.choice([-1.0, 3.0]))]
+        x0, x1 = 30 - rng.uniform(4, 25), 70 + rng.uniform(4, 25)
+        y0, y1 = y - rng.uniform(4, 20), y + rng.uniform(15, 50)
+        side = rng.choice([1, 1, -1])
+        sheets = [sh.Sheet(rect(x0, y0, x1, y1), rng.choice([0.6, 0.8, 1.0]),
+                           side, name="liner")]
+        for k in range(rng.randint(1, 4)):
+            a = rng.choice([x0, 70.0])
+            w = rng.uniform(4, 22)
+            b = rng.uniform(y0, y1 - 8)
+            sheets.append(sh.Sheet(
+                rect(a + rng.uniform(-3, 3), b, a + w, b + rng.uniform(6, 30)),
+                rng.choice([0.6, 1.0, 1.4]), side, name=f"w{k}"))
+        return out, folds, sheets, rng.choice([1.0, 1.6, 2.0]), base
     sheets = []
     for k in range(rng.randint(1, 7)):
         w, h = rng.uniform(15, W * 1.05), rng.uniform(10, H * 1.05)
@@ -421,7 +480,7 @@ def _bent(lay, fold=0):
 
 
 def _notes(lay, *kinds):
-    return [n for n in lay.notes if n.kind in kinds]
+    return [n for n in getattr(lay, "notes", ()) if n.kind in kinds]
 
 
 def _narrower(sheets, by=5.54):
@@ -626,6 +685,249 @@ def test_a_flap_with_a_piece_on_it_moves_a_later_fold_by_what_the_pile_needs():
     assert witnesses(lay, 17) == []
 
 
+# -- past the end of a hinge, and where a piece is parted -------------------
+
+def _wings(way):
+    # a liner wider than the T's flap, folded 180 degrees 3 mm up its
+    # stem, with a pocket on its left wing (beside the flap, over nothing
+    # of the main piece)
+    return stack(TEE, [fold(0, 63, 100, 63, 180.0, way)],
+                 [(rect(10, 50, 90, 110), 1.0, 1),
+                  (rect(12, 80, 28, 100), 1.0, 1)])
+
+
+def _panels_of(lay, k):
+    return sorted({(p, tuple(round(v, 6) for v in pc.bounds(q)))
+                   for p, q, _f in lay._regions[k - 1]})
+
+
+@pytest.mark.parametrize("way", [1, -1])
+def test_a_liner_wider_than_its_flap_swings_with_it_wings_and_all(way):
+    lay = _wings(way)
+    flap = lay.panels[0].index if lay.panels[0].box[1] >= 63.0 - 1e-9 \
+        else lay.panels[1].index
+    body = 1 - flap
+    # the liner is cut along the fold line only: the part above it, wings
+    # and all, goes with the flap; the pocket on the wing goes with it
+    assert _panels_of(lay, 1) == sorted([
+        (body, (10.0, 50.0, 90.0, 63.0)), (flap, (10.0, 63.0, 90.0, 110.0))])
+    assert _panels_of(lay, 2) == [(flap, (12.0, 80.0, 28.0, 100.0))]
+    slits = _notes(lay, "slit")
+    if way == 1:
+        # to the front the bend is 6.28 mm wide and reaches 0.14 mm into
+        # the body beside the flap: the liner glued there lies flat with
+        # it, and is parted from what bends, along the body's edge (20 mm)
+        # and the end of the hinge (0.14 mm), at each end
+        assert [(n.sheet, n.fold, round(n.a, 4), n.at) for n in slits] == [
+            (1, 0, 20.1416, (20.0, 60.0)), (1, 0, 20.1416, (80.0, 60.0))]
+        assert all(n.other == (0,) and n.b == pytest.approx(0.1412, abs=1e-4)
+                   for n in slits)
+    else:
+        # to the back the bend misses the body: nothing is parted
+        assert slits == []
+    assert not _notes(lay, "clash", "limit", "crossing")
+    assert witnesses(lay, 21, 3) == []
+
+
+TONGUE = [(0, 0), (100, 0), (100, 100), (60.5, 100), (60.5, 50), (60, 50),
+          (60, 100), (40, 100), (40, 50), (39.5, 50), (39.5, 100), (0, 100)]
+
+
+def test_a_patch_across_the_slit_beside_a_flap_is_slit_along_the_flaps_edge():
+    # a flap cut into a body by two slits half a mm wide, folded over at
+    # its foot; a patch lies across the right-hand slit
+    lay = stack(TONGUE, [fold(40, 50, 60, 50)],
+                [(rect(55, 70, 70, 85), 1.0, 1)])
+    flap = next(p.index for p in lay.panels if p.box[0] >= 40.0 - 1e-9)
+    body = 1 - flap
+    assert _panels_of(lay, 1) == [(body, (60.0, 70.0, 70.0, 85.0)),
+                                  (flap, (55.0, 70.0, 60.0, 85.0))] \
+        if body < flap else [(flap, (55.0, 70.0, 60.0, 85.0)),
+                             (body, (60.0, 70.0, 70.0, 85.0))]
+    slit, = _notes(lay, "slit")
+    assert (slit.sheet, slit.fold, slit.a, slit.at, slit.other) == (
+        1, 0, pytest.approx(15.0, abs=1e-9), (60.0, 77.5), ())
+    assert witnesses(lay, 13, 3) == []
+
+
+# seed 48 of the first check's stacks at the end of a T's hinge: piece 5
+# rests on piece 4, which lies on the flap and stands past its edge
+SEED48 = [(0, 0), (100, 0), (100, 60), (72.64, 60), (72.64, 101.06),
+          (25.4, 101.06), (25.4, 60), (0, 60)]
+SEED48_PIECES = [
+    ([(70.89, 56.1), (80.1, 55.92), (80.96, 101.46), (71.75, 101.63)],
+     0.6, -1),
+    ([(71.72, 59.52), (75.19, 59.52), (75.19, 96.04), (71.72, 96.04)],
+     0.8, -1),
+    ([(73.06, 65.77), (74.53, 65.77), (74.53, 93.88), (73.06, 93.88)],
+     2.0, -1),
+    ([(89.8, 73.15), (90.3, 75.58), (56.4, 82.69), (55.89, 80.26)], 1.5,
+     -1),
+    ([(75.93, 69.42), (76.9, 69.42), (77.0, 69.93), (77.29, 70.36),
+      (77.72, 70.65), (78.23, 70.75), (78.74, 70.65), (79.17, 70.36),
+      (79.46, 69.93), (79.56, 69.42), (80.53, 69.42), (80.53, 89.46),
+      (75.93, 89.46)], 1.5, -1)]
+
+
+def test_a_piece_over_nothing_of_the_main_piece_goes_with_what_it_rests_on():
+    lay = stack(SEED48, [fold(0, 65, 100, 65, 180.0, -1, radius=3.0)],
+                SEED48_PIECES, t=1.0)
+    assert lay.sheets[4].rests == [4]
+    flap = next(p.index for p in lay.panels if p.box[1] >= 65.0 - 1e-9)
+    assert {p for p, _q, _f in lay._regions[3]} == {flap}
+    assert {p for p, _q, _f in lay._regions[4]} == {flap}
+    # it rides round the inside of the bend with the piece it rests on
+    assert lay.why == [("ride", 5, 0)]
+    assert lay.radius == pytest.approx([6.4], abs=1e-9)
+    for j in range(21):
+        cells = lay.solid(lay.fractions(j / 20))
+        assert not [d for d, ta, tb in overlaps(cells)
+                    if {sh.sheet_of(ta), sh.sheet_of(tb)} == {4, 5}], j
+
+
+L_SHAPE = [(0, 0), (100, 0), (100, 60), (40, 60), (40, 140), (0, 140)]
+
+
+def test_a_piece_over_where_two_fold_lines_cross_past_the_main_piece_is_said():
+    # an L-shaped piece folded across its upright arm and then across its
+    # foot; the two lines cross past its inside corner, at (70, 75), under
+    # a liner that stands out over the corner
+    lay = stack(L_SHAPE, [fold(0, 75, 100, 75, 180.0, 1, order=1),
+                          fold(70, 0, 70, 60, 135.0, -1, label="B",
+                               order=2)],
+                [(rect(20, 50, 100, 100), 1.0, 1)])
+    crossing, = _notes(lay, "crossing")
+    assert (crossing.sheet, crossing.fold, crossing.other, crossing.at) == (
+        1, 0, (1,), (70.0, 75.0))
+    # the liner goes three ways, and is parted round the crossing: said,
+    # with how long and how deep
+    assert len({p for p, _q, _f in lay._regions[0]}) == 3
+    slit, = _notes(lay, "slit")
+    assert (slit.sheet, round(slit.a, 4), round(slit.b, 4)) == (
+        1, 34.3197, 0.4672)
+    assert witnesses(lay, 17, 3) == []
+
+
+def _tray(*pieces):
+    return stack(rect(0, 0, 160, 160),
+                 [fold(30, 0, 30, 160, 90.0),
+                  fold(130, 0, 130, 160, 90.0, label="B"),
+                  fold(0, 30, 160, 30, 90.0, label="C"),
+                  fold(0, 130, 160, 130, 90.0, label="D")], list(pieces))
+
+
+def test_a_trays_wall_liner_is_said_to_be_slit_where_its_corners_part():
+    # the right wall's corners are hinged to the end walls, not to it: a
+    # liner along the wall is parted from what lies on each corner
+    lay = _tray((rect(2, 2, 28, 158), 1.0, 1), (rect(132, 2, 158, 158), 1.0,
+                                                1))
+    slits = _notes(lay, "slit")
+    assert [(n.sheet, n.fold, n.a, n.at, n.other) for n in slits] == [
+        (2, 2, pytest.approx(26.0, abs=1e-9), (145.0, 30.0), (0,)),
+        (2, 3, pytest.approx(26.0, abs=1e-9), (145.0, 130.0), (0,))]
+    # where the corner folds into the wall the liner is drawn through
+    # itself, said under the slit; the left liner, whose corners are
+    # hinged to its wall, is not parted at all
+    assert [round(n.b, 4) for n in slits] == [6.7675, 4.1544]
+    assert witnesses(lay, 9, 3) == []
+
+
+def test_two_piles_that_pass_through_each_other_inside_a_step_are_said():
+    # a channel: both walls stand up, one after the other; the second
+    # wall's pile sweeps through the first wall's on the way and is clear
+    # of it when the wall stands
+    lay = stack(rect(0, 0, 240, 60),
+                [fold(80, 0, 80, 60, 90.0, order=1),
+                 fold(160, 0, 160, 60, 90.0, order=2, label="B")],
+                [(rect(25, 10, 45, 50), 60.0, 1),
+                 (rect(165, 10, 185, 50), 40.0, 1)], base=1)
+    clash, = _notes(lay, "clash", "limit")
+    assert (clash.kind, clash.sheet, clash.other, clash.b) == (
+        "clash", 1, (2,), 1.5)
+    assert clash.a == pytest.approx(3.6698, abs=1e-4)
+    for t in (0.0, 1.0, 2.0):
+        assert not overlaps(lay.solid(lay.fractions(t)))
+    assert witnesses(lay, 9, 3) == []
+
+
+def _three_77(trial):
+    rng = random.Random(77)
+    for _k in range(trial + 1):
+        out, folds, sheets, t, base = random_stack(rng, "three")
+    return fs.fold_piece(out, folds, thickness=t, sheets=sheets, base=base)
+
+
+def test_a_later_fold_moves_clear_of_a_pile_folded_in_over_a_lower_rider():
+    # random strip in three, trial 9 of seed 77: the first flap's pieces
+    # are folded in over the middle panel and run on into the second
+    # fold's bend, along a stretch where only a low piece rides round it.
+    # Measured against the tallest piece riding round anywhere, the fold
+    # moved 21.3 mm and left them 1.91 mm in its bend; it moves 25.08
+    lay = _three_77(9)
+    assert lay.shift == pytest.approx([0.0, 25.0796], abs=1e-4)
+    assert not lay.stuck[1] and not lay.warnings
+    # (the 0.036 mm left is what a fold moved to its place may keep: no
+    # finding)
+    assert not _notes(lay, "clash", "limit", "landing", "stuck")
+    assert witnesses(lay, 9, 3) == []
+
+
+def test_a_fold_that_cannot_move_clear_says_so_and_what_it_draws_through():
+    # trial 23: the second fold's bend would not fit before the edge of
+    # the last panel; what it closes over is left in its bend
+    lay = _three_77(23)
+    assert lay.stuck == [False, True]
+    # (8.9 mm where it is, 35 mm with the fold on its line: the big
+    # liner, piece 6, folded in with the first flap)
+    stuck, = _notes(lay, "stuck")
+    assert (stuck.fold, round(stuck.a, 4), round(stuck.b, 4),
+            stuck.other) == (1, 8.9047, 34.9793, (6,))
+    assert [(n.sheet, n.other, round(n.a, 4), n.b)
+            for n in _notes(lay, "clash")] == [
+        (2, (6,), 1.311, 1.5), (5, (6,), 1.0222, 1.25),
+        (6, (6,), 0.8551, 1.25)]
+    assert witnesses(lay, 9, 3) == []
+
+
+def _trifold(pockets, t=0.8):
+    # a 270 by 90 mm strip, 1.4 mm, its right flap folded in over the
+    # middle and then the two over the left; a pocket on the front of
+    # any of its three panels
+    sheets = [sh.Sheet(rect(x - 40, -40, x + 40, 10), t, name=name)
+              for name, x in (("L", -90), ("M", 0), ("R", 90))
+              if name in pockets]
+    return fs.fold_piece(rect(-135, -45, 135, 45),
+                         [fold(-45, -45, -45, 45, order=2),
+                          fold(45, -45, 45, 45, order=1, label="B")],
+                         thickness=1.4, sheets=sheets)
+
+
+@pytest.mark.parametrize("pockets, shift", [
+    ("", 2.1991), ("L", 2.8274), ("M", 2.8274), ("R", 2.8274),
+    ("LR", 3.4558), ("LMR", 4.0841)])
+def test_a_fold_moves_on_while_each_move_brings_the_pile_clearer(pockets,
+                                                                  shift):
+    # the pocket on the left panel comes into the second fold's bend as
+    # the fold moves and lines its round: each move clears the folded
+    # flap by less than it is long. Given up after one, the fold stuck
+    # 2.53 mm into the flap with all three pockets on
+    lay = _trifold(pockets)
+    assert lay.shift == pytest.approx([shift, 0.0], abs=1e-4)
+    assert lay.stuck == [False, False] and not lay.warnings
+    assert not _notes(lay, "clash", "limit", "landing", "stuck")
+    assert witnesses(lay, 9, 3) == []
+
+
+def test_a_hair_a_moved_fold_is_let_keep_is_no_finding():
+    # with 0.2 mm pockets the strip is left 0.004 mm into itself where
+    # its fold forms off its line: less than a moved fold may keep
+    lay = _trifold("LMR", 0.2)
+    assert lay.shift == pytest.approx([2.0704, 0.0], abs=1e-4)
+    deep = max(d for d, _a, _b in overlaps(lay.solid([1.0, 1.0])))
+    assert 0.0 < deep < 0.05
+    assert not _notes(lay, "clash", "limit", "landing")
+
+
 # -- one piece folds as before ------------------------------------------------
 
 @pytest.mark.parametrize("piece", ["trifold", "tray", "bifold"])
@@ -674,20 +976,23 @@ def test_a_crease_has_no_face_on_its_inside_and_the_cell_stays_convex():
 
 @pytest.mark.parametrize("family, seed", [
     ("flat", 1), ("shut", 2), ("shut", 12), ("zigzag", 3), ("open", 4),
-    ("open", 14), ("tee", 5), ("tee", 15), ("three", 6), ("three", 16)])
+    ("open", 14), ("tee", 5), ("tee", 15), ("three", 6), ("three", 16),
+    ("ell", 7), ("ell", 17), ("wings", 8), ("wings", 18)])
 def test_random_stacks_are_whole_at_five_moments_of_their_folding(family,
                                                                   seed):
     # 1 to 7 pieces each, on both faces, turned to any angle, rounded,
     # L-shaped, notched and standing past the edge; folded flat shut, in
-    # a zigzag, at 30 to 160 degrees, on a T-shaped piece, or as a strip
-    # in three whose flaps reach the other bend
+    # a zigzag, at 30 to 160 degrees, on a T-shaped piece, as a strip in
+    # three whose flaps reach the other bend, on an L-shaped piece across
+    # both arms, or on a T-shaped piece under a liner wider than its flap
+    # with pieces on its wings. Looked at at five moments, and at three
+    # more inside each step: whatever is drawn into anything is said
     rng = random.Random(seed)
     for trial in range(8):
         out, folds, sheets, t, base = random_stack(rng, family)
         lay = fs.fold_piece(out, folds, thickness=t, sheets=sheets,
                             base=base)
-        assert witnesses(lay, 5, slit_pass=True) == [], (family, seed,
-                                                         trial)
+        assert witnesses(lay, 5, 3) == [], (family, seed, trial)
 
 
 # -- controls: each rule switched off makes a witness fail --------------------
@@ -822,3 +1127,124 @@ def test_a_lining_punched_to_meet_when_shut_is_read_shut():
         cross, = _notes(lay, "cross")
         assert cross.a == pytest.approx(over, abs=1e-9)
         assert lay.lineup().readings == {1: want}
+
+
+def test_two_linings_punched_for_shut_are_read_shut_together():
+    # two 1 mm linings, one on the other, inside a 2 mm piece folded flat:
+    # pi x 1.5 and pi x 2.5 mm too long round the inside. Each is punched
+    # half that nearer the fold each side; read shut together, every
+    # hole of the three meets
+    holes = [(x, 95.0, 1.0) for x in range(10, 91, 5)] + \
+        [(x, 95.0, 1.0) for x in range(110, 191, 5)]
+
+    def lining(name, over):
+        return sh.Sheet(rect(0, 0, 200, 98), 1.0, name=name, holes=[
+            (x + (0.5 * over if x < 100 else -0.5 * over), y, d)
+            for x, y, d in holes])
+
+    lay = fs.fold_piece(rect(0, 0, 200, 100), [fold(100, 0, 100, 100)],
+                        holes=holes, sheets=[lining("one", math.pi * 1.5),
+                                             lining("two", math.pi * 2.5)])
+    check = lay.lineup()
+    assert check.readings == {1: (0, 34, True), 2: (0, 34, True)}
+    assert len(check.holes(fs.MEETS)) == 102
+
+
+def test_a_lining_round_two_folds_is_read_shut_at_both():
+    # a strip in three, 1.6 mm, its flaps folded in over the middle; a
+    # 0.8 mm lining round the inside of both folds is pi x 1.2 mm too long
+    # at each. Held in the middle, each flap's part stands that much
+    # further out shut: punched that much nearer the middle, it meets
+    over = math.pi * 1.2
+    holes = [(x, 95.0, 1.0) for x in range(5, 256, 5)
+             if abs(x - 80) > 8 and abs(x - 180) > 8]
+
+    def pull(x):
+        return x + over if x < 80 else x - over if x > 180 else x
+
+    lining = sh.Sheet(rect(0, 0, 260, 98), 0.8, name="lining",
+                      holes=[(pull(x), y, d) for x, y, d in holes])
+    lay = fs.fold_piece(rect(0, 0, 260, 100),
+                        [fold(80, 0, 80, 100, order=2),
+                         fold(180, 0, 180, 100, order=1, label="B")],
+                        thickness=1.6, base=1, holes=holes, sheets=[lining])
+    assert [n.a for n in _notes(lay, "cross")] == pytest.approx(
+        [over, over], abs=1e-9)
+    assert lay.lineup().readings == {1: (17, 45, True)}
+
+
+@pytest.mark.parametrize("turn", [0.0, 30.0, 90.0])
+def test_the_size_and_the_leather_shut_go_by_the_stack_not_the_drawing(turn):
+    # a 200 by 90 mm shell, 1.6 mm, folded in the middle, with a square
+    # cornered 0.8 mm liner stopping 2 mm short of its top edge, drawn
+    # turned on the page
+    ring = turned(rect(0, 0, 200, 90), turn, 100, 45)
+    a, b = turned([(100, 0), (100, 90)], turn, 100, 45)
+    liner = turned(rect(0, 0, 200, 88), turn, 100, 45)
+    lay = fs.fold_piece(ring, [fs.FoldLine(a, b, 180.0, 1, label="A")],
+                        thickness=1.6, sheets=[sh.Sheet(liner, 0.8)])
+    size, = _notes(lay, "size")
+    assert (size.a, size.b) == pytest.approx((99.8867, 90.0), abs=1e-4)
+    # along the top edge a needle goes through the shell twice, only
+    leather, = _notes(lay, "leather")
+    assert (leather.a, leather.b) == pytest.approx((4.8, 3.2), abs=1e-9)
+
+
+def _limited():
+    # a piece whose fold B forms off its line (the fault left over from
+    # the fold fix, at its smallest), with a small patch on its back far
+    # from every fold
+    outline = [(0, 0), (127, 0), (127, 30), (60, 30), (60, 50), (30, 50),
+               (30, 30), (0, 30)]
+    folds = [fs.FoldLine((30, 30), (60, 30), 180, 1, order=1, label="F"),
+             fs.FoldLine((30, 0), (30, 30), 180, 1, order=2, label="B"),
+             fs.FoldLine((70, 0), (70, 30), 180, -1, order=3, label="C"),
+             fs.FoldLine((112, 0), (112, 30), 90, -1, order=4, label="D")]
+    return outline, folds
+
+
+def test_a_stack_whose_fold_moves_is_told_what_the_move_brings_down():
+    outline, folds = _limited()
+    alone = fs.fold_piece(outline, folds, thickness=2.0)
+    lay = fs.fold_piece(outline, folds, thickness=2.0, sheets=[
+        sh.Sheet([(40, 5), (55, 5), (55, 20), (40, 20)], 0.4, -1)])
+    # the lone piece's warning and its remedy, which the patch does not
+    # stand in the way of
+    assert lay.shift == alone.shift == pytest.approx([0.0, math.pi, 0, 0],
+                                                     abs=1e-9)
+    assert lay.warnings == alone.warnings == [
+        "With fold B off its line, panel 5 and fold B are drawn 1.79 mm "
+        "into each other."]
+    assert lay.remedy(1) == alone.remedy(1) == (
+        "To have it fold on its line, shorten panel 2 by 3.14 mm where "
+        "it reaches into the fold.")
+    # ... and among the notes, what the move brings down: not a limit of
+    # folding the piece, which it is not with the fold on its line
+    landing, = _notes(lay, "landing")
+    assert (landing.fold, landing.other, round(landing.a, 4), landing.b,
+            landing.c) == (1, (("panel", 4), ("bend", 1)), 1.7854, 3.75,
+                           0.0)
+    assert not _notes(lay, "limit", "clash")
+
+
+def test_a_piece_that_crosses_the_fold_line_only_past_the_hinge_reaches_in():
+    # an L-shaped piece on the T's body reaching into the bend of the flap's
+    # fold, its arm standing up beside the flap across the fold line,
+    # where nothing bends: it reaches in, it does not go round
+    ell_ = [(40, 50), (95, 50), (95, 80), (75, 80), (75, 58), (40, 58)]
+    lay = stack(TEE, [fold(0, 65, 100, 65, radius=6.0)], [(ell_, 1.0, 1)])
+    assert not _notes(lay, "cross", "level")
+    reach, = _notes(lay, "reach")
+    assert (reach.sheet, round(reach.a, 4), round(reach.b, 4)) == (
+        1, 3.9956, 10.9956)
+
+
+def test_a_piece_outside_a_fold_cut_long_enough_comes_level():
+    # 0.8 mm on the outside of a 1.6 mm piece folded flat needs pi x 1.2
+    # mm more leather; cut that much longer, it is told it comes level
+    lay = stack(rect(0, 0, 200, 100), [fold(100, 0, 100, 100)],
+                [(rect(-1.885, 10, 201.885, 90), 0.8, -1)], t=1.6)
+    assert not _notes(lay, "cross")
+    level, = _notes(lay, "level")
+    assert (level.a, level.b) == (pytest.approx(-3.7699, abs=1e-4),
+                                  pytest.approx(-3.77, abs=1e-9))

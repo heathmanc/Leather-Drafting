@@ -1491,7 +1491,6 @@ def test_a_fold_that_moves_says_what_it_then_brings_down_in_other_leather():
         "each other."]
 
 
-
 def test_a_moved_fold_says_when_its_own_bend_comes_down_in_a_wall():
     # a flap on panel 3's long edge folds down first, its side edge on
     # fold line B; panel 1 folds over it, panel 4 under panel 3, and
@@ -1566,6 +1565,45 @@ def test_what_a_moved_fold_brings_down_is_looked_for_at_every_whole_step():
     assert lay.warnings == [
         "With fold B off its line, panel 2 and panel 5 are drawn 3.50 mm "
         "into each other (and they are not the only ones)."]
+
+
+def test_a_moved_fold_says_how_deep_the_two_are_with_it_on_its_line():
+    # a random piece with folds that cross: with fold D on its line,
+    # panels 1 and 3 are already 5.80 mm into each other, and the move
+    # makes it 5.90 -- the warning says both, so that the 5.90 mm is not
+    # read as all the move's doing
+    outline = [(52.532539968937684, 26.702564825164053),
+               (11.746551192710474, 21.40454885063399),
+               (-12.155072366299045, 45.64605114128626),
+               (-26.381507116725594, 16.45825035162531),
+               (-51.431918523980194, -1.8017624742538396),
+               (-29.31020240615076, -24.2868939470454),
+               (-2.720418415204471, -24.92026952692177),
+               (23.36402165387357, -34.07457739712457),
+               (20.331256469077896, -4.8797991861194525)]
+    folds = [
+        fs.FoldLine((-0.3716981244917079, -4.103284657007443),
+                    (65.51229659850179, 70.04929082239036), 30, -1,
+                    order=2, label="A"),
+        fs.FoldLine((16.129302629524744, -13.658888507180144),
+                    (-50.85857175880312, 44.81850455248501), 180, -1,
+                    radius=0, order=2, label="B"),
+        fs.FoldLine((21.696947452864407, -10.653562423675858),
+                    (25.997576217204376, -7.724821322504739), 30, -1,
+                    order=3, label="C"),
+        fs.FoldLine((52.532539968937684, 26.702564825164053),
+                    (-29.31020240615076, -24.2868939470454), 180, -1,
+                    radius=0, order=2, label="D")]
+    lay = fs.fold_piece(outline, folds, thickness=4.0, radius=0.0)
+    assert lay.warnings[2] == (
+        "With fold D off its line, panel 1 and panel 3 are drawn 5.90 mm "
+        "into each other (5.80 mm with the fold on its line) (and they "
+        "are not the only ones).")
+    assert lay.warned(lambda mm: f"{mm / 25.4:.3f} in")[2] == (
+        "With fold D off its line, panel 1 and panel 3 are drawn 0.232 in "
+        "into each other (0.228 in with the fold on its line) (and they "
+        "are not the only ones).")
+
 
 def test_nothing_is_said_to_shorten_that_would_leave_folds_too_close():
     # panel 3 is 8 mm wide, and the folds either side of it bend at 2 and

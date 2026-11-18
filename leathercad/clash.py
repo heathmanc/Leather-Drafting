@@ -123,14 +123,24 @@ def clashes(cells, eps: float = JUDGE) -> List[Tuple[float, tuple, tuple]]:
     Cells of one piece are tried against each other like any others: the
     tags say whose each is. The boxes round two cells are tried before the
     cells themselves, so a model with nothing wrong in it costs little."""
+    return [(d, cells[i].tag, cells[j].tag) for d, i, j in pairs(cells, eps)]
+
+
+def pairs(cells, eps: float = JUDGE, pick=None
+          ) -> List[Tuple[float, int, int]]:
+    """``clashes``, with the two cells given by where they are in the
+    list, ``[(depth, i, j)]``. ``pick``, if given, is asked
+    of two places in the list whether those two cells are to be tried at
+    all (a judge that knows two cells cannot have come together leaves
+    them be)."""
     boxed = []
-    for c in cells:
+    for k, c in enumerate(cells):
         xs = [v[0] for v in c.verts]
         ys = [v[1] for v in c.verts]
         zs = [v[2] for v in c.verts]
         if xs:
             boxed.append((min(xs), max(xs), min(ys), max(ys), min(zs),
-                          max(zs), c))
+                          max(zs), k))
     boxed.sort(key=lambda box: box[0])         # along x, to try few pairs
     out = []
     for i, (_ax0, ax1, ay0, ay1, az0, az1, a) in enumerate(boxed):
@@ -140,9 +150,11 @@ def clashes(cells, eps: float = JUDGE) -> List[Tuple[float, tuple, tuple]]:
             if (by0 >= ay1 - eps or ay0 >= by1 - eps
                     or bz0 >= az1 - eps or az0 >= bz1 - eps):
                 continue
-            d = depth(a, b)
+            if pick is not None and not pick(a, b):
+                continue
+            d = depth(cells[a], cells[b])
             if d > eps:
-                out.append((d, a.tag, b.tag))
+                out.append((d, a, b))
     out.sort(key=lambda found: -found[0])
     return out
 

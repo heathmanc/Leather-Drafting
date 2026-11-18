@@ -1606,6 +1606,7 @@ def test_a_stack_of_one_piece_is_what_the_preview_shows_today(qapp):
     from leathercad_app.preview3d import fold_lines, foldables
     for doc in (_wallet(), _drawing(*hemmed_pocket()),
                 _drawing(*bifold_wallet())):
+        asm.take_off(doc, doc.shapes)        # the bifold arrives put together
         today, = [f for f in foldables(doc) if f.kind == "piece"]
         sh = asm.shape_by_id(doc, today.key)
         asm.put_on(doc, sh)
@@ -1703,7 +1704,10 @@ def test_a_fold_folds_the_other_way_when_the_main_piece_lies_mirrored():
     def spine():
         main = asm.stacks(doc)[0].main
         return main.folds[0].direction, main.grain_up, main.mirrored
-    assert by["Spine fold"].fold_dir == "front"
+    # the generated spine folds to the back, to close with the grain outside
+    assert by["Spine fold"].fold_dir == "back"
+    assert spine() == (-1, True, False)
+    by["Spine fold"].fold_dir = "front"
     assert spine() == (1, True, False)
     asm.turn_over(doc, shell)                # flesh up: the drawn side down
     assert spine() == (-1, False, True)

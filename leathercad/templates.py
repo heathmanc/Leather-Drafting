@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 
+from . import assembly
 from .document import Document
 from .geometry import Vec2
 from .shapes import (Rectangle, Circle, PathShape, EditablePath, Edge,
@@ -16,24 +17,45 @@ from .shapes import (Rectangle, Circle, PathShape, EditablePath, Edge,
 from .stitchline import StitchLine
 from .stitchsettings import StitchSettings
 
+# the thickness (mm) the pieces of the two card holders arrive with: a
+# leather to start from, changed in Properties to the one in hand
+CARD_HOLDER_T = 1.2
+
+
+def _put_together(doc: Document, back, on, thickness: float) -> None:
+    """A template's pieces arrive put together as they are drawn
+    (``leathercad.assembly``): ``back`` at the bottom, the stack's main
+    piece, and the pieces ``on`` it in the order given, each where it is
+    drawn against the back piece and each ``thickness`` mm of leather.
+    The back piece is then turned over: it lies grain down, its grain the
+    outside of the finished thing."""
+    stack = assembly.put_on(doc, back, thickness=thickness)
+    for piece in on:
+        assembly.put_on(doc, piece, stack, thickness=thickness)
+    # last: nothing comes in as drawn on a main piece that lies turned over
+    assembly.turn_over(doc, back)
+
 
 def card_holder() -> Document:
-    """Tutorial 1: a 105x70 back panel with a 45 mm pocket, flush bottoms."""
+    """Tutorial 1: a 105x70 back panel with a 45 mm pocket, flush bottoms.
+    It arrives put together: the pocket on the back panel, 1.2 mm each."""
     doc = Document("Card holder")
-    doc.add_shape(Rectangle(
+    back = doc.add_shape(Rectangle(
         name="Back panel", width=105, height=70, corner_radius=6,
         transform=Transform(x=0, y=0),
         stitch=StitchSettings(pitch_mm=3.85, inset=3.5), layer="Cut"))
     # pocket bottom sits flush with the back panel's bottom (y = -35)
-    doc.add_shape(Rectangle(
+    pocket = doc.add_shape(Rectangle(
         name="Pocket", width=105, height=45, corner_radius=6,
         transform=Transform(x=0, y=-12.5),
         stitch=StitchSettings(enabled=False), layer="Cut"))
+    _put_together(doc, back, [pocket], CARD_HOLDER_T)
     return doc
 
 
 def belt() -> Document:
-    """A 1050x38 strap with rounded ends, buckle slot, fold line and 5 holes."""
+    """A 1050x38 strap with rounded ends, buckle slot, fold line and 5
+    holes."""
     doc = Document("Belt")
     doc.add_shape(Rectangle(
         name="Strap", width=1050, height=38, corner_radius=19,
@@ -87,22 +109,29 @@ def slim_card_holder() -> Document:
     NOT a closed loop -- so the top stays open for the cards. The pockets
     share the back's width, so that one seam passes through every layer and
     holds the whole stack together.
+
+    It arrives put together as drawn: the back panel at the bottom, the
+    three pockets on it from the tallest, 1.2 mm each.
     """
     doc = Document("Slim card holder")
-    W, r = 70.0, 5.0                    # card 54 wide + 8 each side; soft corners
-    BACK_H = 92.0                       # card 86 tall + a little; flat top
+    W, r = 70.0, 5.0                # card 54 wide + 8 each side; soft corners
+    BACK_H = 92.0                   # card 86 tall + a little; flat top
     disabled = lambda: StitchSettings(enabled=False)
 
-    doc.add_shape(Rectangle(name="Back panel", width=W, height=BACK_H,
-                            corner_radius=r, transform=Transform(x=0, y=BACK_H / 2),
-                            stitch=disabled(), layer="Cut"))
+    back = doc.add_shape(Rectangle(
+        name="Back panel", width=W, height=BACK_H, corner_radius=r,
+        transform=Transform(x=0, y=BACK_H / 2), stitch=disabled(),
+        layer="Cut"))
     # three deep pockets, tallest (back-most) first, small 8 mm steps
+    pockets = []
     for name, h in (("Card pocket (back)", 84.0),
                     ("Card pocket (middle)", 76.0),
                     ("Card pocket (front)", 68.0)):
-        doc.add_shape(Rectangle(name=name, width=W, height=h, corner_radius=r,
-                                transform=Transform(x=0, y=h / 2),
-                                stitch=disabled(), layer="Cut"))
+        pockets.append(doc.add_shape(Rectangle(
+            name=name, width=W, height=h, corner_radius=r,
+            transform=Transform(x=0, y=h / 2), stitch=disabled(),
+            layer="Cut")))
+    _put_together(doc, back, pockets, CARD_HOLDER_T)
 
     # perimeter saddle stitch: a U down the sides and across the bottom,
     # 3.5 mm in; the top edge is left open so cards slide in.
@@ -124,8 +153,8 @@ def fold_over_wallet() -> Document:
     219 x 290 mm, that folds into a ~70 x 100 mm vertical flap wallet.
 
     NOTE: kept only as a multi-fold TEST FIXTURE (a scored single piece with
-    non-parallel creases) -- it is deliberately NOT in ``TEMPLATES``, so it does
-    not appear in File → New from template.
+    non-parallel creases) -- it is deliberately NOT in ``TEMPLATES``, so it
+    does not appear in File → New from template.
 
     The T, drawn flat:
 
@@ -163,7 +192,8 @@ def fold_over_wallet() -> Document:
     r_tip, sh_y, apex_y = 12.0, 264.0, 290.0
     vy = apex_y
     for _ in range(60):
-        vy = apex_y + r_tip / (abs(CR - MID) / math.hypot(CR - MID, sh_y - vy)) - r_tip
+        vy = apex_y + r_tip / (
+            abs(CR - MID) / math.hypot(CR - MID, sh_y - vy)) - r_tip
     tdx, tdy = CR - MID, sh_y - vy             # vertex -> right shoulder
     tL = math.hypot(tdx, tdy)
     tt = r_tip * abs(tdy) / abs(tdx)           # tangent dist from the vertex
@@ -238,9 +268,9 @@ def fold_over_wallet() -> Document:
     #     each other (x_right = x_left + 2*(CR - CL));
     #   * the pouch-mouth TOP seam -- the left wing top folds down onto the
     #     stationary middle-section top row.
-    T0, T1 = 82.0, 142.0                               # shared folded span
-    lw0, lw1 = 2 * CL - T1, 2 * CL - T0                # left wing rows: 14..74
-    rb0, rb1 = 2 * CR - T1, 2 * CR - T0                # right wing bottom: 154..214
+    T0, T1 = 82.0, 142.0                         # shared folded span
+    lw0, lw1 = 2 * CL - T1, 2 * CL - T0          # left wing rows: 14..74
+    rb0, rb1 = 2 * CR - T1, 2 * CR - T0          # right wing bottom: 154..214
     runs = [
         ("Top seam (left wing)", [Vec2(lw0, 86), Vec2(lw1, 86)]),
         ("Top seam (middle)", [Vec2(T0, 86), Vec2(T1, 86)]),

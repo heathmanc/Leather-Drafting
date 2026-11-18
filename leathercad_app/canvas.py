@@ -2632,6 +2632,13 @@ class Canvas(QGraphicsView):
         a_fold = menu.addAction("Unmark fold line" if is_fold
                                 else "Mark as fold line")
         a_fold.setEnabled(line_like)
+        # the leather the chosen pieces are cut from: what the 3D assembly
+        # preview stacks and folds them as thick as
+        leather = self._leather_items(shapes)
+        a_thick = menu.addAction("Leather thickness…")
+        a_thick.setEnabled(bool(leather))
+        a_thick.setToolTip("How thick the leather of a closed piece is, for "
+                           "the 3D assembly preview")
         # which edge of a stitched piece was right-clicked: sew it or not
         edge_item, edge_idx, edge_on = None, None, True
         edge_tip = ""
@@ -2711,6 +2718,18 @@ class Canvas(QGraphicsView):
                 self.offset_selected(dist)
         elif chosen is a_fold:
             self.toggle_fold_line(shapes[0])
+        elif chosen is a_thick:
+            from .prompts import ask_length
+            cur = float(getattr(leather[0].model, "thickness", 0.0) or 0.0)
+            what = ("this piece's leather is" if len(leather) == 1 else
+                    f"the leather of these {len(leather)} pieces is")
+            t, ok = ask_length(
+                self, "Leather thickness", "Thickness", cur, 0.0, 12.0, 2,
+                hint=f"How thick {what}: the 3D assembly preview stacks and "
+                     "folds a piece at its thickness. 0 = not set: the "
+                     "preview gives it one when the piece is put on a stack.")
+            if ok:
+                self.set_thickness(leather, t)
         elif chosen is a_edge:
             self.toggle_stitch_edge(edge_item, edge_idx)
         elif chosen is a_alledges:
@@ -6115,6 +6134,31 @@ class Canvas(QGraphicsView):
             if isinstance(it, ShapeItem):
                 it.model.keepout = max(0.0, float(radius))
                 it.sync_from_model()
+        self.documentChangedSig.emit()
+        self._emit_commit()
+
+    def _leather_items(self, items) -> list:
+        """Those of ``items`` that are pieces of leather: closed outlines
+        on a cut layer, which have a thickness."""
+        from leathercad.assembly import is_outline
+        return [it for it in items if isinstance(it, ShapeItem)
+                and is_outline(self.doc, it.model)]
+
+    def set_thickness(self, items, thickness: float) -> None:
+        """Give the selected pieces of leather a thickness of ``thickness``
+        mm, as one undo step (0 takes it off: not set). A fold line, a slit
+        or anything else that is no closed outline on a cut layer is passed
+        over. The thinnest leather it takes is the 3D preview's own, 0.2
+        mm, and the thickest 12 mm, as in Properties."""
+        t = min(12.0, max(0.0, float(thickness)))
+        if 0.0 < t < 0.2:
+            t = 0.2
+        pieces = self._leather_items(items)
+        if not pieces:
+            return
+        for it in pieces:
+            it.model.thickness = t
+        self.selectionChangedSig.emit()     # Properties shows it at once
         self.documentChangedSig.emit()
         self._emit_commit()
 

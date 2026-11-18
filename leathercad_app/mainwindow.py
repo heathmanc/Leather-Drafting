@@ -1333,7 +1333,9 @@ class MainWindow(QMainWindow):
         hint = QLabel("Generates every piece of a stepped card-pocket stack "
                       "(wallet interior), sized so cards clear the side "
                       "seams. Pieces land bottom-aligned in a row — arrange "
-                      "or nest them afterwards.")
+                      "or nest them afterwards. They arrive put together for "
+                      "the 3D assembly preview: the pockets on their backing, "
+                      "the tallest first.")
         hint.setWordWrap(True)
         lay.addWidget(hint)
         form = QFormLayout()
@@ -1356,12 +1358,17 @@ class MainWindow(QMainWindow):
                       "How deep a card sits in the front pocket")
         allow = _spin("genCardAllow", 7.0, 3, 30,
                       "Seam/stitch margin each side (card must clear it)")
+        thick = _spin("genCardThickness", 0.8, 0.2, 12,
+                      "How thick the leather of the pockets and their "
+                      "backing is: each piece keeps it for the 3D assembly "
+                      "preview")
         form.addRow("Card width", cw)
         form.addRow("Card height", ch)
         form.addRow("Pockets", n)
         form.addRow("Reveal step", reveal)
         form.addRow("Pocket depth", depth)
         form.addRow("Side allowance", allow)
+        form.addRow("Leather thickness", thick)
         lay.addLayout(form)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                               | QDialogButtonBox.StandardButton.Cancel)
@@ -1374,12 +1381,14 @@ class MainWindow(QMainWindow):
                          ("genCardCount", n.value()),
                          ("genCardReveal", reveal.value()),
                          ("genCardDepth", depth.value()),
-                         ("genCardAllow", allow.value())):
+                         ("genCardAllow", allow.value()),
+                         ("genCardThickness", thick.value())):
             s.setValue(key, val)
         pieces = card_pocket_stack(card_w=cw.value(), card_h=ch.value(),
                                    count=n.value(), reveal=reveal.value(),
                                    depth=depth.value(),
-                                   allowance=allow.value())
+                                   allowance=allow.value(),
+                                   thickness=thick.value())
         self.canvas.insert_generated(shapes=pieces)
 
     def _gen_zipper(self):
@@ -1567,18 +1576,33 @@ class MainWindow(QMainWindow):
             "Bifold wallet",
             "Every piece of a classic bifold: outer shell with its spine fold, "
             "a bill-pocket liner, and a stepped card-pocket stack for each "
-            "side, laid out in a row.",
+            "side, laid out in a row. They arrive put together for the 3D "
+            "assembly preview, each piece with its leather thickness: the "
+            "liner on the shell, the pockets on each half of it.",
             [("bf_cw", "Card width", "mm", 85.6, (20, 200), "Bank card: 85.6"),
              ("bf_ch", "Card height", "mm", 54.0, (20, 200), "Bank card: 54"),
              ("bf_n", "Card pockets per side", "int", 3, (1, 8), ""),
              ("bf_reveal", "Reveal step", "mm", 10.0, (4, 40), ""),
              ("bf_margin", "Side margin", "mm", 6.0, (3, 30), ""),
              ("bf_r", "Corner radius", "mm", 6.0, (0, 30), ""),
-             ("bf_bill", "Bill pocket height", "mm", 90.0, (60, 150), "")])
+             ("bf_bill", "Bill pocket height", "mm", 90.0, (60, 150), ""),
+             ("bf_shell_t", "Shell leather", "mm", 1.6, (0.2, 12),
+              "How thick the outer shell's leather is"),
+             ("bf_inner_t", "Lining and pocket leather", "mm", 0.8, (0.2, 12),
+              "How thick the leather of the liner, the pocket backings and "
+              "the pockets is"),
+             ("bf_fit", "Make room for the fold", "bool", False, None,
+              "Size the wallet for this leather: the shell wider by what its "
+              "fold takes round the pockets, the liner shorter by what the "
+              "inside of the bend takes, the pockets ending at the edge of "
+              "the bend. Off: the shell is two panels and 4 mm, whatever the "
+              "leather.")])
         if v:
             self.canvas.insert_generated(shapes=bifold_wallet(
                 v["bf_cw"], v["bf_ch"], v["bf_n"], v["bf_reveal"],
-                v["bf_margin"], v["bf_r"], v["bf_bill"]))
+                v["bf_margin"], v["bf_r"], v["bf_bill"],
+                shell_t=v["bf_shell_t"], inner_t=v["bf_inner_t"],
+                fit=v["bf_fit"]))
 
     def _gen_key_tab(self):
         from leathercad.generators import key_tab

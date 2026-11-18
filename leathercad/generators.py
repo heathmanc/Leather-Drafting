@@ -4,6 +4,10 @@ straps and belts, gussets, a bifold wallet, key tabs and hemmed pockets.
 These produce correctly-sized, named pieces from a few real-world numbers
 (card size, zip gauge) -- the sizing arithmetic is the tedious, error-prone
 part of drafting wallet interiors, so the program does it.
+
+The pieces of a card-pocket stack and of a bifold wallet arrive put
+together (``leathercad.assembly``): on the drawing they lie apart in a row,
+ready to cut, and each knows where it lies in the finished thing.
 """
 
 from __future__ import annotations
@@ -11,6 +15,8 @@ from __future__ import annotations
 import math
 from typing import List, Tuple
 
+from . import assembly
+from .document import Document
 from .geometry import Vec2
 from .shapes import (Circle, EditablePath, Edge, PathShape, Rectangle,
                      Transform, _next_id)
@@ -26,11 +32,46 @@ CARD_H = 54.0
 ZIP_WINDOW = {"#3": 6.0, "#5": 8.0, "#8": 10.0}
 
 
+# ---------------------------------------------------------------------------
+# pieces that arrive put together
+# ---------------------------------------------------------------------------
+def _bench(pieces) -> Document:
+    """A scratch drawing of generated pieces, to put them together on.
+
+    Where a piece lies in the finished thing is kept on the piece
+    (``Shape.placed``). It is set only through ``leathercad.assembly``, as
+    a window on the stack sets it and never by numbers made up here, so a
+    stack read back from the drawing is exactly the one generated. Assembly
+    places the pieces of a document: this one holds them while they are
+    placed, and is dropped."""
+    doc = Document()
+    doc.shapes = list(pieces)
+    return doc
+
+
+def _lay_on(doc: Document, piece, stack: str, side: str) -> None:
+    """Put a generated piece on top of the pile of ``stack``, level with
+    the bottom of the stack's main piece and with its ``side`` ("left",
+    "centre" or "right"). It is held by those edges, so it stays level
+    with them when either piece is made another size."""
+    assembly.put_on(doc, piece, stack, as_drawn=False)
+    assembly.line_up(doc, piece, side)
+    assembly.line_up(doc, piece, "bottom")
+
+
+def _cut_from(pieces, thickness: float) -> None:
+    """Keep on each piece the thickness (mm) of the leather it is cut
+    from; 0 leaves it not given."""
+    if thickness > 0.0:
+        for p in pieces:
+            p.thickness = float(thickness)
+
+
 def card_pocket_stack(card_w: float = CARD_W, card_h: float = CARD_H,
                       count: int = 4, reveal: float = 12.0,
                       depth: float = 38.0, ease: float = 2.0,
-                      allowance: float = 7.0,
-                      gap: float = 15.0) -> List[Rectangle]:
+                      allowance: float = 7.0, gap: float = 15.0,
+                      thickness: float = 0.0) -> List[Rectangle]:
     """Pieces for a stepped card-pocket stack (a wallet interior).
 
     Every pocket is wide enough that a card slides between the side seams:
@@ -40,7 +81,29 @@ def card_pocket_stack(card_w: float = CARD_W, card_h: float = CARD_H,
     The backing panel is tall enough that a card in the LAST pocket still
     hides its bottom and shows its top. Pieces are laid out in a row,
     bottom-aligned, ``gap`` mm apart, ready to arrange or nest.
+
+    They arrive put together, as one stack: the backing at the bottom, its
+    main piece, and the pockets on it from the tallest to pocket 1, the
+    front one, on top -- each centred on the backing, its bottom level
+    with the backing's. ``thickness`` is the leather they are all cut
+    from, in mm; 0 leaves it not given.
     """
+    pieces = _pocket_row(card_w, card_h, count, reveal, depth, ease,
+                         allowance, gap)
+    _cut_from(pieces, thickness)
+    doc = _bench(pieces)
+    stack = assembly.put_on(doc, pieces[-1])        # the backing
+    for p in pieces[-2::-1]:                        # the tallest pocket first
+        _lay_on(doc, p, stack, "centre")
+    return pieces
+
+
+def _pocket_row(card_w: float, card_h: float, count: int, reveal: float,
+                depth: float, ease: float, allowance: float,
+                gap: float) -> List[Rectangle]:
+    """The pieces of a card-pocket stack in a row, sized as
+    ``card_pocket_stack`` says: the pockets from the front one, then the
+    backing. In no stack yet."""
     count = max(1, int(count))
     w = card_w + 2.0 * ease + 2.0 * allowance
     pieces: List[Rectangle] = []
@@ -167,7 +230,8 @@ def strap(length: float = 1050.0, width: float = 38.0, tip: str = "round",
           stitched: bool = False, pitch_mm: float = 3.85) -> List:
     """A strap / belt: outline with the chosen tip, an optional buckle-tongue
     slot and turn-back fold line at the buckle end, and a ladder of sizing
-    holes from the tip. Centred on the origin; everything grouped."""
+    holes from the tip. Centred on the origin; everything grouped. The
+    turn-back folds to the back, round the buckle with the grain outside."""
     pieces: List = []
     body = _strap_outline(length, width, tip, buckle_end)
     body.name = "Strap"
@@ -183,12 +247,12 @@ def strap(length: float = 1050.0, width: float = 38.0, tip: str = "round",
         pieces.append(s)
     if fold_from_end > 0:
         pieces.append(_fold_line("Buckle fold", fold_from_end, -width / 2.0,
-                                 fold_from_end, width / 2.0, 180.0))
+                                 fold_from_end, width / 2.0, 180.0, "back"))
     for i in range(max(0, int(holes))):
         x = length - hole_from_tip - i * hole_spacing
         if oval_holes:
-            h = Rectangle(name=f"Hole {i + 1}", width=hole_d * 1.8, height=hole_d,
-                          corner_radius=hole_d / 2.0,
+            h = Rectangle(name=f"Hole {i + 1}", width=hole_d * 1.8,
+                          height=hole_d, corner_radius=hole_d / 2.0,
                           transform=Transform(x=x, y=0.0), layer="Cut")
         else:
             h = Circle(name=f"Hole {i + 1}", rx=hole_d / 2.0, ry=hole_d / 2.0,
@@ -245,7 +309,8 @@ def curved_gusset(bag_w: float = 200.0, bag_h: float = 150.0,
              x0 + length - (bag_h - r)]
     for i, x in enumerate(marks):
         m = PathShape(name=f"Curve {'start' if i % 2 == 0 else 'end'}",
-                      points=[Vec2(x, -depth / 2.0), Vec2(x, -depth / 2.0 + 4.0)],
+                      points=[Vec2(x, -depth / 2.0),
+                              Vec2(x, -depth / 2.0 + 4.0)],
                       close_path=False, transform=Transform(), layer="Score")
         m.shape_id = _next_id("shape")
         out.append(m)
@@ -256,13 +321,42 @@ def bifold_wallet(card_w: float = CARD_W, card_h: float = CARD_H,
                   pockets_per_side: int = 3, reveal: float = 10.0,
                   margin: float = 6.0, corner_r: float = 6.0,
                   bill_h: float = 90.0, pitch_mm: float = 3.85,
-                  seam: float = 3.5) -> List:
+                  seam: float = 3.5, shell_t: float = 0.0,
+                  inner_t: float = 0.0, fit: bool = False) -> List:
     """The pieces of a classic bifold: an outer shell (two panels wide, a
-    centre fold line), a bill-pocket liner the same size, and a stepped
-    card-pocket stack for each side. Laid out in a row, grouped per piece."""
+    centre fold line), a bill-pocket liner, and a stepped card-pocket stack
+    for each side. Laid out in a row.
+
+    They arrive put together, as one stack that folds along the shell's
+    spine: the shell at the bottom, grain down, its main piece; the liner
+    on it, centred, their bottoms level; then for each half a pocket
+    backing and its pockets from the tallest to the front one, level with
+    the shell's bottom and with its outer end. The spine folds to the
+    back, so the wallet closes over its pockets with the grain outside.
+    ``shell_t`` is the thickness (mm) of the shell's leather, ``inner_t``
+    that of the liner and of every pocket piece; 0 leaves it not given.
+
+    The shell is the two panels and 4 mm of ease across the spine, and the
+    liner as wide, whatever the leather. ``fit`` makes room for the fold
+    in the leather given (it takes both thicknesses; without them the
+    sizes stay as they are). Each half carries the liner, a backing and
+    its pockets, ``pile = inner_t * (pockets + 2)`` of leather, and the
+    shell closes flat over both piles: it bends at that radius, and the
+    bend takes ``spine = pi * (pile + shell_t / 2)`` of it. The shell is
+    then two panels and that spine wide, so the pockets end on the edge of
+    the bend; and the liner, which goes round the inside of the bend, is
+    cut ``pi * (shell_t + inner_t) / 2`` shorter, to lie smooth in the
+    fold and come level with the shell when the wallet is shut."""
     panel_w = card_w + 2.0 * margin
-    shell_w = 2.0 * panel_w + 4.0            # a little ease across the spine
-    shell_h = max(bill_h, card_h + (pockets_per_side - 1) * reveal + 2 * margin)
+    spine = 4.0                              # a little ease across the spine
+    inside = 0.0                             # what the liner is cut shorter
+    if fit and shell_t > 0.0 and inner_t > 0.0:
+        pile = inner_t * (max(1, int(pockets_per_side)) + 2)
+        spine = math.pi * (pile + shell_t / 2.0)
+        inside = math.pi * (shell_t + inner_t) / 2.0
+    shell_w = 2.0 * panel_w + spine
+    shell_h = max(bill_h,
+                  card_h + (pockets_per_side - 1) * reveal + 2 * margin)
     out: List = []
     shell = Rectangle(name="Outer shell", width=shell_w, height=shell_h,
                       corner_radius=corner_r, transform=Transform(),
@@ -270,9 +364,9 @@ def bifold_wallet(card_w: float = CARD_W, card_h: float = CARD_H,
                       stitch=StitchSettings(pitch_mm=pitch_mm, inset=seam))
     shell.shape_id = _next_id("shape")
     out.append(shell)
-    out.append(_fold_line("Spine fold", 0.0, -shell_h / 2.0, 0.0, shell_h / 2.0,
-                          180.0))
-    liner = Rectangle(name="Bill pocket liner", width=shell_w,
+    out.append(_fold_line("Spine fold", 0.0, -shell_h / 2.0, 0.0,
+                          shell_h / 2.0, 180.0, "back"))
+    liner = Rectangle(name="Bill pocket liner", width=shell_w - inside,
                       height=shell_h - 2.0, corner_radius=corner_r,
                       transform=Transform(x=0.0, y=-(shell_h + 20.0)),
                       layer="Cut", stitch=StitchSettings(enabled=False))
@@ -280,16 +374,26 @@ def bifold_wallet(card_w: float = CARD_W, card_h: float = CARD_H,
     out.append(liner)
     depth = max(25.0, card_h - 2.0 * reveal)
     x = shell_w / 2.0 + 30.0
+    halves = []
     for side in ("Left", "Right"):
-        stack = card_pocket_stack(card_w, card_h, count=pockets_per_side,
-                                  reveal=reveal, depth=depth, ease=1.0,
-                                  allowance=margin - 1.0, gap=10.0)
-        for p in stack:
+        row = _pocket_row(card_w, card_h, pockets_per_side, reveal, depth,
+                          1.0, margin - 1.0, 10.0)
+        for p in row:
             p.name = f"{side} {p.name.lower()}"
             p.transform.x += x
             p.transform.y -= shell_h / 2.0
             out.append(p)
-        x += sum(p.width for p in stack) + 10.0 * len(stack) + 20.0
+        x += sum(p.width for p in row) + 10.0 * len(row) + 20.0
+        halves.append((side.lower(), row))
+    _cut_from([shell], shell_t)
+    _cut_from([liner] + [p for _side, row in halves for p in row], inner_t)
+    doc = _bench(out)
+    stack = assembly.put_on(doc, shell)
+    assembly.turn_over(doc, shell)       # its grain is the wallet's outside
+    _lay_on(doc, liner, stack, "centre")
+    for side, row in halves:
+        for p in row[-1:] + row[-2::-1]:     # a backing, its pockets on it
+            _lay_on(doc, p, stack, side)     # from the tallest
     return out
 
 
@@ -298,8 +402,9 @@ def key_tab(width: float = 20.0, length: float = 80.0, ring_slot: float = 0.0,
             tip: str = "round") -> List:
     """A fold-over key tab: a strap that folds in half round a split ring,
     with a rivet (or Chicago screw) hole through both ends and a fold line
-    at the middle. ``ring_slot`` > 0 cuts a slot at the fold for a wider
-    ring or a D-ring tab."""
+    at the middle, which folds to the back: the tab closes with its grain
+    outside. ``ring_slot`` > 0 cuts a slot at the fold for a wider ring or
+    a D-ring tab."""
     out: List = []
     body = _strap_outline(length, width, tip, "round" if tip == "round"
                           else "square")
@@ -308,7 +413,7 @@ def key_tab(width: float = 20.0, length: float = 80.0, ring_slot: float = 0.0,
     body.stitch = StitchSettings(enabled=False)
     out.append(body)
     out.append(_fold_line("Ring fold", length / 2.0, -width / 2.0,
-                          length / 2.0, width / 2.0, 180.0))
+                          length / 2.0, width / 2.0, 180.0, "back"))
     for x in (rivet_from_end, length - rivet_from_end):
         h = Circle(name="Rivet hole", rx=rivet_hole / 2.0, ry=rivet_hole / 2.0,
                    transform=Transform(x=x, y=0.0), layer="Cut")
@@ -325,8 +430,8 @@ def key_tab(width: float = 20.0, length: float = 80.0, ring_slot: float = 0.0,
     return out
 
 
-def hemmed_pocket(width: float = 100.0, height: float = 60.0, hem: float = 12.0,
-                  corner_r: float = 5.0, seam: float = 3.5,
+def hemmed_pocket(width: float = 100.0, height: float = 60.0,
+                  hem: float = 12.0, corner_r: float = 5.0, seam: float = 3.5,
                   pitch_mm: float = 3.85, thickness: float = 1.5) -> List:
     """A pocket whose top edge is folded over (a hem / edge turn): the piece
     is cut ``hem`` taller plus the fold's bend allowance, with a fold line
@@ -344,7 +449,8 @@ def hemmed_pocket(width: float = 100.0, height: float = 60.0, hem: float = 12.0,
     # the top straight (and its two corner arcs) is the folded mouth: unsewn
     flags = []
     for seg in body.local_path().segments:
-        top = min(seg.start().y, seg.end().y) >= total_h / 2.0 - corner_r - 1e-6
+        top = (min(seg.start().y, seg.end().y)
+               >= total_h / 2.0 - corner_r - 1e-6)
         flags.append(not top)
     body.stitch_edges = flags if len(flags) == n else None
     y_fold = total_h / 2.0 - hem - extra / 2.0

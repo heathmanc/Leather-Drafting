@@ -729,6 +729,23 @@ def _on(dlg, name, x, y):
     return (x, y, -(0.8 + s.hi + dlg.view.apart * s.rank))
 
 
+def _pick_coloured(dlg) -> int:
+    """How many pixels of the picture are the colour a chosen piece is
+    marked with."""
+    view = dlg.view
+    view.repaint()
+    img = view.grab().toImage()
+    c = view.look.pick
+    pick = (c.red(), c.green(), c.blue())
+    n = 0
+    for y in range(img.height()):
+        for x in range(img.width()):
+            p = img.pixelColor(x, y)
+            if math.dist((p.red(), p.green(), p.blue()), pick) < 12:
+                n += 1
+    return n
+
+
 def _click(dlg, point, mods=Qt.NoModifier):
     _colour, (x, y) = _seen(dlg, point)
     QTest.mouseClick(dlg.view, Qt.LeftButton, mods, QPoint(int(x), int(y)))
@@ -748,11 +765,10 @@ def test_clicking_a_piece_chooses_its_row_and_a_fold_line_brings_folds(
             and [i.row() for i in dlg.pieces.pieces.selectionModel()
                  .selectedRows()] == [5]
         assert dlg.tabs.currentWidget() is dlg.pieces
-        # it is lit in the picture, and the thickness shown is its own
+        # it is lit in the picture -- the pick colour runs round it,
+        # whatever its leather -- and the thickness shown is its own
         assert dlg.view.chosen == (4,) and dlg.spin_t.value() == 0.8
-        lit, _at = _seen(dlg, _on(dlg, "Left pocket 2", 50.0, -6.0))
-        plain, _at = _seen(dlg, _on(dlg, "Left pocket 3", 50.0, 4.0))
-        assert lit[2] < plain[2] - 15             # washed yellow: less blue
+        assert _pick_coloured(dlg) > 40
         # what can be done to it is there to be done
         panel = dlg.pieces
         assert panel.btn_higher.isEnabled() and panel.btn_over.isEnabled()
@@ -775,9 +791,10 @@ def test_clicking_a_piece_chooses_its_row_and_a_fold_line_brings_folds(
         assert dlg.view.chosen == (0,) and dlg.spin_t.value() == 1.6
         assert not panel.spin_x.isEnabled()       # it is what they go by
         assert not panel.btn_under.isEnabled()
-        # a click on nothing chooses none
+        # a click on nothing chooses none, and nothing is lit
         QTest.mouseClick(dlg.view, Qt.LeftButton, Qt.NoModifier, QPoint(4, 4))
         assert dlg.pieces.chosen_keys() == [] and dlg.view.chosen == ()
+        assert _pick_coloured(dlg) == 0
         assert not panel.btn_higher.isEnabled()
         # the fold line shows on the liner between the two pocket stacks:
         # a click on it is for the fold, and brings its tab forward

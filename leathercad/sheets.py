@@ -42,6 +42,7 @@ HAIR = 0.05
 _SMOOTH = 0.03      # how closely (mm) a sheet's curved outline is followed
 _BUSY = 260         # ... unless it would still have more corners than this
 _GROW = 1e-9        # leather (mm) that thinning an outline may add: rounding
+_ROOM = 4.0         # a panel's number wants this much (mm) clear of an edge
 # where a sheet's grain is laid from when its outline has no first edge
 _SQUARE = ((0.0, 0.0), (1.0, 0.0), (0.0, 1.0))
 
@@ -582,19 +583,49 @@ def _to_ring(p: Pt, ring: Sequence[Pt]) -> float:
     return best
 
 
+def _on_edge(p: Pt, ring: Sequence[Pt], tol: float = HAIR) -> bool:
+    """Whether a point is within ``tol`` mm of an outline."""
+    px, py = p
+    x0, y0 = ring[-1]
+    for x1, y1 in ring:
+        if not ((px < x0 - tol and px < x1 - tol)
+                or (px > x0 + tol and px > x1 + tol)
+                or (py < y0 - tol and py < y1 - tol)
+                or (py > y0 + tol and py > y1 + tol)):
+            dx, dy = x1 - x0, y1 - y0
+            ll = dx * dx + dy * dy
+            t = 0.0 if ll < 1e-18 else max(0.0, min(1.0, (
+                (px - x0) * dx + (py - y0) * dy) / ll))
+            ex, ey = px - x0 - t * dx, py - y0 - t * dy
+            if ex * ex + ey * ey <= tol * tol:
+                return True
+        x0, y0 = x1, y1
+    return False
+
+
 def _past(parts, ground, tol: float = 0.01):
     """How far a piece stands past the edge of another, both in convex
     parts: ``(how far, the point of it furthest from the other's
     leather)``, or ``(0.0, None)`` for a piece wholly on the other.
 
-    What of the piece has nothing of the other under it is gone through
-    in convex bits. A bit is furthest from one convex part of the other
-    piece at one of its corners; so its corners give the answer wherever
-    one part is the nearest to all of the bit, and it is cut smaller only
-    where they do not -- over a notch or an inside corner of the other
-    piece, where the furthest point may be along an edge of the bit or
-    inside it -- until the answer is within ``tol`` mm."""
+    From a convex piece nothing is further than a corner: if the other
+    piece is convex, the corners of this one give the answer. If it is
+    not, what of this piece has nothing of the other under it is gone
+    through in convex bits. A bit is furthest from one convex part of the
+    other piece at one of its corners; so its corners give the answer
+    wherever one part is the nearest to all of the bit, and it is cut
+    smaller only where they do not -- over a notch or an inside corner of
+    the other piece, where the furthest point may be along an edge of the
+    bit or inside it -- until the answer is within ``tol`` mm."""
     best, at = LAP, None
+    if len(ground) == 1:
+        for part in parts:
+            for q in part:
+                if not pc.inside_convex(q, ground[0], 0.0):
+                    d = _to_ring(q, ground[0])
+                    if d > best:
+                        best, at = d, q
+        return (best, at) if at is not None else (0.0, None)
     todo: list = []                    # (how far it could be, ..., a bit)
     seen = 0
 
@@ -898,9 +929,9 @@ def laid_check(layers, tol: float = 0.75, near: float = 4.0) -> LaidCheck:
                                and box[1] <= p[1] <= box[3]):
             return False
         ring = layers[i].ring
-        if not pc.inside(p, ring) or _to_ring(p, ring) <= HAIR:
+        if not pc.inside(p, ring) or _on_edge(p, ring):
             return False
-        return not any(pc.inside(p, c) or _to_ring(p, c) <= HAIR
+        return not any(pc.inside(p, c) or _on_edge(p, c)
                        for c in layers[i].cutouts)
 
     link: Dict[int, int] = {}                  # holes that meet, in stacks
@@ -1100,6 +1131,17 @@ class FlatStack:
             self.holes += s.holes
             self.hole_sheet += [k] * len(s.holes)
         self._cells = self._cut()
+        # where each panel's number is written, on the front and on the
+        # back: the layout's own spot, moved clear of the edges of the
+        # pieces that lie on that face
+        self._spots = []
+        for panel in self.panels:
+            both = []
+            for side in (1, -1):
+                rings = [s.ring for s in self.sheets
+                         if s.side == side and s.parts]
+                both.append(_roomy(panel, rings) if rings else panel.spot)
+            self._spots.append(tuple(both))
 
     def __getattr__(self, name):
         # whatever else is asked of the stack is its layout's own
@@ -1329,16 +1371,18 @@ class FlatStack:
         """Where to write each panel's number, as ``Layout.panel_marks``
         gives it -- but on the outermost leather there, with one thing
         more at the end of each: ``(piece, piece)``, the pieces the spot
-        on the front and the spot on the back are on."""
+        on the front and the spot on the back are on. On a face with
+        pieces on it the spot is moved, if it has to be, to where the
+        number is clear of their edges: it is written on one piece, not
+        across the edge of one on to the next."""
         if not self.sheets:
             return self.layout.panel_marks(fractions)
         out = []
-        for front, _back, nn in self.layout.panel_marks(
-                [0.0] * len(self.folds)):
-            spot = front[:2]
-            zf, kf = self._outermost(1, spot, apart)
-            zb, kb = self._outermost(-1, spot, apart)
-            out.append((spot + (zf,), spot + (zb,), nn, (kf, kb)))
+        flat = self.layout.panel_marks([0.0] * len(self.folds))
+        for (_front, _back, nn), (front, back) in zip(flat, self._spots):
+            zf, kf = self._outermost(1, front, apart)
+            zb, kb = self._outermost(-1, back, apart)
+            out.append((front + (zf,), back + (zb,), nn, (kf, kb)))
         return out
 
     def bounds3(self, fractions: Sequence[float], apart: float = 0.0):
@@ -1384,6 +1428,41 @@ class FlatStack:
                     if c is not None:
                         rings.setdefault(c.index, []).append((x, y, dia))
         return check
+
+
+def _roomy(panel, rings) -> Pt:
+    """A place for a panel's number: the panel's own spot if no edge of
+    the pieces whose outlines are ``rings``, nor the panel's own, is
+    within ``_ROOM`` mm of it; else the nearest place on the panel, of
+    those a few mm apart round the spot, that is so clear -- or failing
+    any, the one that is clearest."""
+    rings = [(pc.bounds(ring), ring) for ring in rings + [panel.pts]]
+
+    def room(q):
+        best = math.inf
+        for (x0, y0, x1, y1), ring in rings:
+            if x0 - _ROOM < q[0] < x1 + _ROOM \
+                    and y0 - _ROOM < q[1] < y1 + _ROOM:
+                best = min(best, _to_ring(q, ring))
+        return best
+
+    at = panel.spot
+    most = room(at)
+    if most >= _ROOM:
+        return at
+    x, y = at
+    for step in range(1, 41):
+        for dx, dy in ((0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, 1),
+                       (1, -1), (-1, -1)):
+            q = (x + dx * step, y + dy * step)
+            if not _in(q, panel.parts):
+                continue
+            here = room(q)
+            if here >= _ROOM:
+                return q
+            if here > most:
+                most, at = here, q
+    return at
 
 
 def _cell_at(cells, x: float, y: float):

@@ -1011,8 +1011,27 @@ def test_fold_lines_and_panel_numbers_sit_on_the_outermost_leather():
     one, two = stack.panel_marks([0.0])
     assert one[3] == (0, 7) and two[3] == (0, 3)
     assert _near(one[0][2], 0.8) and _near(one[1][2], -(0.8 + 2.4))
-    assert one[0][:2] == one[1][:2] == stack.panels[0].spot
     assert one[2] == (0.0, 0.0, 1.0)
+    # On the shell's own face, which nothing lies on, it is where the
+    # layout puts it. On the other face that spot is 1 mm from the edge
+    # of pocket 2: there the number is moved 3 mm up, on to pocket 3
+    # alone, 4 mm from the nearest edge of any piece
+    x, y = stack.panels[0].spot
+    assert y == 0.0 and one[0][:2] == (x, y) and one[1][:2] == (x, 3.0)
+    assert two[0][:2] == stack.panels[1].spot and two[1][1] == 3.0
+
+    def room(q):
+        return min(sh._to_ring(q, s.ring) for s in stack.sheets)
+
+    assert _near(room((x, y)), 1.0)
+    assert _near(room(one[1][:2]), 4.0) and _near(room(two[1][:2]), 4.0)
+    # a panel too small for that keeps the clearest place there is
+    lay = fs.fold_piece(MAIN, [fs.FoldLine((6, 0), (6, 100), 90, 1)])
+    stack = sh.FlatStack(lay, [sh.Sheet(_rect(1, 10, 190, 90), 1.0)], MAIN)
+    strip, body = stack.panel_marks([0.0])
+    assert strip[0][:2] == lay.panels[0].spot == (3.0, 50.0)
+    assert body[0][:2] == lay.panels[1].spot
+    assert body[0][0] > 90 and body[3] == (1, 0)
 
 
 def test_holes_cutouts_and_lines_of_a_sheet_ride_on_its_faces():

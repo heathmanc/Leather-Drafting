@@ -21,6 +21,7 @@ import math
 from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from . import clash
 from . import polycut as pc
 from .bsp import BACK, DOTS, FRONT, INNER, LINE, POLY, WALL, Cell, Face, \
     plane_of
@@ -36,6 +37,10 @@ _SHARP = 0.02                   # a bend narrower than this (mm) is a crease
 _REACH = 0.02                   # leather this far (mm) into a bend is let be
 _TOUCH = 0.05                   # ... and this far into other leather, not said
 _LAP = 0.3                      # layers this far (mm) over each other lie flat
+# A face of a bend this near (mm) the line the bend goes round is a crease:
+# it is laid on that line itself, every rung of it, so that a bend with no
+# inside radius has no face there at all, not one made of rounding.
+_CREASE = 1e-7
 _FLAT_FRAME: Frame = ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
                       (0.0, 0.0, 1.0))
 
@@ -44,6 +49,9 @@ _FLAT_FRAME: Frame = ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
 # mark on a panel that is not a hole of its own: where the hole that one of
 # its holes should have met comes down on it)
 MEETS, OFF, LONE, LANDS = 1, 2, 3, 4
+# ... and, on a stack, where a hole of another piece comes through this one,
+# which has no hole there (the same mark as ``sheets.BLANK``)
+_BLANK = 5
 
 
 @dataclass
@@ -183,11 +191,20 @@ class _Found:
 
 class _Cell2:
     """A convex bit of the pattern: part of a flat panel, or one strip of a
-    bend (``hinge`` set, with each corner's place along and across it)."""
+    bend (``hinge`` set, with each corner's place along and across it).
+
+    A cell of a piece laid on the main piece (a sheet of a stack) rides
+    on the panel or the bend it is cut from: ``sheet`` is its number in
+    the stack (0 for the main piece itself), ``low`` and ``high`` how far
+    its two faces are out of the main piece's middle, along the normal
+    out of its front (None for the main piece: half its thickness each
+    way), ``kinds`` which face of its leather each of those is, and
+    ``frame`` where its grain is laid from on the pattern."""
 
     __slots__ = ("pts", "flags", "panel", "hinge", "strip", "place", "area",
                  "box", "edges", "edges_rev", "sides", "tag", "dots",
-                 "polys", "lines", "turns", "index")
+                 "polys", "lines", "turns", "index", "sheet", "low", "high",
+                 "kinds", "frame")
 
     def __init__(self, pts, flags, panel):
         self.pts = pts
@@ -203,6 +220,10 @@ class _Cell2:
         self.lines = []           # (kind, p, q)
         self.turns = []           # (edge, hinge index, strip) -- see below
         self.index = -1           # its place in the layout's list of cells
+        self.sheet = 0
+        self.low = self.high = None
+        self.kinds = (FRONT, BACK)
+        self.frame = None
 
 
 # -- small vector helpers (tuples) --------------------------------------------
@@ -494,7 +515,8 @@ class Layout:
                  numbered: bool = False,
                  moved: Optional[Sequence[float]] = None, held=(),
                  fixed=(), least: Sequence[float] = (),
-                 bare: bool = False):
+                 bare: bool = False, sheets=(), outline=None,
+                 settled: Optional[list] = None):
         # ``numbered``: the regions come in the order to number the panels
         # in (else they are numbered by where they lie, left to right).
         # The rest are ``fold_piece``'s, which cuts a piece again to move
@@ -504,8 +526,10 @@ class Layout:
         # ``least``, a radius each fold is to have at least; ``bare``,
         # what to shorten is worked out later, and the holes, cut-outs
         # and marks put on (see ``_advise``, ``_dress``). With ``moved``
-        # None the folds stay on the lines given.
+        # None the folds stay on the lines given. ``settled``: the notes
+        # of ``sheets.settle`` when the sheets have been laid already.
         self.folds = list(folds)
+        self.sheets = list(sheets)
         self.lines = list(lines)
         self.thickness = max(0.05, float(thickness))
         self.base_radius = max(0.0, float(radius))
@@ -542,8 +566,11 @@ class Layout:
         self.cutouts: List[List[Pt]] = []
         self.marks: List[tuple] = []
         self._build_tree()
-        self._settle_radii()
-        self._build_cells()
+        if self.sheets:
+            self._stack(outline, settled)
+        else:
+            self._settle_radii()
+            self._build_cells()
         self._check_spacing()
         self._check_inside()
         if not bare:
@@ -571,6 +598,69 @@ class Layout:
         number."""
         label = str(self.folds[fold].label or fold + 1)
         return label.replace("{", "{{").replace("}", "}}")
+
+    # -- a stack of pieces ----------------------------------------------------
+
+    def _stack(self, outline, settled):
+        """Lay the sheets of a stack on the main piece and fold them with
+        it.
+
+        The sheets are laid down flat first (``sheets.settle``, unless
+        ``settled`` has its notes), then cut along the main piece's fold
+        lines as this layout has them and each part given the panel it
+        rides on (``sheets.seat``). Then, round and round: the radius of
+        each fold (``_settle_radii``, which gives room for the bodies of
+        leather that come together: ``sheets.bodies``), the main piece's
+        cells, and the sheets' (``sheets.cut``) -- again while what bends
+        inside a fold asks for more radius than it has (``sheets.ride``),
+        or leather goes over to another panel at the end of a hinge, as a
+        wider bend can make it. Eight rounds at the most: the band only
+        grows."""
+        from . import sheets as sh
+        # the main piece's own name, shape id and leather, and the side of
+        # its leather it is drawn from (1 its grain side, -1 its flesh
+        # side), as ``sheets.FlatStack`` has them: for the caller to set
+        self.name, self.key, self.leather, self.grain = "", "", "", 1
+        self.outline = model_outline(outline) \
+            if outline is not None and len(outline) >= 3 \
+            else sh.outline_of(self)
+        self.notes = list(settled) if settled is not None \
+            else sh.settle(self.outline, self.thickness, self.sheets)
+        self._regions = sh.seat(self)
+        self._floor: Dict[int, tuple] = {}
+        for _round in range(8):
+            self._bodies = sh.bodies(self)
+            self._settle_radii()
+            self._build_cells()
+            moved = sh.cut(self)
+            if not sh.ride(self) and not moved:
+                break
+        # (where what rides inside a bend asks for all the radius it has,
+        # and is in the bend at the radius asked for, that is why it has
+        # it -- whatever else asks for as much)
+        t = self.thickness
+        for fi, (floor, who) in self._floor.items():
+            f = self.folds[fi]
+            asked = f.radius if f.radius >= 0.0 else self.base_radius
+            half = 0.25 * math.radians(min(f.angle, 180.0)) * (asked + t)
+            if floor > 0.0 and floor >= self.radius[fi] - 1e-9 and any(
+                    sh._in_band(self._regions[who[0] - 1], h, half, h.k0,
+                                h.k1)
+                    for h in self.tree if h.fold == fi):
+                self.why[fi] = ("ride",) + who
+
+    def sheet(self, piece: int):
+        """The sheet a piece's number stands for: ``sheets[piece - 1]``,
+        and None for the main piece (0) or a number no piece has."""
+        if 0 < piece <= len(self.sheets):
+            return self.sheets[piece - 1]
+        return None
+
+    @property
+    def layout(self) -> "Layout":
+        """The main piece's layout: this one (as ``sheets.FlatStack``
+        has it, for a caller that takes either)."""
+        return self
 
     # -- the folding tree -----------------------------------------------------
 
@@ -701,8 +791,19 @@ class Layout:
         by_fold: Dict[int, List[Hinge]] = {}
         for h in self.tree:
             by_fold.setdefault(h.fold, []).append(h)
+        # With a stack: why each fold bends as it does, as (the rule, the
+        # piece, the other piece) -- see ``why``
+        stack = bool(self.sheets)
+        self.why: List[Optional[tuple]] = [None] * n
         for fi in sorted((i for i in range(n) if self.steps[i]),
                          key=lambda i: (self.steps[i], i)):
+            if stack and fi in by_fold:
+                # what rides inside the bend: no less than its pile
+                floor, who = self._floor.get(fi, (0.0, ()))
+                if floor > self.radius[fi]:
+                    self.wrap[fi] += floor - self.radius[fi]
+                    self.radius[fi] = floor
+                    self.why[fi] = ("ride",) + who
             if theta[fi] >= _FLAT and fi in by_fold:
                 for _round in range(24):
                     angles = list(done)
@@ -710,12 +811,23 @@ class Layout:
                     widths = [theta[k] * (self.radius[k] + 0.5 * t)
                               for k in range(n)]
                     fr = self.frames(None, widths, angles)
-                    need = max(self._clearance(h, fr, widths, angles)
-                               for h in by_fold[fi])
+                    need, who = max(((self._clearance(h, fr, widths, angles),
+                                      self._who) for h in by_fold[fi]),
+                                    key=lambda got: got[0])
                     if need <= 1e-6:
                         break
                     self.radius[fi] += 0.5 * need
                     self.wrap[fi] += 0.5 * need
+                    if stack:
+                        self.why[fi] = ("meet",) + who
+            elif stack and fi in by_fold and theta[fi] > 1e-9:
+                from . import sheets as sh
+                least, who = sh.corner_room(self, by_fold[fi], theta[fi],
+                                            self.radius[fi])
+                if least > self.radius[fi] + 1e-12:
+                    self.wrap[fi] += least - self.radius[fi]
+                    self.radius[fi] = least
+                    self.why[fi] = ("corner",) + who
             done[fi] = theta[fi]
         self.used = [theta[k] * (self.radius[k] + 0.5 * t) for k in range(n)]
         for k in range(n):
@@ -725,6 +837,82 @@ class Layout:
     def _clearance(self, h: Hinge, frames: List[Frame],
                    widths: Sequence[float], angles: Sequence[float]
                    ) -> float:
+        """How much further out what this hinge carries must lie to clear
+        the leather it has come down on: the main piece's own panels
+        (``_clear_panels``) and, on a stack, every body of leather
+        (``_clear_bodies``). ``_who`` is left with the two pieces that
+        asked for the most (0 for the main piece)."""
+        need = self._clear_panels(h, frames, widths, angles)
+        self._who = (0, 0)
+        if self.sheets:
+            need = self._clear_bodies(h, frames, need)
+        return need
+
+    def _clear_bodies(self, h: Hinge, frames: List[Frame], need: float
+                      ) -> float:
+        """How much further out the bodies of leather this hinge carries
+        must lie to clear those it has come down on, if that is more than
+        ``need`` already.
+
+        A body is a panel of the main piece, or one sheet's part on one
+        panel, with its footprint and the two heights it lies between
+        (``sheets.bodies``). What is carried comes to rest on top of what
+        it lands on: a carried body is clear of a still one only when it
+        ends above it, and where the two overlap by any real amount
+        (``sheets.LAP``) it must rise by as much as they share in
+        height. Two bare panels are left to ``_clear_panels``, which keeps
+        the released rule and its 0.3 mm."""
+        from . import sheets as sh
+        o, ex, ey, n = frames[h.parent]
+        s = float(self.folds[h.fold].direction)
+        d = (s * n[0], s * n[1], s * n[2])
+        e1 = _mix(h.e[0], ex, h.e[1], ey)
+        cc = _mix(-h.e[1], ex, h.e[0], ey)
+        seen: Dict[int, Optional[tuple]] = {}
+
+        def foot(b):
+            if b not in seen:
+                panel, parts, low, high, _k = self._bodies[b]
+                fr = frames[panel]
+                if abs(_dot(fr[3], n)) < 0.985:
+                    seen[b] = None
+                else:
+                    flat = [pc.ccw([(_dot(q, e1), _dot(q, cc))
+                                    for q in (place(fr, p) for p in part)])
+                            for part in parts]
+                    q = place(fr, self.panels[panel].pts[0])
+                    height = (q[0] - o[0]) * d[0] + (q[1] - o[1]) * d[1] \
+                        + (q[2] - o[2]) * d[2]
+                    way = 1.0 if _dot(fr[3], d) > 0.0 else -1.0
+                    a, b2 = height + way * low, height + way * high
+                    seen[b] = (flat, min(a, b2), max(a, b2),
+                               [pc.bounds(f) for f in flat])
+            return seen[b]
+
+        for m, body in enumerate(self._bodies):
+            if body[0] not in h.moves or foot(m) is None:
+                continue
+            fm = foot(m)
+            for g, other in enumerate(self._bodies):
+                if other[0] in h.moves or body[4] == 0 == other[4]:
+                    continue
+                fg = foot(g)
+                if fg is None or fm[1] >= fg[2] - 1e-6:
+                    continue                   # (it ends above: clear)
+                lift = fg[2] - fm[1]
+                if lift <= need:
+                    continue
+                if any(ba[0] < bb[2] and bb[0] < ba[2] and ba[1] < bb[3]
+                       and bb[1] < ba[3] and pc.convex_overlap(A, B, sh.LAP)
+                       for A, ba in zip(fm[0], fm[3])
+                       for B, bb in zip(fg[0], fg[3])):
+                    need = lift
+                    self._who = (body[4], other[4])
+        return need
+
+    def _clear_panels(self, h: Hinge, frames: List[Frame],
+                      widths: Sequence[float], angles: Sequence[float]
+                      ) -> float:
         """How much further out the panels this hinge carries must lie to
         clear the leather they have come down on.
 
@@ -965,69 +1153,17 @@ class Layout:
                 c.place = [_strip_place(p, h, w, step, j) for p in cp]
                 cells.append(c)
         cells = [c for c in cells if c.area > 1e-9 and len(c.pts) >= 3]
-        t = self.thickness
+        _sides(cells, self.thickness, self._sharp)
         for c in cells:
-            n = len(c.pts)
-            c.edges = tuple(f == pc.OUTLINE for f in c.flags)
-            c.edges_rev = tuple(c.edges[(n - 2 - k) % n] for k in range(n))
-            sharp = [(round(p[0], 6), round(p[1], 6)) in self._sharp
-                     for p in c.pts]
-            c.sides = []
-            for k in range(n):
-                j = (k + 1) % n
-                p, q = c.pts[k], c.pts[j]
-                dx, dy = q[0] - p[0], q[1] - p[1]
-                ln = math.hypot(dx, dy) or 1e-12
-                wall = c.flags[k] == pc.OUTLINE
-                c.sides.append((dy / ln, -dx / ln, ln * t,
-                                WALL if wall else INNER,
-                                (True, sharp[j], True, sharp[k]) if wall
-                                else None))
             c.tag = ("panel", c.panel) if c.hinge is None \
                 else ("bend", self.tree[c.hinge].fold)
         self.cells = cells
         by_panel: Dict[int, List[_Cell2]] = {}
-        bends: Dict[int, List[_Cell2]] = {}
         self._by_panel = by_panel
         for k, c in enumerate(cells):
             c.index = k
             by_panel.setdefault(c.panel, []).append(c)
-            if c.hinge is not None:
-                bends.setdefault(c.panel, []).append(c)
-        # Where the leather goes on round a bend from a cell: the edges
-        # along the lines the strips of a bend meet at, each with the strip
-        # across it (-1 and the number of strips stand for the flat panel
-        # before the first and after the last). The view wants these: such
-        # an edge is the rim of what shows when the next strip has turned
-        # out of sight.
-        for c in cells:
-            n = len(c.pts)
-            if c.hinge is not None:
-                for k in range(n):
-                    if c.flags[k] == pc.OUTLINE:
-                        continue
-                    t0, t1 = c.place[k][1], c.place[(k + 1) % n][1]
-                    if t0 <= 1e-9 and t1 <= 1e-9:
-                        c.turns.append((k, c.hinge, c.strip - 1))
-                    elif t0 >= 1.0 - 1e-9 and t1 >= 1.0 - 1e-9:
-                        c.turns.append((k, c.hinge, c.strip + 1))
-                continue
-            near = bends.get(c.panel)
-            if not near:
-                continue
-            for k in range(n):
-                if c.flags[k] == pc.OUTLINE:
-                    continue
-                p, q = c.pts[k], c.pts[(k + 1) % n]
-                wx, wy = c.sides[k][0], c.sides[k][1]
-                x = 0.5 * (p[0] + q[0]) + 2e-4 * wx    # just across the edge
-                y = 0.5 * (p[1] + q[1]) + 2e-4 * wy
-                for s in near:
-                    b = s.box
-                    if (b[0] <= x <= b[2] and b[1] <= y <= b[3]
-                            and pc.inside_convex((x, y), s.pts, 0.0)):
-                        c.turns.append((k, s.hinge, s.strip))
-                        break
+        _turns(cells)
         self.hole_panel: List[int] = []
         self.hole_flat: List[bool] = []
 
@@ -1038,6 +1174,7 @@ class Layout:
         they can form.)"""
         cells, by_panel = self.cells, self._by_panel
         self.holes = [tuple(h) for h in holes]
+        self.hole_sheet = [0] * len(self.holes)
         self.cutouts = [pc.ccw([tuple(p) for p in c]) for c in cutouts]
         self.marks = [(kind, [tuple(p) for p in pts]) for kind, pts in marks]
         # stitch holes go on the cell they are in
@@ -1088,6 +1225,15 @@ class Layout:
                     bit = pc.clip_segment_to_convex(p, q, c.pts)
                     if bit is not None and math.dist(*bit) > 1e-6:
                         c.lines.append((kind, bit[0], bit[1]))
+        if self.sheets:
+            # the sheets' own holes (numbered on from the main piece's),
+            # cut-outs and marks; then what there is to tell of the stack
+            # folded, and what the judge finds at each whole step
+            from . import sheets as sh
+            self._own_holes = len(self.holes)
+            sh.dress(self)
+            self.notes += sh.fold_notes(self)
+            self.notes += sh.judge(self)
 
     def _check_spacing(self):
         """Warn of folds too close together for the bends they need."""
@@ -1319,7 +1465,14 @@ class Layout:
         off its line, or has leather left in its bend -- by trying it
         (``_tried``) on ``drawn``, the same piece with every fold on its
         line. What comes right goes into ``shift_trim``, or on to the end
-        of the fold's warning; of what does not, nothing is said."""
+        of the fold's warning; of what does not, nothing is said.
+
+        A stack says nothing of the kind: the pieces laid on the main
+        piece would not be shortened with it, and what it would come to
+        is not known."""
+        if self.sheets:
+            self._asks = []
+            return
         for fi, warning, named in self._asks:
             trim = self._tried(drawn, fi)
             if warning is None:
@@ -1527,12 +1680,27 @@ class Layout:
         Nor does a panel the fold runs along elsewhere and now closes
         over (where folds cross): the fold line cuts it, wherever the
         line is, and no move brings that clear -- it is found, and kept
-        apart."""
+        apart.
+
+        On a stack, what rides on a panel folded in earlier is leather
+        folded in earlier as well, the part of it standing past the main
+        piece's edge included; what rides on the fold's own two panels
+        bends with it and never moves it (and what rides on a panel the
+        fold runs along is said of the stack as a whole: see
+        ``sheets.fold_notes``)."""
         f = self.folds[fi]
         t = self.thickness
         w = self.used[fi]
         rho = w / math.radians(min(f.angle, 180.0))
         r = rho - 0.5 * t
+        if self.sheets:
+            # (what rides round the inside of the bend takes that much of
+            # its round)
+            r -= max((self.sheets[c.sheet - 1].hi
+                      for c in self.sheet_cells if c.hinge is not None
+                      and self.tree[c.hinge].fold == fi
+                      and self.sheets[c.sheet - 1].side == f.direction),
+                     default=0.0)
         s = float(f.direction)
         frames = self.frames(made)
         arcs = self._arcs(frames, made)
@@ -1581,12 +1749,13 @@ class Layout:
                         - 0.5 * w)
             got = []
             clear: Dict[int, bool] = {}
-            for c in self.cells:
+            for c in self.cells + (self.sheet_cells if self.sheets else []):
                 p = c.panel
-                if p in (h.parent, h.child) or p not in away:
+                if p in (h.parent, h.child) or p not in away \
+                        or c.sheet and p in along:
                     continue
                 carried = p in h.moves
-                if c.hinge is None:
+                if c.hinge is None and not c.sheet:
                     # (a panel that lies flat with the fold's two, in
                     # the sheet of one of them or beyond: none of it is
                     # between them, and there is no more to work out)
@@ -1718,9 +1887,15 @@ class Layout:
         if c.hinge is None:
             fr = frames[c.panel]
             ht = 0.5 * self.thickness
+            if c.low is not None:
+                return ([place(fr, p, c.high) for p in c.pts],
+                        [place(fr, p, c.low) for p in c.pts])
             return ([place(fr, p, ht) for p in c.pts],
                     [place(fr, p, -ht) for p in c.pts])
-        e1, tops, bots = arcs[c.hinge][:3]
+        arc = arcs[c.hinge]
+        if c.low is not None:
+            arc = _ride(arc, c.low, c.high)
+        e1, tops, bots = arc[:3]
         j = c.strip
         return tuple([_strip_point(q, p0, p1, e1) for q in c.place]
                      for p0, p1 in ((tops[j], tops[j + 1]),
@@ -1773,50 +1948,77 @@ class Layout:
         return (room, what) if what else (0.0, "")
 
     def _landing(self, drawn: "Layout"):
-        """Warn where a fold that has moved brings what it carries down
-        in other leather. A flap ended short of a wall, a lip came down
-        just past a folded edge: with a fold further along the piece
-        they may no longer. Only what the piece folded on its lines --
-        ``drawn`` -- does not have as deep is the fold's doing (its own
-        bend apart, and any with leather left in it: ``_check_inside``
-        has seen to those)."""
+        """Warn where a fold that has moved puts leather into other
+        leather. A flap ended short of a wall, a lip came down just past
+        a folded edge: with a fold further along the piece they may no
+        longer -- nor may the moved fold's own bend, or the panel it has
+        moved on to, clear a panel stood up beside the folded edge.
+
+        At each whole step from the first at which a moved fold is made,
+        every cell of the piece is set against every other (the judge of
+        ``clash``, boxes first), and what the piece folded on its lines
+        -- ``drawn`` -- does not have as deep at that step is the moves'
+        doing. The bends with leather left in them are left out: that is
+        said already (``_check_inside``). Each is laid at the door of
+        the first moved fold whose hinge has one of the two on either
+        side, else of the first fold that moved."""
         def name(tag):
             return f"panel {self.panels[tag[1]].number}" \
                 if tag[0] == "panel" else f"fold {self._name(tag[1])}"
 
-        # the deepest of each two panels or bends: (mm, the fold)
-        found: Dict[tuple, Tuple[float, int]] = {}
-        model = _Folded(self)
-        for h in self.tree:
-            if not self.shift[h.fold]:
-                continue
-            stays, comes = [], []
-            for k, c in enumerate(self.cells):
-                g = self.tree[c.hinge] if c.hinge is not None else None
-                if g is None or g is not h and not self.stuck[g.fold]:
-                    (comes if c.panel in h.moves else stays).append(k)
-            for i in comes:
-                for j in stays:
-                    deep = model.into(i, j)
-                    # (panels before folds: the same two are named the
-                    # same way whichever of them the fold carries)
-                    pair = tuple(sorted(
-                        (self.cells[i].tag, self.cells[j].tag),
-                        key=lambda tag: (tag[0] != "panel", tag[1])))
-                    if deep > found.get(pair, (_TOUCH, 0))[0]:
-                        found[pair] = (deep, h.fold)
+        def panels(tag):
+            if tag[0] == "panel":
+                return {tag[1]}
+            return {p for h in self._by_fold.get(tag[1], ())
+                    for p in (h.parent, h.child)}
+
+        moved = sorted((k for k, mm in enumerate(self.shift) if mm),
+                       key=lambda k: (self.steps[k], k))
+        if not moved:
+            return
+
+        def blame(ta, tb):
+            a, b = panels(ta), panels(tb)
+            for k in moved:
+                for h in self._by_fold.get(k, ()):
+                    if (a <= h.moves and not b & h.moves
+                            or b <= h.moves and not a & h.moves):
+                        return k
+            return moved[0]
+
+        def pose(lay, step):
+            made = [1.0 if s and s <= step else 0.0 for s in lay.steps]
+            return [c for c in lay.solid(made)
+                    if not (c.tag[0] == "bend" and self.stuck[c.tag[1]])]
+
+        # the deepest of each two panels or bends, at each whole step
+        # (panels before folds: the same two are named the same way
+        # whichever comes first)
+        found: Dict[tuple, float] = {}
+        for step in range(self.steps[moved[0]], self.n_steps + 1):
+            for deep, ta, tb in clash.clashes(pose(self, step), _TOUCH):
+                if ta == tb:
+                    continue
+                pair = (step,) + tuple(sorted(
+                    (ta, tb), key=lambda tag: (tag[0] != "panel", tag[1])))
+                found[pair] = max(deep, found.get(pair, 0.0))
         if not found:
             return
-        model = _Folded(drawn)
-        by_tag: Dict[tuple, List[int]] = {}
-        for k, c in enumerate(drawn.cells):
-            by_tag.setdefault(c.tag, []).append(k)
+        # ... and the same two, folded on their lines
+        posed: Dict[int, list] = {}
         new: Dict[int, list] = {}
-        for (ta, tb), (deep, fold) in found.items():
-            if not any(model.into(i, j) >= deep - _TOUCH
-                       for i in by_tag.get(ta, ())
-                       for j in by_tag.get(tb, ())):
-                new.setdefault(fold, []).append((deep, name(ta), name(tb)))
+        worst: Dict[tuple, float] = {}
+        for (step, ta, tb), deep in found.items():
+            if step not in posed:
+                posed[step] = pose(drawn, step)
+            if any(clash.depth(a, b) >= deep - _TOUCH
+                   for a in posed[step] if a.tag == ta
+                   for b in posed[step] if b.tag == tb):
+                continue
+            worst[ta, tb] = max(deep, worst.get((ta, tb), 0.0))
+        for (ta, tb), deep in worst.items():
+            new.setdefault(blame(ta, tb), []).append(
+                (deep, name(ta), name(tb)))
         for fold in sorted(new):
             deep, one, other = max(new[fold])
             more = "" if len(new[fold]) == 1 \
@@ -1833,7 +2035,12 @@ class Layout:
         the front of the leather faces on each strip -- with the panel
         before the first strip and the one after the last at either end --
         and whether the strips are too narrow to see, on the front and on
-        the back (the inside of a bend with no radius is a crease)."""
+        the back (the inside of a bend with no radius is a crease). Then,
+        for what rides on the bend (``_rungs``): those lines on the middle
+        of the leather and the way it faces there, a point of the line the
+        bend goes round and how far that is from the middle (None and 0
+        for a bend lying flat), and the way it bends. A face that lies on
+        the line the bend goes round is laid on it exactly."""
         ht = 0.5 * self.thickness
         out = []
         for hi, h in enumerate(self.tree):
@@ -1852,7 +2059,7 @@ class Layout:
             cc = _mix(c2[0], ex, c2[1], ey)
             a0 = _lin(o, h.a[0] - 0.5 * w * c2[0], ex,
                       h.a[1] - 0.5 * w * c2[1], ey)
-            tops, bots = [], []
+            tops, bots, mids, nns = [], [], [], []
             M = 2 * m
             for j in range(M + 1):
                 if phi < 1e-9:
@@ -1866,10 +2073,19 @@ class Layout:
                     sn, cs = math.sin(al), math.cos(al)
                     mid = _lin(a0, rho * sn, cc, s * rho * (1.0 - cs), n)
                     nn = _mix(cs, n, -s * sn, cc)
+                mids.append(mid)
+                nns.append(nn)
                 tops.append((mid[0] + ht * nn[0], mid[1] + ht * nn[1],
                              mid[2] + ht * nn[2]))
                 bots.append((mid[0] - ht * nn[0], mid[1] - ht * nn[1],
                              mid[2] - ht * nn[2]))
+            axis, rho = None, 0.0
+            if phi >= 1e-9:
+                rho = w / phi
+                axis = _lin(a0, 0.0, cc, s * rho, n)
+                for lift, rungs in ((ht, tops), (-ht, bots)):
+                    if abs(rho - s * lift) < _CREASE:
+                        rungs[:] = [axis] * (M + 1)
             if phi < 1e-9:
                 faces = [n] * (M + 2)
             else:
@@ -1880,7 +2096,8 @@ class Layout:
                 faces.append(_mix(math.cos(phi), n, -s * math.sin(phi), cc))
             out.append((e1, tops, bots, faces,
                         math.dist(tops[0], tops[1]) < _SHARP,
-                        math.dist(bots[0], bots[1]) < _SHARP))
+                        math.dist(bots[0], bots[1]) < _SHARP,
+                        mids, nns, axis, rho, s))
         return out
 
     @staticmethod
@@ -1896,7 +2113,7 @@ class Layout:
         n = len(c.pts)
         front, back = list(c.edges), list(c.edges_rev)
         for k, hinge, strip in c.turns:
-            _e1, _tops, _bots, faces, no_top, no_bot = arcs[hinge]
+            _e1, _tops, _bots, faces, no_top, no_bot = arcs[hinge][:6]
             fn = bn = faces[strip + 1]
             if c.hinge is None and (no_top or no_bot):
                 far = faces[-1] if 2 * strip < len(faces) - 2 else faces[0]
@@ -1909,27 +2126,51 @@ class Layout:
         return tuple(front), tuple(back)
 
     def solid(self, fractions: Sequence[float],
-              check: Optional[Check] = None) -> List[Cell]:
+              check: Optional[Check] = None, apart: float = 0.0
+              ) -> List[Cell]:
         """The model with every fold ``fractions`` of its way round, as
         convex cells. With the ``check`` from ``lineup``, each stitch hole
-        carries what the check found for it (see ``_decals``)."""
+        carries what the check found for it (see ``_decals``).
+
+        A stack's sheets follow the main piece's own cells, each cut as it
+        rides on a panel or round a bend (``sheet_cells``), tagged
+        ``("panel", panel, sheet)`` and ``("bend", fold, sheet)``.
+        ``apart`` lifts each sheet that many mm for every layer of its
+        rank, away from the main piece, to show what lies on what: it is
+        for the stack lying flat."""
         frames = self.frames(fractions)
         arcs = self._arcs(frames, fractions)
-        cells = (self._cell(c, frames, arcs, check) for c in self.cells)
+        cells = [self._cell(c, frames, arcs, check) for c in self.cells]
+        if self.sheets:
+            rides: Dict[tuple, list] = {}
+            for c in self.sheet_cells:
+                s = self.sheets[c.sheet - 1]
+                off = s.side * apart * s.rank
+                lifts = (c.low + off, c.high + off)
+                if lifts not in rides:
+                    rides[lifts] = [_ride(arc, *lifts) for arc in arcs]
+                cells.append(self._cell(c, frames, rides[lifts], check,
+                                        lifts))
         return [cell for cell in cells if cell is not None]
 
     def _cell(self, c: _Cell2, frames: Sequence[Frame], arcs,
-              check: Optional[Check] = None) -> Optional[Cell]:
+              check: Optional[Check] = None, lifts=None) -> Optional[Cell]:
         """One bit of the pattern as a cell of the model (None for a
-        strip the bend has closed to nothing)."""
+        strip the bend has closed to nothing). A sheet's cell is given its
+        ``lifts`` -- where its two faces are, out of the main piece's
+        middle -- and the bends as they are at those (``_ride``)."""
         ht = 0.5 * self.thickness
+        lo, hi = (-ht, ht) if lifts is None else lifts
+        up_kind, down_kind = c.kinds
+        blanks = getattr(check, "blanks", None) if self.sheets else None
+        blank = blanks.get(c.index) if blanks else None
         if c.hinge is None:
             o, ex, ey, n = frames[c.panel]
             ax, ay, az = ex
             bx, by, bz = ey
             nx, ny, nz = n
-            tx, ty, tz = o[0] + ht * nx, o[1] + ht * ny, o[2] + ht * nz
-            ux, uy, uz = o[0] - ht * nx, o[1] - ht * ny, o[2] - ht * nz
+            tx, ty, tz = o[0] + hi * nx, o[1] + hi * ny, o[2] + hi * nz
+            ux, uy, uz = o[0] + lo * nx, o[1] + lo * ny, o[2] + lo * nz
             top = [(tx + x * ax + y * bx, ty + x * ay + y * by,
                     tz + x * az + y * bz) for x, y in c.pts]
             bot = [(ux + x * ax + y * bx, uy + x * ay + y * by,
@@ -1950,13 +2191,14 @@ class Layout:
             faces = [
                 Face(tuple(top), (nx, ny, nz,
                                   nx * pt[0] + ny * pt[1] + nz * pt[2]),
-                     FRONT, fe, _decals(c, up, check), c.tag, c.area,
-                     ((tx, ty, tz), ex, ey)),
+                     up_kind, fe, _decals(c, up, check, blank), c.tag,
+                     c.area,
+                     _reframe(((tx, ty, tz), ex, ey), c.frame)),
                 Face(tuple(bot[::-1]),
                      (-nx, -ny, -nz,
                       -(nx * pb[0] + ny * pb[1] + nz * pb[2])),
-                     BACK, be, _decals(c, down, check), c.tag,
-                     c.area, ((ux, uy, uz), ex, ey))]
+                     down_kind, be, _decals(c, down, check, blank), c.tag,
+                     c.area, _reframe(((ux, uy, uz), ex, ey), c.frame))]
             m = len(top)
             for k in range(m):
                 j = k + 1 if k + 1 < m else 0
@@ -1991,19 +2233,25 @@ class Layout:
 
         faces = []
         fe, be = self._edges(c, arcs)
-        pl = plane_of(top)
+        # (a face between two rungs that are one line, a crease, has no
+        # area: it is not asked for a plane)
+        pl = None if t0 == t1 else plane_of(top)
         if pl is not None:
-            faces.append(Face(tuple(top), pl, FRONT, fe,
-                              _decals(c, lambda p: up(at(p)), check),
+            faces.append(Face(tuple(top), pl, up_kind, fe,
+                              _decals(c, lambda p: up(at(p)), check,
+                                      blank),
                               c.tag, c.area,
-                              _strip_uv(h, w, step, j, t0, t1, e1)))
+                              _reframe(_strip_uv(h, w, step, j, t0, t1, e1),
+                                       c.frame)))
         rb = bot[::-1]
-        pl = plane_of(rb)
+        pl = None if b0 == b1 else plane_of(rb)
         if pl is not None:
-            faces.append(Face(tuple(rb), pl, BACK, be,
-                              _decals(c, lambda p: down(at(p)), check),
+            faces.append(Face(tuple(rb), pl, down_kind, be,
+                              _decals(c, lambda p: down(at(p)), check,
+                                      blank),
                               c.tag, c.area,
-                              _strip_uv(h, w, step, j, b0, b1, e1)))
+                              _reframe(_strip_uv(h, w, step, j, b0, b1, e1),
+                                       c.frame)))
         m = len(top)
         for k in range(m):
             jj = k + 1 if k + 1 < m else 0
@@ -2014,11 +2262,20 @@ class Layout:
 
     # -- marks for the view ---------------------------------------------------
 
-    def fold_marks(self, fractions: Sequence[float]):
+    def fold_marks(self, fractions: Sequence[float], apart: float = 0.0):
         """Each fold line as it lies on the model: ``{fold: [(p, q, p', q',
         n)]}`` with ``p``-``q`` on the front face of the leather, ``p'``-
         ``q'`` on the back and ``n`` the normal out of the front there, one
-        entry for every stretch of the fold (the middle of its bend)."""
+        entry for every stretch of the fold (the middle of its bend).
+
+        On a stack the line is drawn on the outermost leather over it, so
+        that a lining does not bury it: a stretch comes in as many lengths
+        as there are changes of what lies over it, each with one thing
+        more at its end, ``(piece, piece)``, the pieces its line on the
+        front and its line on the back are drawn on (``sheets``)."""
+        if self.sheets:
+            from . import sheets as sh
+            return sh.fold_marks(self, fractions, apart)
         frames = self.frames(fractions)
         ht = 0.5 * self.thickness
         out: Dict[int, list] = {}
@@ -2062,9 +2319,14 @@ class Layout:
             out.setdefault(h.fold, []).append(tuple(ends) + (nn,))
         return out
 
-    def panel_marks(self, fractions: Sequence[float]):
+    def panel_marks(self, fractions: Sequence[float], apart: float = 0.0):
         """For each panel: a point on its front face, one on its back, and
-        the normal out of the front -- where to write its number."""
+        the normal out of the front -- where to write its number. On a
+        stack, on the outermost leather there, with one thing more at the
+        end, ``(piece, piece)``, as ``fold_marks`` has it."""
+        if self.sheets:
+            from . import sheets as sh
+            return sh.panel_marks(self, fractions, apart)
         frames = self.frames(fractions)
         ht = 0.5 * self.thickness
         return [(place(frames[p.index], p.spot, ht),
@@ -2074,6 +2336,10 @@ class Layout:
     def extent(self) -> Tuple[P3, float]:
         """Centre and radius of a ball round the piece lying flat (it holds
         the piece at every stage of the folding, near enough)."""
+        if self.sheets:
+            lo, hi = self.bounds3([0.0] * len(self.folds))
+            return (tuple(0.5 * (a + b) for a, b in zip(lo, hi)),
+                    0.5 * math.dist(lo, hi))
         xs = [p[0] for panel in self.panels for p in panel.pts]
         ys = [p[1] for panel in self.panels for p in panel.pts]
         if not xs:
@@ -2083,8 +2349,15 @@ class Layout:
                                                max(ys) - min(ys)) \
             + self.thickness
 
-    def bounds3(self, fractions: Sequence[float]):
-        """The box round the model as it stands: ``(low corner, high)``."""
+    def bounds3(self, fractions: Sequence[float], apart: float = 0.0):
+        """The box round the model as it stands: ``(low corner, high)``.
+        On a stack, round every cell of it, the sheets lifted ``apart``
+        (see ``solid``)."""
+        if self.sheets:
+            pts = [v for c in self.solid(fractions, apart=apart)
+                   for v in c.verts]
+            return (tuple(min(p[k] for p in pts) for k in range(3)),
+                    tuple(max(p[k] for p in pts) for k in range(3)))
         frames = self.frames(fractions)
         ht = 0.5 * self.thickness
         lo = [1e30] * 3
@@ -2100,6 +2373,32 @@ class Layout:
                         if q[k] > hi[k]:
                             hi[k] = q[k]
         return tuple(lo), tuple(hi)
+
+    def clear_marks(self, fractions: Sequence[float]):
+        """Where each fold's bend begins, either side of its line: the
+        lines to keep the edges of what is laid on the piece clear of.
+        ``{fold: [(p, q, p', q', n, (a, b))]}``, one entry for each side of
+        every stretch, ``p``-``q`` on the front face of the main piece and
+        ``p'``-``q'`` on its back, ``n`` the normal out of its front and
+        ``a``-``b`` the line on the pattern. None for a fold with no
+        bend."""
+        frames = self.frames(fractions)
+        ht = 0.5 * self.thickness
+        out: Dict[int, list] = {}
+        for h in self.tree:
+            half = 0.5 * self.used[h.fold]
+            if half <= 0.0:
+                continue
+            c2 = (-h.e[1], h.e[0])
+            for panel, way in ((h.parent, -1.0), (h.child, 1.0)):
+                a, b = ((h.a[0] + k * h.e[0] + way * half * c2[0],
+                         h.a[1] + k * h.e[1] + way * half * c2[1])
+                        for k in (h.k0, h.k1))
+                fr = frames[panel]
+                out.setdefault(h.fold, []).append(
+                    (place(fr, a, ht), place(fr, b, ht), place(fr, a, -ht),
+                     place(fr, b, -ht), fr[3], (a, b)))
+        return out
 
     # -- do the stitch holes meet? --------------------------------------------
 
@@ -2119,7 +2418,13 @@ class Layout:
         through every layer -- since that is what a needle has to go
         through: ``OFF`` if any hole of the stack misses another, ``MEETS``
         if none does, ``LONE`` for a hole that meets nothing and misses
-        nothing. Returns a ``Check``."""
+        nothing. Returns a ``Check``.
+
+        A stack is checked through its layers instead
+        (``sheets.stack_check``): a ``sheets.LaidCheck``."""
+        if self.sheets:
+            from . import sheets as sh
+            return sh.stack_check(self, tol, near)
         t = self.thickness
         frames = self.frames([1.0] * len(self.folds))
         check = Check()
@@ -2324,6 +2629,49 @@ def _listed(numbers: Sequence[int]) -> str:
         else ", ".join(words[:-1]) + " and " + words[-1]
 
 
+def _rungs(arc, lift: float) -> List[P3]:
+    """The lines the strips of a bend meet at (as ``_arcs`` gives it),
+    ``lift`` mm out of the middle of the main piece's leather: where a
+    face of what rides on the bend lies, concentric with the main
+    piece's own at every moment. A face on the line the bend goes round
+    is laid on that line exactly."""
+    mids, nns, axis, rho, s = arc[6:11]
+    if axis is not None and abs(rho - s * lift) < _CREASE:
+        return [axis] * len(mids)
+    return [(m[0] + lift * v[0], m[1] + lift * v[1], m[2] + lift * v[2])
+            for m, v in zip(mids, nns)]
+
+
+def _ride(arc, low: float, high: float):
+    """A bend as ``_arcs`` gives it, as it is for what rides on it with
+    its two faces ``low`` and ``high`` mm out of the main piece's middle:
+    the same strips at the same angles, its faces moved along their
+    normals."""
+    if arc is None:
+        return None
+    tops, bots = _rungs(arc, high), _rungs(arc, low)
+    return (arc[0], tops, bots, arc[3],
+            math.dist(tops[0], tops[1]) < _SHARP,
+            math.dist(bots[0], bots[1]) < _SHARP) + tuple(arc[6:])
+
+
+def _reframe(uv, frame):
+    """Where the pattern lies on a face (``(o, u, v)``, as ``bsp.Face``
+    has it) made to go by a sheet's own grain instead: ``frame`` is the
+    point and the two ways its grain is laid from, on the pattern. As it
+    is for no frame."""
+    if frame is None or uv is None:
+        return uv
+    o, u, v = uv
+    (ox, oy), (ux, uy), (vx, vy) = frame
+    return ((o[0] + ox * u[0] + oy * v[0], o[1] + ox * u[1] + oy * v[1],
+             o[2] + ox * u[2] + oy * v[2]),
+            (ux * u[0] + uy * v[0], ux * u[1] + uy * v[1],
+             ux * u[2] + uy * v[2]),
+            (vx * u[0] + vy * v[0], vx * u[1] + vy * v[1],
+             vx * u[2] + vy * v[2]))
+
+
 def _strip_point(q: Tuple[float, float], p0: P3, p1: P3, e1: P3) -> P3:
     """Where a point of a bend's strip lies on one face of the leather:
     ``q`` is ``(how far along the fold, how far across the strip from 0
@@ -2368,10 +2716,18 @@ def _strip_uv(h: Hinge, w: float, step: float, j: int, p0: P3, p1: P3,
 
 
 def _cut_zone(flat: List[pc.Poly], h: Hinge, side: float, half: float,
-              m: int):
+              m: int, ends: Optional[Tuple[bool, bool]] = None):
     """Take the half of a bend that lies in one panel out of that panel's
     flat polygons: the band ``half`` mm deep along the hinge, in ``m``
-    strips. Returns ``(what stays flat, [(strip number, polygon)])``."""
+    strips. Returns ``(what stays flat, [(strip number, polygon)])``.
+
+    The main piece's own polygons are known by their edge along the
+    fold. A sheet riding on the panel (``ends`` given) is taken by where
+    its leather is: whatever of it lies in the band bends, whether it
+    reaches the fold line or not -- but nothing of it beyond the line,
+    which is the other panel's, and nothing past an end of the hinge
+    unless ``ends`` says the bend goes on there (``sheets.ends``: one
+    answer at each end for every layer)."""
     a, e = h.a, h.e
     c2 = (-e[1], e[0])
     fold = h.fold
@@ -2400,6 +2756,8 @@ def _cut_zone(flat: List[pc.Poly], h: Hinge, side: float, half: float,
 
     keep: List[pc.Poly] = []
     zone: List[pc.Poly] = []
+    if ends is not None:
+        return _cut_rider(flat, h, side, half, m, ends)
     for pts, flags in flat:
         if not on_hinge(pts, flags):
             keep.append((pts, flags))
@@ -2422,6 +2780,70 @@ def _cut_zone(flat: List[pc.Poly], h: Hinge, side: float, half: float,
                 (keep if sign * (along(c) - k_end) > 0.0
                  else trimmed).append(piece)
         zone = trimmed
+    return keep, _in_strips(zone, h, side, half, m)
+
+
+def _cut_rider(flat: List[pc.Poly], h: Hinge, side: float, half: float,
+               m: int, ends: Tuple[bool, bool]):
+    """``_cut_zone`` for a sheet riding on the panel: see there."""
+    a, e = h.a, h.e
+    c2 = (-e[1], e[0])
+
+    def along(p):
+        return (p[0] - a[0]) * e[0] + (p[1] - a[1]) * e[1]
+
+    def depth(p):
+        return side * ((p[1] - a[1]) * e[0] - (p[0] - a[0]) * e[1])
+
+    keep: List[pc.Poly] = []
+    zone: List[pc.Poly] = []
+    line = (a[0] + side * half * c2[0], a[1] + side * half * c2[1])
+    for pts, flags in flat:
+        if min(depth(p) for p in pts) >= half - 1e-9:
+            keep.append((pts, flags))
+            continue
+        for piece in pc.cut(pts, flags, line, e, None, pc.INNER):
+            (zone if depth(pc.centroid(piece[0])) < half
+             else keep).append(piece)
+    for go_on, (k_end, sign) in zip(ends, ((h.k0, -1.0), (h.k1, 1.0))):
+        if go_on:
+            continue
+        trimmed: List[pc.Poly] = []
+        origin = (a[0] + k_end * e[0], a[1] + k_end * e[1])
+        for pts, flags in zone:
+            if max(sign * (along(p) - k_end) for p in pts) <= 1e-6:
+                trimmed.append((pts, flags))
+                continue
+            for piece in pc.cut(pts, flags, origin, c2, None, pc.INNER):
+                (keep if sign * (along(pc.centroid(piece[0])) - k_end) > 0.0
+                 else trimmed).append(piece)
+        zone = trimmed
+    # nothing on the far side of the fold line bends on this side
+    near: List[pc.Poly] = []
+    for pts, flags in zone:
+        if min(depth(p) for p in pts) >= -1e-9:
+            near.append((pts, flags))
+            continue
+        for piece in pc.cut(pts, flags, a, e, None, pc.INNER):
+            (near if depth(pc.centroid(piece[0])) > 0.0
+             else keep).append(piece)
+    return keep, _in_strips(near, h, side, half, m)
+
+
+def _in_strips(zone: List[pc.Poly], h: Hinge, side: float, half: float,
+               m: int):
+    """What lies in the half of a bend on one side of the fold, cut in
+    ``m`` strips square to the way it bends: ``[(strip number, polygon)]``,
+    numbered across the whole bend from the parent's side."""
+    a, e = h.a, h.e
+    c2 = (-e[1], e[0])
+
+    def depth(p):
+        return side * ((p[1] - a[1]) * e[0] - (p[0] - a[0]) * e[1])
+
+    def offset(dist):
+        return (a[0] + side * dist * c2[0], a[1] + side * dist * c2[1])
+
     for j in range(1, m):
         nxt: List[pc.Poly] = []
         for pts, flags in zone:
@@ -2434,16 +2856,26 @@ def _cut_zone(flat: List[pc.Poly], h: Hinge, side: float, half: float,
         k = 0 if k < 0 else m - 1 if k >= m else k
         # strips are numbered across the whole bend, from the parent's side
         strips.append((m - 1 - k if side < 0 else m + k, (pts, flags)))
-    return keep, strips
+    return strips
 
 
-def _strip_parts(pts: List[Pt], flags: List[int], h: Hinge
-                 ) -> List[pc.Poly]:
+def _strip_parts(pts: List[Pt], flags: List[int], h: Hinge,
+                 rider: bool = False) -> List[pc.Poly]:
     """One strip of a bend in convex parts. Where its outline turns in
     -- at the neck of a flap on a wider panel, say -- it is first parted
     square to the fold: a seam running aslant across a strip is twisted
     by the bend, and the parts either side of it would not meet along
-    it."""
+    it.
+
+    A ``rider``'s strip (a piece laid on the main piece, which may lie
+    across the bend at any angle) is first cut along the fold through
+    every corner of it that lies between the strip's two edges, before
+    anything else parts it: a part with a corner between those two
+    lines has a twisted side once bent, and two such parts side by side
+    do not fit together. The cuts go through the corners themselves, so
+    that nothing is moved by rounding."""
+    if rider:
+        return _rider_parts(pts, flags, h)
     if pc.is_convex(pts):
         return [(pts, flags)]
     c2 = (-h.e[1], h.e[0])
@@ -2460,13 +2892,115 @@ def _strip_parts(pts: List[Pt], flags: List[int], h: Hinge
     return [part for P, F in polys for part in pc.convex_parts(P, F)]
 
 
-def _decals(c: _Cell2, to3d, check: Optional[Check]):
+def _sides(cells: Sequence[_Cell2], thick: float, sharp_set) -> None:
+    """Fill in what each edge of some cells is: ``edges`` and
+    ``edges_rev`` (an edge of the leather, or a seam inside it, on the
+    front face and on the back) and ``sides`` (see ``_Cell2``), the walls
+    ``thick`` mm high. A wall shows a line down it at a corner that is in
+    ``sharp_set``."""
+    for c in cells:
+        n = len(c.pts)
+        c.edges = tuple(f == pc.OUTLINE for f in c.flags)
+        c.edges_rev = tuple(c.edges[(n - 2 - k) % n] for k in range(n))
+        sharp = [(round(p[0], 6), round(p[1], 6)) in sharp_set
+                 for p in c.pts]
+        c.sides = []
+        for k in range(n):
+            j = (k + 1) % n
+            p, q = c.pts[k], c.pts[j]
+            dx, dy = q[0] - p[0], q[1] - p[1]
+            ln = math.hypot(dx, dy) or 1e-12
+            wall = c.flags[k] == pc.OUTLINE
+            c.sides.append((dy / ln, -dx / ln, ln * thick,
+                            WALL if wall else INNER,
+                            (True, sharp[j], True, sharp[k]) if wall
+                            else None))
+
+
+def _turns(cells: Sequence[_Cell2]) -> None:
+    """Where the leather goes on round a bend from each of some cells (of
+    one piece): the edges along the lines the strips of a bend meet at,
+    each with the strip across it (-1 and the number of strips stand for
+    the flat panel before the first and after the last). The view wants
+    these: such an edge is the rim of what shows when the next strip has
+    turned out of sight."""
+    bends: Dict[int, List[_Cell2]] = {}
+    for c in cells:
+        if c.hinge is not None:
+            bends.setdefault(c.panel, []).append(c)
+    for c in cells:
+        n = len(c.pts)
+        if c.hinge is not None:
+            for k in range(n):
+                if c.flags[k] == pc.OUTLINE:
+                    continue
+                t0, t1 = c.place[k][1], c.place[(k + 1) % n][1]
+                if t0 <= 1e-9 and t1 <= 1e-9:
+                    c.turns.append((k, c.hinge, c.strip - 1))
+                elif t0 >= 1.0 - 1e-9 and t1 >= 1.0 - 1e-9:
+                    c.turns.append((k, c.hinge, c.strip + 1))
+            continue
+        near = bends.get(c.panel)
+        if not near:
+            continue
+        for k in range(n):
+            if c.flags[k] == pc.OUTLINE:
+                continue
+            p, q = c.pts[k], c.pts[(k + 1) % n]
+            wx, wy = c.sides[k][0], c.sides[k][1]
+            x = 0.5 * (p[0] + q[0]) + 2e-4 * wx    # just across the edge
+            y = 0.5 * (p[1] + q[1]) + 2e-4 * wy
+            for s in near:
+                b = s.box
+                if (b[0] <= x <= b[2] and b[1] <= y <= b[3]
+                        and pc.inside_convex((x, y), s.pts, 0.0)):
+                    c.turns.append((k, s.hinge, s.strip))
+                    break
+
+
+def _rider_parts(pts: List[Pt], flags: List[int], h: Hinge
+                 ) -> List[pc.Poly]:
+    """``_strip_parts`` for a rider's strip: see there."""
+    def across(p):
+        return (p[1] - h.a[1]) * h.e[0] - (p[0] - h.a[0]) * h.e[1]
+
+    us = [across(p) for p in pts]
+    lo, hi = min(us), max(us)
+    cuts: List[Pt] = []
+    seen: List[float] = []
+    for p, u in zip(pts, us):
+        if lo + 1e-6 < u < hi - 1e-6 and all(abs(u - v) > 1e-6
+                                             for v in seen):
+            seen.append(u)
+            cuts.append(p)
+    bits = [(list(pts), list(flags))]
+    for p in cuts:
+        bits = [piece for q, f in bits
+                for piece in pc.cut(q, f, p, h.e, None, pc.INNER)]
+    out = []
+    for q, f in bits:
+        n = len(q)
+        # (convex to within a millionth of a mm at each corner: no more
+        # than rounding is left after the cuts)
+        if all((q[i][0] - q[i - 1][0]) * (q[(i + 1) % n][1] - q[i][1])
+               - (q[i][1] - q[i - 1][1]) * (q[(i + 1) % n][0] - q[i][0])
+               >= -1e-6 * (math.dist(q[i - 1], q[i]) or 1.0)
+               for i in range(n)):
+            out.append((q, f))
+        else:
+            out.extend(pc.convex_parts(q, f))
+    return out
+
+
+def _decals(c: _Cell2, to3d, check: Optional[Check], blank=None):
     """The marks on one face of a cell, placed by ``to3d``. Stitch holes
     are ``DOTS`` with the style ``(diameter, state)``: 0 for a hole the
     check has nothing about, else ``MEETS``, ``OFF`` or ``LONE`` -- and
-    ``LANDS`` for the spots where the holes that its own missed come down."""
+    ``LANDS`` for the spots where the holes that its own missed come down.
+    ``blank``: on a stack, the spots where holes of other pieces come
+    through this one, which has none there (``_BLANK``)."""
     rings = check.rings.get(c.index) if check is not None else None
-    if not (c.dots or c.polys or c.lines or rings):
+    if not (c.dots or c.polys or c.lines or rings or blank):
         return None
     out = []
     for ring in c.polys:
@@ -2476,6 +3010,8 @@ def _decals(c: _Cell2, to3d, check: Optional[Check]):
     groups: Dict[tuple, list] = {}
     for x, y, dia in rings or ():              # first, so under the holes
         groups.setdefault((dia, LANDS), []).append(to3d((x, y)))
+    for x, y, dia in blank or ():
+        groups.setdefault((dia, _BLANK), []).append(to3d((x, y)))
     if c.dots:
         state = check.state if check is not None else {}
         for x, y, dia, k in c.dots:
@@ -2570,8 +3106,8 @@ def model_outline(outline: Sequence[Pt], smooth: float = 0.03,
 def fold_piece(outline: Sequence[Pt], folds: Sequence[FoldLine], *,
                thickness: float = 2.0, radius: float = 0.0,
                base: Optional[int] = None, holes=(), cutouts=(),
-               marks=(), detail: float = 12.0, smooth: float = 0.03
-               ) -> Layout:
+               marks=(), detail: float = 12.0, smooth: float = 0.03,
+               sheets=()) -> Layout:
     """Lay a piece out for folding along its fold lines.
 
     ``outline`` is the piece (pattern mm, either way round); ``holes`` its
@@ -2590,11 +3126,21 @@ def fold_piece(outline: Sequence[Pt], folds: Sequence[FoldLine], *,
     go by where the leather really folds -- and the layout says how far
     (``Layout.shift``), and what to shorten in the drawing to have it
     fold on its line (``Layout.shift_trim``). The panels keep the numbers
-    they have with every fold on its line."""
+    they have with every fold on its line.
+
+    ``sheets`` are the other pieces of a stack built on this one (see
+    ``leathercad.sheets``): they are laid on it, and fold with it. Every
+    layout made on the way takes them, so that they are seated again
+    along a fold that has moved."""
     ring = model_outline(outline, smooth)
     regions, lines = split_piece(ring, folds)
     kw = dict(thickness=thickness, radius=radius, detail=detail,
               sharp=sharp_corners(ring), bare=True)
+    if sheets:
+        from . import sheets as sh
+        sheets = list(sheets)
+        kw.update(sheets=sheets, outline=ring,
+                  settled=sh.settle(outline, thickness, sheets))
     n = len(folds)
     first = lay = Layout(regions, folds, lines, base=base,
                          moved=[0.0] * n, **kw)
@@ -2639,6 +3185,11 @@ def fold_piece(outline: Sequence[Pt], folds: Sequence[FoldLine], *,
                          fixed=fixed, **kw,
                          least=[r if d else 0.0
                                 for r, d in zip(was.radius, moved)])
+            if sheets:
+                # (a radius kept from where a fold was keeps its reason)
+                lay.why = [w or (o if d and r <= q + 1e-9 else None)
+                           for w, o, d, r, q in zip(lay.why, was.why, moved,
+                                                    lay.radius, was.radius)]
             # A move that leaves the fold wanting to go as far again has
             # not brought anything clear (what is in its way moves with
             # it): back where it was, then, and no more of that
@@ -2650,7 +3201,7 @@ def fold_piece(outline: Sequence[Pt], folds: Sequence[FoldLine], *,
             held.add(fi)
         lay = Layout(cut[0], folds, cut[1], moved=was.moved, held=held,
                      fixed=fixed, least=was._least, **kw)
-    if any(lay.shift):
+    if any(lay.shift) and not sheets:
         lay._landing(first)
     lay._advise(first)
     lay._dress(holes, cutouts, marks)
@@ -2776,99 +3327,6 @@ def _slide(into: Sequence[Pt], other: Sequence[Pt], p: Pt, step: float,
         return None
     return (p[0] + (p[0] - q[0]) * left / more,
             p[1] + (p[1] - q[1]) * left / more)
-
-
-class _Folded:
-    """A layout folded right up, to see how far two of its cells are
-    into each other (``into``, by their places in ``Layout.cells``). A
-    cell is only built for a pair whose boxes are into each other: most
-    of a folded piece is layers that lie on each other and no more."""
-
-    def __init__(self, lay: Layout):
-        self.lay = lay
-        made = [1.0 if s else 0.0 for s in lay.steps]
-        self.frames = lay.frames(made)
-        self.arcs = lay._arcs(self.frames, made)
-        self.boxes = []
-        for c in lay.cells:
-            front, back = lay._corners(c, self.frames, self.arcs)
-            pts = front + back
-            self.boxes.append(tuple(f(p[k] for p in pts)
-                                    for f in (min, max) for k in range(3)))
-        self.cells: Dict[int, Optional[Cell]] = {}
-        self.ways: dict = {}
-
-    def into(self, a: int, b: int) -> float:
-        """How far the two are into each other (mm) if that is more than
-        a little, else 0."""
-        p, q = self.boxes[a], self.boxes[b]
-        if any(min(p[k + 3], q[k + 3]) - max(p[k], q[k]) <= _TOUCH
-               for k in range(3)):
-            return 0.0
-        for k in (a, b):
-            if k not in self.cells:
-                self.cells[k] = self.lay._cell(self.lay.cells[k],
-                                               self.frames, self.arcs)
-        if self.cells[a] is None or self.cells[b] is None:
-            return 0.0
-        deep = _into(self.cells[a], self.cells[b], self.ways, _TOUCH)
-        return deep if deep > _TOUCH else 0.0
-
-
-def _parting(cell: Cell, edges: bool) -> List[P3]:
-    """The ways a convex cell can be parted from another: the normals of
-    its faces -- or, with ``edges``, the directions its edges run in. (Of
-    a cell with a great many edges -- a rounded corner has one every few
-    degrees -- sixteen of the directions are kept, evenly spread: there
-    are as many ways to try as one cell has of these times the other.)"""
-    kept: List[P3] = []
-    for f in cell.faces:
-        for v in ([(q[0] - p[0], q[1] - p[1], q[2] - p[2])
-                   for p, q in zip(f.pts, f.pts[1:] + f.pts[:1])]
-                  if edges else [f.plane[:3]]):
-            ln = math.sqrt(_dot(v, v))
-            if ln > 1e-9 and not any(abs(_dot(v, u)) > (1.0 - 1e-9) * ln
-                                     for u in kept):
-                kept.append((v[0] / ln, v[1] / ln, v[2] / ln))
-    return kept[::-(-len(kept) // 16)] if edges and kept else kept
-
-
-def _into(a: Cell, b: Cell, ways: dict, tol: float) -> float:
-    """How far two convex cells are into each other (mm): the least they
-    overlap along any way of parting them -- square to a face of either,
-    or to an edge of each. It stops at the first way along which that is
-    ``tol`` or less: cells no further in than that only touch. ``ways``
-    keeps what is worked out for each cell."""
-    if math.dist((a.cx, a.cy, a.cz), (b.cx, b.cy, b.cz)) \
-            >= a.rad + b.rad - tol:
-        return 0.0
-
-    def parting(cell, edges):
-        if (id(cell), edges) not in ways:
-            ways[id(cell), edges] = _parting(cell, edges)
-        return ways[id(cell), edges]
-
-    def across(v):
-        pa = [_dot(v, q) for q in a.verts]
-        pb = [_dot(v, q) for q in b.verts]
-        return min(max(pa) - min(pb), max(pb) - min(pa))
-
-    least = math.inf
-    for v in parting(a, False) + parting(b, False):
-        least = min(least, across(v))
-        if least <= tol:
-            return least
-    for u in parting(a, True):
-        for w in parting(b, True):
-            v = (u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2],
-                 u[0] * w[1] - u[1] * w[0])
-            ln = math.sqrt(_dot(v, v))
-            if ln > 1e-6:
-                least = min(least, across((v[0] / ln, v[1] / ln,
-                                           v[2] / ln)))
-                if least <= tol:
-                    return least
-    return least
 
 
 def _shared(pts: Sequence[Pt], panel: Panel) -> float:

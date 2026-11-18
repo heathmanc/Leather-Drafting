@@ -1491,6 +1491,82 @@ def test_a_fold_that_moves_says_what_it_then_brings_down_in_other_leather():
         "each other."]
 
 
+
+def test_a_moved_fold_says_when_its_own_bend_comes_down_in_a_wall():
+    # a flap on panel 3's long edge folds down first, its side edge on
+    # fold line B; panel 1 folds over it, panel 4 under panel 3, and
+    # panel 5 is stood up beside the folded edge. Fold B forms 3.14 mm
+    # further on to go round the flap -- and its own bend then comes
+    # down in the wall, whether the wall is stood up last or first
+    outline = [(0, 0), (127, 0), (127, 30), (60, 30), (60, 50), (30, 50),
+               (30, 30), (0, 30)]
+    for orders in ((1, 2, 3, 4), (2, 3, 4, 1)):
+        folds = [fs.FoldLine(a, b, angle, way, order=step, label=name)
+                 for (a, b, angle, way, name), step in zip((
+                     ((30, 30), (60, 30), 180, 1, "F"),
+                     ((30, 0), (30, 30), 180, 1, "B"),
+                     ((70, 0), (70, 30), 180, -1, "C"),
+                     ((112, 0), (112, 30), 90, -1, "D")), orders)]
+        lay = fs.fold_piece(outline, folds, thickness=2.0)
+        assert _near(lay.shift, [0.0, math.pi, 0.0, 0.0], 1e-6)
+        assert lay.warnings == [
+            "With fold B off its line, panel 5 and fold B are drawn 1.79 mm "
+            "into each other."]
+        found = _inside_each_other(lay.solid([1.0] * 4))
+        assert {frozenset(pair[:2]) for pair in found} == {
+            frozenset({("panel", 4), ("bend", 1)})}
+        assert abs(max(d for _a, _b, d in found) - 1.7854) < 1e-3
+    # the flap 3.14 mm narrower: the fold stays on its line, and nothing
+    # is in anything
+    outline[5:7] = [(33.14, 50), (33.14, 30)]
+    folds = [fs.FoldLine((33.14, 30), (60, 30), 180, 1, order=1, label="F"),
+             fs.FoldLine((30, 0), (30, 30), 180, 1, order=2, label="B"),
+             fs.FoldLine((70, 0), (70, 30), 180, -1, order=3, label="C"),
+             fs.FoldLine((112, 0), (112, 30), 90, -1, order=4, label="D")]
+    lay = fs.fold_piece(outline, folds, thickness=2.0)
+    assert lay.shift == [0.0, 0.0, 0.0, 0.0] and not lay.warnings
+    assert _inside_each_other(lay.solid([1.0] * 4)) == []
+
+
+def test_a_moved_fold_says_when_the_panel_it_moved_on_to_meets_a_wall():
+    # the same, with the flap 6 mm past fold line B: the fold goes 9.14 mm
+    # further on, and the panel it now ends on -- the still side of the
+    # moved hinge -- comes down 1.91 mm into the wall
+    outline = [(0, 0), (116.7, 0), (116.7, 30), (60, 30), (60, 50),
+               (24, 50), (24, 32), (30, 32), (30, 30), (0, 30)]
+    folds = [fs.FoldLine((30, 30), (60, 30), 180, 1, order=1, label="F"),
+             fs.FoldLine((30, 0), (30, 30), 180, 1, order=2, label="B"),
+             fs.FoldLine((70, 0), (70, 30), 180, -1, order=3, label="C"),
+             fs.FoldLine((114, 0), (114, 30), 90, -1, order=4, label="D")]
+    lay = fs.fold_piece(outline, folds, thickness=2.0)
+    assert round(lay.shift[1], 3) == 9.142
+    assert lay.warnings == [
+        "With fold B off its line, panel 3 and panel 5 are drawn 1.91 mm "
+        "into each other."]
+
+
+def test_what_a_moved_fold_brings_down_is_looked_for_at_every_whole_step():
+    # the wall is stood up first and tipped away again by the last fold:
+    # folded right up nothing is in anything, but at the end of step 3
+    # what fold B carries is 3.50 mm into the wall
+    folds = [fs.FoldLine((x, 0), (x, 30), angle, way, order=step,
+                         label=name)
+             for x, angle, way, step, name in ((28, 180, -1, 2, "A"),
+                                               (56, 180, -1, 3, "B"),
+                                               (86, 90, -1, 1, "C"),
+                                               (82, 90, 1, 4, "E"))]
+    lay = fs.fold_piece([(0, 0), (101, 0), (101, 30), (0, 30)], folds,
+                        thickness=2.0, base=2)
+    assert _near(lay.shift, [0.0, math.pi, 0.0, 0.0], 1e-3)
+    assert _inside_each_other(lay.solid(lay.fractions(4.0))) == []
+    deep = {frozenset(pair[:2]): d for *pair, d
+            in _inside_each_other(lay.solid(lay.fractions(3.0)))}
+    assert abs(deep[frozenset({("panel", 1), ("panel", 4)})] - 3.4978) \
+        < 1e-3
+    assert lay.warnings == [
+        "With fold B off its line, panel 2 and panel 5 are drawn 3.50 mm "
+        "into each other (and they are not the only ones)."]
+
 def test_nothing_is_said_to_shorten_that_would_leave_folds_too_close():
     # panel 3 is 8 mm wide, and the folds either side of it bend at 2 and
     # at 3 mm: their bends need 11 mm between them. They have it only

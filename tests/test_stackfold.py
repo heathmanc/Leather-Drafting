@@ -10,6 +10,7 @@ lies behind every face of it, the planes worked out from the corners;
 (c) each sheet's cells cover it once; (d) every seam inside a sheet lies
 on a neighbouring cell of it, unless the sheet is said to be slit."""
 
+import dataclasses
 import math
 import random
 
@@ -1371,17 +1372,197 @@ def test_the_size_and_the_leather_shut_go_by_the_stack_not_the_drawing(turn):
 
 
 
-@pytest.mark.parametrize("angle, most", [(150.0, 5.1713), (170.0, 4.837)])
-def test_a_needle_meets_a_fold_not_shut_right_through_its_slant(angle,
-                                                                  most):
+@pytest.mark.parametrize("angle, most", [
+    (175.0, 4.8092), (177.0, 4.8033), (179.0, 4.8004)])
+def test_a_needle_meets_a_fold_not_quite_shut_right_through_its_slant(
+        angle, most):
     # a 200 by 90 mm shell, 1.6 mm, folded in the middle not quite shut,
     # with a 0.8 mm liner stopping 2 mm short of its top edge: the folded
     # half lies aslant over the still half, and a needle meets it, and
-    # its liner, for more than their thickness where it is deepest
+    # its liner, for more than their thickness where it is deepest --
+    # 2.4 mm lying level and 2.4 / cos(180 - angle) aslant
     lay = stack(rect(0, 0, 200, 90), [fold(100, 0, 100, 90, angle)],
                 [(rect(0, 0, 200, 88), 0.8, 1)], t=1.6)
     leather, = _notes(lay, "leather")
     assert (round(leather.a, 4), round(leather.b, 4)) == (most, 1.6)
+
+
+@pytest.mark.parametrize("angle", [90.0, 120.0, 150.0, 170.0, 174.9])
+def test_the_leather_a_needle_meets_is_told_only_of_a_stack_that_is_shut(
+        angle):
+    # the same shell and liner with the fold standing open: a needle
+    # square to the still half says nothing of the stitching, and no
+    # figure is given, nor looked for -- the size is told as ever
+    lay = stack(rect(0, 0, 200, 90), [fold(100, 0, 100, 90, angle)],
+                [(rect(0, 0, 200, 88), 0.8, 1)], t=1.6)
+    assert _notes(lay, "leather") == []
+    assert [n.kind for n in _notes(lay, "size", "shut")] == ["size", "shut"]
+
+
+def test_one_fold_of_two_standing_open_and_no_needle_figure_is_given():
+    # a strip in three, the first fold shut and the second at 90 degrees
+    folds = [fold(140, 0, 140, 60, 180.0, 1, order=1),
+             fold(220, 0, 220, 60, 90.0, -1, order=2, label="B")]
+    lay = stack(rect(0, 0, 300, 60), folds, [(rect(0, 0, 300, 60), 0.8, 1)],
+                t=1.6, base=0)
+    assert _notes(lay, "leather") == []
+    # ... and a fold that is not made at all does not count as open: the
+    # 160 mm folded over cover all of the 140 mm lying still
+    folds[1] = dataclasses.replace(folds[1], order=0, angle=0.0)
+    lay = stack(rect(0, 0, 300, 60), folds, [(rect(0, 0, 300, 60), 0.8, 1)],
+                t=1.6, base=0)
+    leather, = _notes(lay, "leather")
+    assert (leather.a, leather.b) == pytest.approx((4.8, 4.8), abs=1e-9)
+
+
+def _needle(lay):
+    """A witness of its own for the leather a needle meets in the stack
+    shut: ``needle(x, y)`` adds up what the upright line through a point
+    meets of every cell, between the cell's own faces, leaving out the
+    windows of the cells that lie level -- or None off the still panel's
+    flat leather. With it, the boxes round that leather."""
+    at = lay.fractions(float(lay.n_steps))
+    frames = lay.frames(at)
+    cells, still = [], []
+    for c, cell in lay._posed(at):
+        xs = [v[0] for v in cell.verts]
+        ys = [v[1] for v in cell.verts]
+        planes = [f.plane for f in cell.faces]
+        level = all(abs(pl[2]) < 1e-9 or abs(pl[2]) > 1 - 1e-9
+                    for pl in planes)
+        windows = []
+        if level and c.hinge is None:
+            windows = [[fs.place(frames[c.panel], q)[:2] for q in ring]
+                       for ring in c.polys]
+        cells.append((min(xs), min(ys), max(xs), max(ys), planes, windows))
+        if c.sheet == 0 and c.panel == lay.base and c.hinge is None:
+            still.append((min(xs), min(ys), max(xs), max(ys), planes))
+
+    def inside(planes, x, y):
+        return all(pl[0] * x + pl[1] * y <= pl[3] - 1e-6 for pl in planes
+                   if abs(pl[2]) < 1e-9)
+
+    def needle(x, y):
+        if not any(inside(planes, x, y) for *_b, planes in still):
+            return None
+        total = 0.0
+        for x0, y0, x1, y1, planes, windows in cells:
+            if x < x0 or x > x1 or y < y0 or y > y1:
+                continue
+            lo, hi = -math.inf, math.inf
+            for nx, ny, nz, d in planes:
+                if abs(nz) < 1e-12:
+                    if nx * x + ny * y > d + 1e-9:
+                        hi = -math.inf
+                elif nz > 0.0:
+                    hi = min(hi, (d - nx * x - ny * y) / nz)
+                else:
+                    lo = max(lo, (d - nx * x - ny * y) / nz)
+            if hi > lo and not any(pc.inside((x, y), w) for w in windows):
+                total += hi - lo
+        return total
+
+    return needle, [b[:4] for b in still]
+
+
+def _strip_in_a_z():
+    # a strip 300 by 60 mm, 1.6 mm, with a 0.8 mm liner all over it,
+    # folded shut at 140 mm and back again at 220 mm: the round of the
+    # second fold lies over the still panel, 60 mm in from its edge
+    return stack(rect(0, 0, 300, 60),
+                 [fold(140, 0, 140, 60, 180.0, 1, order=1),
+                  fold(220, 0, 220, 60, 180.0, -1, order=2, label="B")],
+                 [(rect(0, 0, 300, 60), 0.8, 1)], t=1.6, base=0)
+
+
+def _wallet_nearly_shut():
+    outline, folds, sheets, t, holes = generated(shell_t=1.6, inner_t=0.8)
+    return fs.fold_piece(outline, [dataclasses.replace(f, angle=177.0)
+                                   for f in folds],
+                         thickness=t, holes=holes, sheets=sheets)
+
+
+def _tee_under_a_round():
+    # the fourteenth random T-shaped piece of seed 11: 1 mm leather with
+    # one piece on it, its flap folded shut on a wide round that comes
+    # to lie over the still panel -- 3.8053 mm at the most, by the
+    # corners of the pieces alone
+    rng = random.Random(11)
+    for _k in range(14):
+        outline, folds, sheets, t, base = random_stack(rng, "tee")
+    return fs.fold_piece(outline, folds, thickness=t, sheets=sheets,
+                         base=base)
+
+
+@pytest.mark.parametrize("build, most, least", [
+    (_strip_in_a_z, 7.2, 2.4),
+    (_wallet_nearly_shut, 11.2077, 1.6),
+    (_tee_under_a_round, 3.8254, 1.0),
+    (lambda: _windowed("liner"), 5.2, 4.2)])
+def test_no_point_of_the_still_panel_has_more_or_less_leather_than_told(
+        build, most, least):
+    # the most and the least are of every place: no point of 4,000 taken
+    # at random over the still panel's flat leather, and 1,600 more just
+    # inside its edges, has more leather under a needle than the most
+    # told, or less than the least, and the points come to within a
+    # hundredth of a millimetre of both -- where leather lies aslant too
+    # (a fold not quite shut, the round of a bend), which was once only
+    # sampled at the corners of the pieces
+    lay = build()
+    leather, = _notes(lay, "leather")
+    assert (leather.a, leather.b) == pytest.approx((most, least), abs=1e-4)
+    needle, boxes = _needle(lay)
+    rng = random.Random(3)
+    found = []
+    for x0, y0, x1, y1 in boxes:
+        spots = [(rng.uniform(x0, x1), rng.uniform(y0, y1))
+                 for _k in range(4000 // len(boxes))]
+        for _k in range(400 // len(boxes)):
+            x, y = rng.uniform(x0, x1), rng.uniform(y0, y1)
+            near = rng.uniform(0.001, 0.05)
+            spots += [(x0 + near, y), (x1 - near, y), (x, y0 + near),
+                      (x, y1 - near)]
+        for x, y in spots:
+            mm = needle(x, y)
+            if mm is not None:
+                found.append(mm)
+    assert len(found) > 4000
+    assert max(found) <= leather.a + 1e-7
+    assert min(found) >= leather.b - 1e-7
+    assert max(found) == pytest.approx(leather.a, abs=0.01)
+    assert min(found) == pytest.approx(leather.b, abs=0.01)
+
+
+def test_a_slab_of_leather_tipped_up_is_met_as_a_plane_says_piece_by_piece():
+    # a 20 by 10 mm slab, 2 mm thick, tipped 30 degrees about its 10 mm
+    # edge: seen from above, a needle goes through 2 / cos 30 of it where
+    # it meets both its faces, and runs out to nothing across the 1 mm
+    # (2 sin 30) at each end, where it leaves through an end
+    lay = fs.fold_piece(rect(0, 0, 40, 10), [fold(20, 0, 20, 10, 150.0)],
+                        thickness=2.0, radius=0.0)
+    cell, = [cell for c, cell in lay._posed(lay.fractions(1.0))
+             if c.panel != lay.base and c.hinge is None]
+    pieces = sh._aslant(cell)
+    assert len(pieces) == 3
+    full = max(pieces, key=lambda got: abs(pc.area(got[0])))
+    upright = 2.0 / math.cos(math.radians(30))
+    assert full[1] == pytest.approx((0.0, 0.0, upright), abs=1e-9)
+    volume = 0.0
+    for ring, plane in pieces:
+        x0, y0, x1, y1 = pc.bounds(ring)
+        assert y1 - y0 == pytest.approx(10.0, abs=1e-9)
+        volume += abs(pc.area(ring)) * sh._at(plane, pc.centroid(ring))
+        if ring is not full[0]:
+            assert x1 - x0 == pytest.approx(1.0, abs=1e-9)
+            ends = sorted(sh._at(plane, q) for q in ring)
+            assert ends[0] == pytest.approx(0.0, abs=1e-9)
+            assert ends[-1] == pytest.approx(upright, abs=1e-9)
+    # ... and what the needle meets, added up over all of it, is the
+    # slab: its length (what it covers, less the 1 mm, by cos 30), its
+    # 10 mm and its 2 mm
+    xs = [v[0] for v in cell.verts]
+    long = (max(xs) - min(xs) - 1.0) / math.cos(math.radians(30))
+    assert volume == pytest.approx(long * 10.0 * 2.0, abs=1e-6)
 
 
 def test_leather_riding_round_a_bend_past_its_hinge_end_moves_its_fold():
@@ -1453,6 +1634,69 @@ def _many(n):
                                rng.choice([0.4, 0.6, 0.8]),
                                rng.choice([1, 1, -1]), name=f"s{k}"))
     return rect(0, 0, 240, 90), folds, sheets
+
+
+def _wallet_built(angle):
+    """The generated bifold built with its spine at an angle: the least
+    processor time of three builds (s), and the layout."""
+    import time
+    best = math.inf
+    for _try in range(3):
+        outline, folds, sheets, t, holes = generated(shell_t=1.6,
+                                                     inner_t=0.8)
+        folds = [dataclasses.replace(f, angle=angle) for f in folds]
+        t0 = time.process_time()
+        lay = fs.fold_piece(outline, folds, thickness=t, holes=holes,
+                            sheets=sheets)
+        best = min(best, time.process_time() - t0)
+    return best, lay
+
+
+def test_the_wallet_builds_as_fast_with_its_spine_standing_open():
+    # the search for the leather a needle meets once ran on every stack,
+    # and on leather lying aslant it never ended: the wallet with its
+    # spine at 150 degrees took 11.5 s to build, at 179 degrees 13.5 s
+    # (57 ms shut). Now 54 ms and 103 ms: never more than twice the
+    # wallet shut -- or 150 ms, for a busy machine and a coarse clock
+    shut, lay = _wallet_built(180.0)
+    leather, = _notes(lay, "leather")
+    assert (leather.a, leather.b) == pytest.approx((11.2, 3.2), abs=1e-9)
+    for angle in (90.0, 120.0, 150.0, 179.0):
+        took, lay = _wallet_built(angle)
+        assert took <= max(2.0 * shut, 0.15), angle
+        assert len(_notes(lay, "leather")) == (1 if angle >= 175.0 else 0)
+
+
+def test_random_shut_stacks_get_their_needle_figure_and_quickly():
+    # fifteen stacks of up to seven pieces of every shape on a shell
+    # folded shut: the search cuts its boxes along the outlines' own
+    # sides, so each gets its figure within the search's ceiling, and
+    # none takes longer than 0.14 s to build (1.0 s, before)
+    import time
+    rng = random.Random(7)
+    worst = 0.0
+    for _k in range(15):
+        outline, folds, sheets, t, base = random_stack(rng, "shut")
+        t0 = time.process_time()
+        lay = fs.fold_piece(outline, folds, thickness=t, sheets=sheets,
+                            base=base)
+        worst = max(worst, time.process_time() - t0)
+        assert len(_notes(lay, "leather")) == 1
+    assert worst < 0.5
+
+
+def test_a_search_cut_short_gives_no_needle_figure_rather_than_a_wrong_one(
+        monkeypatch):
+    # the search stops at a number of boxes looked at (4,000; the wallet
+    # takes 3): beyond it no figure is given, and all else is told
+    monkeypatch.setattr(sh, "_BOXES", 2)
+    lay = bifold(shell_t=1.6, inner_t=0.8)
+    assert _notes(lay, "leather") == []
+    size, = _notes(lay, "size")
+    assert (size.a, size.b) == pytest.approx((97.66, 90.0), abs=0.01)
+    monkeypatch.setattr(sh, "_BOXES", 3)
+    leather, = _notes(bifold(shell_t=1.6, inner_t=0.8), "leather")
+    assert (leather.a, leather.b) == pytest.approx((11.2, 3.2), abs=1e-9)
 
 
 def test_forty_pieces_on_a_trifold_build_in_well_under_half_a_second():

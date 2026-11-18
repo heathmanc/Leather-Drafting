@@ -275,7 +275,9 @@ class Note(NamedTuple):
                    across, outside to outside
     ``"leather"``  a needle square to the still panel goes through ``a``
                    mm of leather at the most, ``b`` at the least, over the
-                   still panel's flat leather
+                   still panel's flat leather. Told only of a stack that
+                   is shut -- every fold that is made closes flat -- and
+                   not where finding it would take too long (``_BOXES``)
     ``"clash"``    the judge finds ``sheet`` and ``other[0]`` ``a`` mm
                    into each other at the deepest, at any moment it looks
                    at, first seen deeper than 0.05 mm at the moment ``b``;
@@ -3272,7 +3274,11 @@ def _shut(layout) -> List[Note]:
                 fs._FLAT and any(h.fold == k for h in layout.tree):
             out.append(Note("spine", 0, k, 2.0 * (layout.radius[k]
                                                   + layout.thickness)))
-    got = _through(layout, posed)
+    # (the leather a needle goes through is only told of a stack that
+    # is shut: every fold that is made closes flat)
+    shut = all(math.radians(min(f.angle, 180.0)) >= fs._FLAT
+               for k, f in enumerate(layout.folds) if layout.steps[k])
+    got = _through(layout, posed) if shut else None
     if got is not None:
         out.append(Note("leather", 0, -1, *got))
     return out
@@ -3325,6 +3331,13 @@ def _boxed(hull) -> Tuple[float, float]:
 
 _CROSSING = 4         # outlines crossing a box of the still panel's leather
 #                       few enough to cut it by them all (``_through``)
+_CUTS = 64            # ... the most cuts along an outline's side on the way
+#                       down to one box, before boxes are only halved
+_BOXES = 4000         # ... and the most boxes it looks at before it gives up
+
+
+class _TooMany(Exception):
+    """``_through`` has looked at ``_BOXES`` boxes and gives no answer."""
 
 
 def _through(layout, posed):
@@ -3338,9 +3351,12 @@ def _through(layout, posed):
     them. A cell lying level adds its thickness to a piece wholly, but
     for the windows and other cut-outs in it, where a needle goes
     through no leather of it; one lying aslant adds what a needle meets
-    of it, which changes across the piece as a plane does -- most and
-    least at a corner. Only cells over the still panel's leather are
-    looked at, boxes first."""
+    of it, which changes as a plane does across each part of it that
+    lies under one of its faces and over another (``_aslant``) -- so the
+    most and the least are at a corner of a piece. Only cells over the
+    still panel's leather are looked at, boxes first. None as well where
+    that takes more than ``_BOXES`` boxes: no figure rather than a wrong
+    one."""
     base = layout.base
     frames = layout.frames(layout.fractions(float(layout.n_steps)))
     # (the cells of one sheet lying level on one panel are mostly one
@@ -3358,7 +3374,7 @@ def _through(layout, posed):
         level = all(abs(f.plane[2]) < 1e-9 or abs(f.plane[2]) > 1 - 1e-9
                     for f in cell.faces)
         if not level:
-            tilted.append((foot, pc.bounds(foot), cell))
+            tilted.append(cell)
             continue
         zs = [v[2] for v in cell.verts]
         key = (c.sheet, c.panel, c.hinge, round(min(zs), 6),
@@ -3413,22 +3429,25 @@ def _through(layout, posed):
             if key not in levels:
                 levels[key] = [bit, 0.0]
             levels[key][1] += thick
-    tilted = [(foot, cell) for foot, fb, cell in tilted if over(foot, fb)]
+    # (an outline, the box round it, the most leather a needle meets
+    # under it and, of a cell lying aslant, the plane that says how much)
     feet = [(foot, pc.bounds(foot), mm, None)
             for foot, mm in levels.values()]
-    for foot, cell in tilted:
-        zs = [v[2] for v in cell.verts]
-        feet.append((foot, pc.bounds(foot), max(zs) - min(zs), cell))
+    for cell in tilted:
+        for foot, lin in _aslant(cell):
+            fb = pc.bounds(foot)
+            if over(foot, fb):
+                feet.append((foot, fb, max(_at(lin, q) for q in foot), lin))
     best = [0.0, math.inf]             # (most, least) so far
 
     def take(v):
         if v > 1e-6:
             best[0], best[1] = max(best[0], v), min(best[1], v)
 
-    def leaf(polys, got, part):
+    def leaf(polys, got, part, cover):
         # (the leather in the box cut by every outline that crosses it)
-        pieces = [(p, pc.bounds(p), got, ()) for p in polys]
-        for foot, fb, mm, cell in part:
+        pieces = [(p, pc.bounds(p), got, cover) for p in polys]
+        for foot, fb, mm, lin in part:
             nxt = []
             for poly, pb, have, on in pieces:
                 if not (pb[0] < fb[2] and fb[0] < pb[2] and pb[1] < fb[3]
@@ -3439,11 +3458,11 @@ def _through(layout, posed):
                 inner = pc.clip_to_convex(poly, foot)
                 if len(inner) >= 3 and abs(pc.area(inner)) > 1e-9:
                     inner = pc.ccw(inner)
-                    if cell is None:
+                    if lin is None:
                         nxt.append((inner, pc.bounds(inner), have + mm, on))
                     else:
                         nxt.append((inner, pc.bounds(inner), have,
-                                    on + (cell,)))
+                                    on + (lin,)))
                 nxt += [(rest, pc.bounds(rest), have, on)
                         for rest in _minus([poly], [foot], 1e-7)]
             pieces = nxt
@@ -3451,68 +3470,124 @@ def _through(layout, posed):
             if not on:
                 take(have)
                 continue
-            cx, cy = pc.centroid(poly)
-            for x, y in [(x + (cx - x) * 1e-6, y + (cy - y) * 1e-6)
-                         for x, y in poly] + [(cx, cy)]:
-                take(have + sum(_chord(c, x, y) for c in on))
+            for q in poly:
+                take(have + sum(_at(lin, q) for lin in on))
 
-    def look(box, polys, got, part, depth):
-        # (a box of the still panel's leather: the outlines that cover it
-        # whole add to all of it; while many cross it, and what it holds
-        # could still be the most or the least, it is halved)
+    looked = [0]
+
+    def look(box, polys, got, part, cover, depth, cuts):
+        # (a box of the still panel's leather: the outlines that cover
+        # all the leather in it add to all of it -- a cell lying aslant
+        # what its plane says, most and least at a corner of that
+        # leather; while many cross it, and what it holds could still be
+        # the most or the least, it is cut in two)
+        looked[0] += 1
+        if looked[0] > _BOXES:
+            raise _TooMany()
         x0, y0, x1, y1 = box
         sq = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
         polys = [q for q in (pc.clip_to_convex(p, sq) for p in polys)
                  if len(q) >= 3 and abs(pc.area(q)) > 1e-9]
         if not polys:
             return
+        # (the box drawn in round the leather left in it)
+        corners = [q for poly in polys for q in poly]
+        x0 = max(x0, min(x for x, _y in corners))
+        x1 = min(x1, max(x for x, _y in corners))
+        y0 = max(y0, min(y for _x, y in corners))
+        y1 = min(y1, max(y for _x, y in corners))
         crossing, up = [], 0.0
+        cover = list(cover)
         for f in part:
-            foot, fb, mm, cell = f
+            foot, fb, mm, lin = f
             if fb[2] <= x0 or x1 <= fb[0] or fb[3] <= y0 or y1 <= fb[1]:
                 continue
-            if cell is None and all(pc.inside_convex(q, foot, 0.0)
-                                    for q in sq):
-                got += mm
+            if all(pc.inside_convex(q, foot) for q in corners):
+                if lin is None:
+                    got += mm
+                else:
+                    cover.append(lin)
+                continue
+            # (one that only touches the leather here cuts nothing off
+            # it: ``leaf`` asks the same of each piece)
+            if not any(pc.convex_overlap(q, foot, 1e-9) for q in polys):
                 continue
             crossing.append(f)
             up += mm
-        if got + up <= best[0] and got >= best[1]:
+        low = high = got
+        if cover:
+            sums = [got + sum(_at(lin, q) for lin in cover)
+                    for q in corners]
+            low, high = min(sums), max(sums)
+        if high + up <= best[0] and low >= best[1]:
             return
         if len(crossing) <= _CROSSING or depth >= 16:
-            leaf(polys, got, crossing)
+            leaf(polys, got, crossing, tuple(cover))
             return
-        if x1 - x0 >= y1 - y0:
-            m = 0.5 * (x0 + x1)
+        # (cut along the side of an outline that crosses it, the one
+        # nearest the middle: a box whose sides lie along the outlines'
+        # own is covered whole or missed by each, and most outlines of a
+        # stack lie along a few lines; halved where no side lies in it)
+        wide = x1 - x0 >= y1 - y0
+        m = None
+        if cuts < _CUTS:
+            for across in (wide, not wide):
+                lo, hi = (x0, x1) if across else (y0, y1)
+                k = 0 if across else 1
+                sides = [v for f in crossing for v in (f[1][k], f[1][k + 2])
+                         if lo + 1e-7 < v < hi - 1e-7]
+                if sides:
+                    mid = 0.5 * (lo + hi)
+                    m, wide = min(sides, key=lambda v: abs(v - mid)), across
+                    cuts, depth = cuts + 1, depth - 1
+                    break
+        if m is None:
+            m = 0.5 * (x0 + x1) if wide else 0.5 * (y0 + y1)
+        if wide:
             halves = ((x0, y0, m, y1), (m, y0, x1, y1))
         else:
-            m = 0.5 * (y0 + y1)
             halves = ((x0, y0, x1, m), (x0, m, x1, y1))
         for half in halves:
-            look(half, polys, got, crossing, depth + 1)
+            look(half, polys, got, crossing, cover, depth + 1, cuts)
 
-    look(region, [p for p, _b, _g, _o in pieces], 0.0, feet, 0)
+    try:
+        look(region, [p for p, _b, _g, _o in pieces], 0.0, feet, (), 0, 0)
+    except _TooMany:
+        return None
     most, least = best
     return (most, least) if most > 0.0 else None
 
 
-def _chord(cell, x: float, y: float) -> float:
-    """How much of the upright line through ``(x, y)`` lies in a convex
-    cell (mm)."""
-    lo, hi = -math.inf, math.inf
+def _aslant(cell):
+    """A convex cell lying aslant, seen from above, as the convex pieces
+    of its outline across each of which a needle meets as much of it as
+    a plane says: ``(piece, (a, b, c))`` for ``a * x + b * y + c`` mm at
+    ``(x, y)``. Each piece lies under one of the cell's faces turned up
+    and over one turned down -- a slab of leather tipped up is one piece
+    its full thickness, measured upright, and a narrow one along each
+    edge where the needle comes out through its side."""
+    ups, downs = [], []
     for f in cell.faces:
         nx, ny, nz, d = f.plane
-        rest = d - nx * x - ny * y
-        if abs(nz) < 1e-12:
-            if rest < -1e-9:
-                return 0.0
+        if abs(nz) < 1e-9:
+            continue                   # (it stands on edge)
+        ring = pc.ccw([(q[0], q[1]) for q in f.pts])
+        if len(ring) < 3 or abs(pc.area(ring)) < 1e-12:
             continue
-        z = rest / nz
-        if nz > 0.0:
-            hi = min(hi, z)
-        else:
-            lo = max(lo, z)
-    return max(0.0, hi - lo)
+        (ups if nz > 0.0 else downs).append(
+            (ring, (-nx / nz, -ny / nz, d / nz)))
+    out = []
+    for top, (a1, b1, c1) in ups:
+        for bottom, (a0, b0, c0) in downs:
+            piece = pc.clip_to_convex(top, bottom)
+            if len(piece) >= 3 and abs(pc.area(piece)) > 1e-9:
+                out.append((pc.ccw(piece), (a1 - a0, b1 - b0, c1 - c0)))
+    return out
+
+
+def _at(lin, q) -> float:
+    """What the plane ``lin`` of ``_aslant`` says at the point ``q``."""
+    return lin[0] * q[0] + lin[1] * q[1] + lin[2]
 
 
 _EIGHTHS = 8        # moments looked at inside a step: eighths of it, and

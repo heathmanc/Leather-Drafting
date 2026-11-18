@@ -2113,12 +2113,14 @@ def test_the_rings_of_the_hole_check_are_as_quick_on_a_finer_screen(qapp):
         img.fill(QColor(200, 170, 130))
         p = QPainter(img)
         p.setRenderHint(QPainter.Antialiasing, True)
-        t0 = time.process_time()
+        # (a clock fine enough on every system: the processor's own
+        # moves in steps of 15.6 ms on Windows, twice what this takes)
+        t0 = time.perf_counter()
         try:
             how(p, where)
         finally:
             p.end()
-        took[dpr] = time.process_time() - t0
+        took[dpr] = time.perf_counter() - t0
         return img
 
     def as_told(p, where, size=3.0):

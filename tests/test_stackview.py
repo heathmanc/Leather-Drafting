@@ -1,18 +1,19 @@
 """A stack of pieces in the 3D view: each piece in its own leather, the
-piece under the mouse, the chosen piece lit, the layers pulled apart and
-the bench seen from above."""
+piece under the mouse, the chosen piece lit and seen through what lies
+over it, the layers pulled apart and the bench seen from above."""
 
 import math
 import os
 import random
+import time
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QPoint, Qt  # noqa: E402
-from PySide6.QtGui import QColor, QImage, QPainter  # noqa: E402
+from PySide6.QtCore import QPoint, QPointF, Qt  # noqa: E402
+from PySide6.QtGui import QColor, QImage, QPainter, QPen  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
@@ -1189,12 +1190,23 @@ def test_a_fold_line_of_a_stack_is_cut_off_behind_a_piece_to_the_pixel(qapp):
 
 class _Told:
     """A painter that does as a ``QPainter`` does, and keeps the words it
-    is given to write and the colour of each path it is given to draw."""
+    is given to write, the colour of each path it is given to draw, and
+    the colour of the fine lines it softens the rim of a face with."""
 
     def __init__(self, painter):
         self._painter = painter
         self.words = []
         self.paths = []
+        self.soft = []
+
+    def drawLines(self, lines):
+        pen = self._painter.pen()
+        # (a hairline of a face's own colour: the shadows are wide and
+        # thin, the line along an edge of the leather has square ends)
+        if pen.isCosmetic() and pen.capStyle() == Qt.FlatCap \
+                and pen.color().alpha() == 255:
+            self.soft.append(_rgb(pen.color()))
+        return self._painter.drawLines(lines)
 
     def __getattr__(self, name):
         return getattr(self._painter, name)
@@ -1302,14 +1314,56 @@ def test_the_key_of_a_piece_shown_alone_is_as_it_was(qapp):
                        labels=False)
         p.end()
         assert cam.scale(640, 400) == 3.2
-        tile = look.texture(fv.FRONT, 23)          # lit from straight above
+        # lit from straight above, with the first step of the sheen
+        tile = look.texture(fv.FRONT, 24)
         # the pattern's (0, 0) is at pixel (0, 360): its y runs up the
-        # picture, and the tile with it
+        # picture and the tile with it, so that the row of pixels above
+        # that line, row 359, is the tile's first
         assert _pixel(cam, 640, 400, (0.0, 0.0, 1.0)) == (0.0, 360.0)
-        for x, y in ((40, 300), (200, 200), (301, 77), (500, 150),
-                     (620, 340)):
-            want = _rgb(tile.pixelColor(x % 256, (360 - y) % 256))
-            assert math.dist(_rgb(img.pixelColor(x, y)), want) < 24, (x, y)
+        worst, same, n = 0.0, 0, 0
+        for x in range(40, 600, 7):
+            for y in range(60, 340, 7):
+                want = _rgb(tile.pixelColor(x % 256, (359 - y) % 256))
+                got = _rgb(img.pixelColor(x, y))
+                worst = max(worst, math.dist(got, want))
+                same += got == want
+                n += 1
+        # all over the piece: 3,200 pixels, none more than a shade or two
+        # from the tile's, and the tile a pixel to one side is no match
+        assert n == 3200 and worst < 6.0 and same > 1000
+        assert max(math.dist(_rgb(img.pixelColor(x, 200)),
+                             _rgb(tile.pixelColor((x + 1) % 256, 159)))
+                   for x in range(40, 600, 7)) > 12.0
+    finally:
+        view.close()
+
+
+def test_the_key_of_a_piece_shown_alone_is_in_the_leather_it_is_painted_in(
+        qapp):
+    from leathercad_app import foldview as fv
+    stack = _bifold(holes=False)
+    lone = fs.fold_piece(MAIN, [fs.FoldLine((80, 0), (80, 100), 90, 1)])
+    view = fv.FoldView()
+    view.resize(500, 400)
+    try:
+        view.set_layout(stack)
+        view.set_leathers({0: "Black", 2: "Navy"})
+        view.set_chosen([2])
+        assert _legend(view)[1] == fv.LEATHERS["Navy"][0]
+        # A piece alone, shown after the stack, is painted as the stack's
+        # piece 0 was: in black. Its key is black too -- not the leather
+        # of whatever was chosen in the stack, nor the usual one.
+        view.set_layout(lone, 0.0, refit=True)
+        view.look_from("front")
+        assert view.leather_of(0) == "Black"
+        x, y = _pixel(view.cam, 500, 400, (150.0, 30.0, 1.0))
+        assert math.dist(_patch(view.grab().toImage(), x, y),
+                         fv.LEATHERS["Black"][0]) < 30
+        assert _legend(view)[1] == fv.LEATHERS["Black"][0]
+        view.set_chosen(())
+        assert _legend(view)[1] == fv.LEATHERS["Black"][0]
+        view.set_leathers(None)
+        assert _legend(view)[1] == fv.LEATHERS["Tan"][0]
     finally:
         view.close()
 
@@ -1337,6 +1391,17 @@ def test_the_lines_of_a_piece_are_in_its_own_leather(qapp):
     assert len(told.paths) == 1
     r, g, b = told.paths[0]
     assert b > r + 20 and math.dist((r, g, b), fv.LEATHERS["Navy"][0]) < 40
+    # (a piece painted faint has no such line laid under it: where there
+    # is nothing behind the piece, the line would show through it)
+    again = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+    p = QPainter(again)
+    faint = _Told(p)
+    try:
+        fv.paint_scene(faint, w, h, fv.Scene(stack, 0.0), cam, look,
+                       labels=False, looks=looks, faint=(1,))
+    finally:
+        p.end()
+    assert faint.paths == []
     # ... and the line along its edge is its own leather's too: dark on
     # the pale main piece, where the main piece's own line is brown
     px, py = _pixel(cam, w, h, (70.0, 20.0, 2.0))  # on its bottom edge
@@ -1404,6 +1469,42 @@ def test_the_cut_edge_of_thin_dark_layers_is_not_all_pale_lines(qapp):
     _scale, edge = down_the_edge(1.0, dark=False)
     dark_line = _rgb(fv.Look(False, "Burgundy").edge)
     assert sum(math.dist(c, dark_line) < 30 for c in edge) >= 2
+    # A layer that is chosen has its edges drawn in full, in the pick
+    # colour, thin or not: the pocket on top of the pile, then the one at
+    # the bottom of it. With none chosen there is no such colour there.
+    pick = _rgb(fv.Look(True).pick)
+
+    def picked(chosen):
+        img = fv.render(stack, 0.0, w, h, dark=True, leather="Black",
+                        leathers=leathers, yaw=0.0, pitch=1.25, turned=True,
+                        labels=False, chosen=chosen)
+        cam = _camera(fv, stack, 0.0, 1.25)
+        x, y0 = _pixel(cam, w, h, (50.0, -45.0, -4.8))
+        _x, y1 = _pixel(cam, w, h, (50.0, -45.0, -1.6))
+        return sum(math.dist(_rgb(img.pixelColor(int(x), y)), pick) < 12
+                   for y in range(int(y0) - 2, int(y1) + 3))
+
+    assert picked(()) == 0
+    assert picked((5,)) >= 3 and picked((3,)) >= 2
+
+
+def test_a_thin_dark_piece_shown_alone_keeps_the_line_along_its_edges(qapp):
+    from leathercad_app import foldview as fv
+    # the faint lines are for the layers of a pile: a piece shown alone,
+    # as thin and as dark, in a dark window, has the pale line along the
+    # top and along the bottom of its cut edge as it always had
+    thin = fs.fold_piece(MAIN, [], thickness=0.8)
+    w, h = 700, 660
+    pale = _rgb(fv.Look(True, "Burgundy").edge)
+    img = fv.render(thin, 0.0, w, h, dark=True, leather="Burgundy", yaw=0.0,
+                    pitch=1.25, labels=False)
+    cam = _camera(fv, thin, 0.0, 1.25, turned=False)
+    assert 0.8 * cam.scale(w, h) < fv._THIN        # 2.2 pixels of cut edge
+    x, y0 = _pixel(cam, w, h, (100.0, 0.0, 0.4))
+    _x, y1 = _pixel(cam, w, h, (100.0, 0.0, -0.4))
+    down = [_rgb(img.pixelColor(int(x), y))
+            for y in range(int(y0) - 3, int(y1) + 4)]
+    assert sum(math.dist(c, pale) < 12 for c in down) == 2
 
 
 # -- told once, kept until told otherwise -------------------------------------
@@ -1447,6 +1548,16 @@ def test_alt_click_picks_the_next_piece_down_under_the_pointer(qapp):
         assert view.pieces_at(off.x(), off.y()) == [0]
         assert click(Qt.AltModifier, off) == (0, False)
         assert click(Qt.AltModifier, QPoint(3, 3)) == (-1, False)
+        # It carries on only at the spot of the last click, to within 4
+        # pixels. Further along the same pocket, with the very same
+        # pieces under the pointer, it starts afresh: from the second.
+        near, far = at + QPoint(3, 0), at + QPoint(15, 0)
+        assert view.pieces_at(far.x(), far.y()) == [5, 4, 3, 2, 1, 0]
+        assert click(Qt.NoModifier) == (5, False)
+        assert [click(Qt.AltModifier)[0] for _ in range(2)] == [4, 3]
+        assert click(Qt.AltModifier, near) == (2, False)
+        assert click(Qt.AltModifier, far) == (4, False)
+        assert click(Qt.AltModifier, far) == (3, False)
     finally:
         view.close()
 
@@ -1509,11 +1620,13 @@ def test_what_the_view_is_told_of_a_stack_it_keeps_for_the_next_model(qapp):
         view.set_layout(stack)
         view.set_leathers({0: "Black", stack.sheets[0].key: "Navy"})
         view.set_chosen([0, 1])
+        view.set_see_through(True)
         view.set_wash({(0, None): red})
         view.set_apart(4.0)
         # a piece shown alone after it is piece 0 of all that
         view.set_layout(lone, 1.0, refit=True)
         assert view.cam.turned and view.chosen == (0, 1)
+        assert view.see_through
         assert view.wash == {(0, None): red} and view.apart == 4.0
         assert view.leather_of(0) == "Black"
         assert view.scene.apart == 0.0             # (it has no layers)
@@ -1523,6 +1636,9 @@ def test_what_the_view_is_told_of_a_stack_it_keeps_for_the_next_model(qapp):
         view.set_leathers(None)
         view.set_chosen(())
         view.set_wash(None)
+        assert view.grab().toImage() == fresh.grab().toImage()
+        view.set_see_through(False)
+        assert not view.see_through
         assert view.grab().toImage() == fresh.grab().toImage()
         assert view.leather_of(0) == "Tan"
         # the main piece of a stack can be told its leather by its key, as
@@ -1579,3 +1695,481 @@ def _near_centre(img, ground) -> bool:
                 ys.append(y)
     return abs(0.5 * (min(xs) + max(xs)) - 0.5 * img.width()) < 12 \
         and abs(0.5 * (min(ys) + max(ys)) - 0.5 * img.height()) < 12
+
+
+def test_the_view_paints_again_when_it_is_told_something_new(qapp):
+    from leathercad_app import foldview as fv
+    stack = _bifold(holes=False)
+    view = fv.FoldView()
+    view.resize(400, 300)
+    try:
+        view.set_layout(stack, check=stack.lineup())
+        asked = []
+        view.update = lambda *_a: asked.append(1)
+        for tell, new in ((view.set_chosen, [2]),
+                          (view.set_see_through, True),
+                          (view.set_wash, {(1, None): view.look.bad}),
+                          (view.set_leathers, {1: "Navy"}),
+                          (view.set_leather, "Olive"),
+                          (view.set_turned, True), (view.set_selected, 0),
+                          (view.set_apart, 3.0), (view.show_check, False)):
+            del asked[:]
+            tell(new)
+            assert len(asked) == 1, tell.__name__
+            tell(new)                  # the same again: nothing to paint
+            assert len(asked) == 1, tell.__name__
+    finally:
+        view.close()
+
+
+# -- where the tree cuts a face -----------------------------------------------
+
+def _notched(x0, y0, x1, y1, r=10.0, n=14):
+    """A rectangle with a thumb notch, half a circle, in its top edge."""
+    cx = 0.5 * (x0 + x1)
+    arc = [(cx + r * math.cos(math.pi * i / n),
+            y1 - r * math.sin(math.pi * i / n)) for i in range(n + 1)]
+    return [(x0, y0), (x1, y0), (x1, y1)] + arc + [(x0, y1)]
+
+
+def _t_joints(cells) -> int:
+    """How many times a corner of a face lies on an edge of a face of the
+    same piece, between that edge's ends: the faces on the two sides of
+    such an edge are not filled alike, pixel for pixel."""
+    by_piece = {}
+    for c in cells:
+        by_piece.setdefault(sh.sheet_of(c.tag), []).append(c)
+    n = 0
+    for mine in by_piece.values():
+        faces = [f for c in mine for f in c.faces if f.kind != bsp.INNER]
+        corners = {q for f in faces for q in f.pts}
+        for f in faces:
+            a = f.pts[-1]
+            for b in f.pts:
+                d = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+                ll = d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+                for q in corners:
+                    t = ((q[0] - a[0]) * d[0] + (q[1] - a[1]) * d[1]
+                         + (q[2] - a[2]) * d[2]) / ll
+                    if 1e-5 < t * math.sqrt(ll) < math.sqrt(ll) - 1e-5 \
+                            and math.dist(q, [a[k] + t * d[k]
+                                              for k in range(3)]) < 1e-6:
+                        n += 1
+                a = b
+    return n
+
+
+def test_no_pixel_of_the_piece_behind_shows_where_the_tree_cut_a_face(qapp):
+    from leathercad_app import foldview as fv
+    # three pockets with a thumb notch, stepped, on a plate: no corner of
+    # any of their 43 cells lies part way along an edge of another
+    lay = fs.fold_piece(MAIN, [], thickness=1.6)
+    stack = sh.FlatStack(lay, [sh.Sheet(_notched(40, 20, 160, 80 - 10 * k),
+                                        0.8) for k in range(3)], MAIN)
+    cells = stack.solid([])
+    assert len(cells) == 43 and _t_joints(cells) == 0
+    # The partition tree has to cut two of them. Each cut puts a corner
+    # on an edge that the cell on the other side of it still has in one
+    # length, and there the two do not always meet: a pixel is left that
+    # shows whatever was painted before -- the pocket behind.
+    eye = (0.3, 0.2, 0.9)
+    raw = bsp.build(stack.solid([]))
+    assert bsp.count(raw)[1] == 45
+    assert _t_joints(bsp.back_to_front(raw, *eye)) == 2
+    # The scene gives the uncut cell the corner too
+    scene = fv.Scene(stack, 0.0)
+    assert bsp.count(scene.tree)[1] == 45
+    assert _t_joints(bsp.back_to_front(scene.tree, *eye)) == 0
+    # ... and the pixel that was the black of the pocket behind, in the
+    # middle of the pale pocket in front, is pale with those round it
+    img = fv.render(stack, 0.0, 700, 660, yaw=-1.5608481746093155,
+                    pitch=0.29710633493604083, zoom=1.0, labels=False,
+                    leather="Black", leathers={0: "Black", 1: "Natural",
+                                               2: "Black", 3: "Natural"})
+    around = [_rgb(img.pixelColor(327 + i, 373 + j))
+              for i in (-1, 0, 1) for j in (-1, 0, 1)]
+    assert min(sum(c) for c in around) > 400
+    assert max(math.dist(c, around[4]) for c in around) < 60
+    # A piece shown alone is left as the tree made it, as it always was:
+    # a plate with a thumb notch folded up along a line, three of whose
+    # 23 cells the tree cuts. (The line laid under the seams of a piece
+    # alone is that piece's own leather.)
+    folded = fs.fold_piece(_notched(0, 0, 200, 100, 20.0),
+                           [fs.FoldLine((60, 0), (60, 100), 90, 1)],
+                           thickness=2.0)
+    raw = bsp.build(folded.solid(folded.fractions(1.0)))
+    assert len(folded.cells) == 23 and bsp.count(raw)[1] == 26
+    assert _t_joints(bsp.back_to_front(raw, *eye)) == 4
+    alone = fv.Scene(folded, 1.0)
+    assert _t_joints(bsp.back_to_front(alone.tree, *eye)) == 4
+
+
+def test_a_stack_is_painted_from_its_own_record_of_each_piece(qapp):
+    from leathercad_app import foldview as fv
+    lay = fs.fold_piece(MAIN, [], thickness=2.0)
+    b = sh.Sheet(_rect(40, 20, 160, 80), 1.0, leather="Navy")
+    stack = sh.FlatStack(lay, [b], MAIN)
+    kw = dict(yaw=0.3, pitch=1.2, labels=False)
+    before = fv.render(stack, 0.0, 400, 300, **kw)
+    scene = fv.Scene(stack, 0.0)
+    assert scene.thickness_of(0) == 2.0 and scene.thickness_of(1) == 1.0
+    assert scene.face_of(1, True) == fv.FRONT
+    assert scene.face_of(1, False) == fv.BACK
+    # the sheet is turned over, made thicker and laid in another stack:
+    # the first stack, and the picture of it, are as they were
+    b.grain, b.thickness, b.side = -1, 3.0, -1
+    again = sh.FlatStack(lay, [b], MAIN)
+    scene = fv.Scene(stack, 0.0)
+    assert scene.thickness_of(1) == 1.0
+    assert scene.face_of(1, True) == fv.FRONT
+    assert fv.render(stack, 0.0, 400, 300, **kw) == before
+    assert fv.Scene(again, 0.0).thickness_of(1) == 3.0
+    assert fv.Scene(again, 0.0).face_of(1, True) == fv.BACK
+    assert fv.render(again, 0.0, 400, 300, **kw) != before
+
+    class Plain:
+        """A model with sheets that keeps no record of its own of how
+        thick each is and which way up."""
+
+        def __getattr__(self, name):
+            if name in ("thickness_of", "grain_of"):
+                raise AttributeError(name)
+            return getattr(stack, name)
+
+    # ... and such a model is asked for its sheets as they are
+    scene = fv.Scene(Plain(), 0.0)
+    assert scene.thickness_of(0) == 2.0 and scene.thickness_of(1) == 3.0
+    assert scene.face_of(1, True) == fv.BACK
+
+
+def test_the_soft_rim_of_a_marked_piece_takes_the_marks_colour(qapp):
+    from leathercad_app import foldview as fv
+    # A piece folded shut, seen from one side. Where a strip of its bend
+    # turns out of sight, the rim of the strip is softened with a fine
+    # line of the strip's own colour, half of which shows outside it.
+    lay = fs.fold_piece(MAIN, [fs.FoldLine((100, 0), (100, 100), 180, 1)],
+                        thickness=2.0)
+    look = fv.Look()
+    cam = fv.Camera()
+    cam.centre, cam.radius = lay.extent()
+    cam.yaw, cam.pitch = 0.6, 0.9
+
+    def soft(wash):
+        img = QImage(500, 400, QImage.Format_ARGB32_Premultiplied)
+        p = QPainter(img)
+        told = _Told(p)
+        try:
+            fv.paint_scene(told, 500, 400, fv.Scene(lay, 1.0), cam, look,
+                           labels=False, wash=wash)
+        finally:
+            p.end()
+        return [r - g for r, g, _b in told.soft]
+
+    # tan leather: a little more red in it than green
+    plain = soft(None)
+    assert len(plain) == 20 and 10 < min(plain) and max(plain) < 70
+    # marked red all over, every one of those lines is the red of the
+    # mark over the leather: none is left a tan line round a red face
+    red = soft({(0, None): look.bad})
+    assert len(red) == 20 and min(red) > 120
+    # ... and marked in its bend only, those of the bend are
+    bend = soft({(0, 0): look.bad})
+    assert len(bend) == 20
+    assert 0 < sum(v > 120 for v in bend) < 20
+    assert sum(v > 120 for v in bend) + sum(v < 70 for v in bend) == 20
+
+
+# -- seen through what lies over it -------------------------------------------
+
+def test_what_stands_between_a_piece_and_the_eye_is_told_from_every_side(
+        qapp):
+    from leathercad_app import foldview as fv
+    stack = _bifold(holes=False)
+    scene = fv.Scene(stack, 0.0)
+    above = _camera(fv, stack, 0.0, 0.0)
+    # From above the bench: over the left backing its three pockets, over
+    # the liner all eight pocket pieces, over the shell everything, and
+    # over the pocket on top nothing.
+    assert fv.pieces_over(scene, above, [2]) == [3, 4, 5]
+    assert fv.pieces_over(scene, above, [1]) == [2, 3, 4, 5, 6, 7, 8, 9]
+    assert fv.pieces_over(scene, above, [0]) == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    assert fv.pieces_over(scene, above, [5]) == []
+    assert fv.pieces_over(scene, above, []) == []
+    # of several pieces: whatever is over any of them, themselves not
+    assert fv.pieces_over(scene, above, [3, 8]) == [4, 5, 9]
+    assert fv.pieces_over(scene, above, [2, 3]) == [4, 5]
+    # from under, it is what a piece lies on that is in the way
+    under = _camera(fv, stack, math.pi, math.pi)
+    assert fv.pieces_over(scene, under, [5]) == [0, 1, 2, 3, 4]
+    assert fv.pieces_over(scene, under, [0]) == []
+    # ... and seen edge on, nothing is over anything
+    side = _camera(fv, stack, 0.0, 0.5 * math.pi)
+    assert [fv.pieces_over(scene, side, [k]) for k in range(10)] == [[]] * 10
+    # Two pieces side by side on a plate, edge to edge: from straight
+    # above neither is over the other. Looked at low from the side of
+    # one, that one covers the cut edge of the other.
+    lay = fs.fold_piece(MAIN, [], thickness=2.0)
+    pair = sh.FlatStack(lay, [sh.Sheet(_rect(20, 20, 100, 80), 3.0),
+                              sh.Sheet(_rect(100, 20, 180, 80), 3.0)], MAIN)
+    scene = fv.Scene(pair, 0.0)
+    cam = _camera(fv, pair, 0.0, 0.0, turned=False)
+    assert fv.pieces_over(scene, cam, [1]) == []
+    assert fv.pieces_over(scene, cam, [2]) == []
+    cam = _camera(fv, pair, 0.5 * math.pi, 1.2, turned=False)
+    near, far = (2, 1) if cam.axes()[2][0] > 0 else (1, 2)
+    assert abs(cam.axes()[2][0]) > 0.9
+    assert fv.pieces_over(scene, cam, [far]) == [near]
+    assert fv.pieces_over(scene, cam, [near]) == []
+    assert fv.pieces_over(scene, cam, [0]) == [1, 2]
+    # Against the pixels themselves, the bifold pulled apart and seen
+    # from six sides: whatever is in view at a pixel where a piece lies
+    # further back is among those told to stand over that piece.
+    rng = random.Random(4)
+    scene = fv.Scene(stack, 0.0, None, 5.0)
+    w, h = 240, 200
+    told = seen = 0
+    for _ in range(6):
+        cam = _camera(fv, stack, rng.uniform(-3.0, 3.0),
+                      rng.uniform(0.1, 3.0), apart=5.0)
+        in_front = {k: set() for k in range(10)}
+        for x in range(0, w, 3):
+            for y in range(0, h, 3):
+                under = fv.pieces_at(scene, cam, w, h, x, y)
+                for i, k in enumerate(under):
+                    in_front[k].update(under[:i])
+        for k in range(10):
+            over = set(fv.pieces_over(scene, cam, [k]))
+            assert in_front[k] <= over, (k, in_front[k], over)
+            told += len(over)
+            seen += len(in_front[k])
+    # (a few stand over a piece by less than the three pixels looked at)
+    assert seen > 60 and told - seen <= 8
+
+
+def test_outlines_overlap_on_the_screen_unless_an_edge_of_either_parts_them(
+        qapp):
+    from leathercad_app import foldview as fv
+    square = _rect(0, 0, 10, 10)
+    # a three-cornered outline beyond the square's corner: no edge of the
+    # square parts the two, its own long edge does
+    beyond = [(9.0, 12.0), (12.0, 9.0), (12.0, 12.0)]
+    assert not fv._overlap(square, beyond)
+    assert not fv._overlap(beyond, square)
+    over = [(8.0, 11.0), (11.0, 8.0), (11.0, 11.0)]
+    assert fv._overlap(square, over) and fv._overlap(over, square)
+    # touching along an edge, or at a corner, is not overlapping
+    assert not fv._overlap(square, _rect(10, 0, 20, 10))
+    assert not fv._overlap(square, _rect(10, 10, 20, 20))
+    assert fv._overlap(square, _rect(9.99, 0, 20, 10))
+    # ... and what is seen edge on is a line, and covers nothing
+    assert not fv._overlap(square, [(2.0, 2.0), (8.0, 8.0)])
+    # the outline of a cell as the eye sees it: a block seen from above
+    # one corner has six corners, counter-clockwise; from straight above
+    # its four
+    cell = fs.fold_piece(MAIN, [], thickness=20.0).solid([])[0]
+    cam = fv.Camera()
+    cam.yaw, cam.pitch = 0.6, 0.9
+    right, up, (ex, ey, ez) = cam.axes()
+    ring = fv._shadow(cell, right, up)
+    # (as much of the screen as its top and two of its sides fill)
+    assert len(ring) == 6 and abs(pc.area(ring) - (
+        20000 * abs(ez) + 2000 * abs(ex) + 4000 * abs(ey))) < 1e-6
+    cam.yaw = cam.pitch = 0.0
+    ring = fv._shadow(cell, *cam.axes()[:2])
+    assert len(ring) == 4 and abs(pc.area(ring) - 20000.0) < 1e-6
+
+
+def test_a_piece_painted_faint_shows_what_lies_behind_it(qapp):
+    from leathercad_app import foldview as fv
+    lay = fs.fold_piece(MAIN, [], thickness=2.0)
+    stack = sh.FlatStack(lay, [sh.Sheet(_rect(40, 20, 160, 80), 1.0,
+                                        leather="Black")], MAIN)
+    w, h = 600, 400
+    cam = _camera(fv, stack, 0.0, 0.0, turned=False)
+    look = fv.Look(False, "Natural")
+    black = fv.sheet_looks(stack, look)[1]
+
+    def painted(model, **more):
+        img = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+        p = QPainter(img)
+        try:
+            fv.paint_scene(p, w, h, fv.Scene(model, 0.0), cam, look,
+                           labels=False, looks=fv.sheet_looks(model, look),
+                           **more)
+            left = p.opacity()
+        finally:
+            p.end()
+        # (whatever is painted next is painted in full again)
+        assert left == 1.0
+        return img
+
+    plain = painted(stack)
+    faint = painted(stack, faint=(1,))
+    plate = painted(lay)                           # with nothing on it
+    assert fv._FAINT == 0.28
+    # the black piece is 28 parts in a hundred of what is seen where it
+    # lies -- its leather as the plain colour its grain comes to -- and
+    # the plate under it, grain and all, the other 72
+    flat = _rgb(black.shade(fv.FRONT, 24)[1].color())
+    assert math.dist(flat, fv.LEATHERS["Black"][0]) < 40
+    px, py = _pixel(cam, w, h, (100.0, 50.0, 3.0))
+    for dx in range(-80, 81, 8):
+        for dy in range(-35, 36, 7):
+            x, y = int(px) + dx, int(py) + dy
+            assert math.dist(_rgb(plain.pixelColor(x, y)), flat) < 40
+            want = _mixed(_rgb(plate.pixelColor(x, y)), flat, 255 * 0.28)
+            assert math.dist(_rgb(faint.pixelColor(x, y)), want) < 2.0
+    # its edge is still drawn, as faintly: darker than the plate beside
+    # it, not the dark line it was
+    ex, ey = _pixel(cam, w, h, (100.0, 20.0, 3.0))
+    line = min((_rgb(faint.pixelColor(int(ex), int(ey) + j))
+                for j in (-2, -1, 0, 1, 2)), key=sum)
+    was = min((_rgb(plain.pixelColor(int(ex), int(ey) + j))
+               for j in (-2, -1, 0, 1, 2)), key=sum)
+    beside = _rgb(faint.pixelColor(int(ex), int(ey) + 30))
+    assert sum(was) + 150 < sum(line) < sum(beside) - 30
+    # nothing else in the picture is changed: away from the piece and
+    # the shadow of its edge every pixel is as it was
+    x0, y1 = _pixel(cam, w, h, (40.0, 20.0, 3.0))
+    x1, y0 = _pixel(cam, w, h, (160.0, 80.0, 3.0))
+    assert all(faint.pixel(x, y) == plain.pixel(x, y)
+               for x in range(0, w, 3) for y in range(0, h, 3)
+               if not (x0 - 14 < x < x1 + 14 and y0 - 14 < y < y1 + 14))
+    # a piece that is chosen is never painted faint, and with nothing
+    # faint the picture is as it always was
+    assert painted(stack, chosen=(1,), faint=(1,)) \
+        == painted(stack, chosen=(1,))
+    assert painted(stack, faint=()) == plain
+    assert painted(stack, faint=(7,)) == plain     # (no such piece)
+
+
+def test_seeing_through_shows_a_chosen_piece_that_lies_under_others(qapp):
+    from leathercad_app import foldview as fv
+    stack = _bifold(holes=False)
+    view = _view(stack)
+    try:
+        w, h = view.width(), view.height()
+        black = {k: "Black" for k in (3, 4, 5)}
+        view.set_leathers({2: "Natural", **black})
+        view.set_chosen([2])                       # the left backing
+        assert not view.see_through
+        covered = view.grab().toImage()
+        view.set_see_through(True)
+        through = view.grab().toImage()
+        assert fv.pieces_over(view.scene, view.cam, [2]) == [3, 4, 5]
+        # where its three black pockets lie over the pale backing, the
+        # picture was black. Now each pocket is 28 parts in a hundred
+        # there: three of them leave 37 of the backing to be seen
+        x, y = (int(v) for v in _pixel(view.cam, w, h, _on_top(stack, 5)))
+        was = _patch(covered, x, y)
+        now = _patch(through, x, y)
+        bx, by = _pixel(view.cam, w, h, _on_top(stack, 2))
+        backing = _patch(covered, bx, by)          # where it shows anyway
+        look = fv.sheet_looks(stack, view.look, {5: "Black"})[5]
+        flat = _rgb(look.shade(fv.FRONT, 24)[1].color())
+        assert math.dist(was, flat) < 20
+        left = 0.72 ** 3
+        assert 0.37 < left < 0.38
+        assert math.dist(now, _mixed(flat, backing, 255 * left)) < 12
+        assert math.dist(_patch(through, bx, by), backing) < 1.0
+        # the other stack of pockets is as it was
+        ox, oy = _pixel(view.cam, w, h, _on_top(stack, 9))
+        assert _patch(through, ox, oy) == _patch(covered, ox, oy)
+        # it is the picture render makes when asked to see through
+        kw = dict(yaw=0.0, pitch=0.0, turned=True, labels=False,
+                  leathers={2: "Natural", **black}, chosen=(2,))
+        plain = fv.render(stack, 0.0, w, h, **kw)
+        seen = fv.render(stack, 0.0, w, h, see_through=True, **kw)
+        assert math.dist(_patch(plain, x, y), was) < 1.0
+        assert math.dist(_patch(seen, x, y), now) < 1.0
+        # with nothing chosen there is nothing to see through to, and a
+        # piece shown alone has nothing over it
+        assert fv.render(stack, 0.0, w, h, see_through=True,
+                         **dict(kw, chosen=())) \
+            == fv.render(stack, 0.0, w, h, **dict(kw, chosen=()))
+        view.set_see_through(False)
+        assert view.grab().toImage() == covered
+    finally:
+        view.close()
+
+
+# -- the rings of the hole check on a finer screen ----------------------------
+
+def test_the_rings_of_the_hole_check_are_as_quick_on_a_finer_screen(qapp):
+    from leathercad_app import foldview as fv
+    look = fv.Look()
+    ink = look.ink(fv.FRONT)
+    rng = random.Random(6)
+    spots = [QPointF(rng.uniform(10, 290), rng.uniform(10, 190))
+             for _ in range(60)]
+    many = [QPointF(rng.uniform(10, 290), rng.uniform(10, 190))
+            for _ in range(1500)]
+    took = {}
+
+    def rings(dpr, how, where=spots):
+        img = QImage(300 * dpr, 200 * dpr,
+                     QImage.Format_ARGB32_Premultiplied)
+        img.setDevicePixelRatio(dpr)
+        img.fill(QColor(200, 170, 130))
+        p = QPainter(img)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        t0 = time.process_time()
+        try:
+            how(p, where)
+        finally:
+            p.end()
+        took[dpr] = time.process_time() - t0
+        return img
+
+    def as_told(p, where, size=3.0):
+        fv._paint_holes(p, where, sh.BLANK, size, ink, look)
+
+    def by_hand(p, where):
+        quiet = QColor(ink)
+        quiet.setAlpha(170)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(quiet, 1.1))
+        for q in where:
+            p.drawEllipse(q, 3.4, 3.4)
+
+    # at one device pixel to the point a ring is the ellipse it was
+    fv._stamps.clear()
+    assert rings(1, as_told) == rings(1, by_hand)
+    assert not fv._stamps
+    # At two, Qt takes ten times as long over each: there a picture of
+    # the ring is stamped, one for each quarter of a pixel its middle may
+    # be at, across and down. It is the same ring, an eighth of a pixel
+    # from its place at the most.
+    a, b = rings(2, as_told), rings(2, by_hand)
+    assert 1 <= len(fv._stamps) <= 16
+    ground = a.pixel(0, 0)
+    worst = inked = 0
+    for x in range(a.width()):
+        for y in range(a.height()):
+            pa, pb = a.pixel(x, y), b.pixel(x, y)
+            if pa != pb:
+                worst = max(worst, max(abs(((pa >> k) & 255)
+                                           - ((pb >> k) & 255))
+                                       for k in (16, 8, 0)))
+            inked += (pa != ground) - (pb != ground)
+    assert 0 < worst < 40 and abs(inked) < 400
+    assert sum(b.pixel(x, y) != ground for x in range(b.width())
+               for y in range(0, b.height(), 4)) > 2000
+    # ... and 1,500 of them take no longer than at one device pixel to
+    # the point (as ellipses they took twelve times as long)
+    one = min(rings(1, as_told, many) and took[1] for _ in range(5))
+    two = min(rings(2, as_told, many) and took[2] for _ in range(5))
+    assert two < 3.0 * one
+    # the pictures kept are let go as rings of other sizes are wanted
+    img = QImage(600, 400, QImage.Format_ARGB32_Premultiplied)
+    img.setDevicePixelRatio(2)
+    p = QPainter(img)
+    try:
+        for k in range(400):
+            as_told(p, spots[:20], 3.0 + 0.05 * k)
+    finally:
+        p.end()
+    assert len(fv._stamps) > 100
+    assert sum(s.sizeInBytes() for s in fv._stamps.values()) <= fv._STAMPS
+    fv._stamps.clear()
+    fv._kept[0] = 0

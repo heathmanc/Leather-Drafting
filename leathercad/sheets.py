@@ -33,6 +33,11 @@ Pt = Tuple[float, float]
 # more than ``clash.JUDGE``, which is what the check of a finished model
 # lets two cells share: whatever is left on one level then passes that
 # check. (It is ``bsp.EPS`` too: the painter cuts nothing that shares less.)
+# It is the overlap of the outlines as they are laid, which is what is
+# drawn: a curve is laid as fewer, longer lines than it is drawn in, never
+# outside it, so two pieces that overlap along a curve by less than the
+# curve is followed to (``Sheet.within``: 0.03 mm, more for a very busy
+# outline) may be laid sharing nothing, and are then left on one level.
 LAP = 1e-6
 SLIVER = 1.0        # a piece resting on less overlap than this (mm) is told
 # less than this (mm) is a curve drawn as short straight lines, not a
@@ -41,7 +46,11 @@ SLIVER = 1.0        # a piece resting on less overlap than this (mm) is told
 HAIR = 0.05
 _SMOOTH = 0.03      # how closely (mm) a sheet's curved outline is followed
 _BUSY = 260         # ... unless it would still have more corners than this
+_LOOSE = 0.5        # ... and then no more loosely than this (mm)
 _GROW = 1e-9        # leather (mm) that thinning an outline may add: rounding
+# two edges of a coarse outline that meet at less of a turn than this (its
+# sine: 20 degrees) are drawn in together, by as much as either has to be
+_TURN = 0.34
 _ROOM = 4.0         # a panel's number wants this much (mm) clear of an edge
 # where a sheet's grain is laid from when its outline has no first edge
 _SQUARE = ((0.0, 0.0), (1.0, 0.0), (0.0, 1.0))
@@ -75,13 +84,21 @@ class Sheet:
     to within 0.03 mm. It is thinned inwards only, never outwards as a
     lone piece's outline may be: two pieces cut along one line share no
     leather as they are drawn, and so share none here and are not taken
-    to lie on each other. ``parts`` is the outline in convex parts: none
-    for an outline with no area, which is no leather -- such a sheet
-    lifts nothing, is shown as nothing, and is told as lying on nothing.
-    ``frame`` is where the grain of its leather is laid from, ``(a point,
-    the way x runs, the way y runs)``: its first corner and its first
-    edge, so that a piece moved or turned on the bench takes its grain
-    with it.
+    to lie on each other. (The other side of that: two pieces that do
+    overlap along a curve, by less than the curve is followed to, may
+    share nothing as they are laid, and are then left on one level.)
+    ``within`` is how closely (mm) the outline as laid follows the one
+    given: 0 where no corner was dropped, 0.03 for a curve, and more for
+    an outline so busy -- a wavy or scalloped edge, a traced one -- that
+    followed so closely it would keep more than 260 corners. What there
+    is to tell of a stack is told only where it is more than the
+    outlines it is about were followed to. ``parts`` is the outline in
+    convex parts: none for an outline with no area, which is no leather
+    -- such a sheet lifts nothing, is shown as nothing, and is told as
+    lying on nothing. ``frame`` is where the grain of its leather is laid
+    from, ``(a point, the way x runs, the way y runs)``: its first corner
+    and its first edge, so that a piece moved or turned on the bench
+    takes its grain with it.
 
     ``settle`` works out the rest. ``lo`` and ``hi`` are the heights of
     its underside and its top above the face of the main piece it is on.
@@ -120,9 +137,13 @@ class Sheet:
     loose: bool = field(default=False, init=False)
     parts: list = field(default_factory=list, init=False, repr=False)
     frame: tuple = field(default=_SQUARE, init=False, repr=False)
+    within: float = field(default=0.0, init=False, repr=False)
     # the outline ``parts`` and ``frame`` were made from
     _seen: Optional[tuple] = field(default=None, init=False, repr=False,
                                    compare=False)
+    # (that outline, the main piece's, ``past``, ``past_at``) as last found
+    _stood: Optional[tuple] = field(default=None, init=False, repr=False,
+                                    compare=False)
 
     def __post_init__(self):
         self.holes = [tuple(h) for h in self.holes]
@@ -134,17 +155,19 @@ class Sheet:
 
     def _ready(self):
         """Make the sheet ready to be laid: its outline as the class
-        says, with ``parts`` and ``frame`` from it, if the outline is not
-        the one they were last made from. ``settle`` does this for every
-        sheet it is given, so an outline put on a sheet after it was made
-        (``sheet.ring = ...``) is the one that is laid."""
+        says, with ``parts``, ``frame`` and ``within`` from it, if the
+        outline is not the one they were last made from. ``settle`` does
+        this for every sheet it is given, so an outline put on a sheet
+        after it was made (``sheet.ring = ...``) is the one that is
+        laid."""
         self.thickness = max(0.05, float(self.thickness))
         self.side = 1 if self.side >= 0 else -1
         self.grain = 1 if self.grain >= 0 else -1
         given = tuple((float(p[0]), float(p[1])) for p in self.ring)
         if given == self._seen:
             return
-        ring = _outline(given) if len(given) >= 3 else list(given)
+        ring, self.within = _outline(given) if len(given) >= 3 \
+            else (list(given), 0.0)
         self.ring = ring
         self._seen = tuple(ring)
         self.parts = _convex(ring)
@@ -161,7 +184,9 @@ class Note(NamedTuple):
     here and everywhere: 0 the main piece, ``k`` the sheet ``sheets[k -
     1]`` (``FlatStack.sheet`` gives the sheet of a number). A moment of
     the folding is as ``Layout.fractions`` takes it: 1.0 the end of step
-    1, 0.5 half way through it.
+    1, 0.5 half way through it. ``rest``, on a note that says leather is
+    drawn into leather, is how deep at rest -- at a whole step of the
+    folding, where things end up -- beside the deepest on the way.
 
     What ``settle`` tells of a flat stack:
 
@@ -174,10 +199,13 @@ class Note(NamedTuple):
                  the main piece, then outwards on its front, then
                  outwards on its back
     ``"past"``   ``sheet`` stands ``a`` mm past the edge of the main
-                 piece, furthest at its point ``at``
+                 piece, furthest at its point ``at`` (told when it is
+                 more than ``HAIR``, and more than the main piece's
+                 outline was followed to)
     ``"clear"``  ``sheet`` stands ``a`` mm clear of the piece ``other[0]``
                  that lies under part of it, lower than what it rests on
-                 (and of the rest of ``other`` by less)
+                 (and of the rest of ``other`` by less), over a place
+                 wider than ``HAIR`` and than the outlines allow for
     ``"sliver"`` ``sheet`` rests on the sheet ``other[0]`` by only ``a``
                  mm of overlap, less than ``SLIVER`` (a rest on the main
                  piece is never told so)
@@ -232,12 +260,14 @@ class Note(NamedTuple):
                    pieces lying across it there (0 the main piece, where
                    the run goes through its leather), ``b`` how deep the
                    sheet is drawn into itself, or the main piece into it,
-                   there (0 for not at all). One note for each run
+                   there at any moment looked at (0 for not at all), and
+                   ``rest`` how deep at rest. One note for each run
     ``"crossing"`` ``sheet`` lies over the place ``at`` where fold and
                    fold ``other[0]`` cross, and is cut or bent along both
                    there -- inside the main piece or past its edge: the
                    main piece alone passes through itself there, folded,
-                   and the sheet is parted. ``b`` as for ``"slit"``
+                   and the sheet is parted. ``b`` and ``rest`` as for
+                   ``"slit"``
     ``"size"``     shut, the stack fits in a rectangle ``a`` by ``b`` mm
                    seen square to the still panel, the longer side first
     ``"shut"``     ... and is ``a`` mm thick
@@ -247,9 +277,11 @@ class Note(NamedTuple):
                    mm of leather at the most, ``b`` at the least, over the
                    still panel's flat leather
     ``"clash"``    the judge finds ``sheet`` and ``other[0]`` ``a`` mm
-                   into each other at the deepest, first seen at the
-                   moment ``b`` (a whole step, or a quarter, half or three
-                   quarters of the way through one). A sheet with itself
+                   into each other at the deepest, at any moment it looks
+                   at, first seen deeper than 0.05 mm at the moment ``b``;
+                   ``rest`` how deep at rest, at the deepest whole step
+                   (0: only on the way, inside a step, where leather
+                   gives). A sheet with itself
                    is never so told where it is slit or over a crossing
                    (that note says it)
     ``"limit"``    ... the main piece in itself: a known limit of folding
@@ -262,10 +294,11 @@ class Note(NamedTuple):
                    ``("bend", fold)``) drawn ``a`` mm into each other,
                    first at the moment ``b``, that are only ``c`` mm into
                    each other with every fold on its line: the move's
-                   doing, laid at the door of fold ``fold``
+                   doing, laid at the door of fold ``fold``; ``rest`` as
+                   for ``"clash"``
 
-    Where a fold has moved, nothing drawn into anything by less than a
-    moved fold is let keep (0.05 mm, ``foldsolid._TOUCH``) is told."""
+    Nothing drawn into anything by 0.05 mm or less (``foldsolid._TOUCH``)
+    is told."""
 
     kind: str
     sheet: int = 0
@@ -275,6 +308,7 @@ class Note(NamedTuple):
     other: tuple = ()
     at: Optional[Pt] = None
     c: float = 0.0
+    rest: float = 0.0
 
 
 def sheet_of(tag) -> int:
@@ -285,25 +319,67 @@ def sheet_of(tag) -> int:
 
 # -- polygons, in plan --------------------------------------------------------
 
-def _outline(ring: Sequence[Pt]) -> List[Pt]:
+def _outline(ring: Sequence[Pt]) -> Tuple[List[Pt], float]:
     """A sheet's outline made ready, as ``foldsolid.model_outline`` makes
     the main piece's: counter-clockwise, no doubled points, and a
     flattened curve thinned to within ``_SMOOTH`` mm (further, up to half
     a mm, for an outline that would still have more than ``_BUSY``
-    corners) -- but thinned inwards only (see ``_inward``). It starts at
-    the corner it was given first, if that is one of those kept."""
+    corners) -- but thinned inwards only (see ``_inward``). Returns
+    ``(the outline, how closely it follows the one given)``. It starts at
+    the corner it was given first, if that is one of those kept.
+
+    An outline that thinning inwards cannot bring under ``_BUSY`` corners
+    at any tolerance -- one edge after another waves by more than half a
+    mm, or the outline is rough: its corners jitter by a hundredth of a
+    mm, as a traced one's do and one read from a file that keeps two
+    decimals, so that every other corner is the end of a hollow and has
+    to stay -- is thinned both ways instead, as a lone piece's is, and
+    then drawn in until it is nowhere outside the outline given (see
+    ``_coarse``)."""
     first = ring[0]
     ring, _flags = pc.tidy(list(ring), [0] * len(ring), 1e-6)
-    ring = pc.ccw(ring)
+    ring = _specks(pc.ccw(ring))
     out = _inward(ring, _SMOOTH)
-    tol = _SMOOTH
-    while len(out) > _BUSY and tol < 0.5:
-        tol *= 1.6
-        out = _inward(ring, min(tol, 0.5))
+    within = _SMOOTH if len(out) < len(ring) else 0.0
+    if len(out) > _BUSY:
+        # thinned both ways and drawn in: at the first tolerance that
+        # leaves few enough corners, as a lone piece's outline has it --
+        # or, where that cannot be done, the next
+        levels = _levels(ring)
+        ladder = [_SMOOTH]
+        while ladder[-1] < _LOOSE:
+            ladder.append(min(1.6 * ladder[-1], _LOOSE))
+        few = [tol for tol in ladder
+               if sum(level > tol for level in levels) <= _BUSY]
+        coarse = None
+        for tol in few + [tol for tol in ladder[::-1] if tol not in few]:
+            coarse = _coarse(ring, tol, levels)
+            if coarse is not None:
+                break
+        # thinned inwards, more and more loosely: as loosely as the
+        # other way follows the outline, to begin with
+        tol = _SMOOTH
+        most = min(coarse[1], _LOOSE) if coarse is not None else _LOOSE
+        while len(out) > _BUSY and tol < most:
+            tol = min(1.6 * tol, _LOOSE)
+            out = _inward(ring, tol)
+        # The other way is taken where it follows the outline more
+        # closely with fewer corners -- or, if this way still leaves too
+        # many, where it leaves a good deal fewer. Failing that, inwards
+        # as loosely as it takes.
+        if coarse is not None and (
+                len(coarse[0]) <= 0.6 * len(out) if len(out) > _BUSY
+                else len(coarse[0]) < len(out) and coarse[1] < tol):
+            out, within = coarse
+        else:
+            while len(out) > _BUSY and tol < _LOOSE:
+                tol = min(1.6 * tol, _LOOSE)
+                out = _inward(ring, tol)
+            within = tol
     if first in out:
         k = out.index(first)
         out = out[k:] + out[:k]
-    return out
+    return out, within
 
 
 def _inward(ring: Sequence[Pt], tol: float) -> List[Pt]:
@@ -317,7 +393,8 @@ def _inward(ring: Sequence[Pt], tol: float) -> List[Pt]:
     they meet, a little way into the leather. Each bulge and each hollow
     is thinned by itself, and the corners where one ends and the next
     begins stay as they are: an outline thinned a second time stays as it
-    is."""
+    is, or all but (it may lose a corner that a dropped one held in
+    place the first time)."""
     n = len(ring)
     if n <= 4 or tol <= 0.0:
         return list(ring)
@@ -342,6 +419,35 @@ def _inward(ring: Sequence[Pt], tol: float) -> List[Pt]:
             out += _chords([ring[(start + t) % n] for t in range(i, j)], tol)
         i = j
     return out if len(out) >= 3 else list(ring)
+
+
+def _specks(ring: Sequence[Pt]) -> List[Pt]:
+    """A counter-clockwise outline without the hollows that are too small
+    to be dealt with: every corner is dropped at which the outline turns
+    into the leather, yet by so little leather that ``polycut`` takes the
+    corner for a straight one. (It goes by the cross product of the two
+    edges at a corner, in mm2: under a thousandth of a millionth that is
+    a straight corner to it, whatever the angle, and two edges a
+    hundred-thousandth of a mm long make no more. A notch that small in
+    an edge -- dirt in a drawing, not a notch -- would be kept in one
+    "convex" part with the rest, and its two walls, carried on as if
+    they were edges of that part, would cut the piece in three.) What is
+    filled in is less than a thousandth of a square micron a corner."""
+    out = list(ring)
+    i = quiet = 0
+    while len(out) > 3 and quiet < len(out):
+        n = len(out)
+        i %= n
+        a, b, c = out[i - 1], out[i], out[(i + 1) % n]
+        cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
+        if -1e-9 <= cross < 0.0 and _turn(a, b, c) < -1e-7:
+            del out[i]
+            i -= 1                     # (its neighbours are looked at again)
+            quiet = 0
+        else:
+            i += 1
+            quiet += 1
+    return out
 
 
 def _turn(a: Pt, b: Pt, c: Pt) -> float:
@@ -406,6 +512,47 @@ def _chords(pts: Sequence[Pt], tol: float, closed: bool = False) -> List[Pt]:
     return [q for q, kept in zip(pts, keep) if kept]
 
 
+def _levels(ring: Sequence[Pt]) -> List[float]:
+    """For each corner of a ring, how loosely the ring can be thinned
+    before that corner goes: ``polycut.simplify(ring, tol)`` keeps just
+    the corners whose level is more than ``tol``. (A corner is kept when
+    it is the one furthest from the line between two kept ones, and
+    further than ``tol``; so it goes with the first of the corners it
+    hangs on, or when ``tol`` reaches its own distance.) One going
+    through the ring serves every tolerance that is tried."""
+    n = len(ring)
+    level = [0.0] * n
+    x0, y0 = ring[0]
+    far = max(range(n), key=lambda i: (ring[i][0] - x0) ** 2
+              + (ring[i][1] - y0) ** 2)
+    level[0] = level[far] = math.inf
+    stack = [(0, far, math.inf), (far, n, math.inf)] if far else []
+    while stack:
+        i, j, cap = stack.pop()
+        if j - i < 2:
+            continue
+        ax, ay = ring[i]
+        bx, by = ring[j % n]
+        dx, dy = bx - ax, by - ay
+        ll = dx * dx + dy * dy
+        worst, wi = -1.0, -1
+        for k in range(i + 1, j):
+            px, py = ring[k]
+            if ll < 1e-18:
+                d = (px - ax) ** 2 + (py - ay) ** 2
+            else:
+                t = ((px - ax) * dx + (py - ay) * dy) / ll
+                t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
+                d = (px - ax - t * dx) ** 2 + (py - ay - t * dy) ** 2
+            if d > worst:
+                worst, wi = d, k
+        cap = min(cap, math.sqrt(worst))
+        level[wi] = cap
+        stack.append((i, wi, cap))
+        stack.append((wi, j, cap))
+    return level
+
+
 def _tangents(pts: Sequence[Pt], tol: float) -> List[Pt]:
     """A run of corners round a hollow of an outline (every one but the
     first and the last turns to the right), thinned by its edges: an edge
@@ -463,6 +610,163 @@ def _tangents(pts: Sequence[Pt], tol: float) -> List[Pt]:
                        for a, b in zip(edges, edges[1:])] + [pts[-1]]
 
 
+def _coarse(ring: Sequence[Pt], tol: float, levels: Sequence[float]):
+    """A counter-clockwise outline thinned both ways, as a lone piece's
+    is, and then drawn in until it has no leather that the outline has
+    not: ``(the outline, how far (mm) the one given is from it at most)``,
+    or None where that cannot be done. ``levels`` are the ring's (see
+    ``_levels``).
+
+    The corners that stay are those ``polycut.simplify`` keeps: the line
+    between two of them stands for the corners dropped between them,
+    which lie within ``tol`` mm of it on either side. Where they lie to
+    its left the line has leather that the outline has not, and is moved
+    in, square to itself, by as far as the furthest of them lies; the
+    corners of the new outline are where one such line meets the next.
+    Two things more are seen to. Lines that meet at next to no turn are
+    moved in by the same amount, the most either needs: moved by
+    different amounts they would meet far from where they were. And
+    round a hollow corner -- where the outline is the leather to the
+    left of either line, not of both -- a line is moved in past the
+    corners its neighbour stands for as well."""
+    n = len(ring)
+    idx = [i for i, level in enumerate(levels) if level > tol]
+    m = len(idx)
+    if m < 3:
+        return None
+    way, base, spans = [], [], []      # each line: its way, a point, corners
+    for j in range(m):
+        i0, i1 = idx[j], idx[(j + 1) % m]
+        ax, ay = ring[i0]
+        dx, dy = ring[i1][0] - ax, ring[i1][1] - ay
+        ln = math.hypot(dx, dy)
+        if ln < 1e-9:
+            return None
+        way.append((dx / ln, dy / ln))
+        base.append((ax, ay))
+        spans.append(range(i0 + 1, i1 if i1 > i0 else n))
+
+    def left(j, k):
+        # how far the corners line ``k`` stands for lie to the left of
+        # line ``j``, at the most
+        (ex, ey), (ax, ay) = way[j], base[j]
+        return max((ex * (ring[i][1] - ay) - ey * (ring[i][0] - ax)
+                    for i in spans[k]), default=0.0)
+
+    turn = [(way[j - 1][0] * way[j][1] - way[j - 1][1] * way[j][0],
+             way[j - 1][0] * way[j][0] + way[j - 1][1] * way[j][1])
+            for j in range(m)]         # at the corner where line j begins
+    need = [max(0.0, left(j, j)) for j in range(m)]
+    for j, (s, _c) in enumerate(turn):
+        if s < 0.0:                    # a hollow corner
+            need[j] = max(need[j], left(j, j - 1))
+            need[j - 1] = max(need[j - 1], left(j - 1, j))
+    # lines that meet at next to no turn go together
+    chain = list(range(m))
+
+    def head(j):
+        while chain[j] != j:
+            chain[j] = chain[chain[j]]
+            j = chain[j]
+        return j
+
+    for j, (s, c) in enumerate(turn):
+        if c > 0.0 and abs(s) < _TURN:
+            chain[head(j)] = head(j - 1)
+    most: Dict[int, float] = {}
+    for j in range(m):
+        most[head(j)] = max(most.get(head(j), 0.0), need[j])
+    move = [most[head(j)] for j in range(m)]
+    out: List[Pt] = []
+    for j, (s, c) in enumerate(turn):
+        bx, by = base[j]
+        a, b = move[j - 1], move[j]
+        if a <= _GROW and b <= _GROW:
+            out.append((bx, by))       # (a corner that was given)
+            continue
+        (ux, uy), (vx, vy) = way[j - 1], way[j]
+        if c > 0.0 and abs(s) < _TURN:
+            k = a / (1.0 + c)
+            out.append((bx - k * (uy + vy), by + k * (ux + vx)))
+        elif abs(s) < 0.5 * _TURN:
+            return None                # back on itself: no place to meet
+        else:
+            # where the first line, moved ``a`` to its left, meets the
+            # second, moved ``b`` to its own
+            out.append((bx + (a * vx - b * ux) / s,
+                        by + (a * vy - b * uy) / s))
+    # every line still runs the way it did, and none crosses another
+    for j in range(m):
+        (ax, ay), (bx, by) = out[j], out[(j + 1) % m]
+        if (bx - ax) * way[j][0] + (by - ay) * way[j][1] <= 1e-9:
+            return None
+    if not _simple(out) or _area(out) <= 0.0:
+        return None
+    off = 0.0
+    for j in range(m):
+        a, b = out[j], out[(j + 1) % m]
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        ll = dx * dx + dy * dy
+        for i in (idx[j],) + tuple(spans[j]):
+            px, py = ring[i]
+            t = max(0.0, min(1.0, ((px - a[0]) * dx + (py - a[1]) * dy) / ll))
+            off = max(off, math.hypot(px - a[0] - t * dx, py - a[1] - t * dy))
+    return out, off
+
+
+def _simple(pts: Sequence[Pt]) -> bool:
+    """Whether no two edges of a polygon cross."""
+    n = len(pts)
+    edges = sorted((min(pts[i][0], pts[(i + 1) % n][0]),
+                    max(pts[i][0], pts[(i + 1) % n][0]), i)
+                   for i in range(n))
+
+    def side(p, q, r):
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+
+    for k, (_lo, hi, i) in enumerate(edges):
+        a, b = pts[i], pts[(i + 1) % n]
+        for lo, _hi, j in edges[k + 1:]:
+            if lo > hi:
+                break                  # and so is every later one
+            if (i - j) % n in (1, n - 1):
+                continue               # the next edge round: they share an end
+            c, d = pts[j], pts[(j + 1) % n]
+            if side(a, b, c) * side(a, b, d) < 0.0 \
+                    and side(c, d, a) * side(c, d, b) < 0.0:
+                return False
+    return True
+
+
+def _strays(given: Sequence[Pt], kept: Sequence[Pt]) -> Tuple[float, float]:
+    """How far an outline thinned both ways strays from the one it was
+    made from, both counter-clockwise: ``(how far it reaches outside it,
+    how far it stops short inside it)`` at the most, in mm. ``kept`` are
+    corners of ``given``, in its order."""
+    n, m = len(given), len(kept)
+    idx, i = [], 0
+    for q in kept:
+        while i < n and given[i] != q:
+            i += 1
+        if i == n:
+            return _LOOSE, _LOOSE      # (not made from it: the loosest)
+        idx.append(i)
+        i += 1
+    out = short = 0.0
+    for j in range(m):
+        i0, i1 = idx[j], idx[(j + 1) % m]
+        ax, ay = given[i0]
+        dx, dy = given[i1][0] - ax, given[i1][1] - ay
+        ln = math.hypot(dx, dy) or 1.0
+        for i in list(range(i0 + 1, i1 if i1 > i0 else n)) \
+                + (list(range(0, i1)) if i1 <= i0 else []):
+            c = (dx * (given[i][1] - ay) - dy * (given[i][0] - ax)) / ln
+            # a corner dropped to the left of the line is leather that
+            # the thinned outline has and the given one has not
+            out, short = max(out, c), max(short, -c)
+    return out, short
+
+
 def _frame(ring: Sequence[Pt]):
     """Where a sheet's grain is laid from: its first corner, the way its
     first edge runs and the way a quarter turn to the left of that."""
@@ -475,10 +779,48 @@ def _frame(ring: Sequence[Pt]):
     return ((x0, y0),) + _SQUARE[1:]
 
 
+def _area(pts: Sequence[Pt]) -> float:
+    """The signed area of a polygon, as ``polycut.area`` gives it -- but
+    worked out from the polygon's own first corner, not from the origin of
+    the pattern. For a bit of a polygon a millionth of a mm across, drawn
+    a hundred mm from the origin, the sums ``polycut.area`` makes come to
+    their own rounding and nothing else; these do not, wherever the
+    pattern is drawn."""
+    x0, y0 = pts[0]
+    s = 0.0
+    ax, ay = pts[-1][0] - x0, pts[-1][1] - y0
+    for x, y in pts:
+        bx, by = x - x0, y - y0
+        s += ax * by - bx * ay
+        ax, ay = bx, by
+    return 0.5 * s
+
+
+def _centre(pts: Sequence[Pt]) -> Pt:
+    """The centre of area of a convex polygon, worked out from its own
+    first corner (see ``_area``): a point of the polygon, wherever it is
+    drawn. For one with no area to speak of, the middle of its corners."""
+    x0, y0 = pts[0]
+    a = cx = cy = size = 0.0
+    ax, ay = pts[-1][0] - x0, pts[-1][1] - y0
+    for x, y in pts:
+        bx, by = x - x0, y - y0
+        c = ax * by - bx * ay
+        a += c
+        cx += (ax + bx) * c
+        cy += (ay + by) * c
+        size = max(size, abs(bx), abs(by))
+        ax, ay = bx, by
+    if abs(a) <= 1e-9 * size * size:
+        n = len(pts)
+        return (sum(p[0] for p in pts) / n, sum(p[1] for p in pts) / n)
+    return (x0 + cx / (3.0 * a), y0 + cy / (3.0 * a))
+
+
 def _convex(ring) -> List[List[Pt]]:
     """An outline (counter-clockwise) as convex polygons: none, for one
     with no area."""
-    if len(ring) < 3 or abs(pc.area(ring)) <= 1e-9:
+    if len(ring) < 3 or abs(_area(ring)) <= 1e-9:
         return []
     return [p for p, _f in pc.convex_parts(ring, [pc.OUTLINE] * len(ring))] \
         or [list(ring)]
@@ -540,11 +882,15 @@ def _lap(parts_a, ring_a, parts_b, ring_b) -> float:
     lying along one is not half on each side of it. So a piece that seems
     to be on by a sliver is looked at again, by the outlines themselves:
     a point that both pieces cover has to be slid out from under each,
-    past the nearest edge of it."""
+    past the nearest edge of it. The points measured from are ones that
+    both do cover: the corners of what two parts have in common, and its
+    centre (worked out from the bit's own corner: where two parts only
+    touch, what they have in common is a speck of rounding, and a centre
+    summed from the origin of the pattern may be anywhere)."""
     best = _reach(parts_a, parts_b)
     if LAP < best < SLIVER and len(parts_a) + len(parts_b) > 2:
         for bit in _common(parts_a, parts_b, 0.0):
-            for q in bit + [pc.centroid(bit)]:
+            for q in bit + [_centre(bit)]:
                 best = max(best, _to_ring(q, ring_a), _to_ring(q, ring_b))
             if best >= SLIVER:
                 break
@@ -568,11 +914,16 @@ def _width(pts: Sequence[Pt]) -> float:
 
 def _wider(pts: Sequence[Pt], least: float) -> bool:
     """Whether a convex polygon is wider than ``least`` mm where it is
-    narrowest. Its area and the box round it settle most at once: it is
-    at least as wide as its area over the length of that box's diagonal,
-    and no wider than three times that."""
+    narrowest. The box round it and its area settle most at once: it is
+    no wider than that box is, at least as wide as its area over the
+    length of the box's diagonal, and no wider than three times that.
+    (The area is worked out from the polygon's own corner: see
+    ``_area``. What two pieces that only touch have in common is a speck
+    a millionth of a millionth of a mm across, and must be told as one.)"""
     x0, y0, x1, y1 = pc.bounds(pts)
-    over = abs(pc.area(pts))
+    if min(x1 - x0, y1 - y0) <= least:
+        return False
+    over = abs(_area(pts))
     span = least * math.hypot(x1 - x0, y1 - y0)
     if over > span:
         return True
@@ -584,7 +935,14 @@ def _wider(pts: Sequence[Pt], least: float) -> bool:
 def _split(pts: Sequence[Pt], p: Pt, q: Pt):
     """A convex polygon cut along the line through ``p`` and ``q``:
     ``(what lies to its left, what lies to its right)``. A point on the
-    line counts as to its left."""
+    line counts as to its left.
+
+    A corner of the polygon that is on the line, or all but, comes out
+    twice: as itself and as the point where the line crosses. The two
+    are a thousandth of a millionth of a mm apart or less, and an edge
+    between them would run any way at all -- taken for a real edge, it
+    can part the polygon from one it lies in. So of two corners that
+    close, one is kept."""
     dx, dy = q[0] - p[0], q[1] - p[1]
     left: List[Pt] = []
     right: List[Pt] = []
@@ -595,11 +953,23 @@ def _split(pts: Sequence[Pt], p: Pt, q: Pt):
         if (da < 0.0) != (db < 0.0):
             t = da / (da - db)
             m = (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
-            left.append(m)
-            right.append(m)
-        (right if db < 0.0 else left).append(b)
+            _corner(left, m)
+            _corner(right, m)
+        _corner(right if db < 0.0 else left, b)
         a, da = b, db
+    for half in (left, right):
+        if len(half) > 1 and abs(half[0][0] - half[-1][0]) < 1e-9 \
+                and abs(half[0][1] - half[-1][1]) < 1e-9:
+            half.pop()
     return left, right
+
+
+def _corner(pts: List[Pt], q: Pt):
+    """Add a corner to a polygon being made, unless it is the corner
+    before it over again (to a thousandth of a millionth of a mm)."""
+    if not pts or abs(q[0] - pts[-1][0]) >= 1e-9 \
+            or abs(q[1] - pts[-1][1]) >= 1e-9:
+        pts.append(q)
 
 
 def _minus(bits, parts, least: float = LAP, boxes=None):
@@ -700,10 +1070,11 @@ def _on_edge(p: Pt, ring: Sequence[Pt], tol: float = HAIR) -> bool:
     return False
 
 
-def _past(parts, ground, tol: float = 0.01):
-    """How far a piece stands past the edge of another, both in convex
-    parts: ``(how far, the point of it furthest from the other's
-    leather)``, or ``(0.0, None)`` for a piece wholly on the other.
+def _past(parts, ground, ring, tol: float = 0.01):
+    """How far a piece stands past the edge of another: ``(how far, the
+    point of it furthest from the other's leather)``, or ``(0.0, None)``
+    for a piece wholly on the other. Both are given in convex parts, and
+    the other (``ground``) by its outline too (``ring``).
 
     From a convex piece nothing is further than a corner: if the other
     piece is convex, the corners of this one give the answer. If it is
@@ -725,22 +1096,56 @@ def _past(parts, ground, tol: float = 0.01):
         return (best, at) if at is not None else (0.0, None)
     todo: list = []                    # (how far it could be, ..., a bit)
     seen = 0
+    boxes = [pc.bounds(G) for G in ground]
 
     def look(bit):
         nonlocal best, at, seen
         seen += 1
-        off = [[0.0 if pc.inside_convex(q, G, 0.0) else _to_ring(q, G)
-                for G in ground] for q in bit]
-        # it is as far out as its corner furthest from every part ...
-        low, k = max((min(row), k) for k, row in enumerate(off))
-        if low > best:
-            best, at = low, bit[k]
-        # ... and no further than its corners are from any one part
-        high = min(max(row[g] for row in off) for g in range(len(ground)))
-        if high > best + tol:
-            heapq.heappush(todo, (-high, seen, bit))
+        # A bit has nothing of the other piece under it, so each corner
+        # is as far from that piece as from its outline. If its first
+        # corner is, and all of the bit from that corner, no further out
+        # than what is found already, the bit is done with
+        x0, y0, x1, y1 = pc.bounds(bit)
+        first = _to_ring(bit[0], ring)
+        if first + math.hypot(x1 - x0, y1 - y0) <= best:
+            return
+        # it is as far out as the furthest of its corners ...
+        low = [first] + [_to_ring(q, ring) for q in bit[1:]]
+        far, k = max((d, k) for k, d in enumerate(low))
+        if far > best:
+            # (... unless that corner is on the other piece after all:
+            # then the bit is a sliver of this one that rounding left
+            # where the other was taken out of it, and is past nothing)
+            if _in(bit[k], ground):
+                return
+            best, at = far, bit[k]
+        # ... and no further than a corner is, and all of the bit from
+        # that corner
+        high = min(d + max(math.dist(q, r) for r in bit)
+                   for d, q in zip(low, bit))
+        if high <= best + tol:
+            return
+        # nor further than its corners are from any one part of the other
+        # piece: the parts nearest it first, by the boxes round them
+        for gap, g in sorted(
+                (math.hypot(max(gx0 - x1, x0 - gx1, 0.0),
+                            max(gy0 - y1, y0 - gy1, 0.0)), g)
+                for g, (gx0, gy0, gx1, gy1) in enumerate(boxes)):
+            if gap >= high:
+                break                  # and so is every part after it
+            G = ground[g]
+            high = min(high, max(
+                0.0 if pc.inside_convex(q, G, 0.0) else _to_ring(q, G)
+                for q in bit))
+            if high <= best + tol:
+                return
+        heapq.heappush(todo, (-high, seen, bit))
 
-    for bit in _minus(list(parts), ground):
+    # (the biggest bits first: what they are found to stand out by is
+    # more than most of the rest could)
+    for _size, _n, bit in sorted(
+            (-abs(_area(bit)), n, bit) for n, bit in enumerate(
+                _minus(list(parts), ground, LAP, boxes))):
         look(bit)
     while todo and seen < 1500:
         high, _n, bit = heapq.heappop(todo)
@@ -752,7 +1157,7 @@ def _past(parts, ground, tol: float = 0.01):
         mid = (0.5 * (p[0] + q[0]), 0.5 * (p[1] + q[1]))
         for half in _split(bit, mid, (mid[0] - (q[1] - p[1]),
                                       mid[1] + (q[0] - p[0]))):
-            if len(half) >= 3 and abs(pc.area(half)) > 1e-12:
+            if len(half) >= 3 and abs(_area(half)) > 1e-12:
                 look(half)
     return (best, at) if at is not None else (0.0, None)
 
@@ -777,9 +1182,38 @@ def settle(main_ring: Sequence[Pt], main_thickness: float,
     says is worked out, and returns what there is to tell of the stack as
     ``Note``s: its thickest place, then every sheet that stands past the
     main piece's edge, stands clear of something under it, rests on a
-    sliver, or lies on nothing."""
-    ring = fs.model_outline(main_ring) if len(main_ring) >= 3 else []
-    ground = _convex(ring)
+    sliver, or lies on nothing.
+
+    A sheet is told as standing past the edge, or clear of a piece, only
+    by more than the outlines were followed to. The main piece's is
+    thinned both ways, a sheet's inwards only (``Sheet.within``), and
+    very busy ones to half a mm and more: a pocket that shares the main
+    piece's own wavy edge lies within it as it is drawn, and as it is
+    laid may stand a third of a mm past it in places, which is the
+    thinning and nothing to tell. For the rest the main piece is its
+    outline as it is laid. Across a hollow of its edge that is laid a
+    little outside the one drawn (0.03 mm; more for a very busy edge):
+    a sheet that lies wholly beside the main piece and fits such a
+    hollow is on it by that much, and is told as resting on it, not as
+    lying on nothing."""
+    return _lay(main_ring, fs.model_outline(main_ring)
+                if len(main_ring) >= 3 else [], main_thickness, sheets)
+
+
+def _lay(main_ring, ready, main_thickness: float, sheets) -> List[Note]:
+    """``settle``, for a caller that has the main piece's outline made
+    ready already (``ready``: ``foldsolid.model_outline`` of it)."""
+    ring: List[Pt] = []
+    short = 0.0                # how far it is laid short of its outline
+    if len(ready) >= 3:
+        given, _flags = pc.tidy([(float(p[0]), float(p[1]))
+                                 for p in main_ring], [0] * len(main_ring),
+                                1e-6)
+        if len(ready) < len(given):
+            short = _strays(pc.ccw(given), ready)[1]
+        # (thinned both ways, it has no speck of a notch left in it)
+        ring = list(ready)
+    ground, edge = _convex(ring), tuple(ring)
     for s in sheets:
         s._ready()
     # for each sheet, the sheets laid before it on its face that it is over
@@ -811,14 +1245,20 @@ def settle(main_ring: Sequence[Pt], main_thickness: float,
                 s.rank = 1
             s.loose = not s.rests
             s.clear = _gaps(s, under, ground, sheets)
-            s.past, s.past_at = _past(s.parts, ground) if ground \
-                else (0.0, None)
+            # (how far it stands past the main piece goes by the two
+            # outlines alone: a sheet that has not moved, on a main piece
+            # that has not changed, is not measured again)
+            if s._stood is None or s._stood[0] is not s._seen \
+                    or s._stood[1] != edge:
+                s._stood = (s._seen, edge) + (
+                    _past(s.parts, ground, ring) if ground else (0.0, None))
+            s.past, s.past_at = s._stood[2:]
             laid.append(k)
-    notes = [_thickest(ground, max(0.05, float(main_thickness)), sheets,
-                       over)]
+    notes = [_thickest(ground, ring, max(0.05, float(main_thickness)),
+                       sheets, over)]
     numbered = list(enumerate(sheets, 1))
     notes += [Note("past", k, -1, s.past, at=s.past_at)
-              for k, s in numbered if s.past > HAIR]
+              for k, s in numbered if s.past > max(HAIR, short + 1e-9)]
     notes += [Note("clear", k, -1, s.clear[0][1],
                    other=tuple(what for what, _gap in s.clear))
               for k, s in numbered if s.clear]
@@ -832,8 +1272,13 @@ def settle(main_ring: Sequence[Pt], main_thickness: float,
 def _gaps(s: Sheet, under, ground, sheets) -> List[Tuple[int, float]]:
     """What a sheet stands clear of: every piece that is the highest
     leather under some part of it and yet lower than what it rests on, as
-    ``[(piece, gap)]`` with the widest gap first."""
+    ``[(piece, gap)]`` with the widest gap first. A place counts when it
+    is wider than ``HAIR`` -- and wider than twice what the outline of
+    any sheet under the sheet was followed to: the strip that a piece is
+    laid short by along its edge, or two such strips side by side, is no
+    place under a bridge."""
     below = sorted(under, reverse=True)                   # the tallest first
+    least = max([HAIR] + [2.0 * sheets[j].within for _hi, j in under])
     # what it could stand clear of, in that order: the main piece last
     lower = [j + 1 for hi, j in below if hi < s.lo - 1e-9]
     if s.lo > 1e-9 and ground:
@@ -854,7 +1299,7 @@ def _gaps(s: Sheet, under, ground, sheets) -> List[Tuple[int, float]]:
             if hi < s.lo - 1e-9:
                 n += 1
                 if j + 1 not in clear and _common(
-                        bits, sheets[j].parts, HAIR, True, boxes[j]):
+                        bits, sheets[j].parts, least, True, boxes[j]):
                     clear.add(j + 1)
             if all(k in clear for k in lower[n:]):
                 break                  # nothing lower is still looked for
@@ -863,18 +1308,23 @@ def _gaps(s: Sheet, under, ground, sheets) -> List[Tuple[int, float]]:
                 break
         else:
             if 0 in lower and 0 not in clear \
-                    and _common(bits, ground, HAIR, True):
+                    and _common(bits, ground, least, True):
                 clear.add(0)
     return [(k, gap[k]) for k in reversed(lower) if k in clear]
 
 
-def _thickest(ground, thickness: float, sheets, over) -> Note:
+def _thickest(ground, ring, thickness: float, sheets, over) -> Note:
     """The thickest place of the flat stack, as a ``"thick"`` note: the
     most there is from the underside of one piece to the top of another
-    that is over it. ``over`` has, for each sheet, the sheets laid before
-    it on its own face that it is over."""
+    that is over it -- and of the places that are as thick as that, the
+    one with most leather in it. ``ground`` and ``ring`` are the main
+    piece, in convex parts and as its outline; ``over`` has, for each
+    sheet, the sheets laid before it on its own face that it is over."""
     def parts(piece):
         return sheets[piece - 1].parts if piece else ground
+
+    def edge(piece):
+        return sheets[piece - 1].ring if piece else ring
 
     known = {}
 
@@ -899,54 +1349,84 @@ def _thickest(ground, thickness: float, sheets, over) -> Note:
         pairs += [(s.hi - sheets[j].lo, k, j + 1) for j in over[k - 1]]
         pairs += [(thickness + s.hi + sheets[j - 1].hi, k, j)
                   for j in live if j < k and sheets[j - 1].side != s.side]
-    pairs.sort(key=lambda pair: -pair[0])      # (the first of equals stays)
-    tall, top, foot = next((pair for pair in pairs if pair[1] == pair[2]
-                            or is_over(pair[1], pair[2])), (0.0, 0, 0))
+    pairs.sort(key=lambda pair: -pair[0])
+    # the thickest of them that are over each other, and whatever else is
+    # as thick (a wallet's two pocket stacks are): a few of those will do
+    found: List[tuple] = []
+    for pair in pairs:
+        if found and (pair[0] < found[0][0] - 1e-9 or len(found) == 6):
+            break
+        if pair[1] == pair[2] or is_over(pair[1], pair[2]):
+            found.append(pair)
 
     def biggest(bits):
         # (a place in very many bits is followed by its biggest only: it
         # is a point of it that is wanted, not all of it)
-        return sorted(bits, key=pc.area)[-8:] if len(bits) > 8 else bits
+        return sorted(bits, key=_area)[-8:] if len(bits) > 8 else bits
 
-    place = list(parts(top))
-    if foot != top:
-        place = _common(place, parts(foot), 0.0)
-    place = biggest(place)
-    # Of all that place, the part with most leather in it. Each other
-    # piece is taken in or left out, the thickest first; what is left of
-    # the place gets smaller as pieces are taken in.
-    rest = sorted(((thickness if not k else sheets[k - 1].thickness, k)
-                   for k in ([0] if ground else []) + live
-                   if k != top and k != foot), key=lambda tk: -tk[0])
-    best = [-1.0, place]
-    tries = [200]
-
-    def take(i, bits, leather, left):
-        if leather > best[0]:
-            best[:] = [leather, bits]
-        if i == len(rest) or leather + left <= best[0] or tries[0] <= 0:
-            return
-        tries[0] -= 1
-        t, k = rest[i]
-        got = biggest(_common(bits, parts(k), LAP))
-        if got:
-            take(i + 1, got, leather + t, left - t)
-            if sum(map(pc.area, got)) >= (1.0 - 1e-9) * sum(map(pc.area,
-                                                                bits)):
-                return                         # it is under all of the place
-        take(i + 1, bits, leather, left - t)
-
-    take(0, place, 0.0, sum(t for t, _k in rest))
-    at = pc.centroid(max(best[1], key=pc.area)) if best[1] else None
-    here = [0] if at is not None and _in(at, ground) else []
-    leather = thickness if here else 0.0
-    for side in (1, -1):
+    # the pieces as a note names them: the main piece, then outwards on
+    # its front, then outwards on its back
+    order = ([0] if ground else []) + [
+        k for side in (1, -1)
         for k in sorted((k for k in live if sheets[k - 1].side == side),
-                        key=lambda k: sheets[k - 1].lo):
-            if at is not None and _in(at, sheets[k - 1].parts):
-                here.append(k)
-                leather += sheets[k - 1].thickness
-    return Note("thick", 0, -1, tall, leather, tuple(here), at)
+                        key=lambda k: sheets[k - 1].lo)]
+
+    def fill(top, foot):
+        # Of the place where ``top`` is over ``foot``, the part with most
+        # leather in it: (how much leather, the pieces there, a point of
+        # it). Each other piece is taken in or left out, the thickest
+        # first; what is left of the place gets smaller as pieces are
+        # taken in.
+        place = list(parts(top))
+        if foot != top:
+            place = _common(place, parts(foot), 0.0)
+        place = biggest(place)
+        rest = sorted(((thickness if not k else sheets[k - 1].thickness, k)
+                       for k in order if k != top and k != foot),
+                      key=lambda tk: -tk[0])
+        best = [-1.0, place]
+        tries = [200]
+
+        def take(i, bits, leather, left):
+            if leather > best[0]:
+                best[:] = [leather, bits]
+            if i == len(rest) or leather + left <= best[0] or tries[0] <= 0:
+                return
+            tries[0] -= 1
+            t, k = rest[i]
+            got = biggest(_common(bits, parts(k), LAP))
+            if got:
+                take(i + 1, got, leather + t, left - t)
+                if sum(map(_area, got)) >= (1.0 - 1e-9) * sum(map(_area,
+                                                                  bits)):
+                    return                     # it is under all of the place
+            take(i + 1, bits, leather, left - t)
+
+        take(0, place, 0.0, sum(t for t, _k in rest))
+        # a point of it: the centre of its biggest bit, which is a point
+        # of both pieces the place is between
+        at = None
+        for bit in sorted(best[1], key=_area, reverse=True):
+            at = _centre(bit)
+            if _in(at, parts(top)) and _in(at, parts(foot)):
+                break
+        if at is None:
+            return 0.0, (), None
+        # ... and what has leather there: the two, and every other piece
+        # that the point is on and not merely on the edge of
+        here = [k for k in order if k == top or k == foot or (
+            _in(at, parts(k)) and _to_ring(at, edge(k)) > 1e-7)]
+        return (sum(thickness if not k else sheets[k - 1].thickness
+                    for k in here), tuple(here), at)
+
+    if not found:
+        return Note("thick", 0, -1, 0.0, 0.0, (), None)
+    most = None                                # (the first of equals stays)
+    for _tall, top, foot in found:
+        got = fill(top, foot)
+        if most is None or got[0] > most[0] + 1e-9:
+            most = got
+    return Note("thick", 0, -1, found[0][0], most[0], most[1], most[2])
 
 
 # -- stitch holes through the layers ------------------------------------------
@@ -974,19 +1454,25 @@ class LaidCheck(fs.Check):
     are ``Laid`` pairs and whose holes are numbered through the whole
     stack, the main piece's first. A hole that only comes through leather
     with no hole in it has no state: that is marked on the piece it comes
-    through. ``passed`` has those spots for each piece, and ``landed`` the
-    spots where holes that were missed come down on it, both as ``{piece:
-    [(x, y, diameter)]}`` in pattern mm; ``rings`` and ``blanks`` are the
-    same spots sorted by the cell they are on, for the model (filled in by
-    whoever has the cells)."""
+    through. ``through`` has those spots for each piece, and ``landed``
+    the spots where holes that were missed come down on it, both as
+    ``{piece: [(x, y, diameter)]}`` in pattern mm; ``rings`` and
+    ``blanks`` are the same spots sorted by the cell they are on, for the
+    model (filled in by whoever has the cells). (``passed`` is an older
+    name for ``through``: the spots a hole passed through, not anything
+    that passed the check.)"""
 
-    __slots__ = ("blanks", "landed", "passed")
+    __slots__ = ("blanks", "landed", "through")
 
     def __init__(self):
         super().__init__()
         self.blanks: Dict[int, List[Tuple[float, float, float]]] = {}
         self.landed: Dict[int, List[Tuple[float, float, float]]] = {}
-        self.passed: Dict[int, List[Tuple[float, float, float]]] = {}
+        self.through: Dict[int, List[Tuple[float, float, float]]] = {}
+
+    @property
+    def passed(self):
+        return self.through
 
 
 class _Layer:
@@ -1102,7 +1588,7 @@ def laid_check(layers, tol: float = 0.75, near: float = 4.0) -> LaidCheck:
                         misses.append((k, k2))
                     else:
                         through[way] += 1
-                        spot(check.passed, b, x, y, dia)
+                        spot(check.through, b, x, y, dia)
             if looked:
                 check.findings.append(Laid(
                     i, j, looked, off, worst, sum(through), apart,
@@ -1174,7 +1660,10 @@ class FlatStack:
     first) with ``hole_sheet`` (the piece each is of), the main piece's
     ``layout``, ``outline``, ``name``, ``key`` and ``leather``, and
     ``sheet`` for the sheet of a piece's number. Anything else asked of
-    it is the layout's own (``cells``, ``frames``, ``hinges`` ...).
+    it is the layout's own, and so of the main piece alone: ``cells``
+    (``solid`` gives more, the sheets' after them), ``hole_panel`` and
+    ``hole_flat`` (for the first of ``holes``, which are the main
+    piece's), ``frames``, ``hinges`` ...
 
     ``outline`` is the main piece's outline as ``fold_piece`` was given
     it; without one it is put together again from the layout's panels
@@ -1182,9 +1671,13 @@ class FlatStack:
     piece's, as a ``Sheet`` has its own.
 
     The sheets are settled as they are taken (``settle`` fills them in),
-    and the stack is a picture of them as they then lie: the heights it
-    shows are its own, so sheets that are laid again -- a piece moved,
-    another order, another stack -- want a new ``FlatStack``. With no
+    and the stack is a picture of them as they then lie. Everything it
+    shows is its own record of them -- each one's outline, height, rank,
+    thickness, the face it is on, which way up it is, its holes -- so
+    sheets that are changed or laid again afterwards (a piece moved,
+    turned over, another order, another stack) do not change it, and
+    want a new ``FlatStack``. ``thickness_of`` and ``grain_of`` give a
+    piece's thickness and way up as the stack has them. With no
     sheets it is the layout, fold for fold. With sheets it shows the
     stack flat only: no fold is made (``steps`` are all 0 and ``n_steps``
     is 0, so there is nothing to play; ``used`` and ``wrap`` are 0 and
@@ -1226,11 +1719,21 @@ class FlatStack:
         self.panels = layout.panels
         self.base = layout.base
         self.crosses = layout.crosses
-        self.notes = settle(self.outline, layout.thickness, self.sheets)
+        # (with the outline as it was given, where it was: how closely
+        # the layout follows it is part of what there is to tell)
+        self.notes = _lay(outline if outline is not None
+                          and len(outline) >= 3 else self.outline,
+                          self.outline, layout.thickness, self.sheets)
         # each sheet as it was laid for this stack: its underside, its
-        # top, its rank, its convex parts and where its grain is laid from
-        self._laid = [(s.lo, s.hi, s.rank, s.parts, s.frame)
-                      for s in self.sheets]
+        # top, its rank, its convex parts, where its grain is laid from,
+        # the face it is on, which way up it is and how thick
+        self._laid = [(s.lo, s.hi, s.rank, s.parts, s.frame, s.side,
+                       s.grain, s.thickness) for s in self.sheets]
+        # ... and all of them as the hole check wants a piece
+        self._layers = [_Layer(self.outline, layout.cutouts, layout.holes,
+                               name)] \
+            + [_Layer(list(s.ring), list(s.cutouts), list(s.holes), s.name)
+               for s in self.sheets]
         n = len(layout.folds)
         if self.sheets:
             self.steps = [0] * n
@@ -1276,6 +1779,20 @@ class FlatStack:
             return self.sheets[piece - 1]
         return None
 
+    def thickness_of(self, piece: int) -> float:
+        """How thick a piece of the stack is, as it was laid."""
+        if 0 < piece <= len(self._laid):
+            return self._laid[piece - 1][7]
+        return self.thickness
+
+    def grain_of(self, piece: int) -> int:
+        """Which way up a piece of the stack is, as it was laid: 1 when
+        its grain side faces the way the main piece's front does (as the
+        main piece's own does), else -1."""
+        if 0 < piece <= len(self._laid):
+            return self._laid[piece - 1][6]
+        return 1
+
     # -- the sheets as cells of the pattern -----------------------------------
 
     def _cut(self):
@@ -1305,7 +1822,10 @@ class FlatStack:
                 for i in range(n):
                     j = (i + 1) % n
                     dx, dy = pts[j][0] - pts[i][0], pts[j][1] - pts[i][1]
-                    ln = math.hypot(dx, dy) or 1e-12
+                    ln = math.hypot(dx, dy)
+                    if ln < 1e-12:
+                        c.sides.append(None)   # no edge: no wall, no plane
+                        continue
                     wall = flags[i] == pc.OUTLINE
                     c.sides.append((dy / ln, -dx / ln, ln * s.thickness,
                                     WALL if wall else INNER,
@@ -1360,7 +1880,7 @@ class FlatStack:
         model, along the normal out of the main piece's front."""
         lo, hi, rank = self._laid[k - 1][:3]
         lift = 0.5 * self.thickness + apart * rank
-        if self.sheets[k - 1].side > 0:
+        if self._laid[k - 1][5] > 0:
             return lift + lo, lift + hi
         return -(lift + hi), -(lift + lo)
 
@@ -1368,9 +1888,9 @@ class FlatStack:
         """The outermost leather at a point of the pattern, on one face of
         the main piece: ``(where its outer face is, which piece)``."""
         best = None
-        for k, s in enumerate(self.sheets, 1):
-            hi, parts = self._laid[k - 1][1], self._laid[k - 1][3]
-            if s.side == side and (best is None or hi > best[0]) \
+        for k, laid in enumerate(self._laid, 1):
+            hi, parts = laid[1], laid[3]
+            if laid[5] == side and (best is None or hi > best[0]) \
                     and _in(p, parts):
                 best = (hi, k)
         if best is None:
@@ -1409,9 +1929,9 @@ class FlatStack:
                         f.decals = _ringed(f.decals, blanks[i],
                                            lambda p, z=z: (p[0], p[1], z))
         for c in self._cells:
-            s = self.sheets[c.tag[2] - 1]
             z0, z1 = self._span(c.tag[2], apart)
-            up, down = (FRONT, BACK) if s.grain > 0 else (BACK, FRONT)
+            up, down = (FRONT, BACK) if self._laid[c.tag[2] - 1][6] > 0 \
+                else (BACK, FRONT)
             top = [(x, y, z1) for x, y in c.pts]
             bot = [(x, y, z0) for x, y in c.pts]
             marks = []
@@ -1432,6 +1952,8 @@ class FlatStack:
                      ((ox, oy, z0), ex, ey))]
             m = len(top)
             for i in range(m):
+                if c.sides[i] is None:
+                    continue
                 j = i + 1 if i + 1 < m else 0
                 wx, wy, size, kind, edges = c.sides[i]
                 b0 = bot[i]
@@ -1535,11 +2057,9 @@ class FlatStack:
         ``solid``) -- or, with no sheets, of the piece folded up."""
         if not self.sheets:
             return self.layout.lineup(tol, near)
-        main = _Layer(self.outline, self.layout.cutouts, self.layout.holes,
-                      self.name)
-        check = laid_check([main] + self.sheets, tol, near)
+        check = laid_check(self._layers, tol, near)
         for found, rings in ((check.landed, check.rings),
-                             (check.passed, check.blanks)):
+                             (check.through, check.blanks)):
             for piece, spots in found.items():
                 cells = [c for c in self._cells if c.tag[2] == piece] \
                     if piece else self.layout.cells
@@ -1666,6 +2186,8 @@ def seat(layout) -> List[list]:
             regions = [piece for pts, flags in regions
                        for piece in pc.cut(pts, flags, a, e, want, fi)]
         mine = []
+        regions = [bit for pts, flags in regions
+                   for bit in _edged(layout, pts, flags)]
         for pts, flags in regions:
             for q, f in _parted(layout, pts, flags):
                 over = _over(layout, q, f)
@@ -1703,6 +2225,92 @@ def _over(layout, pts, flags=None, least: float = HAIR) -> Dict[int, float]:
         if got:
             out[panel.index] = sum(abs(pc.area(g)) for g in got)
     return out
+
+
+def _bare(layout, pts, flags) -> bool:
+    """Whether a part of a sheet lies, more than a hair wide, over none of
+    the main piece's leather -- standing past its edge, or over a slit or
+    a window in it."""
+    box = pc.bounds(pts)
+    under = [q for panel in layout.panels
+             if box[0] < panel.box[2] and panel.box[0] < box[2]
+             and box[1] < panel.box[3] and panel.box[1] < box[3]
+             for q in panel.parts]
+    mine = [q for q, _f in pc.convex_parts(pts, flags)]
+    return bool(_minus(mine, under, HAIR) if under else mine)
+
+
+def _edged(layout, pts, flags, rounds: int = 32):
+    """A part of a sheet that lies over two panels of the main piece,
+    and partly over none of its leather, cut along the main piece's edge
+    until each piece lies over one panel's leather and not past its
+    edge, or over none of it: so that what stands past the edge goes
+    where it goes by itself, not where a hair of it lying over a body
+    takes it (a liner over a flap cut into its body by slits). The edges
+    of the panel it lies least over are tried first: that is the hair of
+    it. (A part over one panel and past its edge to begin with stays
+    whole: it goes with that panel.)"""
+    over = _over(layout, pts, flags)
+    if len(over) < 2 or not _bare(layout, pts, flags):
+        return [(pts, flags)]
+    todo = [(pts, flags, over)]
+    out = []
+    for _round in range(rounds):
+        if not todo:
+            break
+        P, F, over = todo.pop()
+        if not over or len(over) == 1 and not _bare(layout, P, F):
+            out.append((P, F))
+            continue
+        done = None
+        for p in sorted(over, key=over.get):
+            panel = layout.panels[p]
+            n = len(panel.pts)
+            for k in range(n):
+                if panel.flags[k] != pc.OUTLINE:
+                    continue
+                q, r = panel.pts[k], panel.pts[(k + 1) % n]
+                ln = math.dist(q, r)
+                if ln < 1e-9:
+                    continue
+                e = ((r[0] - q[0]) / ln, (r[1] - q[1]) / ln)
+
+                def want(lo, hi, ln=ln):
+                    return min(hi, ln) - max(lo, 0.0) > 1e-6
+
+                pieces = pc.cut(P, F, q, e, want, pc.INNER)
+                if len(pieces) >= 2:
+                    done = pieces
+                    break
+            if done:
+                break
+        if done is None:
+            out.append((P, F))
+        else:
+            todo += [(a, b, _over(layout, a, b)) for a, b in done]
+    return out + [(P, F) for P, F, _o in todo]
+
+
+def _joined(a, b) -> float:
+    """How long a stretch of edge two outlines share (mm)."""
+    got = 0.0
+    na, nb = len(a), len(b)
+    for i in range(na):
+        p, q = a[i], a[(i + 1) % na]
+        ln = math.dist(p, q)
+        if ln < 1e-9:
+            continue
+        e = ((q[0] - p[0]) / ln, (q[1] - p[1]) / ln)
+        for j in range(nb):
+            r, s = b[j], b[(j + 1) % nb]
+            if abs((r[1] - p[1]) * e[0] - (r[0] - p[0]) * e[1]) > 1e-6 \
+                    or abs((s[1] - p[1]) * e[0] - (s[0] - p[0]) * e[1]) \
+                    > 1e-6:
+                continue
+            tr = (r[0] - p[0]) * e[0] + (r[1] - p[1]) * e[1]
+            ts = (s[0] - p[0]) * e[0] + (s[1] - p[1]) * e[1]
+            got += max(0.0, min(ln, max(tr, ts)) - max(0.0, min(tr, ts)))
+    return got
 
 
 def _parted(layout, pts, flags, rounds: int = 24):
@@ -1785,9 +2393,11 @@ def _follow(layout, regions, k: int) -> None:
     """Give each part of sheet ``k`` that lies over no leather of the main
     piece and was cut along no fold (``how`` "free") the panel of what it
     rests on there: of the parts of the sheets laid before it on its face,
-    the one it lies most over. A part over none of them goes with the
-    nearest panel. ``regions`` are the sheets' parts as ``_seated`` has
-    them, those before ``k`` already given theirs."""
+    the one it lies most over. A part over none of them goes with the part
+    of its own sheet over the main piece's leather that it is most joined
+    to; one joined to none, with the panel on its side of the nearest
+    fold line (``_sided``). ``regions`` are the sheets' parts as
+    ``_seated`` has them, those before ``k`` already given theirs."""
     s = layout.sheets[k - 1]
     for part in regions[k - 1]:
         if part[3] != "free" or len(part) > 4 and part[4]:
@@ -1809,9 +2419,55 @@ def _follow(layout, regions, k: int) -> None:
                 if lap > most:
                     best, most = panel, lap
         if best is None:
-            c = pc.centroid(part[1])
-            best = min(layout.panels, key=lambda p: _to_ring(c, p.pts)).index
+            # (resting on nothing there: with the leather of its own it is
+            # most joined to over the main piece's, through whatever of
+            # its own stands past the edge with it)
+            best = _joined_to(regions[k - 1], part)
+        if best is None:
+            best = _sided(layout, part[1])
         part[0] = best
+
+
+def _joined_to(mine, part) -> Optional[int]:
+    """The panel of what a part of a sheet over nothing of the main piece
+    is most joined to: of the sheet's parts over the main piece's leather
+    (``mine``), the panel the run of free parts it belongs to shares the
+    most edge with. None for a run joined to none."""
+    free = [p for p in mine if p[3] == "free"]
+    run, todo = [part], [part]
+    while todo:
+        one = todo.pop()
+        for other in free:
+            if not any(other is r for r in run) \
+                    and _joined(one[1], other[1]) > 1e-6:
+                run.append(other)
+                todo.append(other)
+    shares: Dict[int, float] = {}
+    for one in run:
+        for other in mine:
+            if other[3] != "free":
+                shared = _joined(one[1], other[1])
+                if shared > 1e-6:
+                    shares[other[0]] = shares.get(other[0], 0.0) + shared
+    return max(shares, key=shares.get) if shares else None
+
+
+def _sided(layout, pts) -> int:
+    """The panel a part of a sheet joined to nothing goes with: the one
+    on its side of the nearest fold line, else the nearest panel."""
+    c = pc.centroid(pts)
+    best = None
+    for h in layout.hinges:
+        a, e, _ln = layout.lines[h.fold]
+        al = (c[0] - a[0]) * e[0] + (c[1] - a[1]) * e[1]
+        u = (c[1] - a[1]) * e[0] - (c[0] - a[0]) * e[1]
+        off = max(0.0, h.lo - al, al - h.hi)
+        far = math.hypot(u, off)
+        if best is None or far < best[0]:
+            best = (far, h.left if u > 0.0 else h.right)
+    if best is not None:
+        return best[1]
+    return min(layout.panels, key=lambda p: _to_ring(c, p.pts)).index
 
 
 def _band(h, half: float, lo: float, hi: float) -> List[Pt]:
@@ -2600,7 +3256,12 @@ def _shut(layout) -> List[Note]:
     still panel's flat leather: ``_through``)."""
     if not layout.n_steps:
         return []
-    posed = layout._posed(layout.fractions(float(layout.n_steps)))
+    # (the cells are left for the judge, which looks at the stack shut
+    # too: see ``judge``)
+    memo: dict = {}
+    layout._poses = memo
+    posed = layout._posed(layout.fractions(float(layout.n_steps)),
+                          memo=memo)
     cells = [cell for _c, cell in posed]
     pts = [v for c in cells for v in c.verts]
     length, width = _boxed(_hull([(p[0], p[1]) for p in pts]))
@@ -2662,6 +3323,10 @@ def _boxed(hull) -> Tuple[float, float]:
     return max(best[1]), min(best[1])
 
 
+_CROSSING = 4         # outlines crossing a box of the still panel's leather
+#                       few enough to cut it by them all (``_through``)
+
+
 def _through(layout, posed):
     """``(most, least)``: the leather a needle square to the still panel
     goes through (mm), over the still panel's own flat leather, in the
@@ -2670,66 +3335,164 @@ def _through(layout, posed):
     The still panel's flat leather is cut by the outline, seen from
     above, of every cell over it, into pieces each under one set of
     cells: every place with a different set of layers over it is one of
-    them. A cell lying level adds its thickness to a piece wholly; one
-    lying aslant adds what a needle meets of it, which changes across
-    the piece as a plane does -- most and least at a corner."""
+    them. A cell lying level adds its thickness to a piece wholly, but
+    for the windows and other cut-outs in it, where a needle goes
+    through no leather of it; one lying aslant adds what a needle meets
+    of it, which changes across the piece as a plane does -- most and
+    least at a corner. Only cells over the still panel's leather are
+    looked at, boxes first."""
     base = layout.base
-    pieces = []
-    for c, cell in posed:
-        if c.sheet == 0 and c.panel == base and c.hinge is None:
-            foot = _hull([(v[0], v[1]) for v in cell.verts])
-            if len(foot) >= 3:
-                pieces.append((foot, 0.0, ()))
-    if not pieces:
-        return None
-    levels: Dict[tuple, list] = {}
+    frames = layout.frames(layout.fractions(float(layout.n_steps)))
+    # (the cells of one sheet lying level on one panel are mostly one
+    # convex piece of it, cut up only where other pieces' outlines cross
+    # it: they are taken as that one piece wherever they make up all of
+    # its hull, which keeps the count of pieces down)
+    groups: Dict[tuple, list] = {}
     tilted = []
-    for _c, cell in posed:
-        foot = _hull([(v[0], v[1]) for v in cell.verts])
+    for c, cell in posed:
+        xs = [v[0] for v in cell.verts]
+        ys = [v[1] for v in cell.verts]
+        foot = _hull(list(zip(xs, ys)))
         if len(foot) < 3 or abs(pc.area(foot)) < 1e-9:
             continue                   # (it stands on edge: no needle in it)
         level = all(abs(f.plane[2]) < 1e-9 or abs(f.plane[2]) > 1 - 1e-9
                     for f in cell.faces)
-        if level:
-            zs = [v[2] for v in cell.verts]
-            key = tuple(foot)
+        if not level:
+            tilted.append((foot, pc.bounds(foot), cell))
+            continue
+        zs = [v[2] for v in cell.verts]
+        key = (c.sheet, c.panel, c.hinge, round(min(zs), 6),
+               round(max(zs), 6))
+        groups.setdefault(key, []).append((c, foot))
+    flats = []                         # (foot, box, thickness, holes, base)
+    for key, got in groups.items():
+        thick = key[4] - key[3]
+        holes = []
+        if key[2] is None:
+            fr = frames[key[1]]
+            holes = [pc.ccw([fs.place(fr, q)[:2] for q in ring])
+                     for c, _f in got for ring in c.polys]
+        whole = None
+        if len(got) > 1:
+            whole = _hull([q for _c, f in got for q in f])
+            if abs(abs(pc.area(whole)) - sum(abs(pc.area(f))
+                                             for _c, f in got)) \
+                    > 1e-6 * max(1.0, abs(pc.area(whole))):
+                whole = None
+        feet = [whole] if whole is not None else [f for _c, f in got]
+        is_base = key[0] == 0 and key[1] == base and key[2] is None
+        for foot in feet:
+            flats.append((foot, pc.bounds(foot), thick, holes, is_base))
+    pieces = [(foot, fb, 0.0, ()) for foot, fb, _t, _h, b in flats if b]
+    if not pieces:
+        return None
+    region = (min(b[0] for _p, b, _g, _o in pieces),
+              min(b[1] for _p, b, _g, _o in pieces),
+              max(b[2] for _p, b, _g, _o in pieces),
+              max(b[3] for _p, b, _g, _o in pieces))
+    under = [(p, b) for p, b, _g, _o in pieces]
+
+    def over(foot, fb):
+        return (fb[0] < region[2] and region[0] < fb[2]
+                and fb[1] < region[3] and region[1] < fb[3]
+                and any(b[0] < fb[2] and fb[0] < b[2] and b[1] < fb[3]
+                        and fb[1] < b[3]
+                        and pc.convex_overlap(foot, p, 1e-9)
+                        for p, b in under))
+
+    levels: Dict[tuple, list] = {}
+    for foot, fb, thick, holes, _b in flats:
+        if not over(foot, fb):
+            continue
+        bits = [foot]
+        if holes:
+            # (its windows, where they lie shut)
+            bits = _minus(bits, holes, 1e-7)
+        for bit in bits:
+            key = tuple((round(x, 9), round(y, 9)) for x, y in bit)
             if key not in levels:
-                levels[key] = [foot, 0.0]
-            levels[key][1] += max(zs) - min(zs)
-        else:
-            tilted.append((foot, cell))
-    feet = [(foot, mm, None) for foot, mm in levels.values()] + \
-        [(foot, 0.0, cell) for foot, cell in tilted]
-    for foot, mm, cell in feet:
-        fb = pc.bounds(foot)
-        nxt = []
-        for poly, got, over in pieces:
-            pb = pc.bounds(poly)
-            if not (pb[0] < fb[2] and fb[0] < pb[2] and pb[1] < fb[3]
-                    and fb[1] < pb[3]) or not pc.convex_overlap(poly, foot,
-                                                                1e-9):
-                nxt.append((poly, got, over))
+                levels[key] = [bit, 0.0]
+            levels[key][1] += thick
+    tilted = [(foot, cell) for foot, fb, cell in tilted if over(foot, fb)]
+    feet = [(foot, pc.bounds(foot), mm, None)
+            for foot, mm in levels.values()]
+    for foot, cell in tilted:
+        zs = [v[2] for v in cell.verts]
+        feet.append((foot, pc.bounds(foot), max(zs) - min(zs), cell))
+    best = [0.0, math.inf]             # (most, least) so far
+
+    def take(v):
+        if v > 1e-6:
+            best[0], best[1] = max(best[0], v), min(best[1], v)
+
+    def leaf(polys, got, part):
+        # (the leather in the box cut by every outline that crosses it)
+        pieces = [(p, pc.bounds(p), got, ()) for p in polys]
+        for foot, fb, mm, cell in part:
+            nxt = []
+            for poly, pb, have, on in pieces:
+                if not (pb[0] < fb[2] and fb[0] < pb[2] and pb[1] < fb[3]
+                        and fb[1] < pb[3]) or \
+                        not pc.convex_overlap(poly, foot, 1e-9):
+                    nxt.append((poly, pb, have, on))
+                    continue
+                inner = pc.clip_to_convex(poly, foot)
+                if len(inner) >= 3 and abs(pc.area(inner)) > 1e-9:
+                    inner = pc.ccw(inner)
+                    if cell is None:
+                        nxt.append((inner, pc.bounds(inner), have + mm, on))
+                    else:
+                        nxt.append((inner, pc.bounds(inner), have,
+                                    on + (cell,)))
+                nxt += [(rest, pc.bounds(rest), have, on)
+                        for rest in _minus([poly], [foot], 1e-7)]
+            pieces = nxt
+        for poly, _pb, have, on in pieces:
+            if not on:
+                take(have)
                 continue
-            inner = pc.clip_to_convex(poly, foot)
-            if len(inner) >= 3 and abs(pc.area(inner)) > 1e-9:
-                nxt.append((pc.ccw(inner), got + mm,
-                            over + ((cell,) if cell is not None else ())))
-            nxt += [(rest, got, over)
-                    for rest in _minus([poly], [foot], 1e-7)]
-        pieces = nxt
-    most, least = 0.0, math.inf
-    for poly, got, over in pieces:
-        if over:
             cx, cy = pc.centroid(poly)
-            spots = [(x + (cx - x) * 1e-6, y + (cy - y) * 1e-6)
-                     for x, y in poly] + [(cx, cy)]
-            values = [got + sum(_chord(c, x, y) for c in over)
-                      for x, y in spots]
+            for x, y in [(x + (cx - x) * 1e-6, y + (cy - y) * 1e-6)
+                         for x, y in poly] + [(cx, cy)]:
+                take(have + sum(_chord(c, x, y) for c in on))
+
+    def look(box, polys, got, part, depth):
+        # (a box of the still panel's leather: the outlines that cover it
+        # whole add to all of it; while many cross it, and what it holds
+        # could still be the most or the least, it is halved)
+        x0, y0, x1, y1 = box
+        sq = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+        polys = [q for q in (pc.clip_to_convex(p, sq) for p in polys)
+                 if len(q) >= 3 and abs(pc.area(q)) > 1e-9]
+        if not polys:
+            return
+        crossing, up = [], 0.0
+        for f in part:
+            foot, fb, mm, cell = f
+            if fb[2] <= x0 or x1 <= fb[0] or fb[3] <= y0 or y1 <= fb[1]:
+                continue
+            if cell is None and all(pc.inside_convex(q, foot, 0.0)
+                                    for q in sq):
+                got += mm
+                continue
+            crossing.append(f)
+            up += mm
+        if got + up <= best[0] and got >= best[1]:
+            return
+        if len(crossing) <= _CROSSING or depth >= 16:
+            leaf(polys, got, crossing)
+            return
+        if x1 - x0 >= y1 - y0:
+            m = 0.5 * (x0 + x1)
+            halves = ((x0, y0, m, y1), (m, y0, x1, y1))
         else:
-            values = [got]
-        for v in values:
-            if v > 1e-6:
-                most, least = max(most, v), min(least, v)
+            m = 0.5 * (y0 + y1)
+            halves = ((x0, y0, x1, m), (x0, m, x1, y1))
+        for half in halves:
+            look(half, polys, got, crossing, depth + 1)
+
+    look(region, [p for p, _b, _g, _o in pieces], 0.0, feet, 0)
+    most, least = best
     return (most, least) if most > 0.0 else None
 
 
@@ -2752,98 +3515,177 @@ def _chord(cell, x: float, y: float) -> float:
     return max(0.0, hi - lo)
 
 
+_EIGHTHS = 8        # moments looked at inside a step: eighths of it, and
+#                     a sixteenth in from each end, where a piece parted at
+#                     the end of a hinge comes into itself
+_HALVINGS = 8       # ... and how closely each two's deepest is closed in on
+
+
 def judge(layout) -> List[Note]:
     """What the judge (``clash``) finds in the stack as it folds, as notes
-    that name the two pieces and say how deep. It looks at each whole
-    step of the folding and at three moments inside each (a quarter, half
-    and three quarters of the way through it); inside a step only at two
-    cells the step moves against each other (``_bodies``).
+    that name the two pieces and say how deep: more than ``foldsolid.
+    _TOUCH`` (0.05 mm), always.
 
-    ``"clash"``: two pieces, at their deepest, with the moment they are
-    first seen so (``b``: 1.0 the end of step 1, 0.5 half way through
-    it). What a sheet does to itself, or the main piece to it, where the
-    sheet is noted slit or lies over a crossing of folds is that note's
-    to say: its ``b`` is made the deepest of it, and no clash is given.
-    ``"limit"``: the main piece in itself -- a known limit of folding one
-    piece, crossing folds and a tray's corners, no fault of what is put
-    on it. Where a fold has moved off its line, the main piece's own two
-    parts that the piece folded with every fold on its line does not
-    have as deep (the layout's ``_drawn``) are a ``"landing"`` instead:
-    the move's doing. Never per frame: a layout runs it once, when it is
-    made. The notes of the stack (``layout.notes``) must hold its slit
-    and crossing notes already."""
+    At rest -- at each whole step of the folding -- every two cells are
+    tried, exactly. On the way, inside each step, the two cells the step
+    moves against each other (``_bodies``) are tried at eighths of the
+    step and a sixteenth in from each end, and each two found into each
+    other there closed in on round the deepest moment found, between the
+    moments looked at either side (a golden section search,
+    ``_HALVINGS`` steps of it). So each note says two depths: ``rest``,
+    the deepest at any whole step (0 for what is so only on the way), and
+    ``a``, the deepest at any moment looked at, with ``b`` the first
+    moment it is deeper than ``_TOUCH`` (1.0 the end of step 1, 0.5 half
+    way through it).
+
+    ``"clash"``: two pieces. What a sheet does to itself, or the main
+    piece to it, where the sheet is noted slit or lies over a crossing of
+    folds is that note's to say: its ``b`` is made the deepest of it, its
+    ``rest`` the deepest at rest, and no clash is given. ``"limit"``: the
+    main piece in itself -- a known limit of folding one piece, crossing
+    folds and a tray's corners, no fault of what is put on it. Where a
+    fold has moved off its line, the main piece's own two parts that the
+    piece folded with every fold on its line does not have as deep (the
+    layout's ``_drawn``) are a ``"landing"`` instead: the move's doing.
+    Never per frame: a layout runs it once, when it is made. The notes
+    of the stack (``layout.notes``) must hold its slit and crossing notes
+    already."""
     from . import clash
     n = layout.n_steps
-    moments = [0.0]
-    for step in range(1, n + 1):
-        moments += [step - 0.75, step - 0.5, step - 0.25, float(step)]
+    least = fs._TOUCH
     drawn = getattr(layout, "_drawn", None) if any(layout.shift) else None
     runs = getattr(layout, "_slit_runs", [])
     spots = [(note.sheet, note.at, note.fold, note.other[0])
              for note in layout.notes if note.kind == "crossing"]
+    # what was found, by what it is: [deepest, first moment, deepest at
+    # rest, and for a landing how deep the two are folded on their lines]
     found: Dict[tuple, list] = {}
-    moved: Dict[tuple, list] = {}
-    there: Dict[tuple, float] = {}
-    # (where a fold has moved, what it is left into other leather by no
-    # more than a moved fold is let keep, the hair it is moved to within,
-    # is no finding)
-    least = fs._TOUCH if any(layout.shift) else clash.JUDGE
+    poses: Dict[float, tuple] = {}
+    lined: Dict[float, list] = {}
+    # (cells on panels lying still, from moment to moment -- and the
+    # stack shut, as ``_shut`` left it)
+    memo: dict = layout.__dict__.pop("_poses", None) or {}
 
     def order(tag):
         return (tag[0] != "panel", tag[1])
 
-    for t in moments:
-        fr = layout.fractions(t)
-        posed = layout._posed(fr)
-        cells = [cell for _c, cell in posed]
-        pick = None
-        if t != int(t):
-            body = _bodies(layout, int(math.ceil(t)), [c for c, _x in posed])
+    def pose(t):
+        if t not in poses:
+            fr = layout.fractions(t)
+            frames = layout.frames(fr)
+            poses[t] = (frames, layout._arcs(frames, fr), {})
+        return poses[t]
 
-            def pick(i, j, body=body):
-                return body[i] != body[j]
+    def one(c, t):
+        frames, arcs, rides = pose(t)
+        if c.sheet:
+            lifts = (c.low, c.high)
+            if lifts not in rides:
+                rides[lifts] = [fs._ride(arc, *lifts) for arc in arcs]
+            return layout._cell(c, frames, rides[lifts], None, lifts)
+        return layout._cell(c, frames, arcs)
 
-        lined = None
-        for deep, i, j in clash.pairs(cells, least, pick):
-            ca, cb = posed[i][0], posed[j][0]
-            a, b = sorted((ca.sheet, cb.sheet))
-            if a == b == 0 and drawn is not None:
-                ta, tb = sorted((ca.tag, cb.tag), key=order)
-                if lined is None:
-                    lined = drawn._posed(fr, sheets=False)
-                was = max((clash.depth(x, y) for c2, x in lined
-                           if c2.tag == ta for d2, y in lined
-                           if d2.tag == tb and y is not x), default=0.0)
-                if was < deep - fs._TOUCH:
-                    got = moved.setdefault((ta, tb), [deep, t, was])
-                    if deep > got[0]:
-                        got[0], got[2] = deep, was
-                    continue
-            elif b and a in (0, b):
-                key = _parted_there(layout, b, [c for c in (ca, cb)
-                                                if c.sheet == b],
-                                    runs, spots)
-                if key is not None:
-                    there[key] = max(there.get(key, 0.0), deep)
-                    continue
-            got = found.setdefault((a, b), [deep, t])
-            got[0] = max(got[0], deep)
+    def say(ca, cb, deep, t, whole):
+        a, b = sorted((ca.sheet, cb.sheet))
+        was = 0.0
+        if a == b == 0 and drawn is not None:
+            ta, tb = sorted((ca.tag, cb.tag), key=order)
+            if t not in lined:
+                lined[t] = drawn._posed(drawn.fractions(t), sheets=False)
+            was = max((clash.depth(x, y) for c2, x in lined[t]
+                       if c2.tag == ta for d2, y in lined[t]
+                       if d2.tag == tb and y is not x), default=0.0)
+            key = ("landing", ta, tb) if was < deep - least \
+                else ("found", 0, 0)
+        elif b and a in (0, b):
+            key = _parted_there(layout, b, [c for c in (ca, cb)
+                                            if c.sheet == b], runs, spots)
+            key = ("found", a, b) if key is None else key
+        else:
+            key = ("found", a, b)
+        got = found.setdefault(key, [0.0, t, 0.0, 0.0])
+        if deep > got[0]:
+            got[0], got[3] = deep, was
+        got[1] = min(got[1], t)
+        if whole:
+            got[2] = max(got[2], deep)
+
+    # at rest: every two cells at each whole step
+    for step in range(n + 1):
+        posed = layout._posed(layout.fractions(float(step)), memo=memo,
+                              lazy=True)
+        for deep, i, j in clash.pairs([x for _c, x in posed], least):
+            say(posed[i][0], posed[j][0], deep, float(step), True)
+    # on the way: what each step moves against each other, at eighths of
+    # the step, and each two found into each other closed in on round its
+    # deepest moment
+    inner = sorted({k / _EIGHTHS for k in range(1, _EIGHTHS)}
+                   | {0.5 / _EIGHTHS, 1.0 - 0.5 / _EIGHTHS})
+    for step in range(1, n + 1):
+        follow: Dict[tuple, list] = {}
+        for k in inner:
+            t = step - 1 + k
+            posed = layout._posed(layout.fractions(t), memo=memo, lazy=True)
+            body = _bodies(layout, step, [c for c, _x in posed])
+
+            for g, i, j in clash.pairs([x for _c, x in posed], least,
+                                       bodies=body):
+                ca, cb = posed[i][0], posed[j][0]
+                say(ca, cb, g, t, False)
+                key = (id(ca), id(cb))
+                if key not in follow or g > follow[key][0]:
+                    follow[key] = [g, t, ca, cb]
+        lo_t, hi_t = step - 1.0, float(step)
+        for g, t, ca, cb in follow.values():
+
+            def depth_at(x, ca=ca, cb=cb):
+                one_a, one_b = one(ca, x), one(cb, x)
+                if one_a is None or one_b is None:
+                    return 0.0
+                return clash.depth(one_a, one_b)
+
+            # (between the moments looked at either side of it)
+            at = t - (step - 1)
+            lo = step - 1 + max([0.0] + [x for x in inner if x < at - 1e-12])
+            hi = step - 1 + min([1.0] + [x for x in inner if x > at + 1e-12])
+            r = 0.5 * (math.sqrt(5.0) - 1.0)
+            x1, x2 = hi - r * (hi - lo), lo + r * (hi - lo)
+            f1, f2 = depth_at(x1), depth_at(x2)
+            best, when = (f1, x1) if f1 > f2 else (f2, x2)
+            for _half in range(_HALVINGS):
+                if f1 > f2:
+                    hi, x2, f2 = x2, x1, f1
+                    x1 = hi - r * (hi - lo)
+                    f1 = depth_at(x1)
+                    if f1 > best:
+                        best, when = f1, x1
+                else:
+                    lo, x1, f1 = x1, x2, f2
+                    x2 = lo + r * (hi - lo)
+                    f2 = depth_at(x2)
+                    if f2 > best:
+                        best, when = f2, x2
+            if best > g:
+                say(ca, cb, best, when, False)
     # the depths at slits and crossings, into their notes
     count = {"slit": 0, "crossing": 0}
     for m, note in enumerate(layout.notes):
         if note.kind in count:
-            deep = there.get((note.kind, count[note.kind]))
+            got = found.get((note.kind, count[note.kind]))
             count[note.kind] += 1
-            if deep is not None:
-                layout.notes[m] = note._replace(b=deep)
-    out = [Note("limit" if pair == (0, 0) else "clash", pair[0], -1,
-                deep, t, (pair[1],))
-           for pair, (deep, t) in sorted(found.items(),
-                                         key=lambda kv: -kv[1][0])]
-    for (ta, tb), (deep, t, was) in sorted(moved.items(),
-                                            key=lambda kv: -kv[1][0]):
-        out.append(Note("landing", 0, layout._blame(ta, tb), deep, t,
-                        (ta, tb), c=was))
+            if got is not None:
+                layout.notes[m] = note._replace(b=got[0], rest=got[2])
+    out = []
+    for key, (deep, t, rest, was) in sorted(
+            found.items(), key=lambda kv: -kv[1][0]):
+        if key[0] == "found":
+            a, b = key[1:]
+            out.append(Note("limit" if (a, b) == (0, 0) else "clash", a, -1,
+                            deep, t, (b,), rest=rest))
+        elif key[0] == "landing":
+            ta, tb = key[1:]
+            out.append(Note("landing", 0, layout._blame(ta, tb), deep, t,
+                            (ta, tb), c=was, rest=rest))
     return out
 
 
@@ -3021,7 +3863,7 @@ class StackCheck(LaidCheck):
     def __init__(self, found: LaidCheck):
         super().__init__()
         for name in ("findings", "state", "lands", "rings", "blanks",
-                     "landed", "passed"):
+                     "landed", "through"):
             setattr(self, name, getattr(found, name))
         self.readings: Dict[int, Tuple[int, int, bool]] = {}
 
@@ -3043,21 +3885,18 @@ class Faced(fs.Lineup):
 def stack_check(layout, tol: float = 0.75, near: float = 4.0):
     """The stitch holes of a stack: what ``Layout.lineup`` gives for one.
 
-    First as the stack lies flat, through its layers (``laid_check``). A
-    piece with holes that goes round a bend (a ``"cross"`` or ``"level"``
-    note) is read shut as well, with its holes shifted by its true
-    length: at every fold it goes round, half that note's length further
-    from the fold line on each side (inside the bend; nearer, outside),
-    the shifts of all its folds added up. The shut reading has every such
-    piece shifted together; then, piece by piece, the reading in which
-    more of its holes meet is kept, the others held in the reading they
-    have. ``readings`` says, for each such piece, ``(how many of its
-    holes meet as it lies, how many shut, whether the shut reading is
-    kept)``, over all its folds. Then the pieces the folding brings face
-    to face with nothing between are compared as ``Layout.lineup``
-    compares two panels, within the same reach (it is not made longer by
-    the piles): ``Faced`` findings. The spots it marks are sorted by cell
-    for ``solid``. A ``StackCheck``."""
+    The stack is read twice, whole, through its layers (``laid_check``):
+    FLAT, every piece as it lies, and SHUT, every piece that goes round a
+    bend (a ``"cross"`` or ``"level"`` note) with its holes where they
+    land when the stack is shut (``_landed``). The marks show the reading
+    in which more holes meet (flat, where as many do). ``readings`` says,
+    for each piece that goes round a bend and has holes, ``(how many of
+    its holes meet flat, how many shut, whether the shut reading is the
+    one shown)`` -- the last the same for every piece. Then the pieces
+    the folding brings face to face with nothing between are compared as
+    ``Layout.lineup`` compares two panels, within the same reach (it is
+    not made longer by the piles): ``Faced`` findings. The spots it marks
+    are sorted by cell for ``solid``. A ``StackCheck``."""
     own = layout._own_holes
     main = _Layer(layout.outline, layout.cutouts, layout.holes[:own],
                   getattr(layout, "name", ""))
@@ -3067,49 +3906,45 @@ def stack_check(layout, tol: float = 0.75, near: float = 4.0):
     for k, s in enumerate(layout.sheets, 1):
         starts[k] = first
         first += len(s.holes)
-    # each piece that goes round a bend, with its holes read shut
-    shut: Dict[int, _Layer] = {}
-    for k, s in enumerate(layout.sheets, 1):
-        folds = [note for note in layout.notes if note.sheet == k
-                 and note.kind in ("cross", "level")]
-        if not s.holes or not folds:
-            continue
-        moved = []
-        for x, y, dia in s.holes:
-            dx = dy = 0.0
-            for note in folds:
-                line = layout.lines[note.fold]
-                if line is None:
-                    continue
-                (ax, ay), (ex, ey), _ln = line
-                u = (y - ay) * ex - (x - ax) * ey
-                way = 0.5 * note.a * (1.0 if u >= 0.0 else -1.0)
-                dx, dy = dx - way * ey, dy + way * ex
-            moved.append((x + dx, y + dy, dia))
-        shut[k] = _Layer(s.ring, s.cutouts, moved, s.name)
-
-    def read(chosen):
-        return laid_check([shut[k] if k in chosen else layer
-                           for k, layer in enumerate(layers)], tol, near)
 
     def met(found, k):
         mine = range(starts[k], starts[k] + len(layout.sheets[k - 1].holes))
         return sum(1 for i in mine if found.state.get(i) == fs.MEETS)
 
-    chosen = set(shut)
-    check = read(chosen)
-    readings = {}
-    for k in sorted(shut):
-        flat = read(chosen - {k})
-        now, then = met(flat, k), met(check, k)
-        better = then > now
-        readings[k] = (now, then, better)
-        if not better:
-            chosen.discard(k)
-            check = flat
+    def read(shut):
+        return laid_check([shut.get(k, layer)
+                           for k, layer in enumerate(layers)], tol, near)
+
+    # each piece that goes round a bend, with its holes as they land when
+    # it is held each way it may be (``_landed``): the way most of its own
+    # holes meet, the others held at their middles, is the one it is read
+    # shut in
+    holds = {k: _landed(layout, k) for k in range(1, len(layers))}
+    holds = {k: got for k, got in holds.items() if got}
+    middle = {k: got[0] for k, got in holds.items()}
+    shut: Dict[int, _Layer] = {}
+    for k, ways in holds.items():
+        best, most = ways[0], -1
+        for way in ways:
+            got = met(read({**middle, k: way}), k)
+            if got > most:
+                best, most = way, got
+        shut[k] = best
+    flat = read({})
+    if shut:
+        closed = read(shut)
+        shown = len(closed.holes(fs.MEETS)) > len(flat.holes(fs.MEETS))
+    else:
+        closed, shown = flat, False
+    check = closed if shown else flat
+    readings = {k: (met(flat, k), met(closed, k), shown) for k in shut}
     check = StackCheck(check)
     check.readings = readings
-    _faced(layout, check, tol, near)
+    # (holes the shut reading has moved are not compared as they lie)
+    _faced(layout, check, tol, near,
+           {i for k in (shut if shown else ())
+            for i in range(starts[k],
+                           starts[k] + len(layout.sheets[k - 1].holes))})
     for found, rings in ((check.landed, check.rings),
                          (check.passed, check.blanks)):
         for piece, spots in found.items():
@@ -3122,13 +3957,87 @@ def stack_check(layout, tol: float = 0.75, near: float = 4.0):
     return check
 
 
-def _faced(layout, check, tol: float, near: float) -> None:
+def _landed(layout, k: int) -> List["_Layer"]:
+    """Sheet ``k`` with its holes where they land when the stack is shut,
+    for each way it may be held: ``[_Layer]``, the first held at its
+    middle -- its two ends coming equally far from where they lie flat --
+    and then held on each panel it lies on in turn. Empty for a sheet
+    without holes or that goes round no bend.
+
+    The steps between the panels it lies on are fixed by the folds: round
+    each bend it has that note's length more leather than the room it
+    has (less, outside the bend), and what lies beyond the bend from
+    where it is held is pushed that much further from the fold line (on
+    the inside; drawn nearer, outside). Where along its length it is held
+    is the one thing not fixed."""
+    s = layout.sheets[k - 1]
+    over = {note.fold: note.a for note in layout.notes
+            if note.sheet == k and note.kind in ("cross", "level")}
+    if not s.holes or not over:
+        return []
+    up = {h.child: h for h in layout.tree}
+
+    def chain(p):
+        out = [p]
+        while out[-1] in up:
+            out.append(up[out[-1]].parent)
+        return out
+
+    def push(hold, p):
+        """How far a point on panel ``p`` lands from where it lies, the
+        sheet held on panel ``hold``."""
+        a, b = chain(hold), chain(p)
+        top = next(q for q in a if q in b)
+        dx = dy = 0.0
+        for q in b[:b.index(top)] + a[:a.index(top)]:
+            h = up[q]
+            mm = over.get(h.fold)
+            if not mm:
+                continue
+            c2 = (-h.e[1], h.e[0])          # to the child's side
+            way = 1.0 if p in h.moves else -1.0
+            dx += way * mm * c2[0]
+            dy += way * mm * c2[1]
+        return dx, dy
+
+    panels = sorted({panel for panel, _q, _f in layout._regions[k - 1]})
+    where = []
+    for x, y, _d in s.holes:
+        on = next((panel for panel, q, _f in layout._regions[k - 1]
+                   if pc.inside((x, y), q)), None)
+        if on is None:
+            on = min(layout._regions[k - 1],
+                     key=lambda r: _to_ring((x, y), r[1]))[0]
+        where.append(on)
+
+    def held(shifts):
+        return _Layer(s.ring, s.cutouts,
+                      [(x + shifts[p][0], y + shifts[p][1], d)
+                       for (x, y, d), p in zip(s.holes, where)], s.name)
+
+    # the two panels furthest apart round the bends: held at its middle,
+    # it lands half way between being held on the one and on the other
+    ends = max(((a, b) for a in panels for b in panels),
+               key=lambda ab: (math.hypot(*push(ab[0], ab[1])), ab))
+    mid = {p: tuple(0.5 * (u + v) for u, v in zip(push(ends[0], p),
+                                                  push(ends[1], p)))
+           for p in panels}
+    out = [held(mid)]
+    for hold in panels:
+        out.append(held({p: push(hold, p) for p in panels}))
+    return out
+
+
+def _faced(layout, check, tol: float, near: float, moved=frozenset()
+           ) -> None:
     """Add to ``check`` the pieces that the folding brings face to face
     with nothing between (see ``stack_check``): each body of leather
     (``bodies``) against each on another panel, folded right up, where
     their planes lie together and their faces are no further apart than
     ``Layout.lineup`` lets two panels be. A hole of either that meets or
-    misses one of the other is given that, as the flat reading does."""
+    misses one of the other is given that, as the flat reading does --
+    but for the holes in ``moved``, which the reading shown has where
+    they land, not where the model lays them."""
     n = len(layout.folds)
     if not layout.n_steps:
         return
@@ -3200,12 +4109,14 @@ def _faced(layout, check, tol: float, near: float) -> None:
                                 default=(2.0 * near, -1))
                     if d <= tol:
                         apart = max(apart, d)
-                        if check.state.get(k) != fs.OFF:
+                        if check.state.get(k) != fs.OFF \
+                                and k not in moved:
                             check.state[k] = fs.MEETS
                     elif d <= near:
                         off += 1
                         worst = max(worst, d)
-                        check.state[k] = fs.OFF
+                        if k not in moved:
+                            check.state[k] = fs.OFF
                     else:
                         lone += 1
             check.findings.append(Faced(

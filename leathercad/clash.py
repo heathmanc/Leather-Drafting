@@ -32,10 +32,16 @@ def _key(x: float, y: float, z: float) -> P3:
 
 
 def _normals(cell) -> List[P3]:
-    """The ways the faces of a cell are turned, each once."""
+    """The ways the faces of a cell are turned, each once: the normal
+    each face carries, made a unit length. A face that carries none (a
+    plane of ``(0, 0, 0, d)``) has no way to look along."""
     out, seen = [], set()
     for f in cell.faces:
-        n = f.plane[:3]
+        nx, ny, nz = f.plane[:3]
+        ln = math.sqrt(nx * nx + ny * ny + nz * nz)
+        if ln <= 1e-12:
+            continue
+        n = (nx / ln, ny / ln, nz / ln)
         k = _key(*n)
         if k not in seen:
             seen.add(k)
@@ -126,13 +132,16 @@ def clashes(cells, eps: float = JUDGE) -> List[Tuple[float, tuple, tuple]]:
     return [(d, cells[i].tag, cells[j].tag) for d, i, j in pairs(cells, eps)]
 
 
-def pairs(cells, eps: float = JUDGE, pick=None
+def pairs(cells, eps: float = JUDGE, pick=None, bodies=None
           ) -> List[Tuple[float, int, int]]:
     """``clashes``, with the two cells given by where they are in the
     list, ``[(depth, i, j)]``. ``pick``, if given, is asked
     of two places in the list whether those two cells are to be tried at
     all (a judge that knows two cells cannot have come together leaves
-    them be)."""
+    them be); ``bodies``, if given, says for each cell what it moves with,
+    and two that move as one are not tried. A cell may be given as
+    something with its ``verts`` and a ``full()`` that makes it
+    (``foldsolid._Pending``): it is made only if it is to be tried."""
     boxed = []
     for k, c in enumerate(cells):
         xs = [v[0] for v in c.verts]
@@ -140,19 +149,28 @@ def pairs(cells, eps: float = JUDGE, pick=None
         zs = [v[2] for v in c.verts]
         if xs:
             boxed.append((min(xs), max(xs), min(ys), max(ys), min(zs),
-                          max(zs), k))
+                          max(zs), k, bodies[k] if bodies else 0))
     boxed.sort(key=lambda box: box[0])         # along x, to try few pairs
     out = []
-    for i, (_ax0, ax1, ay0, ay1, az0, az1, a) in enumerate(boxed):
-        for bx0, _bx1, by0, by1, bz0, bz1, b in boxed[i + 1:]:
+    for i, (_ax0, ax1, ay0, ay1, az0, az1, a, ga) in enumerate(boxed):
+        for bx0, _bx1, by0, by1, bz0, bz1, b, gb in boxed[i + 1:]:
             if bx0 >= ax1 - eps:
                 break                          # and so does every later one
+            if bodies and ga == gb:
+                continue
             if (by0 >= ay1 - eps or ay0 >= by1 - eps
                     or bz0 >= az1 - eps or az0 >= bz1 - eps):
                 continue
             if pick is not None and not pick(a, b):
                 continue
-            d = depth(cells[a], cells[b])
+            ca, cb = cells[a], cells[b]
+            # (a cell given as its corners only is made now: see
+            # ``foldsolid._Pending``)
+            ca = ca.full() if hasattr(ca, "full") else ca
+            cb = cb.full() if hasattr(cb, "full") else cb
+            if ca is None or cb is None:
+                continue
+            d = depth(ca, cb)
             if d > eps:
                 out.append((d, a, b))
     out.sort(key=lambda found: -found[0])
@@ -168,11 +186,15 @@ def convex(cell) -> float:
     It is the most that any corner of the cell stands in front of any of
     its own faces: of the plane the face carries, and of the plane
     through the face's own corners, which a cell put together wrongly may
-    not have the same. A cell whose faces do not close round it -- one
-    left out, one turned inside out -- is told too: the faces of a solid,
-    each taken as its area along its normal, add up to nothing, and what
-    they add up to here is given as a length (over the root of all their
-    area)."""
+    not have the same. Where those two planes are not the same -- the
+    one the face carries is turned otherwise, or its normal is not of
+    unit length, or it has none -- the most by which they differ at any
+    corner of the cell is told as well: ``depth`` looks along the normal
+    a face carries, and measures wrongly by that much. A cell whose
+    faces do not close round it -- one left out, one turned inside out --
+    is told too: the faces of a solid, each taken as its area along its
+    normal, add up to nothing, and what they add up to here is given as
+    a length (over the root of all their area)."""
     worst = 0.0
     sx = sy = sz = area = 0.0
     cx, cy, cz = cell.cx, cell.cy, cell.cz
@@ -196,6 +218,13 @@ def convex(cell) -> float:
         for nx, ny, nz, d in planes:
             for x, y, z in cell.verts:
                 q = nx * x + ny * y + nz * z - d
+                if q > worst:
+                    worst = q
+        if len(planes) == 2:
+            (nx, ny, nz, d), (mx, my, mz, e) = planes
+            for x, y, z in cell.verts:
+                q = abs((nx - mx) * x + (ny - my) * y + (nz - mz) * z
+                        - (d - e))
                 if q > worst:
                     worst = q
     if area > 0.0:

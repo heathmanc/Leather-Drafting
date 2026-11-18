@@ -477,39 +477,37 @@ def _faced_report(check) -> str:
 
 
 def _readings_report(parts, model, check) -> List[str]:
-    """For each piece of a stack that goes round a fold and has stitch
-    holes, the two ways they are read (``check.readings``, over all the
-    folds it goes round): punched to meet as the piece lies flat, and
-    punched to meet when shut, its length round every bend taken up --
-    and which of them the marks on the model show."""
-    out = []
+    """How the stitch holes of a stack whose pieces go round its folds
+    are read (``check.readings``): the whole stack one way, punched to
+    meet lying flat or punched to meet when shut (the length of each
+    piece round every bend taken up), whichever has more holes meeting --
+    said once, as the marks on the model show it -- then for each such
+    piece how many of its holes meet each way."""
     readings = getattr(check, "readings", None) or {}
-    for k, (flat, shut, kept) in sorted(readings.items()):
+    if not readings:
+        return []
+    shut = any(shown for _f, _s, shown in readings.values())
+    out = ["<b>Stitch holes of the pieces that go round a fold:</b> the "
+           "stack is read as punched to meet "
+           + ("when shut, each piece's length round its folds taken up"
+              if shut else "lying flat")
+           + ", the reading in which more holes meet. The marks on the "
+           "model show that reading."]
+    for k, (flat, folded, _shown) in sorted(readings.items()):
         s = model.sheet(k)
         if s is None:
             continue
         name, n = sm.escaped(parts.names[k]), len(s.holes)
-        on = sm.escaped(parts.names[s.rests[0]] if s.rests
-                     else parts.names[0])
         # (read shut, at every fold it goes round)
         folds = sorted({note.fold for note in model.notes
                         if note.sheet == k
                         and note.kind in ("cross", "level")})
         labels = [model.folds[j].label for j in folds]
         round_ = ("fold " if len(labels) == 1 else "folds ") \
-            + sm.listed(labels)
-        if kept:
-            out.append(f"{name}'s holes are read as punched to meet when "
-                       f"shut, its length round {round_} taken up: "
-                       f"{shut} of {n} meet {on}'s shut, and "
-                       f"{flat or 'none'} lying flat. The marks on the "
-                       "model show that reading.")
-        else:
-            out.append(f"{name}'s holes are read as punched flat: {flat} "
-                       f"of {n} meet {on}'s flat, and {shut or 'none'} "
-                       "when shut. The marks on the model show that "
-                       "reading.")
-    return out
+            + sm.listed(labels) if labels else "its folds"
+        out.append(f"{name}, round {round_}: {folded or 'none'} of its {n} "
+                   f"holes meet when shut, {flat or 'none'} lying flat.")
+    return ["<br>".join(out)]
 
 
 class _RadiusSpin(MathSpinBox):
@@ -1274,68 +1272,19 @@ class FoldPreviewDialog(QDialog):
         self._wrote(soon)
         self.reload(show=show, front=False)
 
-    # how much of a piece's leather shows when it is seen through: the
-    # rest of it is the colour behind the model
-    _THROUGH = 0.28
-
-    def _over_chosen(self) -> List[int]:
-        """The pieces of the stack shown (their numbers in the model) that
-        lie over a chosen piece: higher in the pile, and over it on the
-        bench."""
-        if self.current is None or self.current.kind != "stack" \
-                or self.parts is None:
-            return []
-        pile = self.current.stack.pieces
-        keys = set(self.pieces.chosen_keys())
-        chosen = [k for k, p in enumerate(pile) if p.key in keys]
-        out = []
-        for k, p in enumerate(pile):
-            if p.key in keys or not chosen or k < chosen[0]:
-                continue
-            x0, y0, x1, y1 = p.box
-            if any(j < k and x0 < pile[j].box[2] and pile[j].box[0] < x1
-                   and y0 < pile[j].box[3] and pile[j].box[1] < y1
-                   for j in chosen):
-                n = self.parts.number(p.key)
-                if n >= 0:
-                    out.append(n)
-        return out
-
     def _see_through(self):
         """Mark the pieces of the model: amber on the leather of a piece in
-        a bend it should not be in, red on the pieces drawn through each
-        other (what the report warns of: ``stackmodel.marks``) -- and with
-        "See through" ticked, the pieces lying over the chosen ones
-        painted faint: the colour behind the model laid over them, so
-        that little of their leather shows. A mark on a piece seen
-        through is laid on as faintly, so it is still seen for what it
-        is."""
+        a bend it should not be in, red on the pieces drawn into leather
+        (what the report warns of: ``stackmodel.marks``) -- and with "See
+        through" ticked, the view paints faint whatever stands between a
+        chosen piece and the eye, worked out afresh as the model is turned
+        and folded (``FoldView.set_see_through``); a mark on a piece seen
+        through is painted as faintly as its leather."""
         look = self.view.look
-        wash = {key: QColor(look.warn if what == sm.WARN else look.bad)
-                for key, what in self._warned.items()}
-        if self.chk_through.isChecked():
-            veil = QColor(look.ground)
-            veil.setAlpha(int(round(255 * (1.0 - self._THROUGH))))
-            for n in self._over_chosen():
-                for key in [key for key in wash if key[0] == n]:
-                    wash[key] = self._faint(wash[key], veil)
-                if (n, None) not in wash:
-                    wash[(n, None)] = veil
-        self.view.set_wash(wash)
-
-    @staticmethod
-    def _faint(mark: QColor, veil: QColor) -> QColor:
-        """A mark on a piece that is seen through: its colour with the
-        colour behind the model laid over it as the veil is, laid on as
-        strongly as the veil."""
-        a = veil.alphaF()
-        out = QColor(
-            int(round(mark.red() + (veil.red() - mark.red()) * a * 0.6)),
-            int(round(mark.green() + (veil.green() - mark.green()) * a
-                      * 0.6)),
-            int(round(mark.blue() + (veil.blue() - mark.blue()) * a * 0.6)))
-        out.setAlpha(veil.alpha())
-        return out
+        self.view.set_wash({key: QColor(look.warn if what == sm.WARN
+                                        else look.bad)
+                            for key, what in self._warned.items()})
+        self.view.set_see_through(self.chk_through.isChecked())
 
     def _see_through_set(self, on: bool):
         if self._settings is not None:

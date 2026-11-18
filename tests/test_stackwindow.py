@@ -2088,7 +2088,13 @@ def test_underneath_puts_a_piece_next_to_the_main_piece_on_its_far_side(
 
 def test_see_through_paints_what_lies_over_the_chosen_pieces_faint(
         qapp, mm):
+    from leathercad_app.foldview import pieces_over
     doc, by = _bifold()
+    # (the backing dark under pale pockets, to see the one through the
+    # others)
+    by["Left pocket backing"].leather = "Black"
+    for k in ("3", "2", "1 (front)"):
+        by[f"Left pocket {k}"].leather = "Natural"
     settings = QSettings(QSettings.IniFormat, QSettings.UserScope,
                          "stitch-hero-tests", "see-through")
     settings.clear()
@@ -2104,37 +2110,34 @@ def test_see_through_paints_what_lies_over_the_chosen_pieces_faint(
         assert all(f == 0 for _n, f in marked)
 
         def veiled():
-            return {key: c for key, c in dlg.view.wash.items()
-                    if key[1] is None}
-        assert veiled() == {}
+            # the pieces the view paints faint, as it now stands
+            return set(pieces_over(dlg.view.scene, dlg.view.cam,
+                                   dlg.view.chosen)) \
+                if dlg.view.see_through else set()
+        assert veiled() == set()
+        dlg.view.look_from("top")
         dlg.chk_through.setChecked(True)
         assert settings.value("fold3dSeeThrough", type=bool) is True
-        # the three pockets over the backing, and none on the other side
+        # the three pockets over the backing, and none on the other side;
+        # the marks are as they were
         over = {dlg.parts.number(by[f"Left pocket {k}"].shape_id)
                 for k in ("3", "2", "1 (front)")}
-        assert set(n for n, _f in veiled()) == over
-        veil = next(iter(veiled().values()))
-        assert veil.alpha() == 184                 # 28 % of it shows
-        assert _rgb(veil) == _rgb(dlg.view.look.ground)
-        # a pixel of the front pocket over it comes nearer the colour
-        # behind the model
-        dlg.view.look_from("top")
-        ground = _rgb(dlg.view.look.ground)
+        assert veiled() == over
+        assert dlg.view.wash == marked
+        # a pixel of the front pocket over it shows the dark backing
+        # under it
         x = 50.8 if dlg.parts.turned else -50.8
         on, _at = _seen(dlg, (x, -28.0, 4.0))
         dlg.chk_through.setChecked(False)
         assert dlg.view.wash == marked
         off, _at = _seen(dlg, (x, -28.0, 4.0))
-
-        def far(c):
-            return sum(abs(a - b) for a, b in zip(c, ground))
-        assert far(on) < 0.5 * far(off)
+        assert sum(on) < sum(off) - 60
         dlg.chk_through.setChecked(True)
-        # the main piece chosen: all nine lie over it
+        # the main piece chosen, from the top: all nine lie over it
         _choose(dlg, "Outer shell")
         assert len(veiled()) == 9
         _choose(dlg)
-        assert dlg.view.wash == marked
+        assert veiled() == set() and dlg.view.wash == marked
         assert doc.to_dict() == was
     finally:
         dlg.close()

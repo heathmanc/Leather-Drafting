@@ -474,6 +474,38 @@ def fold_steps(folds: Sequence[FoldLine], live: Sequence[bool]) -> List[int]:
 
 # -- the layout ---------------------------------------------------------------
 
+class _Pending:
+    """A cell of the model not made yet (``Layout._posed`` with ``lazy``):
+    its corners and its tag, enough to put a box round it; ``full()``
+    makes it -- the cell itself, or None for a strip the bend has closed
+    to nothing -- and keeps it in the memo it was asked of."""
+
+    __slots__ = ("verts", "tag", "_args", "_made")
+
+    def __init__(self, layout, c, frames, bends, lifts, memo, key):
+        if c.hinge is None:
+            fr = frames[c.panel]
+            ht = 0.5 * layout.thickness
+            lo, hi = (-ht, ht) if lifts is None else lifts
+            self.verts = [place(fr, p, z) for z in (lo, hi) for p in c.pts]
+        else:
+            e1, tops, bots = bends[c.hinge][:3]
+            j = c.strip
+            self.verts = [_strip_point(q, p0, p1, e1) for q in c.place
+                          for p0, p1 in ((tops[j], tops[j + 1]),
+                                         (bots[j], bots[j + 1]))]
+        self.tag = c.tag
+        self._args = (layout, c, frames, bends, lifts, memo, key)
+        self._made = False
+
+    def full(self):
+        if self._made is False:
+            layout, c, frames, bends, lifts, memo, key = self._args
+            self._made = memo[key] = layout._cell(c, frames, bends, None,
+                                                  lifts)
+        return self._made
+
+
 class Layout:
     """A piece cut up ready to fold.
 
@@ -2282,23 +2314,60 @@ class Layout:
 
     def _posed(self, fractions: Sequence[float],
                check: Optional[Check] = None, apart: float = 0.0,
-               sheets: bool = True) -> List[Tuple[_Cell2, Cell]]:
+               sheets: bool = True, memo: Optional[dict] = None,
+               lazy: bool = False) -> List[Tuple[_Cell2, Cell]]:
         """``solid``, each cell of the model with the bit of the pattern it
         is made from: ``[(_Cell2, Cell)]``. With ``sheets`` False, the main
-        piece's own cells only."""
+        piece's own cells only. Given a ``memo`` (a dict kept from one
+        call to the next, with no ``check``), a cell lying where it lay
+        at an earlier call -- on a panel lying as it lay, or round a bend
+        as far round from such a panel -- is that call's cell again, not
+        made anew. With ``lazy`` (and a ``memo``), a cell it does not hold
+        is given as its corners only (``_Pending``), made in full when it
+        is asked for -- for ``clash.pairs``, which asks only of cells
+        whose boxes meet."""
         frames = self.frames(fractions)
         arcs = self._arcs(frames, fractions)
-        cells = [(c, self._cell(c, frames, arcs, check)) for c in self.cells]
+        rides: Dict[tuple, list] = {}
+        if memo is not None:
+            # (how each panel lies, and each bend, as a number the memo
+            # keeps from call to call: a bend lies as the panel it goes
+            # out of lies and as far round as its fold has gone)
+            states = memo.setdefault("states", {})
+            lies = [states.setdefault(fr, len(states)) for fr in frames]
+            bent = [states.setdefault((lies[h.parent], fractions[h.fold]),
+                                      len(states)) for h in self.tree]
+
+        def ridden(lifts):
+            if lifts is None:
+                return arcs
+            if lifts not in rides:
+                rides[lifts] = [_ride(arc, *lifts) for arc in arcs]
+            return rides[lifts]
+
+        def make(c, lifts=None):
+            if memo is None or check is not None:
+                return self._cell(c, frames, ridden(lifts), check, lifts)
+            # (a cell with an edge where it goes on round a bend is drawn
+            # by how that bend lies too)
+            key = (id(c), lies[c.panel] if c.hinge is None
+                   else bent[c.hinge], lifts)
+            if c.turns:
+                key += tuple(bent[h] for _k, h, _s in c.turns)
+            got = memo.get(key, memo)
+            if got is memo:
+                got = memo[key] = _Pending(self, c, frames, ridden(lifts),
+                                           lifts, memo, key)
+            if not lazy and isinstance(got, _Pending):
+                got = got.full()
+            return got
+
+        cells = [(c, make(c)) for c in self.cells]
         if self.sheets and sheets:
-            rides: Dict[tuple, list] = {}
             for c in self.sheet_cells:
                 s = self.sheets[c.sheet - 1]
                 off = s.side * apart * s.rank
-                lifts = (c.low + off, c.high + off)
-                if lifts not in rides:
-                    rides[lifts] = [_ride(arc, *lifts) for arc in arcs]
-                cells.append((c, self._cell(c, frames, rides[lifts], check,
-                                            lifts)))
+                cells.append((c, make(c, (c.low + off, c.high + off))))
         return [(c, cell) for c, cell in cells if cell is not None]
 
     def _cell(self, c: _Cell2, frames: Sequence[Frame], arcs,
@@ -3360,59 +3429,124 @@ def fold_piece(outline: Sequence[Pt], folds: Sequence[FoldLine], *,
     # That is five rounds a fold at the most. A fold that has moved keeps
     # the radius it moved at, at the least: it goes round the same
     # leather wherever it forms.
-    for _round in range(5 * n):
-        if lay.to_move is None:
-            break
-        fi, step, stay = lay.to_move
-        back = step * lay.moved[fi] < 0.0
-        goes[fi] += 1
-        moved, new = lay.moved, None
-        for _try in range(4):
-            trial = list(lay.moved)
-            trial[fi] += step
-            new = _recut(ring, first, lay, fi, trial)
-            if new is not None:
-                moved = trial
+    def settle(lay, cut):
+        # (each fold moved until it can form, as below: the layout kept,
+        # and the cut of the piece it was made from)
+        for _round in range(5 * n):
+            if lay.to_move is None:
                 break
-            stay = True            # not that far: half, and then no more
-            step *= 0.5
-        if back:
-            fixed.add(fi)
-        elif stay or goes[fi] >= 4:
-            held.add(fi)
-        was = lay
-        if new is not None:
-            lay = Layout(new[0], folds, new[1], moved=moved, held=held,
-                         fixed=fixed, **kw,
-                         least=[r if d else 0.0
-                                for r, d in zip(was.radius, moved)])
-            if sheets:
-                # (a radius kept from where a fold was keeps its reason)
-                lay.why = [w or (o if d and r <= q + 1e-9 else None)
-                           for w, o, d, r, q in zip(lay.why, was.why, moved,
-                                                    lay.radius, was.radius)]
-            # A move that leaves the fold wanting to go as far again has
-            # not brought anything clear (what is in its way moves with
-            # it): back where it was, then, and no more of that
-            # On a stack the pieces riding on the fold's own panels come
-            # into its bend as it moves and take some of its round, so a
-            # move brings less clear than it is long: a move that brings
-            # anything clear is kept, and the fold goes on from there
-            far = lay.to_move
-            enough = abs(step) - _REACH if sheets else 0.5 * abs(step)
-            if (far is None or back or far[0] != fi or far[1] * step <= 0.0
-                    or abs(far[1]) <= enough):
-                cut = new
-                continue
-            held.add(fi)
-        lay = Layout(cut[0], folds, cut[1], moved=was.moved, held=held,
-                     fixed=fixed, least=was._least, **kw)
+            fi, step, stay = lay.to_move
+            back = step * lay.moved[fi] < 0.0
+            goes[fi] += 1
+            moved, new = lay.moved, None
+            for _try in range(4):
+                trial = list(lay.moved)
+                trial[fi] += step
+                new = _recut(ring, first, lay, fi, trial)
+                if new is not None:
+                    moved = trial
+                    break
+                stay = True            # not that far: half, and then no more
+                step *= 0.5
+            if back:
+                fixed.add(fi)
+            elif stay or goes[fi] >= 4:
+                held.add(fi)
+            was = lay
+            if new is not None:
+                lay = Layout(new[0], folds, new[1], moved=moved, held=held,
+                             fixed=fixed, **kw,
+                             least=[r if d else 0.0
+                                    for r, d in zip(was.radius, moved)])
+                if sheets:
+                    # (a radius kept from where a fold was keeps its reason)
+                    lay.why = [w or (o if d and r <= q + 1e-9 else None)
+                               for w, o, d, r, q in zip(
+                                   lay.why, was.why, moved, lay.radius,
+                                   was.radius)]
+                # A move that leaves the fold wanting to go as far again has
+                # not brought anything clear (what is in its way moves with
+                # it): back where it was, then, and no more of that
+                # On a stack the pieces riding on the fold's own panels come
+                # into its bend as it moves and take some of its round, so a
+                # move brings less clear than it is long: a move that brings
+                # anything clear is kept, and the fold goes on from there
+                far = lay.to_move
+                enough = abs(step) - _REACH if sheets else 0.5 * abs(step)
+                if (far is None or back or far[0] != fi or far[1] * step <= 0.0
+                        or abs(far[1]) <= enough):
+                    cut = new
+                    continue
+                held.add(fi)
+            lay = Layout(cut[0], folds, cut[1], moved=was.moved, held=held,
+                         fixed=fixed, least=was._least, **kw)
+        return lay, cut
+
+    lay, cut = settle(lay, cut)
+    # On a stack a fold stopped for want of room, with leather left in its
+    # bend, may yet close further on: past the pile, the pile no longer
+    # rides in its bend, and it bends tighter. It is tried further on, a
+    # millimetre at a time up to where the piece no longer parts so, the
+    # pile measured anew at each, and kept at the first place it closes
+    # clean (found to a hair between that and the last that does not).
+    for _round in range(n if sheets else 0):
+        fi = next((k for k in sorted(range(n), key=lambda k: (lay.steps[k],
+                                                             k))
+                   if lay.stuck[k] and lay.moved[k]), None)
+        if fi is None:
+            break
+        got = _further(ring, first, lay, fi, held, fixed, kw, folds)
+        if got is None:
+            break
+        lay, cut = settle(*got)
+
     if any(lay.shift):
         lay._landing(first)
         lay._drawn = first             # (for the judge of a stack)
     lay._advise(first)
     lay._dress(holes, cutouts, marks)
     return lay
+
+
+def _further(ring, first: Layout, lay: Layout, fi: int, held, fixed, kw,
+             folds):
+    """Where fold ``fi`` of a stack, stuck in ``lay`` for want of room, can
+    form clean further on (see ``fold_piece``): ``(layout, cut)``, or None
+    if nowhere up to the end of the panel."""
+    way = 1.0 if lay.moved[fi] > 0.0 else -1.0
+
+    def clean(d):
+        trial = list(lay.moved)
+        trial[fi] += way * d
+        new = _recut(ring, first, lay, fi, trial)
+        if new is None:
+            return None, None
+        least = [r if m and k != fi else 0.0
+                 for k, (r, m) in enumerate(zip(lay.radius, trial))]
+        got = Layout(new[0], folds, new[1], moved=trial, held=held | {fi},
+                     fixed=fixed, least=least, **kw)
+        ok = not got.stuck[fi] and (got.to_move is None
+                                    or got.to_move[0] != fi)
+        return ok, (got, new)
+
+    last = 0.0
+    for k in range(1, 81):
+        d = float(k) if k <= 40 else 40.0 + 2.0 * (k - 40)
+        ok, got = clean(d)
+        if ok is None:
+            return None
+        if ok:
+            lo, hi, best = last, d, got
+            for _half in range(6):
+                mid = 0.5 * (lo + hi)
+                ok, got = clean(mid)
+                if ok:
+                    hi, best = mid, got
+                else:
+                    lo = mid
+            return best
+        last = d
+    return None
 
 
 def _recut(ring: Sequence[Pt], first: Layout, was: Layout, fi: int,

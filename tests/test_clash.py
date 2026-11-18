@@ -132,6 +132,85 @@ def test_two_edges_that_cross_are_parted_only_by_the_plane_between_them():
     assert clash.depth(*_twisted(0.0)) < 1e-9
 
 
+def _cross(u, v):
+    return (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0])
+
+
+def test_a_tilted_slab_is_parted_from_a_corner_only_by_its_own_face():
+    # A cube of 10 mm, and a slab tilted two ways -- its face is turned
+    # the way (2, 3, 6) points -- that lies beyond the cube's corner at
+    # (10, 10, 10). The cells of a stack that is folded are tilted like
+    # this, and nothing parts the two but the slab's own face
+    box = _box((0, 0, 0), sx=10, sy=10, sz=10)
+    n = (2 / 7, 3 / 7, 6 / 7)
+    ex = (3 / math.sqrt(13), -2 / math.sqrt(13), 0.0)
+    ey = _cross(n, ex)
+
+    def slab(gap):
+        o = tuple(10 + gap * a - 20 * b - 20 * c
+                  for a, b, c in zip(n, ex, ey))
+        return _box(o, ex, ey, n, 40, 40, 3)
+
+    far = slab(0.5)
+    assert _near(_along(n, box, far), -0.5)
+    # looked at along a face of the cube, or square to an edge of each,
+    # they overlap: by 3 mm and more
+    others = [X, Y, Z] + [_cross(u, v) for u in (X, Y, Z)
+                          for v in (ex, ey, n)]
+    assert min(_along(tuple(c / math.hypot(*axis) for c in axis), box, far)
+               for axis in others) > 3.0
+    # 0.5 mm apart, and corner to face, they do not clash: whichever of
+    # the two is asked about first
+    for gap in (0.5, 0.0):
+        assert clash.depth(box, slab(gap)) < 1e-9
+        assert clash.depth(slab(gap), box) < 1e-9
+    assert clash.clashes([box, far]) == [] == clash.clashes([far, box])
+    # the corner 0.2 mm into the slab is 0.2 mm deep
+    assert _near(clash.depth(box, slab(-0.2)), 0.2)
+    assert _near(clash.depth(slab(-0.2), box), 0.2)
+
+
+def _wedge():
+    """A wedge 10 mm long along y: its back at x = 0, 6 mm high, and two
+    faces that slope to meet at its edge, x = 4 -- one turned up and
+    along, (0.6, 0, 0.8), one down and along, (0.6, 0, -0.8)."""
+    def at(x, z):
+        return [(x, 0.0, z), (x, 10.0, z)]
+    (b0, b1), (t0, t1), (e0, e1) = at(0, -3), at(0, 3), at(4, 0)
+    rings = [(b0, b1, t1, t0),                 # the back
+             (t0, t1, e1, e0),                 # sloping up
+             (b1, b0, e0, e1),                 # sloping down
+             (b0, e0, t0), (b1, t1, e1)]       # the two ends
+    faces = []
+    for pts in rings:
+        plane = bsp.plane_of(pts)
+        # (counter-clockwise from outside: turn round any that is not)
+        if plane[0] * 1.5 + plane[1] * 5.0 - plane[3] > 0.0:
+            pts = pts[::-1]
+            plane = bsp.plane_of(pts)
+        faces.append(bsp.Face(tuple(pts), plane, bsp.WALL))
+    return bsp.Cell(faces)
+
+
+def test_two_faces_that_differ_only_up_and_down_are_two_ways_to_look():
+    wedge = _wedge()
+    assert clash.convex(wedge) < 1e-12
+    normals = sorted(tuple(round(c, 9) for c in f.plane[:3])
+                     for f in wedge.faces)
+    assert (0.6, 0.0, 0.8) in normals and (0.6, 0.0, -0.8) in normals
+    # a cube with its corner 0.5 mm clear of the face that slopes down:
+    # the plane of that face parts them, and no other does
+    box = _box((2.3, 2.0, -7.9), sx=6, sy=6, sz=6)
+    assert _near(_along((0.6, 0.0, -0.8), wedge, box), -0.5)
+    assert _along((0.6, 0.0, 0.8), wedge, box) > 1.0
+    assert min(_along(axis, wedge, box) for axis in (X, Y, Z)) > 1.0
+    assert clash.depth(wedge, box) == 0.0 == clash.depth(box, wedge)
+    # 0.2 mm into that face it is 0.2 mm deep
+    near = _box((2.3 - 0.7 * 0.6, 2.0, -7.9 + 0.7 * 0.8), sx=6, sy=6, sz=6)
+    assert _near(clash.depth(wedge, near), 0.2)
+
+
 def _rod(tilt=0.0, up=0.0):
     """A rod 300 mm long and 2 mm square along x, standing on one of its
     long edges, tilted ``tilt`` radians about the upright and lifted
@@ -204,6 +283,44 @@ def test_a_cell_with_a_corner_pushed_out_is_not_convex():
                                            radius=1.5)])
     for t in (0.0, 0.3, 0.7, 1.0):
         assert max(clash.convex(c) for c in lay.solid([t])) < 1e-9
+
+
+def test_a_face_that_carries_a_wrong_plane_is_told_and_does_not_mislead():
+    good = _box((0, 0, 0))
+    # the face at x = 1, and the same carrying a plane of half length
+    side = good.faces[4]
+    assert side.plane == (1.0, 0.0, 0.0, 1.0)
+
+    def with_plane(plane):
+        return bsp.Cell([bsp.Face(f.pts, plane if f is side else f.plane,
+                                  f.kind) for f in good.faces])
+
+    half = with_plane((0.5, 0.0, 0.0, 0.5))
+    # no corner stands in front of it; but it is half a mm out, at the
+    # far corners of the cell, from the plane through the face's corners
+    assert _near(clash.convex(half), 0.5)
+    # the judge looks along the normal a face carries, made a unit
+    # length: 0.2 mm into that face is 0.2 mm, not 0.1
+    other = _box((0.8, 0.2, 0.2), sx=3, sy=3, sz=3)
+    assert _near(clash.depth(half, other), 0.2)
+    assert _near(clash.depth(other, half), 0.2)
+    # a face that carries no plane at all, or one turned otherwise, is
+    # told the same way; and none of them raises
+    nought = with_plane((0.0, 0.0, 0.0, 0.0))
+    assert _near(clash.convex(nought), 1.0)
+    assert clash.depth(nought, _box((1.5, 0, 0))) == 0.0
+    tilted = with_plane((0.8, 0.6, 0.0, 0.8))
+    assert clash.convex(tilted) > 0.5
+    assert clash.convex(good) == 0.0
+    # a sheet of a stack has a wall for each edge of its outline, each
+    # with its own plane, of unit length
+    lay = fs.fold_piece(HALF, [], thickness=2.0)
+    stack = sh.FlatStack(lay, [sh.Sheet(_rounded(20, 20, 120, 80, 8), 1.0)],
+                         HALF)
+    cell = stack.solid([])[-1]
+    walls = [f for f in cell.faces if f.kind == bsp.WALL]
+    assert len(walls) == len(stack.sheets[0].ring)
+    assert all(_near(math.hypot(*f.plane[:3]), 1.0, 1e-12) for f in walls)
 
 
 # -- every pair of a model ----------------------------------------------------

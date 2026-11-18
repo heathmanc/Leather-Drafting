@@ -689,8 +689,20 @@ def _pieces(names: List[str], who: List[int]) -> tuple:
 
 
 # how far through a step a thing is first seen, in words
-_PARTS = ((0.25, "a quarter of the way"), (0.5, "half way"),
-          (0.75, "three quarters of the way"))
+_PARTS = ((0.0625, "a sixteenth of the way"), (0.125, "an eighth of the way"),
+          (0.25, "a quarter of the way"), (0.375, "three eighths of the way"),
+          (0.5, "half way"), (0.625, "five eighths of the way"),
+          (0.75, "three quarters of the way"),
+          (0.875, "seven eighths of the way"),
+          (0.9375, "fifteen sixteenths of the way"))
+
+
+def _part(moment: float) -> str:
+    """How far through its step a moment inside one is, in words: "half
+    way", "an eighth of the way", "part of the way"."""
+    whole = math.floor(moment)
+    return next((words for at, words in _PARTS
+                 if abs(moment - whole - at) < 1e-6), "part of the way")
 
 
 def _when(layout, moment: float) -> str:
@@ -700,10 +712,7 @@ def _when(layout, moment: float) -> str:
     through step 2)."""
     step = int(round(moment))
     if abs(moment - step) > 1e-6:
-        whole = int(math.floor(moment))
-        part = next((words for at, words in _PARTS
-                     if abs(moment - whole - at) < 1e-6), "part of the way")
-        return f"{part} through step {whole + 1}"
+        return f"{_part(moment)} through step {int(math.floor(moment)) + 1}"
     if step <= 0:
         return "lying flat"
     doing = [f for k, f in enumerate(layout.folds)
@@ -718,44 +727,76 @@ def _when(layout, moment: float) -> str:
             + (" closed" if shut else " folded") + f" (step {step})")
 
 
-def _deep(n) -> float:
-    """How deep a note says leather is drawn into leather (mm)."""
+def _rest(n) -> float:
+    """How deep a note says leather stays drawn into leather at rest --
+    at the whole steps of the folding, where the leather ends up (mm)."""
+    return getattr(n, "rest", 0.0)
+
+
+def _way(n) -> float:
+    """How deep a note says leather is drawn into leather at the most,
+    at rest or on the way (mm)."""
     return n.b if n.kind in ("slit", "crossing") else n.a
 
 
 def _alarm(n) -> bool:
-    """Whether a note tells of leather drawn into leather deep enough to
-    be said in red and marked so: a piece drawn into another or itself, a
-    part of the main piece a moved fold brings down in another, as far as
-    ``THROUGH`` or more; a piece parted or torn by its folds and drawn
-    into leather there as far as ``CRIMP``."""
+    """Whether a note tells of leather drawn into leather where it ends
+    up, deep enough to be said in red and marked so: a piece drawn into
+    another or itself, a part of the main piece a moved fold brings down
+    in another, as far as ``THROUGH`` or more at rest; a piece parted or
+    torn by its folds and drawn into leather there as far as ``CRIMP``.
+    What the picture draws only on the way is not (``_passing``)."""
     if n.kind in ("clash", "limit", "landing"):
-        return n.a >= THROUGH
+        return _rest(n) >= THROUGH
     if n.kind in ("slit", "crossing"):
-        return n.b >= CRIMP
+        return _rest(n) >= CRIMP
     return False
+
+
+def _passing(n) -> bool:
+    """Whether a note tells of leather the picture draws into leather on
+    the way only, clear of it at rest: said plainly, not as an alarm (two
+    stiff panels turned through each other where leather gives)."""
+    if n.kind in ("clash", "limit", "landing"):
+        return not _alarm(n) and n.a >= THROUGH
+    return False
+
+
+def _on_the_way(n, deep: float, limit: float) -> str:
+    """The clause of a sentence in red that says how much deeper than at
+    rest the picture draws leather on the way, if it does."""
+    if deep >= limit and length(deep) != length(_rest(n)):
+        return f", and up to {length(deep)} on the way"
+    return ""
 
 
 def _parted(layout, notes, names, k: int) -> List[str]:
     """What is said of the pieces a fold parts or tears (``"slit"`` and
     ``"crossing"`` notes): where, how long, what lies across it, and how
-    deep it is drawn into leather there, in red when that is ``CRIMP`` or
-    more."""
+    deep it is drawn into leather there -- in red when that is ``CRIMP``
+    or more at rest, plainly when it is less, or only on the way."""
     main = names[0]
     label = layout.folds[k].label
     out = []
 
     def deep(n):
-        # how deep it is drawn into leather there, in the sentence
-        if n.b >= CRIMP:
-            return f", and is drawn {length(n.b)} into leather there"
+        # how deep it is drawn into leather there at rest, in the sentence
+        if _rest(n) >= CRIMP:
+            return (f", and is drawn {length(_rest(n))} into leather there"
+                    + _on_the_way(n, n.b, CRIMP))
         return ""
 
-    def crimp(n):
-        if THROUGH <= n.b < CRIMP:
-            return (f" The picture shows it {length(n.b)} into leather "
-                    "there, where real leather would crimp.")
-        return ""
+    def after(n):
+        # what is less than an alarm, after the sentence
+        text = ""
+        if THROUGH <= _rest(n) < CRIMP:
+            text += (f" The picture shows it {length(_rest(n))} into "
+                     "leather there, where real leather would crimp.")
+        if _rest(n) < CRIMP and n.b >= CRIMP:
+            text += (f" On the way the picture draws it up to "
+                     f"{length(n.b)} into leather there; it turns each "
+                     "panel as one stiff piece, where leather gives.")
+        return text
 
     # a piece parted the same way at one fold in several places is told
     # once
@@ -765,8 +806,8 @@ def _parted(layout, notes, names, k: int) -> List[str]:
             across = listed([names[p] for p in n.other
                              if 0 <= p < len(names)])
             slits.setdefault((n.sheet, length(n.a), across, length(n.b),
-                              _alarm(n)), []).append(n)
-    for (piece, long, across, _d, bad), same in slits.items():
+                              length(_rest(n)), _alarm(n)), []).append(n)
+    for (piece, long, across, _d, _r, bad), same in slits.items():
         n = same[0]
         name = names[piece] if 0 <= piece < len(names) else ""
         where = f"along {long}" + (f" in {len(same)} places"
@@ -776,7 +817,7 @@ def _parted(layout, notes, names, k: int) -> List[str]:
                 + deep(n)
                 + ": the fold bends it on one side and leaves it flat on "
                 "the other. In leather it would have to be slit there, or "
-                "stop short of the fold." + crimp(n))
+                "stop short of the fold." + after(n))
         out.append(_warn(text, RED) if bad else text)
     for n in notes:
         if n.kind != "crossing":
@@ -789,13 +830,13 @@ def _parted(layout, notes, names, k: int) -> List[str]:
                     f"{other} cross" + deep(n) + f". {main} is "
                     "folded along one and then the other and passes "
                     "through itself there: the preview cannot show how "
-                    f"{name} would lie." + crimp(n))
+                    f"{name} would lie." + after(n))
         else:
             text = (f"{name} lies over the place where folds {label} and "
                     f"{other} cross, past the edge of {main}"
                     + deep(n) + ": folded along one and then "
                     "the other, it is torn there, and the preview cannot "
-                    "show how it would lie." + crimp(n))
+                    "show how it would lie." + after(n))
         out.append(_warn(text, RED) if _alarm(n) else text)
     return out
 
@@ -1054,27 +1095,67 @@ def fold_report(stack, parts: Parts, layout) -> List[str]:
                      "the least.")
         out.append(text)
     for n in _drawn_through(layout):
-        when = _when(layout, n.b)
+        rest = (f"{length(_rest(n))} into %s at rest"
+                + _on_the_way(n, n.a, THROUGH)
+                + f", from {_when(layout, n.b)}")
         if n.kind == "clash":
             one, two = n.sheet, n.other[0]
             if one == two:
-                out.append(_warn(f"{names[one]} is drawn {length(n.a)} into "
-                                 f"itself {when}.", RED))
+                out.append(_warn(f"{names[one]} is drawn "
+                                 + rest % "itself" + ".", RED))
             else:
                 out.append(_warn(f"{names[one]} and {names[two]} are drawn "
-                                 f"{length(n.a)} into each other {when}.",
-                                 RED))
+                                 + rest % "each other" + ".", RED))
         elif n.kind == "limit":
             # (where its folds cross, that is why; otherwise the judge
             # says only how deep and when)
             why = (": folds that cross are folded one after the other, "
                    "and the preview cannot open the leather for the "
                    "second." if _crossed(layout) else ".")
-            out.append(_warn(f"{main} is drawn {length(n.a)} into itself "
-                             f"{when}{why}", RED))
+            out.append(_warn(f"{main} is drawn " + rest % "itself" + why,
+                             RED))
         # (a part of the main piece that a moved fold brings down in
         # another is in the fold engine's own warnings, below)
+    out += _passed(layout, names)
     out += [_warn(w, RED) for w in _warned(layout, names)]
+    return out
+
+
+def _passed(layout, names) -> List[str]:
+    """What the picture draws into what only on the way through a step,
+    clear of it at rest (``_passing``): said plainly, one sentence a
+    step, each pair once, with how deep and when."""
+    main = names[0]
+    steps: Dict[int, List[tuple]] = {}
+    for n in getattr(layout, "notes", None) or ():
+        if not _passing(n):
+            continue
+        if n.kind == "landing":
+            parts = [(f"panel {t[1] + 1}" if t[0] == "panel" else
+                      f"fold {layout.folds[t[1]].label}")
+                     for t in n.other]
+            who, into, many = f"{listed(parts)} of {main}", "each other", 1
+        elif n.kind == "limit" or n.sheet == n.other[0]:
+            who = main if n.kind == "limit" else names[n.sheet]
+            into, many = "itself", 0
+        else:
+            who = f"{names[n.sheet]} and {names[n.other[0]]}"
+            into, many = "each other", 1
+        whole = int(math.floor(n.b))
+        step = whole + 1 if abs(n.b - whole) > 1e-6 else whole
+        steps.setdefault(step, []).append(
+            (f"{who} up to {length(n.a)} into {into} "
+             f"({_part(n.b)} through)" if step != whole else
+             f"{who} up to {length(n.a)} into {into}", many))
+    out = []
+    for step, said in sorted(steps.items()):
+        clear = "they are" if len(said) > 1 or said[0][1] else "it is"
+        if len(said) > 1:
+            clear = "each is"
+        out.append(f"On the way through step {step} the picture draws "
+                   + listed([words for words, _m in said])
+                   + f"; at rest {clear} clear. The preview turns each "
+                   "panel as one stiff piece, where leather gives.")
     return out
 
 

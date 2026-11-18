@@ -1151,9 +1151,12 @@ def test_ticking_a_piece_puts_it_on_the_stack_and_unticking_takes_it_off(
         assert liner.placed.x == 20.0
         _tick(dlg, "Left pocket backing")
         backing = _named(win.doc, "Left pocket backing")
-        assert (backing.placed.order, backing.placed.x) == (3, 20.0)
+        # (the liner was moved 20 across: landing on it, the backing is
+        # level with nothing of the shell, so it is held as the liner is,
+        # by the shell's middle, and moves with the liner)
+        assert (backing.placed.order, backing.placed.x) == (3, -30.8)
         assert _lies(dlg)["Left pocket backing"] == \
-            "on Bill pocket liner · bottom left, 20 mm across"
+            "on Bill pocket liner · bottom centre, -30.8 mm across"
         # ... and with none chosen on the top of the pile
         _choose(dlg)
         _choose(dlg, "Outer shell")
@@ -2469,5 +2472,91 @@ def test_a_main_piece_on_a_layer_that_is_not_cut_is_said_to_be_there(
     try:
         assert ("Left pocket 2 is on a layer that is not cut and left out "
                 "until it is on a cut layer again.") in _lines(dlg)
+    finally:
+        dlg.close()
+
+
+def _widen_shell(win, dlg, width):
+    shell = _named(win.doc, "Shell")
+    win.properties.show_selection(_select(win, shell))
+    win.properties.w.setValue(width)
+    win.properties.w.editingFinished.emit()
+    _reread(dlg)
+    return {p.name: p.box for p in dlg.current.stack.pieces}
+
+
+def test_a_pocket_ticked_onto_a_liner_moved_across_moves_with_the_liner(
+        qapp, tmp_path, monkeypatch, mm):
+    doc = _drawing(_piece("Shell", 200, 90),
+                   _piece("Liner", 200, 80, at=(250, 0)),
+                   _piece("Pocket", 90, 40, at=(500, 0)))
+    win, dlg = _opened(qapp, doc, tmp_path, monkeypatch)
+    try:
+        _tick(dlg, "Liner")                 # a stack on the shell shown
+        _choose(dlg, "Liner")
+        dlg.pieces.spin_x.setValue(20.0)
+        _choose(dlg, "Liner")
+        _tick(dlg, "Pocket")
+        # level with nothing of the shell: held as the liner is
+        assert _lies(dlg)["Pocket"] == \
+            "on Liner · bottom centre, -35 mm across"
+        box = _widen_shell(win, dlg, 220.0)
+        assert box["Pocket"][0] - box["Liner"][0] == _near(0.0)
+    finally:
+        _shut(win)
+
+
+def test_pockets_taken_along_by_line_up_stay_on_their_backing(
+        qapp, tmp_path, monkeypatch, mm):
+    doc = _drawing(_piece("Shell", 200, 90),
+                   _piece("Backing", 98, 70, at=(250, 0)),
+                   _piece("Pocket", 70, 40, at=(400, 0)),
+                   _piece("Pocket B", 98, 30, at=(550, 0)))
+    win, dlg = _opened(qapp, doc, tmp_path, monkeypatch)
+    try:
+        p = dlg.pieces
+        _tick(dlg, "Backing")
+        _tick(dlg, "Pocket")
+        _choose(dlg, "Backing")
+        _tick(dlg, "Pocket B")
+        assert p.chk_along.isChecked()
+        _choose(dlg, "Backing")
+        steps = _steps(win)
+        p.btn_right.click()
+        assert _steps(win) == steps + 1       # one step, the lot
+        # held by the shell's right edge, as the backing is
+        assert _lies(dlg)["Pocket"] == \
+            "on Backing · bottom right, -28 mm across"
+        assert _lies(dlg)["Pocket B"] == "on Pocket · bottom right"
+        box = _widen_shell(win, dlg, 220.0)
+        for name in ("Pocket", "Pocket B"):
+            assert box[name][0] - box["Backing"][0] == _near(0.0)
+    finally:
+        _shut(win)
+
+
+def test_a_stack_left_with_one_piece_still_says_what_is_left_out(qapp, mm):
+    from leathercad.layers import Layer
+    doc = _drawing(_piece("Shell", 200, 90),
+                   _piece("Liner", 200, 80, at=(250, 0)),
+                   _piece("Pocket", 90, 40, at=(500, 0)))
+    shell, liner, pocket = doc.shapes
+    key = asm.put_on(doc, shell, thickness=2.0)
+    asm.put_on(doc, liner, key, thickness=2.0)
+    asm.put_on(doc, pocket, key, thickness=2.0)
+    doc.layers.append(Layer(name="Score", role="score"))
+    shell.layer = pocket.layer = "Score"
+    dlg = _dialog(doc)
+    try:
+        assert dlg.current.title == "Liner"
+        assert _lines(dlg) == [
+            "Shell, the piece the others are placed against, is on a layer "
+            "that is not cut. Until it is on a cut layer again Liner stands "
+            "in for it, and the others are shown where they lay when it was "
+            "moved; back on a cut layer, it comes back where it lay, and "
+            "they come right. Put it back on a cut layer to go on placing "
+            "pieces and putting more on.",
+            "Pocket is on a layer that is not cut and left out until it is "
+            "on a cut layer again."]
     finally:
         dlg.close()

@@ -2635,6 +2635,63 @@ def test_a_piece_landing_on_a_centred_patch_is_held_by_its_middle():
     assert box["Badge"] == _near((-30.0, -15.0, -10.0, -5.0))
 
 
+def test_a_piece_on_a_strap_as_wide_as_the_shell_moves_with_the_strap():
+    # the strap, landed on a backing lined up right, is held by the
+    # shell's right edge; a pocket landed on the strap is held as it is
+    shell = _piece("Shell", 200, 90)
+    backing = _piece("Backing", 98, 70, at=(300, 0))
+    strap = _piece("Strap", 200, 20, at=(500, 0))
+    pocket = _piece("Pocket", 60, 15, at=(800, 0))
+    doc = _drawing(shell, backing, strap, pocket)
+    key = asm.put_on(doc, shell)
+    asm.put_on(doc, backing, key)
+    asm.line_up(doc, backing, "right")
+    asm.put_on(doc, strap, key, on=backing)
+    asm.put_on(doc, pocket, key, on=strap)
+    assert [(s.placed.ax, s.placed.x) for s in (backing, strap, pocket)] \
+        == [(1.0, 0.0), (1.0, 102.0), (1.0, -38.0)]
+    shell.width = 220.0
+    box = _boxes(doc)
+    assert box["Pocket"][0] - box["Strap"][0] == _near(0.0)
+    assert box["Pocket"] == _near((12.0, -45.0, 72.0, -30.0))
+
+
+def test_what_is_taken_along_is_held_as_what_it_lies_on_is_held():
+    shell = _piece("Shell", 200, 90)
+    backing = _piece("Backing", 98, 70, at=(300, 0))
+    pocket = _piece("Pocket", 70, 40, at=(500, 0))
+    tab = _piece("Tab", 50, 20, at=(700, 0))
+    doc = _drawing(shell, backing, pocket, tab)
+    key = asm.put_on(doc, shell)
+    asm.put_on(doc, backing, key)
+    asm.put_on(doc, pocket, key, on=backing)
+    asm.put_on(doc, tab, key, on=pocket)
+    asm.set_offset(doc, tab, x=8.0)          # set in on the pocket
+    # the three at the shell's left edge; the backing lined up right,
+    # the two on it taken along
+    assert [s.placed.ax for s in (backing, pocket, tab)] == [0.0, 0.0, 0.0]
+    assert asm.take_along(doc, backing,
+                          lambda: asm.line_up(doc, backing, "right"))
+    box = _boxes(doc)
+    assert (box["Backing"][0], box["Pocket"][0], box["Tab"][0]) == \
+        _near((2.0, 2.0, 10.0))
+    # each held now as the backing is, by the shell's right edge
+    assert [(s.placed.ax, s.placed.x) for s in (backing, pocket, tab)] == \
+        [(1.0, 0.0), (1.0, -28.0), (1.0, -40.0)]
+    for w in (220.0, 180.0):
+        shell.width = w
+        box = _boxes(doc)
+        assert box["Pocket"][0] - box["Backing"][0] == _near(0.0)
+        assert box["Tab"][0] - box["Backing"][0] == _near(8.0)
+    # moved back level with the shell's left edge, they are tied there
+    assert asm.take_along(doc, backing,
+                          lambda: asm.line_up(doc, backing, "left"))
+    assert [(s.placed.ax, s.placed.x) for s in (backing, pocket, tab)] == \
+        [(0.0, 0.0), (0.0, 0.0), (0.0, 8.0)]
+    # nothing moved, nothing to take along
+    assert not asm.take_along(doc, backing, lambda: False)
+
+
 def test_small_calls_say_what_they_did():
     doc = _drawing(_piece("A", 100, 60), _piece("B", 80, 40, at=(200, 0)),
                    _piece("Loose", 20, 20, at=(400, 0)))

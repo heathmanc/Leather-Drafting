@@ -1183,20 +1183,16 @@ def _can_go_on(doc, shape) -> bool:
     return d.judged()[0][i] or d.inside(i)
 
 
-def _landed(anchor: float, under: float, centre: float, size: float,
-            main: float):
-    """One axis of a piece put on corner to corner: the point of its box
-    it is held by and its offset, ``centre`` being the middle of its box
-    where it landed. Level with the main piece (within ``FLUSH``) it is
+def _landed(anchor: float, centre: float, size: float, main: float):
+    """One axis of a piece that comes to lie on another (put on corner to
+    corner, or carried along when that one is moved): the point of its
+    box it is held by and its offset, ``centre`` being the middle of its
+    box where it lies. Level with the main piece (within ``FLUSH``) it is
     tied to it there, offset 0: by its middle if both its edges are level
     (as wide) or if it is centred, else by the edge that is level. Level
     with nothing of the main piece, it is held by ``anchor``, the point
-    the piece it landed on (``under`` wide) is held by, so that the two
-    move together whatever happens to the main piece -- but by its own
-    left (or bottom) edge, the corner it landed at, where that piece is
-    as wide as the main piece, and is held by its middle only for that."""
-    if abs(under - main) < FLUSH:
-        anchor = 0.0
+    the piece it lies on is held by, so that the two move together
+    whatever happens to the main piece."""
     lo = centre - 0.5 * size + 0.5 * main          # its edges from the
     hi = centre + 0.5 * size - 0.5 * main          # main piece's
     if abs(lo) < FLUSH and abs(hi) < FLUSH:
@@ -1272,8 +1268,8 @@ def put_on(doc, piece, stack: str = "", on=None, thickness: float = 0.0,
         b = there.box()
         it.cx, it.cy = b[0] + 0.5 * it.w, b[1] + 0.5 * it.h
         main = pile.main
-        it.ax, it.x = _landed(there.ax, there.w, it.cx, it.w, main.w)
-        it.ay, it.y = _landed(there.ay, there.h, it.cy, it.h, main.h)
+        it.ax, it.x = _landed(there.ax, it.cx, it.w, main.w)
+        it.ay, it.y = _landed(there.ay, it.cy, it.h, main.h)
         it.loose = False
     pile.items.append(it)
     pile.write()
@@ -1640,6 +1636,62 @@ def lying_on(doc, piece) -> list:
         if on >= ON_SHARE * abs(pc.area(mine)):
             out.append(it.shape)
     return out
+
+
+def take_along(doc, pieces, change) -> bool:
+    """Make a change that moves pieces on the bench -- ``change()``, which
+    says whether it changed anything -- and take along what lies wholly
+    on each of them (``lying_on``). A piece taken along is moved by as
+    much as the one it lies on, and then held as a piece that comes to
+    lie there is held, on each axis it moved along: tied to the main
+    piece where it is level with it, else by the point of the main
+    piece's box that the one it lies on is held by, so that the two move
+    together from then on. False if the change did nothing."""
+    keys = [sh.shape_id for sh in _shapes(doc, pieces)]
+    riders: Dict[str, str] = {}             # a piece taken along: on what
+    for key in keys:
+        for shape in lying_on(doc, key):
+            if shape.shape_id not in keys:
+                riders.setdefault(shape.shape_id, key)
+
+    def boxes():
+        return {p.key: p.box for st in stacks(doc, detail=False)
+                for p in st.pieces}
+    before = boxes() if riders else {}
+    if not change():
+        return False
+    if not riders:
+        return True
+    after = boxes()
+    moves = {}
+    for rider, key in riders.items():
+        if key in before and key in after:
+            by = (round(after[key][0] - before[key][0], 6),
+                  round(after[key][1] - before[key][1], 6))
+            if by != (0.0, 0.0):
+                moves[rider] = (key, by)
+    for pile, items in _by_pile(doc, list(moves)):
+        main = pile.main
+        for it in items:
+            key, (dx, dy) = moves[it.shape.shape_id]
+            under = pile.find(shape_by_id(doc, key))
+            if it is main or under is None:
+                continue
+            it.cx, it.cy = it.cx + dx, it.cy + dy
+            if it.loose:
+                continue    # (a stack whose main piece is gone: tied afresh)
+            if dx:
+                it.ax, it.x = _landed(under.ax, it.cx, it.w, main.w)
+            else:
+                it.x = round(it.cx + (it.ax - 0.5) * (it.w - main.w),
+                             6) + 0.0
+            if dy:
+                it.ay, it.y = _landed(under.ay, it.cy, it.h, main.h)
+            else:
+                it.y = round(it.cy + (it.ay - 0.5) * (it.h - main.h),
+                             6) + 0.0
+        pile.write()
+    return True
 
 
 # -- commands that rebuild a shape --------------------------------------------

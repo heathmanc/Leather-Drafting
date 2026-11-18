@@ -428,14 +428,16 @@ def report(stack, parts: Parts, model) -> List[str]:
     how thick, a main piece that is gone, the pieces that stand past the
     main piece's edge, that stand clear of what is under them, that rest
     on a sliver, that lie on nothing, and the fold lines that are not
-    the main piece's. Lengths are in the unit shown. Nothing, for a
-    stack of one piece. (What there is to tell of it folded is
-    ``fold_report``'s.)"""
+    the main piece's. Lengths are in the unit shown. For a stack of one
+    piece, only what is left out of it: a main piece cut open, gone or
+    off the cut layers, and the others cut open or off them. (What
+    there is to tell of it folded is ``fold_report``'s.)"""
     notes = getattr(model, "notes", None)
-    if not parts.sheets or not notes:
-        return []
-    names = [escaped(n) for n in parts.names]
-    main = names[0]
+    alone = parts is None or not parts.sheets or not notes
+    if alone:
+        notes = []
+    names = [escaped(n) for n in parts.names] if parts is not None else []
+    main = escaped(title_of(stack.main.shape)) if alone else names[0]
     out = []
     for note in notes:
         if note.kind != "thick":
@@ -494,6 +496,8 @@ def report(stack, parts: Parts, model) -> List[str]:
                    + " on a layer that is not cut and left out until "
                    + ("it is" if len(others) == 1 else "they are")
                    + " on a cut layer again.")
+    if alone:
+        return out
     # pieces that stand the same distance past the edge are told together
     past: Dict[str, List[int]] = {}
     for note in notes:

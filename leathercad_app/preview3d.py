@@ -1488,6 +1488,10 @@ class FoldPreviewDialog(QDialog):
             self.readout.setText("<br><br>".join(out))
             return
         out = []
+        stack = getattr(self.current, "stack", None)
+        if stack is not None:
+            # a stack of one piece: what is left out of it for a while
+            out = sm.report(stack, self.parts, lay)
         used = [(f.label, lay.used[k]) for k, f in enumerate(self.folds)
                 if lay.steps[k]]
         if used:

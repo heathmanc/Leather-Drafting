@@ -588,31 +588,11 @@ class PiecesPanel(QWidget):
 
     def _moving(self, doc, keys, change) -> bool:
         """Make a change that moves pieces on the bench, and take along
-        what lies wholly on each of them, if that is ticked."""
-        def boxes():
-            return {p.key: p.box for st in asm.stacks(doc, detail=False)
-                    for p in st.pieces}
-
-        riders = {}                   # a piece that goes along: with which
+        what lies wholly on each of them, if that is ticked
+        (``assembly.take_along``)."""
         if self.chk_along.isChecked():
-            for key in keys:
-                for shape in asm.lying_on(doc, key):
-                    if shape.shape_id not in keys:
-                        riders.setdefault(shape.shape_id, key)
-        before = boxes() if riders else {}
-        if not change():
-            return False
-        after = boxes() if riders else {}
-        moves = {}
-        for rider, key in riders.items():
-            if key in before and key in after:
-                by = (round(after[key][0] - before[key][0], 6),
-                      round(after[key][1] - before[key][1], 6))
-                if by != (0.0, 0.0):
-                    moves.setdefault(by, []).append(rider)
-        for (dx, dy), who in moves.items():
-            asm.move_by(doc, who, dx, dy)
-        return True
+            return asm.take_along(doc, keys, change)
+        return change()
 
     def _to_side(self):
         """The chosen pieces go under the main piece, next to it -- or,

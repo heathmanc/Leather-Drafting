@@ -12,6 +12,10 @@ its back, its cut edge, a sheen that moves as it turns, and a soft shadow
 where one layer lies on another -- with its stitch holes and cutouts,
 every fold line coloured by the way it folds and lettered, and the panels
 numbered.
+
+A model may be a stack of pieces (``leathercad.sheets``): then each piece
+is painted in its own leather and can be clicked on, the chosen ones are
+lit, and the layers can be lifted apart to show what lies on what.
 """
 
 from __future__ import annotations
@@ -29,12 +33,15 @@ from PySide6.QtWidgets import QToolTip, QWidget
 from leathercad import bsp
 from leathercad.bsp import BACK, DOTS, FRONT, INNER, LINE, POLY
 from leathercad.foldsolid import LANDS, LONE, MEETS, OFF
+from leathercad.sheets import BLANK, sheet_of
 
 _LEVELS = 24                      # shades of each colour, dark to fully lit
 _SHEEN = 8                        # ... and steps of sheen on top of that
 _TILE = 256                       # a leather texture is this many pixels
 _TILE_MM = 80.0                   # ... square, and covers this much leather
 _CREASE = 0.94                    # cosine of the turn that shows as a crease
+_WASH = 96                        # how strongly a piece is lit or marked
+_GRAIN = (23.0, 41.0)             # mm the grain shifts from piece to piece
 _HINT = "Drag to turn · right-drag to slide · wheel to zoom"
 
 #: Leathers to show the piece in: the colour of the grain side, of the
@@ -201,6 +208,9 @@ class Look:
         self.cut = QColor(52, 54, 60) if dark else QColor(120, 122, 130)
         self.idle = QColor(128, 128, 136)            # a fold that isn't made
         self.pick = QColor(255, 196, 0)
+        # washed over leather that is in the way of a fold: beside
+        # ``bad``, for the leather that has run into other leather
+        self.warn = QColor(240, 120, 0)
         self._brushes = {}
 
     def flat(self, kind: int) -> Tuple[int, int, int]:
@@ -305,7 +315,14 @@ class Camera:
     """Where the model is looked at from: turned ``yaw`` about the upright
     of the pattern and tipped back ``pitch`` from looking straight down on
     its front (both radians), about ``centre``; ``radius`` mm fill the
-    view at ``zoom`` 1."""
+    view at ``zoom`` 1.
+
+    ``turned`` is for a stack whose main piece lies grain down on the
+    bench: the model is turned half round the upright of the pattern
+    before it is looked at -- turned over like a page -- so that looking
+    straight down shows its back, with left and right changed over.
+    Every view, the mouse and the light then work as they did, on the
+    stack as it lies on the bench."""
 
     def __init__(self):
         self.yaw = -0.45
@@ -314,12 +331,16 @@ class Camera:
         self.pan_x = self.pan_y = 0.0
         self.centre = (0.0, 0.0, 0.0)
         self.radius = 50.0
+        self.turned = False
 
     def axes(self):
         """Unit vectors in the model: to the right of the screen, up it,
         and out of it towards the eye."""
         cy, sy = math.cos(self.yaw), math.sin(self.yaw)
         cp, sp = math.cos(self.pitch), math.sin(self.pitch)
+        if self.turned:                # the same, seen from the model
+            return ((-cy, sy, 0.0), (cp * sy, cp * cy, -sp),
+                    (-sp * sy, -sp * cy, -cp))
         return ((cy, sy, 0.0), (-cp * sy, cp * cy, sp),
                 (sp * sy, -sp * cy, cp))
 
@@ -343,15 +364,47 @@ class Camera:
 class Scene:
     """The model at one moment of the folding, ready to paint from any
     side: the partition tree of its cells, and where its fold lines and
-    panel numbers go."""
+    panel numbers go.
 
-    def __init__(self, layout, t: float, check=None):
+    A layout with ``sheets`` is a stack of pieces. Its ``solid``,
+    ``fold_marks``, ``panel_marks`` and ``bounds3`` take ``apart`` as
+    well: how far (mm) to lift each layer off the one under it."""
+
+    def __init__(self, layout, t: float, check=None, apart: float = 0.0):
         self.layout = layout
         self.t = t
         self.fractions = layout.fractions(t)
-        self.tree = bsp.build(layout.solid(self.fractions, check))
-        self.folds = layout.fold_marks(self.fractions)
-        self.panels = layout.panel_marks(self.fractions)
+        self.sheets = getattr(layout, "sheets", None) or ()
+        self.apart = max(0.0, float(apart)) if self.sheets else 0.0
+        if self.sheets:
+            cells = layout.solid(self.fractions, check, self.apart)
+            self.folds = layout.fold_marks(self.fractions, self.apart)
+            self.panels = layout.panel_marks(self.fractions, self.apart)
+        else:
+            cells = layout.solid(self.fractions, check)
+            self.folds = layout.fold_marks(self.fractions)
+            self.panels = layout.panel_marks(self.fractions)
+        self.tree = bsp.build(cells)
+
+    def bounds(self):
+        """The box round the model as it stands: ``(low corner, high)``."""
+        if self.sheets:
+            return self.layout.bounds3(self.fractions, self.apart)
+        return self.layout.bounds3(self.fractions)
+
+    def face_of(self, piece: int, front: bool) -> int:
+        """Which side of its leather a piece shows on the face it turns
+        the way the main piece's front is turned (or, not ``front``, its
+        back): ``FRONT`` for the grain side, ``BACK`` for the flesh."""
+        grain = self.sheets[piece - 1].grain \
+            if 0 < piece <= len(self.sheets) else 1
+        return FRONT if (grain > 0) == front else BACK
+
+    def thickness_of(self, piece: int) -> float:
+        """How thick a piece of the model is."""
+        if 0 < piece <= len(self.sheets):
+            return self.sheets[piece - 1].thickness
+        return self.layout.thickness
 
 
 def _hidden(pt, discs, eye, m, reach=1e-3) -> bool:
@@ -391,7 +444,8 @@ def _hidden(pt, discs, eye, m, reach=1e-3) -> bool:
 
 def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                 look: Look, *, labels: bool = True, selected: int = -1,
-                hover: int = -1):
+                hover: int = -1, looks=None, chosen=(), wash=None,
+                seen: Optional[list] = None):
     """Paint the model into a ``w`` x ``h`` area. Returns the fold lines as
     drawn -- ``[(fold, x0, y0, x1, y1)]`` -- for finding the one under the
     mouse.
@@ -401,7 +455,18 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
     pieces a face is painted in. What smoothing is for -- the rim of the
     model against what lies behind it -- is done with a smooth hairline
     along each edge that can be one: dark along an edge of the leather, the
-    face's own colour where it turns out of sight round a bend."""
+    face's own colour where it turns out of sight round a bend.
+
+    The pieces of a stack are told apart by the tags of the cells (see
+    ``sheets.sheet_of``). ``looks`` has the ``Look`` of each piece that is
+    in a leather of its own, ``{piece: Look}``: only its leather is taken
+    from it, the colours of the window are all ``look``'s. The pieces in
+    ``chosen`` are lit with a wash of ``look.pick``, and ``wash`` puts a
+    colour of the caller's over others: ``{(piece, None): colour}`` for a
+    whole piece, ``{(piece, fold): colour}`` for what it has in the bend
+    of one fold. ``seen``, if given, is filled with the stretches of the
+    fold lines that are in sight, each as a line returned is."""
+    looks = looks or {}
     p.fillRect(0, 0, w, h, look.ground)
     smooth = QPainter.Antialiasing
     p.setRenderHint(smooth, False)
@@ -425,7 +490,6 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
     hx, hy, hz = hx / ln, hy / ln, hz / ln
 
     top = _LEVELS - 1
-    shade = look.shade
     order = bsp.back_to_front(scene.tree, ex, ey, ez)
 
     # What there is to paint, cell by cell from the back: the edges of the
@@ -440,6 +504,8 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
     s2 = ax * ax + ay * ay + az * az              # (pixels per mm) squared
     for cell in order:
         cast, faces, solid = [], [], []
+        piece = sheet_of(cell.tag)
+        leather = looks.get(piece, look)       # the piece's own, or the usual
         for f in cell.faces:
             kind = f.kind
             if kind == INNER:
@@ -512,9 +578,10 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                         soft.append(pts[i + 1 if i + 1 < n else 0])
                     else:
                         if seam is None:
-                            seam = seams.get((kind, level))
+                            key = (leather, kind, level)
+                            seam = seams.get(key)
                             if seam is None:
-                                seam = seams[(kind, level)] = QPainterPath()
+                                seam = seams[key] = QPainterPath()
                         seam.moveTo(pts[i])
                         seam.lineTo(pts[i + 1 if i + 1 < n else 0])
             else:
@@ -524,7 +591,7 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                                         pts[i + 1 if i + 1 < n else 0]))
             faces.append((f, level, pts, rims, soft))
         if faces or cast:
-            cells.append((cast, faces))
+            cells.append((cast, faces, piece, leather, cell.tag))
         if solid:
             x, y, z = cell.cx, cell.cy, cell.cz
             discs.append((ox + ax * x + ay * y + az * z,
@@ -537,27 +604,56 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
     # seam: where a face was cut in two and the one beside it was not, the
     # odd pixel between them can go unfilled, and would show the background
     p.setBrush(Qt.NoBrush)
-    for (kind, level), seam in seams.items():
-        p.setPen(shade(kind, level)[1])
+    for (leather, kind, level), seam in seams.items():
+        p.setPen(leather.shade(kind, level)[1])
         p.drawPath(seam)
 
-    edge = QPen(look.edge, 1.0)
-    edge.setCosmetic(True)
     cut = QBrush(look.cut)
-    # the soft shadow an edge of the leather throws on what lies under it:
-    # three bands, each narrower and so darker towards the edge
-    reach = min(11.0, max(3.0, 1.6 * layout.thickness * scale))
-    shadows = []
-    for part in (1.0, 0.62, 0.3):
-        band = QPen(QColor(0, 0, 0, 9), reach * part)
-        band.setCapStyle(Qt.FlatCap)
-        shadows.append(band)
+    rims_of = {}                  # the line along an edge, in each leather
+    inks_of = {}                  # ... and the colour of the marks on it
+    bands = {}                    # the shadow the edge of each piece throws
+    tints = {}                    # what the cells of a piece are washed with
+    lit = frozenset(chosen)
+    wash = wash or {}
+
+    def shadows(piece):
+        # the soft shadow an edge of the leather throws on what lies under
+        # it: three bands, each narrower and so darker towards the edge
+        got = bands.get(piece)
+        if got is None:
+            reach = min(11.0, max(3.0, 1.6 * scene.thickness_of(piece)
+                                  * scale))
+            got = bands[piece] = []
+            for part in (1.0, 0.62, 0.3):
+                band = QPen(QColor(0, 0, 0, 9), reach * part)
+                band.setCapStyle(Qt.FlatCap)
+                got.append(band)
+        return got
+
+    def washes(piece, tag):
+        # a piece that is chosen is lit, and over that goes whatever
+        # colour the caller marks it with, or its part in one bend
+        fold = tag[1] if tag is not None and tag[0] == "bend" else None
+        got = tints.get((piece, fold))
+        if got is None:
+            got = tints[(piece, fold)] = []
+            for colour in (look.pick if piece in lit else None,
+                           wash.get((piece, None)),
+                           wash.get((piece, fold)) if fold is not None
+                           else None):
+                if colour is not None:
+                    colour = QColor(colour)
+                    if colour.alpha() == 255:
+                        colour.setAlpha(_WASH)
+                    got.append(QBrush(colour))
+        return got
+
     k = _TILE_MM / _TILE                       # mm to a pixel of texture
-    inks = {FRONT: look.ink(FRONT), BACK: look.ink(BACK)}
     none = QPen(Qt.NoPen)
-    for cast, faces in cells:
+    for cast, faces, piece, leather, tag in cells:
+        shade = leather.shade
         if cast:
-            for band in shadows:
+            for band in shadows(piece):
                 p.setPen(band)
                 p.drawLines(cast)
         # the faces of one cell never hide each other, so each kind of
@@ -577,6 +673,7 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
         p.setPen(none)
         lines = []
         more = False
+        over = washes(piece, tag) if lit or wash else ()
         for f, level, pts, rims, soft in faces:
             brush = shade(f.kind, level)[0]
             if f.kind <= BACK:
@@ -586,6 +683,13 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                     # pattern puts it, so the grain runs on from panel to
                     # bend to panel
                     o, u, v = uv
+                    if piece:
+                        # ... but not from one piece of a stack to the
+                        # next: each is cut from its own bit of the hide
+                        gx, gy = _GRAIN[0] * piece, _GRAIN[1] * piece
+                        o = (o[0] + gx * u[0] + gy * v[0],
+                             o[1] + gx * u[1] + gy * v[1],
+                             o[2] + gx * u[2] + gy * v[2])
                     brush.setTransform(QTransform(
                         k * (ax * u[0] + ay * u[1] + az * u[2]),
                         k * (bx * u[0] + by * u[1] + bz * u[2]),
@@ -598,7 +702,11 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
             elif soft:
                 more = True
             p.setBrush(brush)
-            p.drawPolygon(QPolygonF(pts))
+            poly = QPolygonF(pts)
+            p.drawPolygon(poly)
+            for tint in over:
+                p.setBrush(tint)
+                p.drawPolygon(poly)
             if rims:
                 lines += rims
         if not lines and not more:
@@ -607,6 +715,10 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
         # the corners of its cut edge, and the line along each of its edges
         p.setRenderHint(smooth, True)
         if more:
+            inks = inks_of.get(leather)
+            if inks is None:
+                inks = inks_of[leather] = {FRONT: leather.ink(FRONT),
+                                           BACK: leather.ink(BACK)}
             for f, level, pts, rims, soft in faces:
                 kind = f.kind
                 if kind > BACK:
@@ -642,6 +754,10 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                                     oy + bx * x + by * y + bz * z)
                             for x, y, z in geo]))
         if lines:
+            edge = rims_of.get(leather)
+            if edge is None:
+                edge = rims_of[leather] = QPen(leather.edge, 1.0)
+                edge.setCosmetic(True)
             p.setPen(edge)
             p.drawLines(lines)
         p.setRenderHint(smooth, False)
@@ -654,16 +770,19 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
     # The fold lines go on last, over the leather they lie on: drawn with
     # the faces, the next strip of the bend painted half of each away. A
     # line shows on a face turned towards the eye, wherever nothing stands
-    # in front of it; the chosen fold is lit through whatever does.
+    # in front of it; the chosen fold is lit through whatever does. (On a
+    # stack a mark says, last, which piece each of its two lines is on.)
     drawn = []
     pieces = 8
     for fi, marks in scene.folds.items():
         fold = layout.folds[fi]
         live = bool(layout.steps[fi])
-        for a, b, a2, b2, nn in marks:
+        for mark in marks:
+            a, b, a2, b2, nn = mark[:5]
+            on = mark[5] if len(mark) > 5 else (0, 0)
             facing = nn[0] * ex + nn[1] * ey + nn[2] * ez
-            for q, r, side, kind in ((a, b, facing, FRONT),
-                                     (a2, b2, -facing, BACK)):
+            for q, r, side, front in ((a, b, facing, True),
+                                      (a2, b2, -facing, False)):
                 (x0, y0), (x1, y1) = spot(q), spot(r)
                 drawn.append((fi, x0, y0, x1, y1))
                 if fi == selected or fi == hover:
@@ -676,7 +795,9 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                 if side <= 0.02:
                     continue                   # that face is turned away
                 start = None
-                p.setPen(fold_pen(look, fold, live, kind))
+                piece = on[0] if front else on[1]
+                p.setPen(fold_pen(looks.get(piece, look), fold, live,
+                                  scene.face_of(piece, front)))
                 for i in range(pieces + 1):
                     clear = False
                     if i < pieces:
@@ -689,13 +810,15 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                         start = i
                     elif not clear and start is not None:
                         t0, t1 = start / pieces, i / pieces
-                        p.drawLine(QPointF(x0 + (x1 - x0) * t0,
-                                           y0 + (y1 - y0) * t0),
-                                   QPointF(x0 + (x1 - x0) * t1,
-                                           y0 + (y1 - y0) * t1))
+                        run = (x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0,
+                               x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1)
+                        p.drawLine(QPointF(run[0], run[1]),
+                                   QPointF(run[2], run[3]))
+                        if seen is not None:
+                            seen.append((fi,) + run)
                         start = None
     if labels:
-        _paint_labels(p, scene, look, discs, eye, m, selected)
+        _paint_labels(p, scene, look, discs, eye, m, selected, looks)
     return drawn
 
 
@@ -708,7 +831,10 @@ def _paint_holes(p: QPainter, spots, state: int, size: float, ink: QColor,
     to meet an amber bead with the hole still showing in it -- each ringed
     in ``ink`` to stand off any leather, and each a different shape as
     well as colour. ``LANDS`` spots get a red ring: where a hole that a
-    red one is out of line with comes down."""
+    red one is out of line with comes down. ``BLANK`` spots get a thin
+    ring of ``ink`` alone, with no colour of a fault in it: where a hole
+    of another piece of a stack comes through this one, which has no hole
+    there."""
     if not state:
         dot = QPen(ink, size)
         dot.setCapStyle(Qt.RoundCap)
@@ -716,6 +842,15 @@ def _paint_holes(p: QPainter, spots, state: int, size: float, ink: QColor,
         p.drawPoints(QPolygonF(spots))
         return
     bead = max(4.4, 1.35 * size)
+    if state == BLANK:
+        quiet = QColor(ink)
+        quiet.setAlpha(170)
+        r = 0.5 * bead + 1.2
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(quiet, 1.1))
+        for q in spots:                # (quicker than all as one path)
+            p.drawEllipse(q, r, r)
+        return
     if state == LANDS:
         r = 0.5 * bead + 1.2
         p.setBrush(Qt.NoBrush)
@@ -751,8 +886,9 @@ def fold_pen(look: Look, fold, live: bool, kind: int = FRONT) -> QPen:
     return pen
 
 
-def _paint_labels(p, scene, look, discs, eye, m, selected):
+def _paint_labels(p, scene, look, discs, eye, m, selected, looks=None):
     layout = scene.layout
+    looks = looks or {}
     ox, ax, ay, az, oy, bx, by, bz = m
     ex, ey, ez = eye
 
@@ -764,26 +900,32 @@ def _paint_labels(p, scene, look, discs, eye, m, selected):
     font.setBold(True)
     font.setPointSizeF(10.0)
     p.setFont(font)
-    # panel numbers, on whichever face is towards the eye and in clear view
-    for panel, (front, back, nn) in zip(layout.panels, scene.panels):
+    # panel numbers, on whichever face is towards the eye and in clear
+    # view (on a stack a mark says, last, which piece each spot is on)
+    for panel, mark in zip(layout.panels, scene.panels):
+        front, back, nn = mark[:3]
+        on = mark[3] if len(mark) > 3 else (0, 0)
         facing = nn[0] * ex + nn[1] * ey + nn[2] * ez
         if abs(facing) < 0.08:
             continue
-        at, kind = (front, FRONT) if facing > 0.0 else (back, BACK)
+        up = facing > 0.0
+        at, piece = (front, on[0]) if up else (back, on[1])
         if _hidden(at, discs, eye, m):
             continue
+        kind = scene.face_of(piece, up)
+        leather = looks.get(piece, look)
         c = spot(at)
         box = QRectF(c.x() - 14, c.y() - 10, 28, 20)
-        r, g, b = look.flat(kind)
+        r, g, b = leather.flat(kind)
         # ringed in the leather's own colour, so the grain doesn't break
         # up the figure
         halo = QColor(int(r), int(g), int(b))
-        p.setPen(QPen(halo.darker(118) if look.is_dark(kind)
+        p.setPen(QPen(halo.darker(118) if leather.is_dark(kind)
                       else halo.lighter(122), 3.0))
         for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             p.drawText(box.translated(dx, dy), Qt.AlignCenter,
                        str(panel.number))
-        p.setPen(look.ink(kind))
+        p.setPen(leather.ink(kind))
         p.drawText(box, Qt.AlignCenter, str(panel.number))
     # fold letters: a disc in the fold's colour at the middle of the line
     for fi, marks in scene.folds.items():
@@ -792,7 +934,7 @@ def _paint_labels(p, scene, look, discs, eye, m, selected):
             continue
         a, b, a2, b2, nn = max(marks, key=lambda mk: (mk[0][0] - mk[1][0]) ** 2
                                + (mk[0][1] - mk[1][1]) ** 2
-                               + (mk[0][2] - mk[1][2]) ** 2)
+                               + (mk[0][2] - mk[1][2]) ** 2)[:5]
         facing = nn[0] * ex + nn[1] * ey + nn[2] * ez
         mids = [((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2),
                 ((a2[0] + b2[0]) / 2, (a2[1] + b2[1]) / 2,
@@ -821,24 +963,112 @@ def _paint_labels(p, scene, look, discs, eye, m, selected):
                    fold.label)
 
 
+def sheet_looks(layout, look: Look, leathers=None, made=None) -> dict:
+    """The ``Look`` of each piece of a stack that is shown in a leather of
+    its own: ``{piece: Look}``, for ``paint_scene``. A piece in the usual
+    leather -- that of ``look`` -- is left out.
+
+    A piece's leather is the one ``leathers`` names for it, by its number
+    (0 is the main piece) or else by its sheet's ``key``; failing that,
+    the sheet's own ``leather``; and failing that, or if no such leather
+    is known, the usual one. ``made`` keeps the Looks from one call to the
+    next, by leather: one is made the first time its leather is wanted
+    and dropped once no piece is in it."""
+    leathers = leathers or {}
+    made = {} if made is None else made
+    out = {}
+    sheets = getattr(layout, "sheets", None) or ()
+    for piece in range(len(sheets) + 1):
+        name = leathers.get(piece)
+        if name is None and piece:
+            sheet = sheets[piece - 1]
+            name = leathers.get(sheet.key) if sheet.key else None
+            if name is None:
+                name = sheet.leather
+        if name in LEATHERS and name != look.leather:
+            if name not in made:
+                made[name] = Look(look.dark, name)
+            out[piece] = made[name]
+    in_use = {lk.leather for lk in out.values()}
+    for name in [name for name in made if name not in in_use]:
+        del made[name]
+    return out
+
+
+def piece_at(scene: Scene, cam: Camera, w: int, h: int, x: float,
+             y: float) -> int:
+    """The piece of the model in view at a point of a ``w`` x ``h``
+    picture of it: 0 for the main piece (or a piece shown alone), a
+    sheet's number, or -1 where there is nothing. The cells are gone
+    through as they are painted, but from the front: the first face
+    turned to the eye that the point is on is the one in view there."""
+    ox, ax, ay, az, oy, bx, by, bz = cam.mapping(w, h)
+    ex, ey, ez = cam.axes()[2]
+    s2 = ax * ax + ay * ay + az * az
+    for cell in reversed(bsp.back_to_front(scene.tree, ex, ey, ez)):
+        cx, cy, cz = cell.cx, cell.cy, cell.cz
+        if (ox + ax * cx + ay * cy + az * cz - x) ** 2 \
+                + (oy + bx * cx + by * cy + bz * cz - y) ** 2 \
+                > cell.rad * cell.rad * s2:
+            continue
+        for f in cell.faces:
+            nx, ny, nz, _d = f.plane
+            if f.kind == INNER or nx * ex + ny * ey + nz * ez <= 1e-6:
+                continue
+            px, py, pz = f.pts[-1]
+            u0 = ox + ax * px + ay * py + az * pz
+            v0 = oy + bx * px + by * py + bz * pz
+            sign = 0.0
+            for px, py, pz in f.pts:
+                u1 = ox + ax * px + ay * py + az * pz
+                v1 = oy + bx * px + by * py + bz * pz
+                c = (u1 - u0) * (y - v0) - (v1 - v0) * (x - u0)
+                if c != 0.0:
+                    if sign == 0.0:
+                        sign = c
+                    elif (c > 0.0) != (sign > 0.0):
+                        break
+                u0, v0 = u1, v1
+            else:
+                return sheet_of(cell.tag)
+    return -1
+
+
 def render(layout, t: float, w: int = 900, h: int = 620, *, dark: bool = False,
            yaw: Optional[float] = None, pitch: Optional[float] = None,
            zoom: float = 1.0, labels: bool = True, selected: int = -1,
-           check=None, leather: str = DEFAULT_LEATHER) -> QImage:
+           check=None, leather: str = DEFAULT_LEATHER, leathers=None,
+           chosen=(), wash=None, apart: float = 0.0,
+           turned: bool = False) -> QImage:
     """A picture of ``layout`` at time ``t`` of its folding (see
     ``Layout.fractions``), in one of the ``LEATHERS``; with the ``check``
-    from ``layout.lineup()``, its stitch holes show what that found."""
+    from ``layout.lineup()``, its stitch holes show what that found.
+
+    For a stack: ``leathers`` names the leather of any piece that is not
+    in the usual one (see ``sheet_looks``), ``chosen`` and ``wash`` light
+    and mark pieces (see ``paint_scene``), ``apart`` lifts the layers off
+    each other, and ``turned`` shows it as it lies on the bench with its
+    main piece grain down (see ``Camera``)."""
     img = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
     cam = Camera()
-    cam.centre, cam.radius = layout.extent()
+    scene = Scene(layout, t, check, apart)
+    if scene.apart:
+        lo, hi = scene.bounds()
+        cam.centre = tuple(0.5 * (a + b) for a, b in zip(lo, hi))
+        cam.radius = max(5.0, 0.5 * math.dist(lo, hi))
+    else:
+        cam.centre, cam.radius = layout.extent()
     if yaw is not None:
         cam.yaw = yaw
     if pitch is not None:
         cam.pitch = pitch
     cam.zoom = zoom
+    cam.turned = bool(turned)
+    look = Look(dark, leather)
     p = QPainter(img)
-    paint_scene(p, w, h, Scene(layout, t, check), cam, Look(dark, leather),
-                labels=labels, selected=selected)
+    paint_scene(p, w, h, scene, cam, look, labels=labels, selected=selected,
+                looks=sheet_looks(layout, look, leathers), chosen=chosen,
+                wash=wash)
     p.end()
     return img
 
@@ -853,11 +1083,15 @@ class _Way:
 class FoldView(QWidget):
     """The model on screen. Drag to turn it, drag with the right or middle
     button (or Shift) to slide it, roll the wheel to zoom, double-click to
-    fit it back in. Clicking a fold line picks that fold. The view keeps
+    fit it back in. Clicking a fold line picks that fold; clicking
+    anywhere else picks the piece that is there, or none. The view keeps
     the model centred and filling it as it folds, until it is zoomed or
     slid by hand."""
 
     foldPicked = Signal(int)          # the fold clicked on, -1 for none
+    # the piece clicked on (0 the main piece, -1 for none), and whether it
+    # is to be added to those chosen (Ctrl or Shift was held)
+    piecePicked = Signal(int, bool)
 
     def __init__(self, parent=None, dark: bool = False):
         super().__init__(parent)
@@ -866,14 +1100,20 @@ class FoldView(QWidget):
         self.layout_ = None
         self.scene: Optional[Scene] = None
         self.t = 0.0
+        self.apart = 0.0              # how far a stack's layers are lifted
         self.check = None             # what ``layout.lineup()`` found
         self.check_shown = True       # ... and whether the holes show it
         self.selected = -1
         self.hover = -1
+        self.chosen: Tuple[int, ...] = ()    # the pieces that are lit
+        self.wash: dict = {}          # colours over pieces: ``paint_scene``
         self.labels = True
         self.follow = True            # keep the model filling the view
         self.caption = ""
         self._drawn: List[tuple] = []
+        self._seen: List[tuple] = []  # ... and the stretches of them in sight
+        self._leathers: dict = {}     # the leather given for a piece
+        self._looks: dict = {}        # a Look for each leather in use
         self._press = None
         self._moved = False
         self.setMinimumSize(320, 240)
@@ -897,7 +1137,7 @@ class FoldView(QWidget):
             self.t = min(max(self.t, 0.0), float(layout.n_steps))
             if first or refit:
                 self.follow = True
-            self.scene = Scene(layout, self.t, self._marks())
+            self.scene = Scene(layout, self.t, self._marks(), self.apart)
             self._frame()
         self.update()
 
@@ -908,9 +1148,23 @@ class FoldView(QWidget):
         if self.scene is not None and abs(t - self.t) < 1e-9:
             return
         self.t = t
-        self.scene = Scene(self.layout_, t, self._marks())
+        self.scene = Scene(self.layout_, t, self._marks(), self.apart)
         self._frame()
         self.update()
+
+    def set_apart(self, apart: float):
+        """Lift the layers of a stack ``apart`` mm off each other, to show
+        what lies on what (0 lays them down again). A piece shown alone
+        has nothing to lift."""
+        apart = max(0.0, float(apart))
+        if abs(apart - self.apart) < 1e-9:
+            return
+        self.apart = apart
+        if self.layout_ is not None and self.scene is not None \
+                and self.scene.sheets:
+            self.scene = Scene(self.layout_, self.t, self._marks(), apart)
+            self._frame()
+            self.update()
 
     def _marks(self):
         """The check of the stitch holes, if the model is to show it."""
@@ -923,7 +1177,8 @@ class FoldView(QWidget):
         if on != self.check_shown:
             self.check_shown = on
             if self.layout_ is not None:
-                self.scene = Scene(self.layout_, self.t, self._marks())
+                self.scene = Scene(self.layout_, self.t, self._marks(),
+                                   self.apart)
             self.update()
 
     def _frame(self):
@@ -932,31 +1187,79 @@ class FoldView(QWidget):
         Fit starts it again)."""
         if not self.follow or self.layout_ is None or self.scene is None:
             return
-        lo, hi = self.layout_.bounds3(self.scene.fractions)
+        lo, hi = self.scene.bounds()
         self.cam.centre = tuple(0.5 * (a + b) for a, b in zip(lo, hi))
         self.cam.radius = max(5.0, 0.5 * math.dist(lo, hi))
         self.cam.pan_x = self.cam.pan_y = 0.0
         self.cam.zoom = 1.0
 
     def set_leather(self, name: str):
-        """Show the piece in another of the ``LEATHERS``."""
+        """Show the piece in another of the ``LEATHERS``: the usual one,
+        for every piece of a stack that has none of its own."""
         if name != self.look.leather:
             self.look = Look(self.look.dark, name)
             self.update()
+
+    def set_leathers(self, leathers):
+        """Say which leather each piece of a stack is shown in:
+        ``{piece: name}``, a piece being its number in the model (0 is the
+        main piece) or its sheet's ``key``. A piece left out is in its
+        sheet's own ``leather``, or the usual one (``set_leather``)."""
+        leathers = dict(leathers or {})
+        if leathers != self._leathers:
+            self._leathers = leathers
+            self.update()
+
+    def leather_of(self, piece: int) -> str:
+        """The leather a piece of the model is shown in."""
+        looks = sheet_looks(self.layout_, self.look, self._leathers,
+                            self._looks)
+        return looks.get(piece, self.look).leather
 
     def set_selected(self, fold: int):
         if fold != self.selected:
             self.selected = fold
             self.update()
 
+    def set_chosen(self, pieces):
+        """Light the chosen pieces of a stack (their numbers in the model,
+        0 for the main piece)."""
+        pieces = tuple(pieces)
+        if pieces != self.chosen:
+            self.chosen = pieces
+            self.update()
+
+    def set_wash(self, wash):
+        """Mark pieces of the model with a colour washed over them, as
+        ``paint_scene`` takes it: ``{(piece, None): colour}`` for a whole
+        piece, ``{(piece, fold): colour}`` for what it has in one bend.
+        ``look.warn`` and ``look.bad`` are the colours for leather that is
+        in the way of a fold and leather that has run into leather."""
+        wash = dict(wash or {})
+        if wash != self.wash:
+            self.wash = wash
+            self.update()
+
+    def set_turned(self, on: bool):
+        """Show a stack as it lies on the bench with its main piece grain
+        down: turned over like a page (see ``Camera``)."""
+        if bool(on) != self.cam.turned:
+            self.cam.turned = bool(on)
+            self.update()
+
     def look_from(self, where: str):
         """Turn to a set view: ``"front"``, ``"back"``, ``"side"`` or the
-        three-quarter ``"iso"``."""
+        three-quarter ``"iso"``. For a stack on the bench ``"top"`` looks
+        straight down on it, as ``"front"`` does, and ``"under"`` shows
+        what is underneath as if the stack were turned over like a page:
+        its top edge still at the top, left and right changed over."""
         cam = self.cam
-        if where == "front":
+        if where == "front" or where == "top":
             cam.yaw, cam.pitch = 0.0, 0.0
         elif where == "back":
             cam.yaw, cam.pitch = 0.0, math.pi
+        elif where == "under":
+            cam.yaw, cam.pitch = math.pi, math.pi
         elif where == "side":
             cam.yaw, cam.pitch = 0.0, 0.5 * math.pi
         else:
@@ -982,14 +1285,20 @@ class FoldView(QWidget):
                        self.caption or "Nothing to fold")
             p.end()
             return
+        looks = sheet_looks(self.layout_, self.look, self._leathers,
+                            self._looks)
+        self._seen = []
         self._drawn = paint_scene(p, w, h, self.scene, self.cam, self.look,
                                   labels=self.labels, selected=self.selected,
-                                  hover=self.hover)
-        self._paint_legend(p, w, h)
+                                  hover=self.hover, looks=looks,
+                                  chosen=self.chosen, wash=self.wash,
+                                  seen=self._seen)
+        self._paint_legend(p, w, h, looks)
         p.end()
 
-    def _paint_legend(self, p: QPainter, w: int, h: int):
+    def _paint_legend(self, p: QPainter, w: int, h: int, looks=None):
         look = self.look
+        stack = bool(self.scene is not None and self.scene.sheets)
         font = QFont(p.font())
         font.setBold(False)
         font.setPointSizeF(9.0)
@@ -1006,10 +1315,16 @@ class FoldView(QWidget):
             p.drawText(QRectF(12, 8, w - 24, 22),
                        Qt.AlignRight | Qt.AlignVCenter, _HINT)
         x, y = 12.0, h - 16.0
-        for kind, text in ((FRONT, "front of the leather"),
-                           (BACK, "back")):
-            p.setPen(QPen(look.edge, 1.0))
-            p.setBrush(QBrush(QColor(*look.flat(kind))))
+        # the two sides of the leather: of the piece that is chosen, where
+        # the pieces of a stack are in leathers of their own
+        leather = look
+        if stack and self.chosen and looks:
+            leather = looks.get(self.chosen[0], look)
+        for kind, text in ((FRONT, "grain side" if stack
+                            else "front of the leather"),
+                           (BACK, "flesh side" if stack else "back")):
+            p.setPen(QPen(leather.edge, 1.0))
+            p.setBrush(QBrush(QColor(*leather.flat(kind))))
             p.drawRect(QRectF(x, y - 9, 13, 10))
             p.setPen(look.faint)
             p.drawText(QPointF(x + 18, y), text)
@@ -1022,16 +1337,28 @@ class FoldView(QWidget):
             p.drawText(QPointF(x + 27, y), text)
             x += 27 + fm.horizontalAdvance(text) + 16
         check = self._marks()
-        if check is None or not check.state:
+        blanks = getattr(check, "blanks", None)
+        if check is None or not (check.state or blanks):
             return
         # ... and above it, what the stitch holes are saying
+        head = "Stitch holes, folded:"
+        marks = [(MEETS, "line up"), (OFF, "out of line"),
+                 (LANDS, "where the other hole is"),
+                 (LONE, "no hole to meet")]
+        if stack:
+            # of a stack, lying flat or not: and only the marks it has
+            head = "Stitch holes:"
+            found = set(check.state.values())
+            if check.rings:
+                found.add(LANDS)
+            marks = [mark for mark in marks if mark[0] in found]
+            if blanks:
+                marks.append((BLANK, "another piece's hole comes through"))
         x, y = 12.0, h - 38.0
         p.setPen(look.faint)
-        p.drawText(QPointF(x, y), "Stitch holes, folded:")
-        x += fm.horizontalAdvance("Stitch holes, folded:") + 12
-        for state, text in ((MEETS, "line up"), (OFF, "out of line"),
-                            (LANDS, "where the other hole is"),
-                            (LONE, "no hole to meet")):
+        p.drawText(QPointF(x, y), head)
+        x += fm.horizontalAdvance(head) + 12
+        for state, text in marks:
             _paint_holes(p, [QPointF(x + 6, y - 4)], state, 4.0, look.text,
                          look)
             p.setPen(look.faint)
@@ -1042,9 +1369,12 @@ class FoldView(QWidget):
 
     def fold_at(self, x: float, y: float, reach: float = 8.0) -> int:
         """The fold whose line is nearest ``(x, y)``, within ``reach``
-        pixels, or -1."""
+        pixels, or -1. On a stack a line counts only where it is in
+        sight: under a piece that lies over it, that piece is what a
+        click is for."""
+        stack = self.scene is not None and self.scene.sheets
         best, bd = -1, reach
-        for fi, x0, y0, x1, y1 in self._drawn:
+        for fi, x0, y0, x1, y1 in self._seen if stack else self._drawn:
             dx, dy = x1 - x0, y1 - y0
             ll = dx * dx + dy * dy
             t = 0.0 if ll < 1e-9 else max(0.0, min(1.0, (
@@ -1091,12 +1421,25 @@ class FoldView(QWidget):
             self.cam.pan_y += dy
         self.update()
 
+    def piece_at(self, x: float, y: float) -> int:
+        """The piece of the model in view at a point of the view: 0 for
+        the main piece (or a piece shown alone), a sheet's number, -1 for
+        none."""
+        if self.scene is None:
+            return -1
+        return piece_at(self.scene, self.cam, self.width(), self.height(),
+                        x, y)
+
     def mouseReleaseEvent(self, e):
         press, self._press = self._press, None
         if press is not None and not self._moved \
                 and press[2] == Qt.LeftButton:
-            self.foldPicked.emit(self.fold_at(e.position().x(),
-                                              e.position().y()))
+            x, y = e.position().x(), e.position().y()
+            fold = self.fold_at(x, y)
+            self.foldPicked.emit(fold)
+            if fold < 0:                       # not a fold line: a piece
+                add = e.modifiers() & (Qt.ControlModifier | Qt.ShiftModifier)
+                self.piecePicked.emit(self.piece_at(x, y), bool(add))
 
     def mouseDoubleClickEvent(self, _e):
         self.fit()

@@ -132,6 +132,39 @@ def test_two_edges_that_cross_are_parted_only_by_the_plane_between_them():
     assert clash.depth(*_twisted(0.0)) < 1e-9
 
 
+def _rod(tilt=0.0, up=0.0):
+    """A rod 300 mm long and 2 mm square along x, standing on one of its
+    long edges, tilted ``tilt`` radians about the upright and lifted
+    ``up`` mm."""
+    r = math.sqrt(0.5)
+    c, s = math.cos(tilt), math.sin(tilt)
+    ex, ey, ez = (c, 0.0, -s), (r * s, r, r * c), (-r * s, r, -r * c)
+    o = tuple(-150 * a - b - d + lift
+              for a, b, d, lift in zip(ex, ey, ez, (0.0, up, 0.0)))
+    return _box(o, ex, ey, ez, 300, 2, 2)
+
+
+def test_two_long_cells_a_hair_apart_edge_along_edge_do_not_clash():
+    # One rod lying on the other, edge on edge, 0.000 001 mm between
+    # them, the upper turned a millionth of a radian about the upright:
+    # the two edges all but run alike, and nothing parts the rods but the
+    # plane between those two edges
+    low, high = _rod(), _rod(9.9e-7, 2.0 * math.sqrt(2.0) + 1e-6)
+    top = max(v[1] for v in low.verts)
+    assert _near(top, math.sqrt(2.0), 1e-12)
+    assert _near(min(v[1] for v in high.verts) - top, 1e-6, 1e-9)
+    normals = [f.plane[:3] for f in low.faces + high.faces]
+    assert min(_along(n, low, high) for n in normals) > clash.JUDGE
+    assert clash.depth(low, high) == 0.0 == clash.depth(high, low)
+    assert clash.clashes([low, high]) == []
+    # pushed 0.2 mm into each other they are 0.2 x sin 45 deep, as far as
+    # either has to move along a face of its own to come clear
+    deep = clash.depth(low, _rod(9.9e-7, 2.0 * math.sqrt(2.0) - 0.2))
+    assert abs(deep - 0.2 * math.sqrt(0.5)) < 2e-4
+    # and exactly along each other, a hair apart, they do not clash either
+    assert clash.depth(low, _rod(0.0, 2.0 * math.sqrt(2.0) + 1e-6)) == 0.0
+
+
 def test_a_cell_with_a_corner_pushed_out_is_not_convex():
     good = _box((0, 0, 0))
     assert clash.convex(good) == 0.0
@@ -143,6 +176,29 @@ def test_a_cell_with_a_corner_pushed_out_is_not_convex():
                     for p in f.pts)
         faces.append(bsp.Face(pts, f.plane, f.kind))
     assert _near(clash.convex(bsp.Cell(faces)), 0.3)
+    # Pushed 0.3 mm IN instead, each face still carrying the plane it
+    # had: no corner is in front of any of those. But the face at x = 1
+    # is no longer flat, and two of its own corners stand in front of the
+    # plane through its four
+    faces = []
+    for f in good.faces:
+        pts = tuple((0.7, 1.0, 1.0) if p == (1.0, 1.0, 1.0) else p
+                    for p in f.pts)
+        faces.append(bsp.Face(pts, f.plane, f.kind))
+    dented = bsp.Cell(faces)
+    assert max(n[0] * x + n[1] * y + n[2] * z - n[3]
+               for n in (f.plane for f in dented.faces)
+               for x, y, z in dented.verts) == 0.0
+    assert 0.05 < clash.convex(dented) < 0.3
+    # it is a length, to hold against a tolerance: 0.0 is the convex one
+    assert not clash.convex(good) < 0.0 and clash.convex(dented) > 1e-7
+    # a box with a face left out is no solid: its five faces add up to
+    # the one that is missing, 1 mm2, over the root of their 5 mm2
+    assert _near(clash.convex(bsp.Cell(good.faces[1:])), math.sqrt(0.2))
+    # ... nor is one with a face turned inside out
+    top = good.faces[0]
+    flipped = bsp.Face(top.pts[::-1], (0.0, 0.0, -1.0, -1.0), top.kind)
+    assert clash.convex(bsp.Cell([flipped] + good.faces[1:])) >= 1.0
     # every cell the fold engine makes is convex, at every moment
     lay = fs.fold_piece(HALF, [fs.FoldLine((80, 0), (80, 100), 180, 1,
                                            radius=1.5)])
@@ -187,37 +243,49 @@ def test_the_flat_bifold_goes_into_the_tree_uncut_and_nothing_clashes():
         assert max(clash.convex(c) for c in cells) < 1e-9
 
 
-def test_a_level_forced_wrong_is_found():
-    # the control: the judge must say so when a sheet is not on its level
+def test_a_level_left_wrong_is_found(monkeypatch):
+    # The control: the judge must say so when sheets are left on a level
+    # they should have climbed off. Here the rule that lifts them is
+    # switched off: nothing lies on anything until it is a metre on to it
+    assert clash.clashes(_bifold().solid([0.0])) == []
+    monkeypatch.setattr(sh, "LAP", 1000.0)
     stack = _bifold()
-    backing = stack.sheets[1]
-    assert (backing.name, backing.lo) == ("Left pocket backing", 0.8)
-    backing.lo, backing.hi = 0.0, 0.8          # down into the liner
+    assert [s.lo for s in stack.sheets] == [0.0] * 9
     cells = stack.solid([0.0])
-    (d, a, b), = clash.clashes(cells)
-    assert _near(d, 0.8) and {a, b} == {("panel", 1, 1), ("panel", 1, 2)}
-    assert bsp.count(bsp.build(cells))[1] > len(cells)     # and it is cut
-    backing.lo, backing.hi = 0.4, 1.2          # half way down into it
-    (d, _a, _b), = clash.clashes(stack.solid([0.0]))
-    assert _near(d, 0.4)
-    # two sheets that overlap by 0.04 mm are on two levels; left on one
-    # level they share that 0.04 mm, which is more than is let pass
+    found = clash.clashes(cells)
+    # the liner in each of the eight pocket pieces, and the four of each
+    # pile in each other: every one 0.8 mm, all its thickness, in the next
+    pairs = {tuple(sorted((a[2], b[2]))) for _d, a, b in found}
+    assert pairs == {(1, k) for k in range(2, 10)} \
+        | {(j, k) for lo in (2, 6) for j in range(lo, lo + 4)
+           for k in range(j + 1, lo + 4)}
+    assert len(found) == 20 and all(_near(d, 0.8) for d, _a, _b in found)
+    assert bsp.count(bsp.build(cells))[1] > len(cells)     # and they are cut
+    # Two sheets that overlap by 0.04 mm are on two levels. A rule that
+    # let 0.05 mm pass would leave them on one, sharing that 0.04 mm --
+    # which is more than the judge lets through
     lay = fs.fold_piece(HALF, [], thickness=2.0)
-    pair = [sh.Sheet(_rect(10, 10, 80, 90), 1.0),
-            sh.Sheet(_rect(79.96, 10, 150, 90), 1.0)]
-    stack = sh.FlatStack(lay, pair, HALF)
-    assert pair[1].lo == 1.0 and clash.clashes(stack.solid([])) == []
-    pair[1].lo, pair[1].hi = 0.0, 1.0
+
+    def pair(over):
+        two = [sh.Sheet(_rect(10, 10, 80, 90), 1.0),
+               sh.Sheet(_rect(80 - over, 10, 150, 90), 1.0)]
+        return two, sh.FlatStack(lay, two, HALF)
+
+    monkeypatch.setattr(sh, "LAP", 0.05)
+    two, stack = pair(0.04)
+    assert two[1].lo == 0.0
     (d, a, b), = clash.clashes(stack.solid([]))
     assert _near(d, 0.04) and {a, b} == {("panel", 0, 1), ("panel", 0, 2)}
     assert clash.JUDGE < 0.04
+    monkeypatch.undo()
+    assert sh.LAP == 1e-6 <= clash.JUDGE
+    two, stack = pair(0.04)
+    assert two[1].lo == 1.0 and clash.clashes(stack.solid([])) == []
     # ... while sheets that butt, or share less than counts as lying on
     # each other, are left on one level and pass
     for over in (0.0, 0.5 * sh.LAP):
-        pair = [sh.Sheet(_rect(10, 10, 80, 90), 1.0),
-                sh.Sheet(_rect(80 - over, 10, 150, 90), 1.0)]
-        stack = sh.FlatStack(lay, pair, HALF)
-        assert pair[1].lo == 0.0 and clash.clashes(stack.solid([])) == []
+        two, stack = pair(over)
+        assert two[1].lo == 0.0 and clash.clashes(stack.solid([])) == []
 
 
 def _rounded(x0, y0, x1, y1, r, n=8):

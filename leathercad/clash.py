@@ -4,8 +4,9 @@ The view paints whatever cells it is given, and the partition tree puts
 them in order whether or not they share space: leather drawn through
 leather is cut up and painted, and nothing says so. This module is the
 judge that does. ``depth`` measures how far two convex cells go into each
-other, ``clashes`` tries every pair of a model, and ``convex`` checks that
-a cell is the convex solid the other two take it for. Pure Python, no Qt.
+other, ``clashes`` tries every pair of a model, and ``convex`` measures
+how far a cell is from the convex solid the other two take it for. Pure
+Python, no Qt.
 """
 
 from __future__ import annotations
@@ -73,7 +74,12 @@ def _axes(a, b) -> Iterator[P3]:
             ny = uz * vx - ux * vz
             nz = ux * vy - uy * vx
             ln = math.sqrt(nx * nx + ny * ny + nz * nz)
-            if ln > 1e-6:                      # not two edges that run alike
+            # Two edges that run alike, to rounding, have no direction
+            # between them. Any others do, however nearly alike: a rough
+            # direction can only be one more place to look from, and to
+            # leave it out would call two long cells that lie a hair apart,
+            # edge along edge, one inside the other.
+            if ln > 1e-12:
                 yield (nx / ln, ny / ln, nz / ln)
 
 
@@ -85,7 +91,9 @@ def depth(a, b) -> float:
     This is exact for convex cells. If any plane parts two of them, one
     does that is square to a face of either or to an edge of each; so
     those are the directions tried, and the depth is the least overlap
-    found along any of them."""
+    found along any of them. (Looked at along any direction at all, two
+    cells overlap by at least their depth: so what is found is never
+    less than it.)"""
     if (a.cx - b.cx) ** 2 + (a.cy - b.cy) ** 2 + (a.cz - b.cz) ** 2 \
             >= (a.rad + b.rad) ** 2:
         return 0.0
@@ -140,14 +148,46 @@ def clashes(cells, eps: float = JUDGE) -> List[Tuple[float, tuple, tuple]]:
 
 
 def convex(cell) -> float:
-    """How far any corner of a cell stands in front of any of its own
-    faces (mm): 0 for a convex cell, which lies wholly behind each of
-    them."""
+    """How far a cell is from being the convex solid that ``depth`` and
+    ``clashes`` take it for (mm): 0, to rounding, for one that is. It is
+    a length, not a yes or a no -- ask ``convex(cell) < 1e-7``, never
+    ``if convex(cell)``.
+
+    It is the most that any corner of the cell stands in front of any of
+    its own faces: of the plane the face carries, and of the plane
+    through the face's own corners, which a cell put together wrongly may
+    not have the same. A cell whose faces do not close round it -- one
+    left out, one turned inside out -- is told too: the faces of a solid,
+    each taken as its area along its normal, add up to nothing, and what
+    they add up to here is given as a length (over the root of all their
+    area)."""
     worst = 0.0
+    sx = sy = sz = area = 0.0
+    cx, cy, cz = cell.cx, cell.cy, cell.cz
     for f in cell.faces:
-        nx, ny, nz, d = f.plane
-        for x, y, z in cell.verts:
-            q = nx * x + ny * y + nz * z - d
-            if q > worst:
-                worst = q
+        planes = [f.plane]
+        # twice its area along its normal, from its corners (Newell)
+        ax = ay = az = 0.0
+        x0, y0, z0 = f.pts[-1]
+        for x1, y1, z1 in f.pts:
+            ax += (y0 - y1) * (z0 + z1 - 2.0 * cz)
+            ay += (z0 - z1) * (x0 + x1 - 2.0 * cx)
+            az += (x0 - x1) * (y0 + y1 - 2.0 * cy)
+            x0, y0, z0 = x1, y1, z1
+        ln = math.sqrt(ax * ax + ay * ay + az * az)
+        sx, sy, sz, area = sx + ax, sy + ay, sz + az, area + ln
+        if ln > 1e-12:
+            nx, ny, nz = ax / ln, ay / ln, az / ln
+            planes.append((nx, ny, nz, sum(nx * x + ny * y + nz * z
+                                           for x, y, z in f.pts)
+                           / len(f.pts)))
+        for nx, ny, nz, d in planes:
+            for x, y, z in cell.verts:
+                q = nx * x + ny * y + nz * z - d
+                if q > worst:
+                    worst = q
+    if area > 0.0:
+        gap = math.sqrt((sx * sx + sy * sy + sz * sz) / (2.0 * area))
+        if gap > worst:
+            worst = gap
     return worst

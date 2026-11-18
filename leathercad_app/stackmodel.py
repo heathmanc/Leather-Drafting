@@ -232,8 +232,9 @@ def build(parts: Parts, folds=(), radius: float = 0.0,
     if not parts.sheets:
         layout.grain = parts.grain
         return layout
-    return sh.FlatStack(layout, parts.sheets, parts.outline, parts.names[0],
-                        parts.grain)
+    return sh.FlatStack(layout, parts.sheets, parts.outline,
+                        name=parts.names[0], key=parts.keys[0],
+                        grain=parts.grain)
 
 
 # -- the list of pieces -------------------------------------------------------

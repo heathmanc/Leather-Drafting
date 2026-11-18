@@ -2,7 +2,11 @@
 rest at, what it rests on and stands clear of, the stitch holes through
 the layers, and the stack as a model for the view."""
 
+import dataclasses
 import math
+import random
+
+import pytest
 
 from leathercad import bsp
 from leathercad import clash
@@ -11,6 +15,8 @@ from leathercad import polycut as pc
 from leathercad import sheets as sh
 from leathercad import templates
 from leathercad.generators import bifold_wallet
+from leathercad.geometry import Vec2
+from leathercad.path import CubicBezier
 from leathercad.stitching import holes_for_shape
 
 MAIN = [(0, 0), (200, 0), (200, 100), (0, 100)]
@@ -278,13 +284,16 @@ def test_a_sheet_is_made_ready_as_the_main_pieces_outline_is():
                  side=-3, grain=0, holes=[[5, 5, 1.2]],
                  cutouts=[[(10, 10), (10, 20), (20, 20), (20, 10)]],
                  marks=[("cut", [[1, 1], [9, 9]])])
-    # counter-clockwise, and the doubled point at its end dropped
-    assert s.ring == [(80.0, 0.0), (80.0, 50.0), (0.0, 50.0), (0.0, 0.0)]
+    # counter-clockwise from its first corner, and the doubled point at
+    # its end dropped
+    assert s.ring == [(0.0, 0.0), (80.0, 0.0), (80.0, 50.0), (0.0, 50.0)]
     assert (s.thickness, s.side, s.grain) == (0.05, -1, 1)
     assert s.holes == [(5, 5, 1.2)] and pc.area(s.cutouts[0]) == 100.0
     assert s.marks == [("cut", [(1, 1), (9, 9)])]
     assert (s.name, s.key, s.leather) == ("", "", "")
     assert s.parts == [s.ring]
+    # its grain is laid from its first corner, along its first edge
+    assert s.frame == ((0.0, 0.0), (1.0, 0.0), (0.0, 1.0))
     # an outline with a notch in it is kept in convex parts
     ell = sh.Sheet([(0, 0), (60, 0), (60, 20), (20, 20), (20, 50), (0, 50)],
                    1.0)
@@ -292,6 +301,281 @@ def test_a_sheet_is_made_ready_as_the_main_pieces_outline_is():
     assert _near(sum(pc.area(p) for p in ell.parts), 1800.0)
     assert sh.sheet_of(("panel", 1)) == 0 and sh.sheet_of(("bend", 0)) == 0
     assert sh.sheet_of(("panel", 1, 4)) == 4 and sh.sheet_of(None) == 0
+
+
+def test_the_thickest_place_counts_the_main_piece_only_where_it_is():
+    # a strap that stands 80 mm past the edge, with a keeper on it out
+    # there: over the main piece the stack is 2 + 1, at the keeper 1 + 3
+    (strap, keeper), notes = _laid((_rect(120, 40, 280, 60), 1.0),
+                                   (_rect(230, 35, 270, 65), 3.0))
+    assert (keeper.lo, keeper.rests) == (1.0, [1])
+    thick = notes[0]
+    assert (thick.a, thick.b, thick.other) == (4.0, 4.0, (1, 2))
+    assert thick.at == (250.0, 50.0)
+    # a 3 mm piece lying beside the main piece is 3 mm; a pocket on each
+    # face of the main piece, one over the other, is 2 + 0.8 + 0.6
+    (_loose, _front, _back), notes = _laid((_rect(230, 20, 280, 80), 3.0),
+                                           (_rect(20, 20, 80, 80), 0.8),
+                                           (_rect(30, 30, 90, 90), 0.6, -1))
+    thick = notes[0]
+    assert _near(thick.a, 3.4) and _near(thick.b, 3.4)
+    assert thick.other == (0, 2, 3)
+    assert 30 < thick.at[0] < 80 and 30 < thick.at[1] < 80
+    # piles on the two faces count together only where one is over the
+    # other
+    _two, notes = _laid((_rect(20, 20, 80, 80), 1.0),
+                        (_rect(120, 20, 180, 80), 0.6, -1))
+    assert (notes[0].a, notes[0].other) == (3.0, (0, 1))
+    assert 20 < notes[0].at[0] < 80
+    # Of the thickest place, the point told is one with most leather in
+    # it. Here sheet 2 (front) and sheet 4 (back) are over each other from
+    # 150 to 230 mm across, the main piece between them as far as 200:
+    # 6.6 mm from the underside of the one to the top of the other, and
+    # 2 + 0.6 + 2 of leather where the main piece is
+    _four, notes = _laid((_rect(20, 20, 100, 80), 1.0),
+                         (_rect(60, 30, 230, 70), 0.6),
+                         (_rect(210, 20, 280, 80), 1.0, -1),
+                         (_rect(150, 10, 260, 90), 2.0, -1))
+    thick = notes[0]
+    assert _near(thick.a, 6.6) and _near(thick.b, 4.6)
+    assert thick.other == (0, 2, 4) and 150 < thick.at[0] < 200
+
+
+def _cut_in_two(ctrl, x0=80.0, x1=200.0):
+    """A plate cut in two along a bezier curve, flattened as the app
+    flattens one: ``(the piece on the left, the piece on the right, the
+    corners along the cut)``, which both pieces have."""
+    bez = CubicBezier(*[Vec2(*q) for q in ctrl])
+    cut = [tuple(map(float, ctrl[0]))] + [(q.x, q.y) for q in bez.flatten()]
+    y0, y1 = cut[0][1], cut[-1][1]
+    return [(x0, y0)] + cut + [(x0, y1)], \
+        [(x1, y1)] + cut[::-1] + [(x1, y0)], cut
+
+
+def _within(ring, given):
+    """Whether no corner of an outline is outside the one it was made
+    from."""
+    return all(pc.inside(q, given) or sh._to_ring(q, given) < 1e-9
+               for q in ring)
+
+
+def test_two_pieces_cut_along_one_curve_lie_on_one_level():
+    main = [(0, 0), (300, 0), (300, 200), (0, 200)]
+    left, right, cut = _cut_in_two(((140, 50), (180, 80), (100, 120),
+                                    (140, 150)))
+    assert len(cut) == 77 and set(cut) <= set(left) & set(right)
+    (a, b), notes = _laid((left, 1.0), (right, 0.8), main=main)
+    # neither is on the other: both lie on the main piece, and there is
+    # nothing to tell but the 3 mm of the thicker with the main piece
+    assert (a.lo, b.lo, a.rests, b.rests) == (0.0, 0.0, [0], [0])
+    assert [n.kind for n in notes] == ["thick"] and _near(notes[0].a, 3.0)
+    assert sh._reach(a.parts, b.parts) <= sh.LAP
+    # Each outline is thinned by itself, and so they no longer have every
+    # corner of the cut in common -- but each is thinned inwards only, to
+    # within 0.03 mm: neither has leather it was not drawn with
+    assert len(a.ring) < len(left) and len(b.ring) < len(right)
+    assert len(set(a.ring) & set(b.ring)) < len(cut) - 10
+    for s, given in ((a, pc.ccw(left)), (b, pc.ccw(right))):
+        assert _within(s.ring, given)
+        assert pc.area(given) - 3.0 < pc.area(s.ring) <= pc.area(given)
+        assert max(sh._to_ring(q, s.ring) for q in given) <= 0.03 + 1e-9
+    # in the model they share nothing
+    lay = fs.fold_piece(main, [], thickness=2.0)
+    stack = sh.FlatStack(lay, [sh.Sheet(left, 1.0), sh.Sheet(right, 0.8)],
+                         main)
+    assert clash.clashes(stack.solid([])) == []
+    # any curve, and whichever of the two is laid first
+    rng = random.Random(8)
+    for trial in range(40):
+        left, right, _cut = _cut_in_two((
+            (140, 50), (rng.uniform(100, 190), rng.uniform(60, 90)),
+            (rng.uniform(100, 190), rng.uniform(110, 140)), (140, 150)))
+        pair = [(left, 1.0), (right, 0.8)][::1 if trial % 2 else -1]
+        (a, b), notes = _laid(*pair, main=main)
+        assert b.lo == 0.0 and [n.kind for n in notes] == ["thick"], trial
+    # ... and a hair's gap along the cut is a gap, not an overlap
+    left, right, _cut = _cut_in_two(((140, 50), (180, 80), (100, 120),
+                                     (140, 150)))
+    apart = [(x + 0.002, y) for x, y in right]
+    (a, b), _notes = _laid((left, 1.0), (apart, 0.8), main=main)
+    assert b.lo == 0.0
+    # while a piece really pushed 0.2 mm on to the other does climb
+    nudged = [(x - 0.2, y) for x, y in right]
+    (a, b), _notes = _laid((left, 1.0), (nudged, 0.8), main=main)
+    assert (b.lo, b.rests) == (1.0, [1])
+
+
+def _scalloped(cx, cy, r, lobes=24, n=600, deep=2.0):
+    """A round with a wavy edge, drawn in ``n`` corners."""
+    return [(cx + (r + deep * math.cos(lobes * 2 * math.pi * k / n))
+             * math.cos(2 * math.pi * k / n),
+             cy + (r + deep * math.cos(lobes * 2 * math.pi * k / n))
+             * math.sin(2 * math.pi * k / n)) for k in range(n)]
+
+
+def test_a_busy_outline_is_thinned_in_its_hollows_too_and_inwards_only():
+    given = _scalloped(120, 100, 60)
+    s = sh.Sheet(given, 1.0)
+    # 600 corners given, half of them in the 24 hollows of its edge:
+    # about as few are kept as of a lone piece's outline, which is thinned
+    # both ways
+    plain = fs.model_outline(given)
+    assert len(given) == 600 and len(plain) == 152
+    assert len(s.ring) < 1.5 * len(plain) and len(s.parts) < 120
+    assert _within(s.ring, given)
+    # (so busy an outline is followed to 0.03 x 1.6 x 1.6 x 1.6 = 0.123 mm,
+    # the lone piece's too: closer, it would keep more than 260 corners)
+    assert 0.1 < max(sh._to_ring(q, s.ring) for q in given) <= 0.123
+    assert pc.area(given) - 30.0 < pc.area(s.ring) < pc.area(given)
+    # round a hollow the corners kept are not corners that were given:
+    # they stand a little way into the leather
+    assert len(set(s.ring) - set(given)) > 40
+    # made ready a second time, it stays as it is
+    again = sh.Sheet(s.ring, 1.0)
+    assert again.ring == s.ring and again.frame == s.frame
+    # an outline with few corners is not touched
+    box = sh.Sheet([(0, 0), (30, 0), (30, 10), (10, 10), (10, 30), (0, 30)],
+                   1.0)
+    assert sorted(box.ring) == sorted([(0.0, 0.0), (30.0, 0.0), (30.0, 10.0),
+                                       (10.0, 10.0), (10.0, 30.0),
+                                       (0.0, 30.0)])
+
+
+def test_piled_busy_outlines_settle_without_clipping_everything(monkeypatch):
+    calls = []
+    clip = pc.clip_to_convex
+    monkeypatch.setattr(pc, "clip_to_convex",
+                        lambda *a: calls.append(1) or clip(*a))
+    sheets = [sh.Sheet(_scalloped(120 + 8 * i, 100 + 5 * i, 60 - 6 * i), 1.0)
+              for i in range(3)]
+    notes = sh.settle([(0, 0), (300, 0), (300, 200), (0, 200)], 2.0, sheets)
+    assert [s.lo for s in sheets] == [0.0, 1.0, 2.0]
+    assert [(n.kind, n.sheet) for n in notes] == [("thick", 0), ("clear", 2),
+                                                  ("clear", 3)]
+    assert _near(notes[0].a, 5.0) and notes[0].other == (0, 1, 2, 3)
+    # (125 751 clips before each bit was tried against the box round each
+    # part first, and the thickest place followed by its biggest bits)
+    assert len(calls) < 20000
+
+
+def test_a_piece_moved_after_it_was_made_is_laid_where_it_now_is():
+    lay = fs.fold_piece(MAIN, [], thickness=2.0)
+    a = sh.Sheet(_rect(10, 10, 90, 90), 1.0)
+    b = sh.Sheet(_rect(120, 10, 190, 90), 0.5)
+    sh.settle(MAIN, 2.0, [a, b])
+    assert (b.lo, b.rests) == (0.0, [0])
+    assert b.frame == ((120.0, 10.0), (1.0, 0.0), (0.0, 1.0))
+    b.ring = _rect(50, 10, 120, 90)            # dragged half on to the first
+    notes = sh.settle(MAIN, 2.0, [a, b])
+    assert (b.lo, b.hi, b.rests, b.rank) == (1.0, 1.5, [1], 2)
+    assert b.parts == [b.ring] == [[(50.0, 10.0), (120.0, 10.0),
+                                    (120.0, 90.0), (50.0, 90.0)]]
+    assert b.frame == ((50.0, 10.0), (1.0, 0.0), (0.0, 1.0))
+    assert sh.Note("clear", 2, -1, 1.0, other=(0,)) in notes
+    # the model made of them has it on top of the first, through nothing
+    stack = sh.FlatStack(lay, [a, b], MAIN)
+    cells = stack.solid([])
+    assert clash.clashes(cells) == []
+    assert sorted({v[2] for v in cells[2].verts}) == [2.0, 2.5]
+    assert sorted({v[0] for v in cells[2].verts}) == [50.0, 120.0]
+    # the same for a sheet made anew from it, and for an outline that is
+    # changed where it is
+    c = dataclasses.replace(b, ring=_rect(120, 10, 190, 90))
+    sh.settle(MAIN, 2.0, [a, c])
+    assert (c.lo, c.rests) == (0.0, [0])
+    c.ring[:] = [(x - 70, y) for x, y in c.ring]
+    sh.settle(MAIN, 2.0, [a, c])
+    assert (c.lo, c.rests) == (1.0, [1])
+    # ... and its thickness is the one it has now
+    b.thickness = 0.8
+    sh.settle(MAIN, 2.0, [a, b])
+    assert (b.lo, b.hi) == (1.0, 1.8)
+
+
+def test_standing_past_the_edge_is_told_wherever_a_piece_is_furthest_out():
+    # A thumb notch of 15 mm in the main piece's top edge, drawn in 40
+    # chords, and a pocket flush with that edge across it. Its corners
+    # are all on the main piece; the middle of its top edge is over the
+    # notch, as far from the leather as the notch's chords are from its
+    # centre
+    arc = [(100 + 15 * math.cos(math.pi * i / 40),
+            100 - 15 * math.sin(math.pi * i / 40)) for i in range(41)]
+    notch = [(0, 0), (200, 0), (200, 100)] + arc + [(0, 100)]
+    (pocket,), notes = _laid((_rect(40, 40, 160, 100), 1.0), main=notch)
+    assert abs(pocket.past - 15.0 * math.cos(math.pi / 80)) < 0.01
+    assert math.dist(pocket.past_at, (100.0, 100.0)) < 0.5
+    assert notes[1] == sh.Note("past", 1, -1, pocket.past, at=pocket.past_at)
+    # 4 mm higher its corners stand 4 mm past the edge; the middle of its
+    # top edge is further out: from the two ends of the notch
+    (pocket,), _notes = _laid((_rect(40, 40, 160, 104), 1.0), main=notch)
+    assert abs(pocket.past - math.hypot(15.0, 4.0)) < 0.01
+    assert math.dist(pocket.past_at, (100.0, 104.0)) < 0.05
+    # a strap across the empty corner of an L-shaped piece, every corner
+    # of it on the leather: it stands 5 mm out, where its far edge is as
+    # far from the one arm as from the other
+    ell = [(0, 0), (200, 0), (200, 50), (100, 50), (100, 100), (0, 100)]
+    (strap,), notes = _laid(([(60, 70), (130, 20), (140, 30), (70, 80)],
+                             1.0), main=ell)
+    assert all(pc.inside(q, ell) for q in strap.ring)
+    assert abs(strap.past - 5.0) < 0.01
+    assert math.dist(strap.past_at, (105.0, 55.0)) < 0.02
+    assert [n.kind for n in notes] == ["thick", "past"]
+    # where the main piece's edge is straight, or bulges, it is a corner
+    # that is furthest out, and that to the last place
+    (tab,), _notes = _laid((_rect(150, 30, 215.25, 70), 1.0))
+    assert tab.past == 15.25 and tab.past_at in ((215.25, 30.0),
+                                                 (215.25, 70.0))
+    # 0.3 mm is told, a hair is not
+    (edge,), notes = _laid((_rect(-0.3, 10, 50, 90), 1.0))
+    assert _near(edge.past, 0.3) and [n.kind for n in notes] == ["thick",
+                                                                 "past"]
+
+
+def test_a_rest_on_under_a_millimetre_is_told_as_a_sliver_and_no_other():
+    assert sh.SLIVER == 1.0
+    for over, told in ((0.6, True), (0.99, True), (1.2, False)):
+        (a, b), notes = _laid((_rect(10, 10, 100, 90), 1.0),
+                              (_rect(100 - over, 10, 190, 90), 1.0))
+        assert _near(b.lap, over) and b.rests == [1]
+        slivers = [n for n in notes if n.kind == "sliver"]
+        assert slivers == ([sh.Note("sliver", 2, -1, b.lap, other=(1,))]
+                           if told else []), over
+    # a piece that is on the main piece by as little is not told so: it
+    # is told as standing past its edge
+    (s,), notes = _laid((_rect(199.4, 10, 260, 90), 1.0))
+    assert s.rests == [0] and _near(s.lap, 0.6)
+    assert [n.kind for n in notes] == ["thick", "past"]
+    # An L-shaped piece is kept in two parts, along the line from its
+    # inside corner to its outside one. A narrow strap lying along that
+    # line, wholly on the L, is not half on each part: it is no sliver
+    ell = [(20, 20), (80, 20), (80, 40), (40, 40), (40, 70), (20, 70)]
+    low = sh.Sheet(ell, 1.0)
+    assert len(low.parts) == 2
+    assert all((40.0, 40.0) in part and (20.0, 20.0) in part
+               for part in low.parts)
+    c = math.sqrt(0.5)
+    for wide in (0.8, 1.6):
+        strap = [(30 + x * c - y * c, 30 + x * c + y * c)
+                 for x, y in _rect(-6, -wide / 2, 6, wide / 2)]
+        (low, top), notes = _laid((ell, 1.0), (strap, 0.5))
+        # as far as either part goes it is on by half its width ...
+        assert _near(sh._reach(top.parts, low.parts), wide / 2, 1e-9)
+        # ... but it would have to slide a long way to come off the L
+        assert top.rests == [1] and top.lap > 5.0
+        assert [n.kind for n in notes] == ["thick"], wide
+    # What really is on the L by a sliver is told, by the least slide
+    # that takes it off: over its outer edge, and into its inside corner
+    (low, top), notes = _laid((ell, 1.0), (_rect(5, 30, 20.5, 60), 0.5))
+    assert _near(top.lap, 0.5)
+    assert notes[-1] == sh.Note("sliver", 2, -1, top.lap, other=(1,))
+    (low, top), notes = _laid((ell, 1.0), (_rect(39.5, 39.5, 60, 60), 0.5))
+    assert _near(top.lap, 0.5 * math.sqrt(2.0)) and notes[-1].kind == "sliver"
+    # a place under a bridge is told when it is 0.3 mm wide, not a hair
+    for gap, clear in ((0.3, [(0, 2.0), (2, 1.5)]), (0.04, [(2, 1.5)])):
+        (_a, _b, c), _notes = _laid((_rect(20, 20, 100, 80), 2.0),
+                                    (_rect(100 + gap, 20, 180, 80), 0.5),
+                                    (_rect(60, 40, 140, 60), 1.0))
+        assert c.clear == clear, gap
 
 
 # -- what there is to tell ----------------------------------------------------
@@ -433,6 +717,98 @@ def test_laid_holes_meet_miss_or_come_through():
     assert len(check.holes(fs.MEETS)) == 3 + 3 + 2
 
 
+def test_a_hole_within_4_mm_of_another_is_out_of_line_and_past_that_not():
+    main = fs.fold_piece(MAIN, [], holes=[(50.0, 50.0, 1.0)])
+    for off, state in ((0.7, fs.MEETS), (0.8, fs.OFF), (3.0, fs.OFF),
+                       (3.9, fs.OFF), (4.1, None)):
+        sheet = sh.Sheet(_rect(20, 20, 120, 80), 1.0,
+                         holes=[(50.0 + off, 50.0, 1.0)])
+        check = sh.FlatStack(main, [sheet], MAIN).lineup()
+        assert check.state.get(0) == check.state.get(1) == state, off
+        f, = check.findings
+        assert (f.holes, f.off, f.lone) == (
+            (2, 2, 0) if state == fs.OFF else (2, 0, 0) if state
+            else (2, 0, 2)), off
+        # each comes through the other piece only when it is too far from
+        # that piece's hole to have been meant for it
+        assert check.passed == ({} if state else {
+            0: [(54.1, 50.0, 1.0)], 1: [(50.0, 50.0, 1.0)]})
+
+
+def test_a_hole_on_the_very_edge_of_a_piece_is_not_in_it():
+    # two pockets that butt at 100 mm across; the main piece has a row of
+    # holes down that line and one down the middle of each pocket
+    rows = [(x, 20.0 + 5 * k, 1.0) for x in (60.0, 100.0, 140.0)
+            for k in range(11)]
+    main = fs.fold_piece(MAIN, [], holes=rows)
+
+    def through(*pieces):
+        stack = sh.FlatStack(main, [sh.Sheet(ring, 1.0, cutouts=cut)
+                                    for ring, cut in pieces], MAIN)
+        return [f.holes for f in stack.lineup().findings]
+
+    left, right = _rect(20, 10, 100, 90), _rect(100, 10, 180, 90)
+    # the row on the line is in neither: each has the row down its middle
+    assert through((left, ()), (right, ())) == [11, 11]
+    # ... whichever of the two it is, and whichever way round it is drawn
+
+    def mirror(ring):
+        return [(200 - x, y) for x, y in ring]
+
+    assert through((mirror(left), ()), (mirror(right), ())) == [11, 11]
+    assert through((right[::-1], ()), (left[::-1], ())) == [11, 11]
+    # within a hair of the edge is on it; further in is in the leather
+    assert through((_rect(20, 10, 100.04, 90), ())) == [11]
+    assert through((_rect(20, 10, 100.06, 90), ())) == [22]
+    # The edge of a window is an edge like any other. This one has nine
+    # holes of the pocket's own row inside it and one on each end of it
+    assert through((left, [_rect(55, 20, 65, 70)])) == []
+    assert through((left, [_rect(55, 20.06, 65, 69.94)])) == [2]
+    assert through((left, [_rect(55, 19.94, 65, 70.06)])) == []
+
+
+def test_a_spot_is_marked_once_and_a_window_in_the_main_piece_is_no_leather():
+    # the main piece's hole and the first sheet's are one on the other;
+    # both come through the second sheet, which has no hole: one spot
+    main = fs.fold_piece(MAIN, [], holes=[(50.0, 50.0, 1.0)])
+    one = sh.Sheet(_rect(20, 20, 120, 80), 1.0, holes=[(50.0, 50.0, 1.0)])
+    two = sh.Sheet(_rect(30, 30, 110, 70), 1.0)
+    check = sh.FlatStack(main, [one, two], MAIN).lineup()
+    assert check.holes(fs.MEETS) == {0, 1}
+    assert check.passed == {2: [(50.0, 50.0, 1.0)]}
+    assert sum(len(v) for v in check.blanks.values()) == 1
+    assert sorted((f.a, f.b, f.through) for f in check.findings) == [
+        (0, 1, (0, 0)), (0, 2, (1, 0)), (1, 2, (1, 0))]
+    # A window cut in the main piece: a sheet's hole over it goes through
+    # no leather there, and is not looked at. Its other hole comes
+    # through the main piece, which is ringed there on both its faces
+    main = fs.fold_piece(MAIN, [], cutouts=[_rect(40, 40, 60, 60)])
+    sheet = sh.Sheet(_rect(20, 20, 120, 80), 1.0,
+                     holes=[(50.0, 50.0, 1.0), (100.0, 50.0, 1.0)])
+    stack = sh.FlatStack(main, [sheet], MAIN)
+    check = stack.lineup()
+    f, = check.findings
+    assert (f.a, f.b, f.holes, f.lone, f.through) == (0, 1, 1, 1, (0, 1))
+    assert check.passed == {0: [(100.0, 50.0, 1.0)]} and not check.state
+    assert check.blanks == {0: [(100.0, 50.0, 1.0)]}
+    cells = stack.solid([], check)
+    rings = sorted((geo, style) for face in cells[0].faces
+                   for kind, geo, style in face.decals or ()
+                   if kind == bsp.DOTS)
+    assert rings == [([(100.0, 50.0, -1.0)], (1.0, sh.BLANK)),
+                     ([(100.0, 50.0, 1.0)], (1.0, sh.BLANK))]
+    # ... and the sheet's own holes are plain holes
+    dots = sorted((geo, style) for face in cells[1].faces
+                  for kind, geo, style in face.decals or ()
+                  if kind == bsp.DOTS and face.plane[2] > 0.5)
+    assert dots == [([(50.0, 50.0, 2.0), (100.0, 50.0, 2.0)], (1.0, 0))]
+    # without the check nothing is ringed
+    assert not any(style[1] for cell in stack.solid([])
+                   for face in cell.faces
+                   for kind, _geo, style in face.decals or ()
+                   if kind == bsp.DOTS)
+
+
 # -- the stack as a model -----------------------------------------------------
 
 def test_a_stack_with_no_sheets_is_its_layout():
@@ -555,8 +931,47 @@ def test_a_sheet_shows_its_grain_where_its_grain_is():
         assert {p[2] for p in top.pts} == {z1}
         assert {p[2] for p in bot.pts} == {z0}
         assert top.kind == up and bot.kind == bsp.FRONT + bsp.BACK - up
-        # the texture lies where the pattern does
-        assert top.uv == ((0.0, 0.0, z1), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+        # its leather is laid from its own first corner, along its edge
+        assert top.uv == ((20.0, 20.0, z1), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+        assert bot.uv == ((20.0, 20.0, z0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+
+
+def _grain_at(face, p):
+    """Where on its leather a point of a face is: what the texture is
+    laid by."""
+    o, u, v = face.uv
+    d = (p[0] - o[0], p[1] - o[1], p[2] - o[2])
+    return (d[0] * u[0] + d[1] * u[1] + d[2] * u[2],
+            d[0] * v[0] + d[1] * v[1] + d[2] * v[2])
+
+
+def test_a_sheet_moved_or_turned_takes_its_grain_with_it():
+    lay = fs.fold_piece(MAIN, [], thickness=2.0)
+    ell = [(20, 20), (120, 20), (120, 40), (60, 40), (60, 80), (20, 80)]
+    spot = (100.0, 30.0)                   # a point of the leather
+
+    def lie(turn, dx, dy):
+        c, sn = math.cos(turn), math.sin(turn)
+
+        def to(q):
+            return (dx + q[0] * c - q[1] * sn, dy + q[0] * sn + q[1] * c)
+        stack = sh.FlatStack(lay, [sh.Sheet([to(q) for q in ell], 1.0)],
+                             MAIN)
+        top = [f for cell in stack.solid([])[1:] for f in cell.faces
+               if f.plane[2] > 0.5]
+        assert len(top) == 2               # the L is in two parts
+        x, y = to(spot)
+        return [_grain_at(f, (x, y, 2.0)) for f in top]
+
+    home = lie(0.0, 0.0, 0.0)
+    # the same on both parts of it, and 80 mm along its first edge, 10 in
+    assert all(_near(g[0], 80.0) and _near(g[1], 10.0) for g in home)
+    # slid 13 mm along the bench, and turned a third of the way round and
+    # carried off: that point of the leather has the same grain on it
+    for turn, dx, dy in ((0.0, 13.0, 0.0), (0.0, -7.5, 21.0),
+                         (2.1, 150.0, 60.0), (-0.4, 30.0, 40.0)):
+        there = lie(turn, dx, dy)
+        assert all(math.dist(g, (80.0, 10.0)) < 1e-9 for g in there), turn
 
 
 def test_pulling_apart_lifts_each_sheet_by_its_rank():
@@ -575,6 +990,10 @@ def test_pulling_apart_lifts_each_sheet_by_its_rank():
     (fl, pl), = (m[5] for m in stack.fold_marks([0.0], 6.0)[0][1:])
     assert (fl, pl) == (0, 1)
     assert stack.fold_marks([0.0], 6.0)[0][1][2][2] == -(0.8 + 0.8 + 6.0)
+    # panel 1's number is on pocket 3 of its stack, three layers up
+    one, _two = stack.panel_marks([0.0], 6.0)
+    assert one[3] == (0, 7) and stack.sheets[6].rank == 3
+    assert _near(one[0][2], 0.8) and _near(one[1][2], -(0.8 + 2.4 + 18.0))
 
 
 def test_fold_lines_and_panel_numbers_sit_on_the_outermost_leather():
@@ -630,3 +1049,108 @@ def test_holes_cutouts_and_lines_of_a_sheet_ride_on_its_faces():
     inner = [f for c in cells for f in c.faces if f.kind == bsp.INNER]
     assert len(inner) == 2 and all(f.edges is None for f in inner)
     assert _near(sum(c.big for c in cells), pc.area(ell))
+
+
+def test_a_stack_is_a_picture_of_its_sheets_as_they_lay_when_it_was_made():
+    lay = fs.fold_piece(MAIN, [], thickness=2.0)
+    a = sh.Sheet(_rect(10, 10, 90, 90), 1.0)
+    b = sh.Sheet(_rect(50, 10, 120, 90), 0.5)
+
+    def spans(stack):
+        return [sorted({v[2] for v in cell.verts})
+                for cell in stack.solid([])[1:]]
+
+    one = sh.FlatStack(lay, [a, b], MAIN)
+    assert spans(one) == [[1.0, 2.0], [2.0, 2.5]]
+    # the same two sheets laid the other way round, for another stack
+    two = sh.FlatStack(lay, [b, a], MAIN)
+    assert (b.lo, a.lo) == (0.0, 0.5)
+    assert spans(two) == [[1.0, 1.5], [1.5, 2.5]]
+    # ... leave the first as it was: its picture still agrees with its
+    # notes
+    assert spans(one) == [[1.0, 2.0], [2.0, 2.5]]
+    assert _near(one.notes[0].a, 3.5) and one.notes[0].other == (0, 1, 2)
+    assert one.bounds3([]) == ((0.0, 0.0, -1.0), (200.0, 100.0, 2.5))
+    assert one.extent()[0] == (100.0, 50.0, 0.75)
+    # a sheet moved afterwards does not move in it either
+    b.ring = _rect(130, 10, 190, 90)
+    sh.settle(MAIN, 2.0, [a, b])
+    assert sorted({v[0] for v in one.solid([])[2].verts}) == [50.0, 120.0]
+    assert spans(one) == [[1.0, 2.0], [2.0, 2.5]]
+
+
+def test_a_stack_names_its_main_piece_and_is_its_layout_for_the_rest():
+    fold = fs.FoldLine((80, 0), (80, 100), 90, 1)
+    lay = fs.fold_piece(MAIN, [fold], holes=[(20, 20, 1.0)])
+    patch = sh.Sheet(_rect(90, 10, 150, 90), 0.5, name="Patch", key="s7")
+    stack = sh.FlatStack(lay, [patch], MAIN, name="Body", key="s1",
+                         leather="Navy")
+    assert (stack.name, stack.key, stack.leather) == ("Body", "s1", "Navy")
+    # a piece is a number: 0 the main piece, k the sheet sheets[k - 1]
+    assert stack.sheet(1) is patch
+    assert [stack.sheet(k) for k in (0, 2, -1)] == [None, None, None]
+    assert all(stack.sheet(n.sheet) in (None, patch) for n in stack.notes)
+    # what a stack has no word of its own for is its layout's
+    assert stack.cells is lay.cells and stack.hinges is lay.hinges
+    assert stack.frames([0.0]) == lay.frames([0.0])
+    with pytest.raises(AttributeError):
+        stack.no_such_thing
+    bare = sh.FlatStack(lay)
+    assert (bare.name, bare.key, bare.leather) == ("", "", "")
+    assert bare.cells is lay.cells and bare.sheet(0) is None
+    assert bare.frames([1.0]) == lay.frames([1.0]) != lay.frames([0.0])
+
+
+def test_a_flat_stacks_folds_keep_the_radius_they_were_asked_for():
+    folds = [fs.FoldLine((80, 0), (80, 100), 180, 1, order=1),
+             fs.FoldLine((160, 0), (160, 100), 180, 1, order=2)]
+    lay = fs.fold_piece([(0, 0), (240, 0), (240, 100), (0, 100)], folds,
+                        base=1)
+    # the second fold closes over the first flap: 1 mm of room is given
+    assert (lay.radius, lay.wrap) == ([0.0, 1.0], [0.0, 1.0])
+    stack = sh.FlatStack(lay, [sh.Sheet(_rect(90, 10, 150, 90), 0.5)])
+    # no fold of a stack is made yet, so none needs room: what is left is
+    # the radius that was asked for
+    assert (stack.radius, stack.wrap, stack.used) == ([0.0, 0.0],
+                                                      [0.0, 0.0], [0.0, 0.0])
+    assert stack.notes[-1] == sh.Note("flat", 0, -1, 2.0)
+    assert lay.radius == [0.0, 1.0]
+
+
+def test_the_cut_edge_of_a_sheet_has_a_line_down_each_sharp_corner_only():
+    lay = fs.fold_piece(MAIN, [], thickness=2.0)
+    # three square corners, and one rounded in six chords of 15 degrees
+    arc = [(90 + 10 * math.cos(math.radians(a)),
+            70 + 10 * math.sin(math.radians(a))) for a in range(0, 91, 15)]
+    ring = [(20.0, 20.0), (100.0, 20.0)] + arc + [(20.0, 80.0)]
+    stack = sh.FlatStack(lay, [sh.Sheet(ring, 1.0)], MAIN)
+    cell, = stack.solid([])[1:]
+    walls = [f for f in cell.faces if f.kind == bsp.WALL]
+    assert len(walls) == len(stack.sheets[0].ring) == 10
+    sharp = {(20.0, 20.0), (100.0, 20.0), (20.0, 80.0)}
+    for f in walls:
+        foot, far = f.pts[0][:2], f.pts[1][:2]
+        # along the top and the bottom always; up the side only where the
+        # edge turns sharply
+        assert f.edges == (True, far in sharp, True, foot in sharp)
+    assert sum(f.edges[1] for f in walls) == 3
+
+
+def test_a_sheet_over_nothing_is_drawn_on_the_nearest_panel():
+    ring = [(0, 0), (200, 0), (200, 100), (0, 100)]
+    lay = fs.fold_piece(ring, [fs.FoldLine((80, 0), (80, 100), 90, 1)])
+    assert [p.index for p in lay.panels] == [0, 1]
+    assert lay.panels[0].spot[0] < 80 < lay.panels[1].spot[0]
+    for where, panel in ((_rect(230, 20, 280, 80), 1),
+                         (_rect(-90, 20, -30, 80), 0),
+                         (_rect(60, 120, 75, 150), 0),
+                         (_rect(85, 120, 150, 150), 1)):
+        stack = sh.FlatStack(lay, [sh.Sheet(where, 1.0)])
+        assert stack.sheets[0].loose
+        assert stack.solid([])[-1].tag == ("panel", panel, 1), where
+    # ... and one that is over the main piece, on the panel it has most
+    # leather over
+    for where, panel in ((_rect(60, 20, 120, 80), 1),
+                         (_rect(30, 20, 90, 80), 0)):
+        stack = sh.FlatStack(lay, [sh.Sheet(where, 1.0)])
+        assert stack.solid([])[-1].tag == ("panel", panel, 1), where

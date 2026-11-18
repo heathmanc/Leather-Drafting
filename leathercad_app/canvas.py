@@ -4623,8 +4623,13 @@ class Canvas(QGraphicsView):
                     self._finish_fillet(reach[0], reach[1], reach[2],
                                         reach[3], reach[4], chamfer, ep)
                     return
+        # a piece lying in a stack keeps its leather where it lay, as a notch
+        # subtracted from it does: rounding a corner moves its box
+        lay = copy.deepcopy(ep) if ep.placed is not None else None
         done = (chamfer_vertex if chamfer else fillet_vertex)(
             ep, idx, self.fillet_radius)
+        if done and lay is not None:
+            carry_spot(lay, ep)
         if not done:
             self.statusMessage.emit(
                 "That corner can't be bevelled — a chamfer needs a straight "
@@ -4796,8 +4801,6 @@ class Canvas(QGraphicsView):
                     self._reach_further(items, nodes, edges, closed, corner,
                                         got)
         ep = _editpath_from_world(nodes, edges, closed, base)
-        # welded from a piece that lies in a stack, it lies there still
-        keep_placement([base] + [old.model for old in items], [ep])
         self._distribute_holes([old.model for old in items], [ep])
         for old in items:
             self.doc.remove_shape(old.model)
@@ -4806,6 +4809,9 @@ class Canvas(QGraphicsView):
         item = self._add_item(ShapeItem(ep, self))
         done = (chamfer_vertex if chamfer else fillet_vertex)(
             ep, corner, self.fillet_radius)
+        # welded from a piece that lies in a stack, it lies there still, its
+        # leather where it lay (measured on the outline as it is rounded)
+        keep_placement([base] + [old.model for old in items], [ep])
         item.sync_from_model()
         self.scene_obj.clearSelection()
         item.setSelected(True)
@@ -7432,8 +7438,9 @@ class Canvas(QGraphicsView):
         pieces were: the thickness, the leather and the place in a stack of
         a source go to the path its own line runs along. A path holds one
         of each: the first source's that has it, in the order of the
-        drawing -- but a place comes with the thickness and leather of the
-        source it is taken from, and where that leather lay it stays
+        drawing -- but a place comes with the name, the thickness and the
+        leather of the source it is taken from (none, if that one has
+        none), and where that leather lay it stays
         (``assembly.carry_spot``)."""
         for m in made:
             m.placed, m.thickness, m.leather = None, 0.0, ""
@@ -7457,13 +7464,15 @@ class Canvas(QGraphicsView):
                 continue
             m = made[min(near)[1]]
             if placed and m.placed is None:
-                # the place comes with the thickness and leather it had
+                # the place comes with the name, thickness and leather it
+                # had: the piece is the one in the stack, not a helper line
                 carry_spot(src, m)
-                if src.thickness > 0.0:
-                    m.thickness = src.thickness
-                if src.leather:
-                    m.leather = src.leather
+                m.name = src.name
+                m.thickness = float(src.thickness or 0.0)
+                m.leather = src.leather or ""
                 continue
+            if m.placed is not None:
+                continue                  # it is the placed piece's leather
             if src.thickness > 0.0 and not m.thickness > 0.0:
                 m.thickness = src.thickness
             if src.leather and not m.leather:

@@ -129,7 +129,10 @@ def _placed_from_dict(d) -> Optional[Placement]:
 
 def _thickness_from(v) -> float:
     """A thickness read from a file: a finite number above 0, else 0 (not
-    given), so a value written by hand cannot stop the file opening."""
+    given), so a value written by hand cannot stop the file opening. A
+    yes or no is no thickness."""
+    if isinstance(v, bool):
+        return 0.0
     try:
         v = float(v or 0.0)
     except (TypeError, ValueError):

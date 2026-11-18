@@ -555,8 +555,8 @@ def test_a_piece_moved_level_with_an_edge_is_tied_to_it_for_good():
     # off (in a file, say) stays there while another is moved
     pocket.placed.x = 0.004
     strap = doc.add_shape(_piece("Strap", 150, 20, at=(0, 300)))
-    asm.put_on(doc, strap, shell.placed.of)      # corner to corner on it
-    asm.move_by(doc, strap, 5.0, 5.0)
+    asm.put_on(doc, strap, shell.placed.of, on=shell)   # corner to corner
+    asm.move_by(doc, strap, 90.004, 30.0)
     assert (pocket.placed.ax, pocket.placed.x) == (0.5, 0.004)
     assert (strap.placed.ax, strap.placed.x) == (0.0, 90.004)
     assert (pocket.placed.cx, strap.placed.cx) == (0.004, 50.004)
@@ -1283,8 +1283,8 @@ def test_break_apart_leaves_the_place_on_one_edge_for_join(window):
     assert _boxes(win.doc)["Right pocket 2"] == _near(was)
     assert was == _near((2.0, -45.0, 99.6, -1.0))
     # three pieces broken apart and everything joined at once: each
-    # welded outline is the leather its own edges were, in its own place
-    # (Join names them all after the first, so they are told by the pile)
+    # welded outline is the leather its own edges were, in its own place,
+    # and is named as it was
 
     def pile():
         return {p.order: p.box for p in asm.stacks(win.doc)[0].pieces}
@@ -1301,6 +1301,9 @@ def test_break_apart_leaves_the_place_on_one_edge_for_join(window):
     assert sorted((s.placed.order, s.thickness)
                   for s in win.doc.shapes[-3:]) == [(2, 1.0), (4, 0.8),
                                                     (9, 1.0)]
+    assert sorted((s.placed.order, s.name) for s in win.doc.shapes[-3:]) \
+        == [(2, "Bill pocket liner"), (4, "Left pocket 3"),
+            (9, "Right pocket 2")]
 
 
 def test_a_thumb_notch_subtracted_from_a_pocket_leaves_it_where_it_was(
@@ -1402,6 +1405,37 @@ def test_the_first_fillet_of_a_polygon_keeps_its_place(window):
     assert len(new.nodes) == 7
     assert (new.thickness, new.placed) == (1.2, ell.placed)
     assert _boxes(win.doc)["L pocket"] == _near((-99.6, -45.0, -19.6, 5.0))
+
+
+def test_a_fillet_made_in_place_leaves_the_leather_where_it_lay(window):
+    # a pocket lying turned 45 degrees, held by the corner of its box: each
+    # of its corners rounded in turn, a point of its leather stays put
+    for which in range(4):
+        main = _piece("Main", 200, 100)
+        pocket = Polygon(name="Pocket", points=[Vec2(*p) for p in (
+            (-40, -20), (40, -20), (40, 20), (-40, 20))], close_path=True,
+            layer="Cut", transform=Transform(x=300, y=0))
+        doc = _drawing(main, pocket)
+        key = asm.put_on(doc, main, thickness=1.5)
+        asm.put_on(doc, pocket, key, thickness=1.0)
+        asm.set_turn(doc, pocket, 45.0)
+        asm.line_up(doc, pocket, "left")
+        asm.line_up(doc, pocket, "bottom")
+        win = window(doc)
+        lay = asm.stacks(win.doc)[0].piece(pocket.shape_id)
+        probe = asm.map_point(lay.from_drawing, (310.0, 5.0))
+        corner = pocket.transform.apply(pocket.points[which])
+        win.canvas.fillet_radius = 6.0
+        win.canvas._do_fillet(Vec2(corner.x, corner.y))
+        now, = _named(win.doc, "Pocket")
+        assert now is not pocket and now.placed.ax == 0.0
+        laid = asm.stacks(win.doc)[0].piece(now.shape_id)
+        # the box is 2.485 mm smaller on one side, the leather where it was
+        b0, b1 = lay.box, laid.box
+        assert sum(abs(u - v) for u, v in zip(b0, b1)) == \
+            _near(6.0 * (math.sqrt(2.0) - 1.0), abs=1e-9)
+        assert math.dist(asm.map_point(laid.from_drawing, (310.0, 5.0)),
+                         probe) == _near(0.0, abs=1e-6)
 
 
 def test_a_copy_keeps_the_leather_and_is_in_no_stack(window, tmp_path):
@@ -1832,19 +1866,26 @@ def test_a_pocket_drawn_inside_its_panel_can_be_put_on_and_a_slot_cannot():
     doc = _drawing(panel, pocket, slot, rivet, thumb)
     # one piece with three cutouts; the pocket's own thumb slot, which
     # the rest of the program reads as what drops out of the pocket, is
-    # not offered as a piece: it is the slot of a piece to be
+    # not offered as a piece
     assert [s.name for s in asm.offered(doc)] == ["Back panel"]
     assert len(asm.read_piece(doc, panel).cutouts) == 3
     # the pocket is 63 % of the panel: it can be put on from the list of
-    # what is drawn inside it. The slot (0.8 %) and the rivet hole can't
+    # what is drawn inside it. The slot (0.8 %) and the rivet hole can't.
+    # The thumb slot is drawn inside an outline that is no piece yet: it
+    # is listed too, to be ticked if it is meant, and is never laid as
+    # drawn
     assert asm.OFFER_SHARE == 0.15
     assert [(a.name, b.name) for a, b in asm.drawn_inside(doc)] == \
-        [("Pocket", "Back panel")]
+        [("Pocket", "Back panel"), ("Thumb slot", "Pocket")]
     key = asm.put_on(doc, panel, thickness=2.0)
+    assert not asm.drawn_on_main(doc, thumb, key)
+    assert asm.drawn_on_main(doc, pocket, key)
     assert asm.put_on(doc, pocket, key, thickness=1.2) == key
-    # put on, it is a piece here, where it is drawn
+    # put on, it is a piece here, where it is drawn, and its thumb slot is
+    # its slot: offered nowhere, and not put on even when asked by name
     assert [s.name for s in asm.offered(doc)] == ["Back panel", "Pocket"]
     assert asm.drawn_inside(doc) == []
+    assert asm.put_on(doc, thumb, key) == "" and thumb.placed is None
     under, on = asm.stacks(doc)[0].pieces
     assert on.box == _near((-51.5, -34.0, 51.5, 11.0))
     assert (pocket.placed.ax, pocket.placed.x, pocket.placed.ay,
@@ -1858,15 +1899,39 @@ def test_a_pocket_drawn_inside_its_panel_can_be_put_on_and_a_slot_cannot():
     # taken off, it is a cutout again
     asm.take_off(doc, pocket)
     assert [s.name for s in asm.offered(doc)] == ["Back panel"]
-    # neither the slot in the panel, the rivet hole nor the thumb slot
-    # can be put on, even when asked by name
-    assert [asm.put_on(doc, sh, key) for sh in (slot, rivet, thumb)] == \
-        ["", "", ""]
-    assert (slot.placed, rivet.placed, thumb.placed) == (None, None, None)
+    # neither the slot in the panel nor the rivet hole can be put on, even
+    # when asked by name
+    assert [asm.put_on(doc, sh, key) for sh in (slot, rivet)] == ["", ""]
+    assert (slot.placed, rivet.placed) == (None, None)
     # a lining nearly as big as its panel is a piece without being asked
     lining = doc.add_shape(_piece("Lining", 99, 66))
     assert lining in asm.offered(doc)
     assert all(a is not lining for a, _b in asm.drawn_inside(doc))
+
+
+def test_a_piece_nested_in_a_window_s_waste_can_be_put_on_when_asked():
+    panel = _piece("Panel", 200, 120)
+    window = _piece("Window", 120, 80)       # 40 % of the panel
+    fob = _piece("Fob", 25, 25)              # 6.5 % of the window
+    doc = _drawing(panel, window, fob)
+    assert [s.name for s in asm.offered(doc)] == ["Panel"]
+    assert [(a.name, b.name) for a, b in asm.drawn_inside(doc)] == \
+        [("Window", "Panel"), ("Fob", "Window")]
+    key = asm.put_on(doc, panel, thickness=2.0)
+    # "As drawn" passes it over: it is put on only when asked for
+    assert not asm.drawn_on_main(doc, fob, key)
+    assert asm.put_on(doc, fob, key, thickness=1.0) == key
+    assert fob.placed is not None and not fob.placed.main
+    st, = asm.stacks(doc)
+    assert [p.name for p in st.pieces] == ["Panel", "Fob"]
+    assert st.piece(fob.shape_id).box == _near((-12.5, -12.5, 12.5, 12.5))
+    # the window is the panel's cutout still
+    assert len(st.main.cutouts) == 1
+    # a fob drawn on its own, with no stack, is put on as before
+    lone = _drawing(_piece("Panel", 200, 120), _piece("Window", 120, 80),
+                    _piece("Fob", 25, 25))
+    assert asm.put_on(lone, lone.shapes[2])
+    assert lone.shapes[2].placed.main
 
 
 def test_a_scored_line_is_on_the_smallest_piece_it_lies_on():
@@ -1950,6 +2015,53 @@ def test_a_stitched_line_drawn_on_a_piece_gives_it_its_holes():
     assert n == 27 and len(asm.stacks(doc)[0].main.holes) == n
 
 
+def test_a_stitched_line_on_a_hidden_layer_gives_the_holes_the_laser_cuts():
+    from leathercad.export import collect
+    from leathercad.layers import Layer
+    doc = _drawing(*bifold_wallet())
+    doc.layers.append(Layer(name="Ideas", role="cut", visible=False))
+    shell = _named(doc, "Outer shell")[0]
+    b = shell.bounds()
+    idea = doc.add_shape(PathShape(
+        points=[Vec2(b[0] + 20, (b[1] + b[3]) / 2),
+                Vec2(b[2] - 20, (b[1] + b[3]) / 2)],
+        close_path=False, layer="Ideas", name="Idea",
+        stitch=StitchSettings(enabled=True, pitch_mm=4.0)))
+    # the line is hidden, but its holes go with the Stitch layer, as on
+    # the canvas: the laser cuts them, and the shell has them
+    _outlines, cut = collect(doc)
+    assert sum(r.count for r, _s, _c in cut) == 142 + 41
+    assert len(asm.stacks(doc)[0].main.holes) == 142 + 41
+    assert not doc.layer(idea.layer).visible
+
+
+def test_reading_stacks_maps_a_loose_hole_only_into_the_pieces_round_it(
+        monkeypatch):
+    doc = Document("many")
+    for s in range(10):
+        row = [doc.add_shape(_piece(f"S{s}P{k}", 100 - 5 * k, 60 - 3 * k,
+                                    at=(300 * k, 200 * s)))
+               for k in range(4)]
+        key = asm.put_on(doc, row[0], thickness=1.5)
+        for sh in row[1:]:
+            asm.put_on(doc, sh, key, thickness=1.0)
+        for k in range(4):
+            doc.add_shape(PathShape(
+                points=[Vec2(300 * k - 30, 200 * s),
+                        Vec2(300 * k + 30, 200 * s + 5)],
+                close_path=False, layer="Cut", name="Deco",
+                stitch=StitchSettings(enabled=True, pitch_mm=4.0)))
+    fine = asm._fine
+    calls = []
+    monkeypatch.setattr(asm, "_fine", lambda p: calls.append(p) or fine(p))
+    st = asm.stacks(doc)
+    # 640 holes, each on the piece it is drawn on, and the 40 lines' ends
+    # as marks: mapped once each, not into all 40 pieces
+    assert sum(len(p.holes) for t in st for p in t.pieces) == 640
+    assert len(asm._loose_holes(doc)) == 640
+    assert len(calls) == 640 + 2 * 40
+
+
 def test_a_fold_line_on_two_outlines_is_the_main_piece_s_else_the_bigger_s():
     shell = _piece("Shell", 200, 90)
     spine = _line((0, -45), (0, 45), "Spine", way="back")
@@ -1996,8 +2108,9 @@ def test_union_and_a_welding_fillet_keep_the_thickness_with_the_place(
     _select(win, tab, pocket)
     win.canvas.boolean_selected("union")
     st, = asm.stacks(win.doc)
+    # named after the pocket, whose place it keeps, not after the tab
     assert [(p.name, p.thickness, p.leather) for p in st.pieces] == \
-        [("Back", 1.5, ""), ("Tab", 0.9, "Black")]
+        [("Back", 1.5, ""), ("Pocket", 0.9, "Black")]
     # the pocket's leather lies where it lay: the tab grew 8 mm out of it
     assert st.pieces[1].box == _near((-50.0, -30.0, 30.0, 38.0))
     # a corner trimmed off, then welded round with a fillet
@@ -2017,9 +2130,52 @@ def test_union_and_a_welding_fillet_keep_the_thickness_with_the_place(
     c.fillet_radius = 2.0
     c._do_fillet(Vec2(325, 20))
     st, = asm.stacks(win.doc)
-    assert [(p.thickness, p.leather) for p in st.pieces] == \
-        [(1.5, ""), (0.9, "Black")]
+    assert [(p.name, p.thickness, p.leather) for p in st.pieces] == \
+        [("Back", 1.5, ""), ("Pocket", 0.9, "Black")]
     assert st.pieces[1].box == _near((-50.0, -30.0, 30.0, 10.0), abs=1e-6)
+
+
+def test_the_name_thickness_and_leather_come_with_the_place_even_if_none(
+        window):
+    # a Union: the placed pocket has no thickness, no leather and no name
+    # of its own; the tab drawn first has all three
+    back = _piece("Back", 100, 60)
+    tab = _piece("Tab", 20, 10, at=(300, 33), thickness=2.0,
+                 leather="Brown")
+    pocket = _piece("", 80, 60, at=(300, 0))
+    doc = _drawing(back, tab, pocket)
+    key = asm.put_on(doc, back, thickness=1.5)
+    asm.put_on(doc, pocket, key)
+    assert pocket.thickness == 0.0
+    win = window(doc)
+    _select(win, tab, pocket)
+    win.canvas.boolean_selected("union")
+    st, = asm.stacks(win.doc)
+    assert [(p.name, p.thickness, p.leather) for p in st.pieces] == \
+        [("Back", 1.5, ""), ("", 0.0, "")]
+    # a Join: the edge drawn first is a helper of another thickness; the
+    # place, and all that comes with it, is the pocket's
+    back = _piece("Back", 100, 60)
+    pocket = _piece("Pocket", 80, 40, at=(300, 0))
+    doc = _drawing(back, pocket)
+    key = asm.put_on(doc, back, thickness=1.5)
+    asm.put_on(doc, pocket, key, thickness=0.9)
+    pocket.leather = "Black"
+    win = window(doc)
+    c = win.canvas
+    _select(win, pocket)
+    c.break_apart_selected()
+    edges = [s for s in win.doc.shapes if s.name == "Pocket"]
+    helper = next(e for e in edges if e.placed is None)
+    helper.name, helper.thickness, helper.leather = "Helper", 2.0, "Brown"
+    win.doc.shapes.remove(helper)
+    win.doc.shapes.insert(0, helper)        # drawn before everything
+    c.rebuild()
+    _select(win, *edges)
+    c.join_selected()
+    st, = asm.stacks(win.doc)
+    assert [(p.name, p.thickness, p.leather) for p in st.pieces] == \
+        [("Back", 1.5, ""), ("Pocket", 0.9, "Black")]
 
 
 def test_union_of_the_main_piece_with_a_piece_drawn_before_it_keeps_it_main(
@@ -2061,36 +2217,195 @@ def _pile(doc):
     return [(p.name, p.main, p.box) for p in st.pieces]
 
 
-def test_a_main_piece_cut_open_stays_the_main_piece_while_the_stack_changes(
+def test_a_main_piece_cut_open_stays_the_main_piece_and_its_stack_is_kept(
         window):
+    from dataclasses import replace
     from leathercad_app.items import ShapeItem
     win, a, b, c = _three(window)
-    before = _pile(win.doc)
+    doc = win.doc
+    key = a.placed.of
+    before = _pile(doc)
     assert before[1][2] == _near((-44.0, -26.0, 36.0, 14.0))
     _select(win, a)
     win.canvas.break_apart_selected()
     edges = [it.model for it in win.canvas.selected_items()
              if isinstance(it, ShapeItem)]
     # cut open, not deleted: the reading says which
-    st, = asm.stacks(win.doc)
+    st, = asm.stacks(doc)
     assert st.lost and [s.name for s in st.cut_open] == ["A"]
     assert (st.main.name, [p.name for p in st.pieces]) == ("B", ["B", "C"])
     assert [p.box for p in st.pieces] == [before[1][2], before[2][2]]
-    # the stack changed meanwhile: B turned, C moved and taken higher
-    asm.turn(win.doc, b, 90.0)
-    asm.move_by(win.doc, c, 0.0, 5.0)
-    assert [s.name for s in win.doc.shapes if s.placed and s.placed.main] \
+    assert asm.main_cut_open(doc, key)
+    # looked at, not rearranged: every call that would change the places
+    # or the order of its pieces does nothing and says so
+    kept = {s.shape_id: replace(s.placed) for s in doc.shapes if s.placed}
+    tab = doc.add_shape(_piece("Tab", 20, 10, at=(600, 0)))
+    assert [asm.higher(doc, b), asm.lower(doc, c), asm.put_under(doc, c),
+            asm.put_over(doc, b), asm.line_up(doc, c, "left"),
+            asm.line_up(doc, c, "top", against=b),
+            asm.move_by(doc, [b, c], 0.0, 5.0),
+            asm.set_offset(doc, b, x=1.0, y=2.0),
+            asm.turn(doc, b, 90.0), asm.set_turn(doc, c, 45.0),
+            asm.turn_over(doc, c), asm.mirror(doc, b),
+            asm.make_main(doc, b), asm.lay_as_drawn(doc, [b, c]),
+            asm.put_on(doc, tab, key), asm.put_on(doc, tab, on=b)] == \
+        [False] * 14 + ["", ""]
+    assert tab.placed is None
+    assert {s.shape_id: s.placed for s in doc.shapes if s.placed} == kept
+    assert [s.name for s in doc.shapes if s.placed and s.placed.main] \
         == ["A"]
+    # a piece can be taken off: the others keep their places, the pile
+    # numbered from 1 again
+    assert asm.take_off(doc, b) and b.placed is None
+    assert c.placed == replace(kept[c.shape_id], order=2)
+    # closed again, it is the main piece, and every piece lies where it lay
     _select(win, *edges)
     win.canvas.join_selected()
-    st, = asm.stacks(win.doc)
+    st, = asm.stacks(doc)
     assert (st.main.name, st.lost, st.cut_open) == ("A", False, [])
+    assert _pile(doc) == [before[0], before[2]]
+    assert not asm.main_cut_open(doc, key)
+
+
+def _edit_the_drawing(win, by, cut):
+    """Edits on the drawing of the bifold put together (with an L pocket),
+    as the owner makes them: a width typed, Scale, Fold allowance on the
+    liner, the pockets nested on a sheet -- and, if ``cut``, with the
+    shell broken apart meanwhile, every button of the window pressed
+    before it is joined again."""
+    from leathercad_app.items import ShapeItem
+    c = win.canvas
+    doc = win.doc
+    if cut:
+        _select(win, by["Outer shell"])
+        c.break_apart_selected()
+        edges = [it.model for it in c.selected_items()
+                 if isinstance(it, ShapeItem)]
+    items = _select(win, by["Right pocket 2"])
+    win.properties.show_selection(items)
+    win.properties.w.setValue(90.0)
+    win.properties.w.editingFinished.emit()
+    _select(win, _named(doc, "L pocket")[0])
+    c.scale_selected(1.1)
+    _select(win, by["Bill pocket liner"])
+    win._gen_dialog = lambda *a, **k: {"fa_t": 2.0, "fa_r": 0.0}
+    win._fold_allowance()
+    win.resize(1200, 800)
+    win.show()
+    _select(win, *[by[f"Left {n}"] for n in _POCKETS])
+    assert "Placed 4 of 4" in c.nest_preview(400, 700, margin=5, spacing=8)
+    assert c.nest_apply()
+    if cut:
+        pieces = [s for s in doc.shapes if s.placed is not None]
+        for press in (asm.higher, asm.lower, asm.put_under, asm.put_over,
+                      asm.turn_over, asm.mirror, asm.lay_as_drawn):
+            assert not press(doc, pieces[1:3])
+        assert not asm.line_up(doc, pieces[2], "right")
+        assert not asm.move_by(doc, pieces[3], 4.0, 0.0)
+        assert not asm.make_main(doc, pieces[4])
+        win.commit()
+        _select(win, *edges)
+        c.join_selected()
+    st, = asm.stacks(doc)
+    return [(p.name, p.main, p.box) for p in st.pieces]
+
+
+def test_edits_while_the_main_piece_is_cut_open_bring_every_piece_back(
+        window):
+    # the same edits made with the shell closed throughout, and with it
+    # broken apart and joined again: every piece lies where it lay, to
+    # the millionth of a millimetre, in the same order
+    lies = []
+    for cut in (False, True):
+        doc, by = _bifold()
+        _add_ell(doc, "right")
+        win = window(doc)
+        lies.append(_edit_the_drawing(win, by, cut))
+    kept, back = lies
+    assert [n for n, _m, _b in back] == [n for n, _m, _b in kept]
+    assert [n for n, m, _b in back if m] == ["Outer shell"]
+    for (_n, _m, b0), (_n1, _m1, b1) in zip(kept, back):
+        assert b1 == _near(b0, abs=1e-6)
+    # the edits did reach the pieces
+    box = {n: b for n, _m, b in back}
+    assert box["Right pocket 2"][2] - box["Right pocket 2"][0] == \
+        _near(90.0)
+    assert box["L pocket"][2] - box["L pocket"][0] == _near(88.0)
+
+
+def test_higher_on_a_piece_under_a_main_piece_cut_open_scrambles_nothing(
+        window):
+    from leathercad_app.items import ShapeItem
+    a, b, c = (_piece("A", 100, 60), _piece("B", 80, 40, at=(200, 0)),
+               _piece("C", 60, 30, at=(400, 0)))
+    doc = _drawing(a, b, c)
+    key = asm.put_on(doc, a, thickness=1.5)
+    asm.put_on(doc, b, key, thickness=1.0)
+    asm.put_on(doc, c, key, thickness=1.0)
+    asm.make_main(doc, b)
+    win = window(doc)
     assert [(n, m) for n, m, _b in _pile(win.doc)] == \
-        [("A", True), ("B", False), ("C", False)]
-    assert st.main.box == _near((-50.0, -30.0, 50.0, 30.0))
-    assert st.piece(b.shape_id).box == _near((-24.0, -46.0, 16.0, 34.0))
-    assert st.piece(c.shape_id).box == _near((-10.0, -21.0, 50.0, 9.0))
-    assert (c.placed.ax, c.placed.x) == (1.0, 0.0)
+        [("A", False), ("B", True), ("C", False)]
+    _select(win, b)
+    win.canvas.break_apart_selected()
+    edges = [it.model for it in win.canvas.selected_items()
+             if isinstance(it, ShapeItem)]
+    assert not asm.higher(win.doc, a) and not asm.lower(win.doc, c)
+    _select(win, *edges)
+    win.canvas.join_selected()
+    assert [(n, m) for n, m, _b in _pile(win.doc)] == \
+        [("A", False), ("B", True), ("C", False)]
+
+
+def test_a_piece_cut_open_that_is_not_the_main_piece_locks_nothing():
+    names = ("P1", "M", "P2", "P3", "P4")
+    shapes = [_piece(n, 100 - 10 * k, 60 - 5 * k, at=(300 * k, 0))
+              for k, n in enumerate(names)]
+    doc = _drawing(*shapes)
+    p1, m, p2, p3, p4 = shapes
+    key = asm.put_on(doc, p1)
+    for sh in shapes[1:]:
+        asm.put_on(doc, sh, key)
+    asm.make_main(doc, m)
+
+    def pile():
+        return [s.name + ("*" if s.placed.main else "") for s in
+                sorted((s for s in doc.shapes if s.placed),
+                       key=lambda s: s.placed.order)]
+    assert pile() == ["P1", "M*", "P2", "P3", "P4"]
+    p2.layer = "Score"              # cut open: no outline on a cut layer
+    st, = asm.stacks(doc)
+    assert st.cut_open == [p2] and not asm.main_cut_open(doc, key)
+    # the pile can be rearranged: P2 stays on what it lay on, the main
+    # piece, wherever that goes
+    assert asm.higher(doc, p3)
+    assert pile() == ["P1", "M*", "P2", "P4", "P3"]
+    assert asm.lower(doc, p4)
+    assert pile() == ["P1", "P4", "M*", "P2", "P3"]
+    assert not asm.lower(doc, [p1, p4])     # at the bottom already
+    assert pile() == ["P1", "P4", "M*", "P2", "P3"]
+    assert asm.higher(doc, p4)
+    assert pile() == ["P1", "M*", "P2", "P4", "P3"]
+    p2.layer = "Cut"
+    st, = asm.stacks(doc)
+    assert [p.name for p in st.pieces] == ["P1", "M", "P2", "P4", "P3"]
+    assert [p.order for p in st.pieces] == [1, 2, 3, 4, 5]
+
+
+def test_nothing_is_put_on_a_stack_with_no_closed_outline_left():
+    a, b = _piece("A", 100, 60), _piece("B", 50, 30, at=(200, 0))
+    doc = _drawing(a, b)
+    key = asm.put_on(doc, a)
+    a.layer = "Score"                   # no piece of leather for a while
+    assert asm.stacks(doc) == [] and a.placed.main
+    assert asm.put_on(doc, b, key) == "" and b.placed is None
+    a.layer = "Cut"
+    st, = asm.stacks(doc)
+    assert [(s.name, s.placed.main) for s in doc.shapes if s.placed] == \
+        [("A", True)]
+    assert asm.put_on(doc, b, key) == key
+    assert [(s.name, s.placed.main, s.placed.order) for s in doc.shapes] \
+        == [("A", True, 1), ("B", False, 2)]
 
 
 def test_a_piece_cut_open_keeps_its_place_in_the_pile_while_others_move(
@@ -2160,7 +2475,8 @@ def test_wrong_values_in_a_stored_place_read_as_not_placed_or_as_given():
     b = opened(ax=3.0, ay=-1.0, turn=720.5).shapes[1].placed
     assert (b.ax, b.ay, b.turn) == (1.0, 0.0, 0.5)
     # a thickness that cannot be read is not given, and the file opens
-    for bad in ("thick", [1], float("nan"), float("inf"), -2.0):
+    # (nor is a yes or no, though Python counts True as 1)
+    for bad in ("thick", [1], float("nan"), float("inf"), -2.0, True):
         d = doc.to_dict()
         d["shapes"][1]["thickness"] = bad
         assert Document.from_dict(d).shapes[1].thickness == 0.0
@@ -2212,27 +2528,61 @@ def test_a_piece_as_wide_as_the_one_it_lands_on_is_held_by_its_middle():
     asm.put_on(doc, liner, key)
     p = liner.placed                    # as wide: by its middle across
     assert (p.ax, p.x, p.ay, p.y) == (0.5, 0.0, 0.0, 0.0)
-    # landed on the liner, as tall as it to FLUSH: by its middle up,
-    # until the anchor rule finds its bottom level with the shell's
+    # landed on the liner, it is held as the liner is: by the middle of
+    # the shell across, by its bottom edge up
     asm.put_on(doc, strap, key)
     p = strap.placed
-    assert (p.ax, p.x, p.ay, p.y) == (0.0, 0.0, 0.0, 0.0)
+    assert (p.ax, p.x, p.ay, p.y) == (0.5, -85.0, 0.0, 0.0)
     asm.take_off(doc, strap)
     strap.height = 90.0                 # as tall as the shell, put on it
     asm.put_on(doc, strap, key, on=shell)
     p = strap.placed
     assert (p.ax, p.x, p.ay, p.y) == (0.0, 0.0, 0.5, 0.0)
-    asm.put_on(doc, tab, key)           # on neither axis
+    asm.put_on(doc, tab, key)           # on the strap, held as it is
     p = tab.placed
-    assert (p.ax, p.x, p.ay, p.y) == (0.0, 0.0, 0.0, 0.0)
+    assert (p.ax, p.x, p.ay, p.y) == (0.0, 0.0, 0.5, -35.0)
     # held by its middle, it stays centred when the shell is made wider
     shell.width = 210.0
     assert _boxes(doc)["Liner"] == _near((-100.0, -45.0, 100.0, 43.0))
 
 
+def test_a_piece_put_on_another_than_the_main_piece_moves_with_it():
+    shell = _piece("Shell", 200, 90)
+    backing = _piece("Backing", 98, 70, at=(300, 0))
+    pocket = _piece("Pocket", 98, 40, at=(500, 0))
+    doc = _drawing(shell, backing, pocket)
+    key = asm.put_on(doc, shell, thickness=1.6)
+    asm.put_on(doc, backing, key, thickness=0.8)
+    asm.set_offset(doc, backing, x=5.0, y=3.0)     # set in from the edge
+    asm.put_on(doc, pocket, key, on=backing, thickness=0.8)
+    # as wide as the backing, it is held as the backing is: by the left
+    # and bottom edges of the shell, 5 and 3 mm in
+    p = pocket.placed
+    assert (p.ax, p.x, p.ay, p.y) == (0.0, 5.0, 0.0, 3.0)
+    assert _boxes(doc)["Pocket"] == _near((-95.0, -42.0, 3.0, -2.0))
+    # the shell made wider, then taller: the pocket stays on its backing
+    for w, h in ((220.0, 90.0), (220.0, 100.0), (180.0, 80.0)):
+        shell.width, shell.height = w, h
+        box = _boxes(doc)
+        assert box["Pocket"][0] - box["Backing"][0] == _near(0.0)
+        assert box["Pocket"][1] - box["Backing"][1] == _near(0.0)
+    assert box["Backing"] == _near((-85.0, -37.0, 13.0, 33.0))
+    assert box["Pocket"] == _near((-85.0, -37.0, 13.0, 3.0))
+    # held by the right edge, a narrower piece put on it is held there too
+    asm.line_up(doc, backing, "right")
+    tab = doc.add_shape(_piece("Tab", 40, 20, at=(700, 0)))
+    asm.put_on(doc, tab, key, on=backing, thickness=0.8)
+    shell.width = 240.0
+    box = _boxes(doc)
+    assert (tab.placed.ax, tab.placed.ay) == (1.0, 0.0)
+    assert box["Tab"][0] - box["Backing"][0] == _near(0.0)
+    assert box["Backing"][2] == _near(120.0)
+
+
 def test_small_calls_say_what_they_did():
-    doc = _drawing(_piece("A", 100, 60), _piece("B", 80, 40, at=(200, 0)))
-    a, b = doc.shapes
+    doc = _drawing(_piece("A", 100, 60), _piece("B", 80, 40, at=(200, 0)),
+                   _piece("Loose", 20, 20, at=(400, 0)))
+    a, b, _loose = doc.shapes
     key = asm.put_on(doc, a)
     asm.put_on(doc, b, key)
     assert asm.remember(doc, "") == {}            # no stack named: none
@@ -2279,7 +2629,7 @@ def test_a_piece_in_a_ring_s_hole_does_not_lie_on_the_ring():
     asm.put_on(doc, stud, key)
     asm.line_up(doc, stud, "centre")
     asm.line_up(doc, stud, "middle")
-    asm.put_on(doc, patch, key)
+    asm.put_on(doc, patch, key, on=ring)
     asm.set_offset(doc, patch, x=4.0, y=4.0)     # on the leather
     assert [s.name for s in asm.lying_on(doc, ring)] == ["Patch"]
     asm.move_by(doc, patch, -4.0, -4.0)          # into the corner: still

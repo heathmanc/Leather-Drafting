@@ -31,7 +31,9 @@ either piece changes size on the drawing.
 bench. ``offered`` and ``drawn_inside`` say which outlines can be put on.
 The rest are the changes a window makes: put a piece on, take it off, move
 it, line it up, turn it. Each changes only the shapes of the document it is
-given; all that is returned is plain data. Pure Python, no Qt.
+given; all that is returned is plain data. While a stack's main piece is
+cut open on the drawing (``main_cut_open``), those that would change the
+places or the order of its pieces do nothing. Pure Python, no Qt.
 """
 
 from __future__ import annotations
@@ -326,6 +328,7 @@ class _Drawing:
         self._judged = None
         self._frames: Dict[int, Map] = {}
         self._boxes: Dict[int, Box] = {}
+        self._models: Dict[int, List[Pt]] = {}
         self._marks = None
         self._folds = None
         self._loose = None
@@ -338,8 +341,9 @@ class _Drawing:
         in (or None) and its area. As ``pieces.classify`` has it, but that
         an outline put on a stack is a piece wherever it is drawn -- and
         so the outlines drawn inside it are judged against a piece -- and
-        that a small outline inside one that could be put on as a piece
-        (``drawn_inside``) is that one's slot, not a piece."""
+        that an outline drawn inside one that is no piece (a window cut in
+        a panel, a pocket drawn on its panel and not put on yet) is no
+        piece either: it can be put on only from ``drawn_inside``."""
         if self._judged is None:
             from .pieces import classify, is_own_piece
             _flags, parent, areas = classify(self.rings)
@@ -350,16 +354,31 @@ class _Drawing:
                 p = parent[i]
                 if _stack_key(self.owners[i]) or p is None:
                     continue
-                if piece[p]:
-                    piece[i] = is_own_piece(areas[i], areas[p])
-                elif (parent[p] is not None and areas[p] >= OFFER_SHARE
-                      * areas[parent[p]] - 1e-9
-                      and areas[i] < OFFER_SHARE * areas[p]):
-                    # in a pocket drawn on its panel and not put on yet:
-                    # its thumb slot, not a piece of its own
-                    piece[i] = False
+                piece[i] = piece[p] and is_own_piece(areas[i], areas[p])
             self._judged = (piece, parent, areas)
         return self._judged
+
+    def nested(self, i: int) -> bool:
+        """Whether outline ``i`` is drawn inside an outline that is no
+        piece and lies in a piece itself: a fob nested in the waste of a
+        window cut in a panel, the thumb slot of a pocket drawn on its
+        panel and not put on yet. It is offered from ``drawn_inside``,
+        to be put on when it is asked for, and is never among the pieces
+        put on as drawn (``drawn_on_main``)."""
+        piece, parent, _areas = self.judged()
+        p = parent[i]
+        return (not piece[i] and p is not None and not piece[p]
+                and parent[p] is not None and piece[parent[p]])
+
+    def inside(self, i: int) -> bool:
+        """Whether outline ``i``, read as a cutout, can still be put on:
+        it is at least ``OFFER_SHARE`` of the outline it is drawn in (a
+        pocket drawn on its panel, not a slot or a rivet hole), or it is
+        ``nested`` in an outline that is no piece."""
+        piece, parent, areas = self.judged()
+        p = parent[i]
+        return not piece[i] and p is not None and (
+            areas[i] >= OFFER_SHARE * areas[p] - 1e-9 or self.nested(i))
 
     def pieces(self) -> List[int]:
         piece = self.judged()[0]
@@ -373,7 +392,9 @@ class _Drawing:
         return self._frames[i]
 
     def ring(self, i: int) -> List[Pt]:
-        return _model_ring(self.owners[i])
+        if i not in self._models:
+            self._models[i] = _model_ring(self.owners[i])
+        return self._models[i]
 
     def box(self, i: int) -> Box:
         if i not in self._boxes:
@@ -492,8 +513,13 @@ class _Drawing:
                       if piece[k]}
             self._loose = _loose_holes(self.doc, pieces)
         ring, box = self.ring(i), self.box(i)
+        # (a hole off the piece's box on the drawing is not mapped at all)
+        x0, y0, x1, y1 = _box([(p.x, p.y) for p in self.rings[i]])
         holes = []
         for x, y, dia in self._loose:
+            if not (x0 - SNAP <= x <= x1 + SNAP
+                    and y0 - SNAP <= y <= y1 + SNAP):
+                continue
             p = _fine(map_point(m, (x, y)))
             if _within(p, ring, box):
                 holes.append(p + (dia,))
@@ -627,16 +653,18 @@ def offered(doc) -> list:
 
 def drawn_inside(doc) -> List[tuple]:
     """The outlines that are read as cutouts but can still be put on, each
-    with the piece it is drawn in: ``[(outline, piece)]``. A cutout is
-    offered when it is at least ``OFFER_SHARE`` of the piece round it, so
-    a pocket drawn a little inside its panel is, and a slot or a rivet
-    hole is not."""
+    with the outline it is drawn in: ``[(outline, around)]``. A cutout of
+    a piece is offered when it is at least ``OFFER_SHARE`` of the piece
+    round it, so a pocket drawn a little inside its panel is, and a slot
+    or a rivet hole is not; a slot cut in a piece of a stack is that
+    piece's, and never offered. An outline drawn inside one that is no
+    piece -- a fob nested in the waste of a window cut in a panel, the
+    thumb slot of a pocket drawn on its panel and not put on yet -- is
+    offered whatever its size: it is put on only when it is asked for."""
     d = _Drawing(doc)
-    piece, parent, areas = d.judged()
+    parent = d.judged()[1]
     return [(d.owners[i], d.owners[parent[i]])
-            for i in range(len(d.rings))
-            if not piece[i]
-            and areas[i] >= OFFER_SHARE * areas[parent[i]] - 1e-9]
+            for i in range(len(d.rings)) if d.inside(i)]
 
 
 def read_piece(doc, piece) -> Optional[Piece]:
@@ -724,7 +752,7 @@ class Stack:
     def over(self) -> List[Laid]:
         """The pieces over the main piece, as they are laid on it: the
         nearest to it first."""
-        return [p for p in self.pieces if p.above]
+        return [p for p in self.pieces if p.above and not p.main]
 
     def under(self) -> List[Laid]:
         """The pieces under the main piece, the nearest to it first."""
@@ -950,8 +978,10 @@ def _pile_of(doc, shape) -> Optional[_Pile]:
 def _by_pile(doc, pieces, out: bool = False
              ) -> List[Tuple[_Pile, List[_Item]]]:
     """The pieces given, stack by stack: each stack with its items among
-    them. A piece in no stack is passed over, and so is one cut open just
-    now unless ``out`` is asked for."""
+    them. A piece in no stack is passed over. Unless ``out`` is asked for,
+    so is one cut open just now, and so is every piece of a stack whose
+    main piece is cut open, which is not to be rearranged (see
+    ``main_cut_open``)."""
     piles: Dict[str, _Pile] = {}
     found: Dict[str, List[_Item]] = {}
     for sh in _shapes(doc, pieces):
@@ -961,9 +991,22 @@ def _by_pile(doc, pieces, out: bool = False
         if key not in piles:
             piles.update(_piles(doc, key))
         it = piles[key].find(sh) if key in piles else None
-        if it is not None and (out or not it.out):
+        if it is not None and (out or not (it.out or piles[key].main.out)):
             found.setdefault(key, []).append(it)
     return [(piles[key], items) for key, items in found.items()]
+
+
+def main_cut_open(doc, stack: str) -> bool:
+    """Whether the main piece of a stack is cut open just now (by Trim or
+    Break apart, so that it is no closed outline). Until it is closed
+    again the stack can be looked at but not rearranged: every call here
+    that would change the places or the order of its pieces does nothing
+    and says so, and a piece can still be taken off it, or be given
+    another thickness or leather. So nothing is written against the
+    piece that stands in for the main piece meanwhile, and closed again,
+    every piece lies where it lay."""
+    pile = _piles(doc, stack).get(stack) if stack else None
+    return pile is not None and pile.main.out
 
 
 def _stack_rank(key: str):
@@ -974,6 +1017,10 @@ def _stack_rank(key: str):
 
 def _laid(pile: _Pile, it: _Item, k: int, drawing: Optional[_Drawing],
           main: _Item) -> Laid:
+    """The piece at ``k`` in the pile as it lies. ``main`` is the piece
+    laid as the main piece -- while the main piece is cut open, the
+    lowest piece left, which stands in for it -- and over or under is
+    told from it, so that no piece is laid twice."""
     sh = it.shape
     m = it.from_own()
     mirrored = it.mirrored
@@ -982,7 +1029,7 @@ def _laid(pile: _Pile, it: _Item, k: int, drawing: Optional[_Drawing],
         outline.reverse()           # a mirror turns it clockwise
     laid = Laid(
         key=sh.shape_id, name=sh.name or "", shape=sh, order=k + 1,
-        main=it is main, above=k > pile.items.index(pile.main),
+        main=it is main, above=k > pile.items.index(main),
         grain_up=not it.over, mirrored=mirrored,
         thickness=float(getattr(sh, "thickness", 0.0) or 0.0),
         leather=getattr(sh, "leather", "") or "", outline=outline,
@@ -1103,22 +1150,30 @@ def _drawn_place(pile: _Pile, shape):
 def drawn_on_main(doc, piece, stack: str = "") -> bool:
     """Whether a piece can be put on as drawn: it is drawn overlapping the
     main piece of ``stack`` (of its own stack, if none is named) by more
-    than ``AS_DRAWN``, and the main piece lies unmirrored."""
+    than ``AS_DRAWN``, and the main piece lies unmirrored. An outline
+    nested in one that is no piece (a fob in a window's waste, a pocket's
+    thumb slot) never is: it is put on only when it is asked for."""
     sh = _shape(doc, piece)
     key = stack or _stack_key(sh)
     pile = _piles(doc, key).get(key) if sh is not None and key else None
-    return pile is not None and _drawn_place(pile, sh) is not None
+    if pile is None or _drawn_place(pile, sh) is None:
+        return False
+    if not _stack_key(sh):
+        d = _Drawing(doc)
+        i = d.at.get(id(sh))
+        if i is not None and d.nested(i):
+            return False
+    return True
 
 
 def _can_go_on(doc, shape) -> bool:
-    """Whether an outline can be put on: offered as a piece, or drawn
-    inside one and big enough to be a piece of its own."""
+    """Whether an outline can be put on: offered as a piece, or from
+    ``drawn_inside``."""
     d = _Drawing(doc)
     i = d.at.get(id(shape))
     if i is None:
         return False
-    piece, parent, areas = d.judged()
-    return piece[i] or areas[i] >= OFFER_SHARE * areas[parent[i]] - 1e-9
+    return d.judged()[0][i] or d.inside(i)
 
 
 def put_on(doc, piece, stack: str = "", on=None, thickness: float = 0.0,
@@ -1131,13 +1186,18 @@ def put_on(doc, piece, stack: str = "", on=None, thickness: float = 0.0,
     piece drawn overlapping the main piece comes in where it is drawn
     against it (``as_drawn``; see ``drawn_on_main``). Otherwise it lands
     on ``on`` -- on the top piece, if none is given -- their bottom left
-    corners together; on an axis on which the two are as wide (or as
-    tall), within ``FLUSH``, it is held by its middle instead, so that it
-    stays centred when either changes size. A piece with no thickness of
-    its own is given ``thickness``. One already on that stack stays as it
-    is; one on another stack is taken off that one first. An outline that
-    is neither offered nor drawn inside a piece (``offered``,
-    ``drawn_inside``: a slot, a rivet hole) is not put on."""
+    corners together. Landing on the main piece it is held by its bottom
+    left corner, but on an axis on which the two are as wide (or as
+    tall), within ``FLUSH``, by its middle, so that it stays centred when
+    either changes size. Landing on another piece it is held by the same
+    point of the main piece's box as that piece is, so that the two move
+    together whatever happens to the main piece. A piece with no
+    thickness of its own is given ``thickness``. One already on that stack
+    stays as it is; one on another stack is taken off that one first. An
+    outline that is neither offered nor drawn inside a piece (``offered``,
+    ``drawn_inside``: a slot, a rivet hole) is not put on, and nothing is
+    put on a stack whose main piece is cut open (``main_cut_open``) or
+    that has no closed outline left."""
     from .pieces import on_cut_layer
     sh = _shape(doc, piece)
     if sh is None or not _is_outline(sh, on_cut_layer(doc)):
@@ -1148,6 +1208,12 @@ def put_on(doc, piece, stack: str = "", on=None, thickness: float = 0.0,
     key = stack or _stack_key(under)
     if key and _stack_key(sh) == key:
         return key
+    if key and any(_stack_key(s) == key for s in doc.shapes):
+        pile = _piles(doc, key).get(key)
+        if pile is None or pile.main.out:
+            # a stack with no closed outline left, or one whose main piece
+            # is cut open: nothing is placed against it until it is closed
+            return ""
     if _stack_key(sh):
         take_off(doc, sh)
     if thickness > 0.0 and not sh.thickness > 0.0:
@@ -1170,9 +1236,18 @@ def put_on(doc, piece, stack: str = "", on=None, thickness: float = 0.0,
         if there is None or there.out:
             there = pile.live()[-1]
         b = there.box()
-        it.ax = 0.5 if abs(it.w - there.w) < FLUSH else 0.0
-        it.ay = 0.5 if abs(it.h - there.h) < FLUSH else 0.0
         it.cx, it.cy = b[0] + 0.5 * it.w, b[1] + 0.5 * it.h
+        if there is pile.main:
+            it.ax = 0.5 if abs(it.w - there.w) < FLUSH else 0.0
+            it.ay = 0.5 if abs(it.h - there.h) < FLUSH else 0.0
+        else:
+            # held by the point of the main piece's box that the piece it
+            # lands on is held by, the two move together whatever happens
+            # to the main piece
+            main = pile.main
+            it.ax, it.ay, it.loose = there.ax, there.ay, False
+            it.x = round(it.cx + (it.ax - 0.5) * (it.w - main.w), 6) + 0.0
+            it.y = round(it.cy + (it.ay - 0.5) * (it.h - main.h), 6) + 0.0
     pile.items.append(it)
     pile.write()
     return key
@@ -1181,13 +1256,24 @@ def put_on(doc, piece, stack: str = "", on=None, thickness: float = 0.0,
 def take_off(doc, pieces) -> bool:
     """Take pieces off their stacks. Nothing else moves: when the main
     piece goes, the lowest piece left becomes the main piece and the
-    others are placed against it where they lie. The pieces keep their
-    thickness and their leather. False if none was on a stack."""
+    others are placed against it where they lie. While the main piece is
+    cut open (``main_cut_open``) the others are left where they were
+    written, renumbered only.
+    The pieces keep their thickness and their leather. False if none was
+    on a stack."""
+    from dataclasses import replace
     done = False
     for pile, items in _by_pile(doc, pieces, out=True):
         for it in items:
             pile.items.remove(it)
             it.shape.placed = None
+        done = True
+        if pile.main.out and pile.main not in items:
+            # the rest stay where they were written, the pile numbered
+            # from 1 again
+            for k, it in enumerate(pile.items):
+                it.shape.placed = replace(it.shape.placed, order=k + 1)
+            continue
         live = pile.live()
         if live and pile.main in items:
             pile.set_main(live[0])
@@ -1196,7 +1282,6 @@ def take_off(doc, pieces) -> bool:
         else:                       # only shapes cut open are left
             for it in pile.items:
                 it.shape.placed = None
-        done = True
     # a placed shape that is no outline now is in no pile: clear it too
     for sh in _shapes(doc, pieces):
         if sh.placed is not None:
@@ -1226,15 +1311,13 @@ def lay_as_drawn(doc, pieces) -> bool:
 
 def _reorder(pile: _Pile, row: List[_Item]) -> bool:
     """Give a pile its pieces in a new order, ``row`` being the pieces
-    that are outlines now. A piece cut open for a while stays on the piece
-    it lay on (the next one towards the main piece), on the side away from
-    the main piece, so it comes back on what it lay on; a main piece cut
-    open keeps its place in the pile. True if the order changed."""
+    that are outlines now (the main piece among them). A piece cut open for
+    a while stays on the piece it lay on (the next one towards the main
+    piece), on the side away from the main piece, so it comes back on what
+    it lay on. True if the order changed."""
     old, main = pile.items, pile.main
     m = old.index(main)
     new = list(row)
-    if main.out:
-        new.insert(min(m, len(new)), main)
     for k in sorted((k for k, it in enumerate(old)
                      if it.out and it is not main),
                     key=lambda k: abs(k - m)):
@@ -1285,7 +1368,7 @@ def _to_side(doc, pieces, over: bool) -> bool:
     for pile, items in _by_pile(doc, pieces):
         row = pile.live()
         main = pile.main
-        if main.out or main in items:
+        if main in items:
             continue
         going = [it for it in row if it in items]
         rest = [it for it in row if it not in items]
@@ -1301,9 +1384,9 @@ def put_under(doc, pieces) -> bool:
     """Put pieces under the main piece of their stack, next to it (the
     nearest to it of all that lie under it), whichever side they lay on;
     several keep their order among themselves. The main piece itself, and
-    a stack whose main piece is cut open just now, are passed over. Where
-    each lies on the bench does not change. False if the pile is as it
-    was."""
+    a stack whose main piece is cut open just now (``main_cut_open``), are
+    passed over. Where each lies on the bench does not change. False if the
+    pile is as it was."""
     return _to_side(doc, pieces, False)
 
 
@@ -1316,14 +1399,12 @@ def put_over(doc, pieces) -> bool:
 def make_main(doc, piece) -> bool:
     """Make another piece of a stack its main piece: the stack folds along
     this one's fold lines now, and every piece is placed against it where
-    it lies, so nothing moves. False if the piece is in no stack."""
+    it lies, so nothing moves. False if the piece is in no stack, or its
+    stack's main piece is cut open just now (``main_cut_open``)."""
     sh = _shape(doc, piece)
     pile = _pile_of(doc, sh) if sh is not None else None
-    if pile is None:
+    if pile is None or pile.main.out:
         return False
-    if pile.main.out:
-        # the main piece was cut open: it lies where its box last lay
-        pile.main.cx = pile.main.cy = 0.0
     pile.set_main(pile.find(sh))
     pile.write()
     return True
@@ -1587,9 +1668,11 @@ def keep_placement(sources, made) -> None:
     already), the biggest keeps the place of a placed source -- the main
     piece of its stack if it is among them, else the first -- so that the
     leather stays where it lay (``carry_spot``), and takes that source's
-    thickness and leather with it; the others have no place: Subtract
-    leaving two parts, a trimmed outline in two runs, Break apart's
-    edges, a Union or a weld of a placed piece with another shape."""
+    name, thickness and leather with it, also where it has none (no name
+    of its own, no thickness given, the usual leather); the others have
+    no place: Subtract leaving two parts, a trimmed outline in two runs,
+    Break apart's edges, a Union or a weld of a placed piece with another
+    shape. Where no source is placed, nothing is changed."""
     made = list(made)
     placed = [s for s in sources if getattr(s, "placed", None) is not None]
     src = next((s for s in placed if s.placed.main),
@@ -1599,7 +1682,6 @@ def keep_placement(sources, made) -> None:
     if src is not None and made:
         big = max(made, key=_bulk)
         carry_spot(src, big)
-        if src.thickness > 0.0:
-            big.thickness = src.thickness
-        if src.leather:
-            big.leather = src.leather
+        big.name = src.name
+        big.thickness = float(src.thickness or 0.0)
+        big.leather = src.leather or ""

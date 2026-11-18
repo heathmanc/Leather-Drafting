@@ -455,25 +455,45 @@ def report(stack, parts: Parts, model) -> List[str]:
         out.append(text)
     opened = [sh for sh in getattr(stack, "cut_open", ())
               if sh.placed is not None and sh.placed.main]
-    if opened:
+    uncut = getattr(stack, "uncut", ())
+    if opened and any(sh is opened[0] for sh in uncut):
+        out.append(f"{escaped(opened[0].name or 'The main piece')}, the "
+                   "piece the others are placed against, is on a layer "
+                   "that is not cut. Until it is on a cut layer again "
+                   f"{main} stands in for it, and the others are shown "
+                   "where they lay when it was moved; back on a cut "
+                   "layer, it comes back where it lay, and they come "
+                   "right. Put it back on a cut layer to go on placing "
+                   "pieces and putting more on.")
+    elif opened:
         out.append(f"{escaped(opened[0].name or 'The main piece')}, the "
                    "piece the others are placed against, is cut open on "
                    "the drawing. "
                    f"Until it is a closed outline again {main} stands in "
-                   "for it; closed again, it comes back where it lay. "
-                   "Close its outline to go on placing pieces.")
+                   "for it, and the others are shown where they lay when "
+                   "it was cut open; closed again, it comes back where it "
+                   "lay, and they come right. Close its outline to go on "
+                   "placing pieces and putting more on.")
     elif stack.lost:
         out.append("The piece the others were placed against is gone from "
                    f"the drawing. {main} stands in for it, and every piece "
                    "lies where it last lay.")
     others = [escaped(sh.name or "A piece")
               for sh in getattr(stack, "cut_open", ())
-              if sh.placed is not None and not sh.placed.main]
+              if sh.placed is not None and not sh.placed.main
+              and all(sh is not u for u in uncut)]
     if others:
         out.append(listed(others) + (" is" if len(others) == 1 else " are")
                    + " cut open on the drawing and left out until "
                    + ("it is" if len(others) == 1 else "they are")
                    + " a closed outline again.")
+    others = [escaped(sh.name or "A piece") for sh in uncut
+              if sh.placed is not None and not sh.placed.main]
+    if others:
+        out.append(listed(others) + (" is" if len(others) == 1 else " are")
+                   + " on a layer that is not cut and left out until "
+                   + ("it is" if len(others) == 1 else "they are")
+                   + " on a cut layer again.")
     # pieces that stand the same distance past the edge are told together
     past: Dict[str, List[int]] = {}
     for note in notes:

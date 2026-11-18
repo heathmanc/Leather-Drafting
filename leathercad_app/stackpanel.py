@@ -315,7 +315,7 @@ class PiecesPanel(QWidget):
             and asm.main_cut_open(doc, stack)
         self._find_drawable(rows)
         shown = (tuple(r.signature() for r in rows), stack, self._usual,
-                 self._leather, U.current())
+                 self._leather, U.current(), self._fixed)
         if shown == self._shown:
             self._sync()
             return
@@ -405,6 +405,12 @@ class PiecesPanel(QWidget):
         it.setToolTip(sm.plain(
             f"{r.name}: untick to take it off the stack" if r.where == sm.IN
             else f"{r.name}: tick to put it on the stack"))
+        if self._fixed and r.where != sm.IN:
+            # nothing is put on while the main piece is cut open
+            it.setFlags(Qt.ItemIsSelectable | Qt.ItemIsUserCheckable)
+            it.setToolTip(sm.plain(
+                f"{r.name}: it can be put on once the main piece is a "
+                "closed outline on a cut layer again"))
         thick = QTableWidgetItem(
             sm.length(r.thickness) if r.thickness > 0.0
             else f"({sm.length(self._usual)})")
@@ -683,6 +689,9 @@ class PiecesPanel(QWidget):
         if not on:
             if not self._do(lambda doc: asm.take_off(doc, r.key)):
                 self._ticks()
+            return
+        if self._fixed:               # (its tick is grey: nothing to do)
+            self._ticks()
             return
         ins = [k for k in self._ins() if k != r.key]
         shown = self._shown_piece()

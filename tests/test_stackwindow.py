@@ -1151,10 +1151,9 @@ def test_ticking_a_piece_puts_it_on_the_stack_and_unticking_takes_it_off(
         assert liner.placed.x == 20.0
         _tick(dlg, "Left pocket backing")
         backing = _named(win.doc, "Left pocket backing")
-        # (held as the liner is, by the middle of the shell across)
-        assert (backing.placed.order, backing.placed.x) == (3, -30.8)
+        assert (backing.placed.order, backing.placed.x) == (3, 20.0)
         assert _lies(dlg)["Left pocket backing"] == \
-            "on Bill pocket liner · bottom centre, -30.8 mm across"
+            "on Bill pocket liner · bottom left, 20 mm across"
         # ... and with none chosen on the top of the pile
         _choose(dlg)
         _choose(dlg, "Outer shell")
@@ -2170,9 +2169,11 @@ def test_a_main_piece_cut_open_is_said_to_be_cut_open_not_gone(qapp, mm):
         assert dlg.current.title == "Bill pocket liner + 8 pieces"
         assert ("Outer shell, the piece the others are placed against, is "
                 "cut open on the drawing. Until it is a closed outline "
-                "again Bill pocket liner stands in for it; closed again, "
-                "it comes back where it lay. Close its outline to go on "
-                "placing pieces.") in _lines(dlg)
+                "again Bill pocket liner stands in for it, and the others "
+                "are shown where they lay when it was cut open; closed "
+                "again, it comes back where it lay, and they come right. "
+                "Close its outline to go on placing pieces and putting "
+                "more on.") in _lines(dlg)
         assert not any("gone from the drawing" in line
                        for line in _lines(dlg))
     finally:
@@ -2306,9 +2307,11 @@ def test_with_the_main_piece_cut_open_the_controls_that_move_pieces_are_grey(
         assert asm.main_cut_open(win.doc, dlg.current.key)
         assert ("Outer shell, the piece the others are placed against, is "
                 "cut open on the drawing. Until it is a closed outline "
-                "again Bill pocket liner stands in for it; closed again, "
-                "it comes back where it lay. Close its outline to go on "
-                "placing pieces.") in _lines(dlg)
+                "again Bill pocket liner stands in for it, and the others "
+                "are shown where they lay when it was cut open; closed "
+                "again, it comes back where it lay, and they come right. "
+                "Close its outline to go on placing pieces and putting "
+                "more on.") in _lines(dlg)
         for names in (["Left pocket 2"], ["Bill pocket liner"],
                       ["Left pocket 2", "Right pocket 3"]):
             _choose(dlg, *names)
@@ -2320,6 +2323,17 @@ def test_with_the_main_piece_cut_open_the_controls_that_move_pieces_are_grey(
         _tick(dlg, "Right pocket 1 (front)", False)
         assert _named(win.doc, "Right pocket 1 (front)").placed is None
         assert _steps(win) == steps + 1
+        # ... but nothing is put on: the tick of a piece not in the stack
+        # is grey, and ticked all the same it puts nothing on
+        _reread(dlg)
+        tick = p.pieces.item(_row(dlg, "Right pocket 1 (front)"), 0)
+        assert not tick.flags() & Qt.ItemIsEnabled
+        assert p.pieces.item(_row(dlg, "Left pocket 2"), 0).flags() \
+            & Qt.ItemIsEnabled
+        _tick(dlg, "Right pocket 1 (front)")
+        assert _named(win.doc, "Right pocket 1 (front)").placed is None
+        assert _steps(win) == steps + 1
+        assert tick.checkState() == Qt.Unchecked
         # closed again, they can be used again
         _select(win, *edges)
         win.canvas.join_selected()
@@ -2372,5 +2386,88 @@ def test_two_stacks_of_one_title_are_told_apart_in_the_show_box(qapp, mm):
     try:
         assert [dlg.cmb_piece.itemText(k) for k in range(2)] == [
             "Outer shell + 9 pieces", "Outer shell + 9 pieces (2)"]
+    finally:
+        dlg.close()
+
+
+def test_a_pocket_ticked_onto_a_liner_as_wide_as_the_shell_stays_level(
+        qapp, tmp_path, monkeypatch, mm):
+    doc = _drawing(_piece("Shell", 200, 90),
+                   _piece("Liner", 200, 80, at=(250, 0)),
+                   _piece("Pocket", 90, 40, at=(500, 0)))
+    win, dlg = _opened(qapp, doc, tmp_path, monkeypatch)
+    try:
+        for name in ("Shell", "Liner", "Pocket"):
+            _tick(dlg, name)                # each on the top of the pile
+        assert _lies(dlg)["Pocket"] == "on Liner · bottom left"
+        pocket = _named(win.doc, "Pocket")
+        win.properties.show_selection(_select(win, pocket))
+        win.properties.w.setValue(110.0)
+        win.properties.w.editingFinished.emit()
+        _reread(dlg)
+        box = {p.name: p.box for p in dlg.current.stack.pieces}
+        assert box["Pocket"][0] - box["Shell"][0] == _near(0.0)
+        assert _lies(dlg)["Pocket"] == "on Liner · bottom left"
+        assert not any("past the edge" in line for line in _lines(dlg))
+    finally:
+        _shut(win)
+
+
+def test_across_typed_for_a_backing_on_the_liner_moves_it_that_far(
+        qapp, tmp_path, monkeypatch, mm):
+    doc = _drawing(_piece("Shell", 200, 90),
+                   _piece("Liner", 200, 80, at=(250, 0)),
+                   _piece("Backing", 98, 70, at=(500, 0)))
+    win, dlg = _opened(qapp, doc, tmp_path, monkeypatch)
+    try:
+        p = dlg.pieces
+        _tick(dlg, "Shell")
+        _tick(dlg, "Liner")
+        _choose(dlg, "Liner")
+        _tick(dlg, "Backing")
+        _choose(dlg, "Backing")
+        assert p.spin_x.value() == 0.0
+        assert p.lbl_from.text() == "from its left and bottom edges"
+
+        def left():
+            return dlg.current.stack.piece(
+                _named(win.doc, "Backing").shape_id).box[0]
+        was = left()
+        p.spin_x.setValue(4.0)
+        _reread(dlg)
+        assert left() - was == _near(4.0)
+        assert _lies(dlg)["Backing"] == "on Liner · bottom left, 4 mm across"
+    finally:
+        _shut(win)
+
+
+def test_a_main_piece_on_a_layer_that_is_not_cut_is_said_to_be_there(
+        qapp, mm):
+    from leathercad.layers import Layer
+    doc, by = _bifold()
+    doc.layers.append(Layer(name="Score", role="score"))
+    by["Outer shell"].layer = "Score"
+    st, = asm.stacks(doc)
+    assert st.uncut == [by["Outer shell"]] and asm.main_cut_open(doc, st.key)
+    dlg = _dialog(doc)
+    try:
+        assert ("Outer shell, the piece the others are placed against, is "
+                "on a layer that is not cut. Until it is on a cut layer "
+                "again Bill pocket liner stands in for it, and the others "
+                "are shown where they lay when it was moved; back on a cut "
+                "layer, it comes back where it lay, and they come right. "
+                "Put it back on a cut layer to go on placing pieces and "
+                "putting more on.") in _lines(dlg)
+        assert not any("cut open" in line for line in _lines(dlg))
+    finally:
+        dlg.close()
+    # a pocket moved there is said to be there, not cut open
+    doc, by = _bifold()
+    doc.layers.append(Layer(name="Score", role="score"))
+    by["Left pocket 2"].layer = "Score"
+    dlg = _dialog(doc)
+    try:
+        assert ("Left pocket 2 is on a layer that is not cut and left out "
+                "until it is on a cut layer again.") in _lines(dlg)
     finally:
         dlg.close()

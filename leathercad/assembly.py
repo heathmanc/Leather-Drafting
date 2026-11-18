@@ -734,13 +734,16 @@ class Stack:
     just now (cut open by Trim or Break apart): they keep their places and
     come back when they are closed again. When the main piece is among
     them it is cut open, not deleted, and it stays the main piece: the
-    stand-in is never written as one."""
+    stand-in is never written as one. ``uncut`` holds those of them that
+    are closed outlines all the same, out only for lying on a layer that
+    is not cut (moved to Score, say)."""
 
     key: str                    # "stack7"
     pieces: List[Laid]
     main: Laid
     lost: bool = False
     cut_open: list = field(default_factory=list)
+    uncut: list = field(default_factory=list)
 
     def piece(self, key: str) -> Optional[Laid]:
         """The piece with that shape id, or None."""
@@ -764,6 +767,7 @@ class Stack:
         nothing to redo."""
         return (self.key, self.main.key, self.lost,
                 tuple(sh.shape_id for sh in self.cut_open),
+                tuple(sh.shape_id for sh in self.uncut),
                 tuple(p.signature() for p in self.pieces))
 
 
@@ -1079,9 +1083,12 @@ def stacks(doc, detail: bool = True) -> List[Stack]:
         main = live[0] if pile.main.out else pile.main
         laid = [_laid(pile, it, k, drawing, main)
                 for k, it in enumerate(pile.items) if not it.out]
+        opened = [it.shape for it in pile.items if it.out]
         out.append(Stack(key, laid, laid[live.index(main)],
-                         pile.lost or pile.main.out,
-                         [it.shape for it in pile.items if it.out]))
+                         pile.lost or pile.main.out, opened,
+                         [sh for sh in opened
+                          if not getattr(sh, "is_fold_line", False)
+                          and _own_ring(sh) is not None]))
     return out
 
 
@@ -1176,6 +1183,33 @@ def _can_go_on(doc, shape) -> bool:
     return d.judged()[0][i] or d.inside(i)
 
 
+def _landed(anchor: float, under: float, centre: float, size: float,
+            main: float):
+    """One axis of a piece put on corner to corner: the point of its box
+    it is held by and its offset, ``centre`` being the middle of its box
+    where it landed. Level with the main piece (within ``FLUSH``) it is
+    tied to it there, offset 0: by its middle if both its edges are level
+    (as wide) or if it is centred, else by the edge that is level. Level
+    with nothing of the main piece, it is held by ``anchor``, the point
+    the piece it landed on (``under`` wide) is held by, so that the two
+    move together whatever happens to the main piece -- but by its own
+    left (or bottom) edge, the corner it landed at, where that piece is
+    as wide as the main piece, and is held by its middle only for that."""
+    if abs(under - main) < FLUSH:
+        anchor = 0.0
+    lo = centre - 0.5 * size + 0.5 * main          # its edges from the
+    hi = centre + 0.5 * size - 0.5 * main          # main piece's
+    if abs(lo) < FLUSH and abs(hi) < FLUSH:
+        return 0.5, 0.0
+    if abs(lo) < FLUSH:
+        return 0.0, 0.0
+    if abs(hi) < FLUSH:
+        return 1.0, 0.0
+    if abs(centre) < FLUSH:
+        return 0.5, 0.0
+    return anchor, round(centre + (anchor - 0.5) * (size - main), 6) + 0.0
+
+
 def put_on(doc, piece, stack: str = "", on=None, thickness: float = 0.0,
            as_drawn: bool = True) -> str:
     """Put a piece on a stack, on top of its pile; returns the stack's id
@@ -1186,18 +1220,18 @@ def put_on(doc, piece, stack: str = "", on=None, thickness: float = 0.0,
     piece drawn overlapping the main piece comes in where it is drawn
     against it (``as_drawn``; see ``drawn_on_main``). Otherwise it lands
     on ``on`` -- on the top piece, if none is given -- their bottom left
-    corners together. Landing on the main piece it is held by its bottom
-    left corner, but on an axis on which the two are as wide (or as
-    tall), within ``FLUSH``, by its middle, so that it stays centred when
-    either changes size. Landing on another piece it is held by the same
-    point of the main piece's box as that piece is, so that the two move
-    together whatever happens to the main piece. A piece with no
-    thickness of its own is given ``thickness``. One already on that stack
-    stays as it is; one on another stack is taken off that one first. An
-    outline that is neither offered nor drawn inside a piece (``offered``,
-    ``drawn_inside``: a slot, a rivet hole) is not put on, and nothing is
-    put on a stack whose main piece is cut open (``main_cut_open``) or
-    that has no closed outline left."""
+    corners together. On each axis, what lands level with the main piece
+    is tied to it there, so that what is level stays level: by its middle
+    if it is as wide (or as tall) or centred, else by the edge that is
+    level. On an axis on which it is level with nothing of the main
+    piece, it is held by the same point of the main piece's box as the
+    piece it landed on, so that the two move together (``_landed``). A
+    piece with no thickness of its own is given ``thickness``. One already
+    on that stack stays as it is; one on another stack is taken off that
+    one first. An outline that is neither offered nor drawn inside a piece
+    (``offered``, ``drawn_inside``: a slot, a rivet hole) is not put on,
+    and nothing is put on a stack whose main piece is cut open
+    (``main_cut_open``) or that has no closed outline left."""
     from .pieces import on_cut_layer
     sh = _shape(doc, piece)
     if sh is None or not _is_outline(sh, on_cut_layer(doc)):
@@ -1237,17 +1271,10 @@ def put_on(doc, piece, stack: str = "", on=None, thickness: float = 0.0,
             there = pile.live()[-1]
         b = there.box()
         it.cx, it.cy = b[0] + 0.5 * it.w, b[1] + 0.5 * it.h
-        if there is pile.main:
-            it.ax = 0.5 if abs(it.w - there.w) < FLUSH else 0.0
-            it.ay = 0.5 if abs(it.h - there.h) < FLUSH else 0.0
-        else:
-            # held by the point of the main piece's box that the piece it
-            # lands on is held by, the two move together whatever happens
-            # to the main piece
-            main = pile.main
-            it.ax, it.ay, it.loose = there.ax, there.ay, False
-            it.x = round(it.cx + (it.ax - 0.5) * (it.w - main.w), 6) + 0.0
-            it.y = round(it.cy + (it.ay - 0.5) * (it.h - main.h), 6) + 0.0
+        main = pile.main
+        it.ax, it.x = _landed(there.ax, there.w, it.cx, it.w, main.w)
+        it.ay, it.y = _landed(there.ay, there.h, it.cy, it.h, main.h)
+        it.loose = False
     pile.items.append(it)
     pile.write()
     return key

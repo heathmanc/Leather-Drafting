@@ -555,6 +555,8 @@ def test_a_piece_moved_level_with_an_edge_is_tied_to_it_for_good():
     # off (in a file, say) stays there while another is moved
     pocket.placed.x = 0.004
     strap = doc.add_shape(_piece("Strap", 150, 20, at=(0, 300)))
+    # (put on the shell: landed on the pocket, which is centred on the
+    # shell, it would be held by its middle as the pocket is)
     asm.put_on(doc, strap, shell.placed.of, on=shell)   # corner to corner
     asm.move_by(doc, strap, 90.004, 30.0)
     assert (pocket.placed.ax, pocket.placed.x) == (0.5, 0.004)
@@ -2528,19 +2530,19 @@ def test_a_piece_as_wide_as_the_one_it_lands_on_is_held_by_its_middle():
     asm.put_on(doc, liner, key)
     p = liner.placed                    # as wide: by its middle across
     assert (p.ax, p.x, p.ay, p.y) == (0.5, 0.0, 0.0, 0.0)
-    # landed on the liner, it is held as the liner is: by the middle of
-    # the shell across, by its bottom edge up
+    # landed on the liner, as tall as it to FLUSH: by its middle up,
+    # until the anchor rule finds its bottom level with the shell's
     asm.put_on(doc, strap, key)
     p = strap.placed
-    assert (p.ax, p.x, p.ay, p.y) == (0.5, -85.0, 0.0, 0.0)
+    assert (p.ax, p.x, p.ay, p.y) == (0.0, 0.0, 0.0, 0.0)
     asm.take_off(doc, strap)
     strap.height = 90.0                 # as tall as the shell, put on it
     asm.put_on(doc, strap, key, on=shell)
     p = strap.placed
     assert (p.ax, p.x, p.ay, p.y) == (0.0, 0.0, 0.5, 0.0)
-    asm.put_on(doc, tab, key)           # on the strap, held as it is
+    asm.put_on(doc, tab, key)           # on neither axis
     p = tab.placed
-    assert (p.ax, p.x, p.ay, p.y) == (0.0, 0.0, 0.5, -35.0)
+    assert (p.ax, p.x, p.ay, p.y) == (0.0, 0.0, 0.0, 0.0)
     # held by its middle, it stays centred when the shell is made wider
     shell.width = 210.0
     assert _boxes(doc)["Liner"] == _near((-100.0, -45.0, 100.0, 43.0))
@@ -2577,6 +2579,60 @@ def test_a_piece_put_on_another_than_the_main_piece_moves_with_it():
     assert (tab.placed.ax, tab.placed.ay) == (1.0, 0.0)
     assert box["Tab"][0] - box["Backing"][0] == _near(0.0)
     assert box["Backing"][2] == _near(120.0)
+
+
+def test_what_lands_level_with_the_main_piece_stays_level_with_it():
+    # a pocket landing corner to corner on a liner as wide as the shell is
+    # level with the shell's left and bottom edges: held there, offset 0
+    shell = _piece("Shell", 200, 90)
+    liner = _piece("Liner", 200, 80, at=(300, 0))
+    pocket = _piece("Pocket", 90, 40, at=(600, 0))
+    doc = _drawing(shell, liner, pocket)
+    key = asm.put_on(doc, shell, thickness=1.6)
+    asm.put_on(doc, liner, key, thickness=0.8)
+    asm.put_on(doc, pocket, key, on=liner, thickness=0.8)
+    p = pocket.placed
+    assert (p.ax, p.x, p.ay, p.y) == (0.0, 0.0, 0.0, 0.0)
+    # made 110 wide on the drawing, it is level with the shell still
+    pocket.width = 110.0
+    box = _boxes(doc)
+    assert box["Pocket"][0] - box["Shell"][0] == _near(0.0)
+    assert box["Pocket"] == _near((-100.0, -45.0, 10.0, -5.0))
+    # one as wide as the shell is held by its middle
+    tab = doc.add_shape(_piece("Tab", 200, 20, at=(900, 0)))
+    asm.put_on(doc, tab, key, on=pocket, thickness=0.8)
+    assert (tab.placed.ax, tab.placed.x) == (0.5, 0.0)
+    # one level with nothing of the shell is held as the piece under it
+    strip = doc.add_shape(_piece("Strip", 90, 10, at=(1200, 0)))
+    asm.line_up(doc, pocket, "right")
+    asm.put_on(doc, strip, key, on=pocket, thickness=0.8)
+    # (the strip lands at the pocket's left, 90 from the shell's right)
+    assert (strip.placed.ax, strip.placed.ay) == (1.0, 0.0)
+    shell.width = 240.0
+    box = _boxes(doc)
+    assert box["Strip"][0] - box["Pocket"][0] == _near(0.0)
+
+
+def test_a_piece_landing_on_a_centred_patch_is_held_by_its_middle():
+    shell = _piece("Shell", 200, 90)
+    patch = _piece("Patch", 60, 30, at=(300, 0))
+    badge = _piece("Badge", 20, 10, at=(500, 0))
+    doc = _drawing(shell, patch, badge)
+    key = asm.put_on(doc, shell, thickness=1.6)
+    asm.put_on(doc, patch, key, thickness=0.8)
+    asm.line_up(doc, patch, "centre")
+    asm.line_up(doc, patch, "middle")
+    asm.put_on(doc, badge, key, on=patch, thickness=0.8)
+    # level with nothing of the shell: it takes the patch's middle, where
+    # it landed, at the patch's bottom left corner
+    p = badge.placed
+    assert (p.ax, p.x, p.ay, p.y) == (0.5, -20.0, 0.5, -10.0)
+    for w, h in ((240.0, 90.0), (160.0, 120.0)):
+        shell.width, shell.height = w, h
+        box = _boxes(doc)
+        assert box["Badge"][0] - box["Patch"][0] == _near(0.0)
+        assert box["Badge"][1] - box["Patch"][1] == _near(0.0)
+    assert box["Badge"] == _near((-30.0, -15.0, -10.0, -5.0))
 
 
 def test_small_calls_say_what_they_did():
@@ -2629,6 +2685,8 @@ def test_a_piece_in_a_ring_s_hole_does_not_lie_on_the_ring():
     asm.put_on(doc, stud, key)
     asm.line_up(doc, stud, "centre")
     asm.line_up(doc, stud, "middle")
+    # (put on the ring: landed on the stud, which is centred on the ring,
+    # it would be held by its middle as the stud is)
     asm.put_on(doc, patch, key, on=ring)
     asm.set_offset(doc, patch, x=4.0, y=4.0)     # on the leather
     assert [s.name for s in asm.lying_on(doc, ring)] == ["Patch"]

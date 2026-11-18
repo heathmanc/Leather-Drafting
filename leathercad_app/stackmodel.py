@@ -12,7 +12,11 @@ the model has to tell into words:
 * ``rows`` is the list of pieces the window shows: those of the stack,
   top first, with where each lies in words; then the pieces not put on
   yet; then the outlines drawn inside a piece.
-* ``report`` words what ``sheets.settle`` noted of the stack lying flat.
+* ``report`` words what ``sheets.settle`` noted of the stack lying flat,
+  and ``fold_report`` what the fold engine noted of it folded; ``marks``
+  says which pieces to mark on the model for it, ``drawn_through`` and
+  ``closes_tip`` put the rest of it in a few words for the caption and
+  for a fold's row.
 
 **The frame of the model.** The fold engine builds the main piece as it
 is drawn, its front the side the pattern is drawn on, and never mirrored.
@@ -32,6 +36,7 @@ drawing.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -126,6 +131,7 @@ class Parts:
     keys: List[str] = field(default_factory=list)
     names: List[str] = field(default_factory=list)
     from_bench: tuple = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+    leather: str = ""           # the main piece's own, "" for the usual
 
     def number(self, key: str) -> int:
         """The number in the model of the piece with that shape id, or -1
@@ -201,7 +207,7 @@ def lay_out(stack, usual: float = 2.0) -> Parts:
                   grain(main), flipped, spots(main.holes),
                   [ring(c) for c in main.cutouts], lines(main.marks),
                   keys=[main.key], names=[title_of(main.shape)],
-                  from_bench=m)
+                  from_bench=m, leather=main.leather or "")
     for p in stack.over() + stack.under():
         name = title_of(p.shape)
         parts.sheets.append(sh.Sheet(
@@ -217,24 +223,20 @@ def lay_out(stack, usual: float = 2.0) -> Parts:
 def build(parts: Parts, folds=(), radius: float = 0.0,
           base: Optional[int] = None):
     """The model of a stack: its main piece laid out for folding by the
-    fold engine, with the other pieces on it.
-
-    A stack of one piece is that piece's ``foldsolid.Layout`` and folds
-    as a piece shown alone does. With pieces on it the model is a
-    ``sheets.FlatStack``: the stack lying flat, no fold made. (When the
-    fold engine takes sheets this is the one place that changes: the
-    layout is given ``parts.sheets`` and is the model itself.) Either
-    way the model says with ``grain`` which side of its leather the main
+    fold engine along its fold lines, with the other pieces on it, which
+    fold with it (``foldsolid.fold_piece`` with ``sheets``; it settles
+    ``parts.sheets`` where they lie). A stack of one piece folds as a
+    piece shown alone does, and a stack whose main piece has no fold
+    lines lies flat. The model carries the main piece's name, id and
+    leather, and says with ``grain`` which side of its leather the main
     piece is drawn from."""
     layout = fs.fold_piece(parts.outline, folds, cutouts=parts.cutouts,
                            marks=parts.marks, thickness=parts.thickness,
-                           radius=radius, base=base, holes=parts.holes)
-    if not parts.sheets:
-        layout.grain = parts.grain
-        return layout
-    return sh.FlatStack(layout, parts.sheets, parts.outline,
-                        name=parts.names[0], key=parts.keys[0],
-                        grain=parts.grain)
+                           radius=radius, base=base, holes=parts.holes,
+                           sheets=parts.sheets)
+    layout.name, layout.key = parts.names[0], parts.keys[0]
+    layout.leather, layout.grain = parts.leather, parts.grain
+    return layout
 
 
 # -- the list of pieces -------------------------------------------------------
@@ -408,9 +410,10 @@ def report(stack, parts: Parts, model) -> List[str]:
     each thing, in the order the window says them: how many pieces and
     how thick, a main piece that is gone, the pieces that stand past the
     main piece's edge, that stand clear of what is under them, that rest
-    on a sliver, that lie on nothing, the fold lines that are not the
-    main piece's, and the folds that are not made yet. Lengths are in
-    the unit shown. Nothing, for a stack of one piece."""
+    on a sliver, that lie on nothing, and the fold lines that are not
+    the main piece's. Lengths are in the unit shown. Nothing, for a
+    stack of one piece. (What there is to tell of it folded is
+    ``fold_report``'s.)"""
     notes = getattr(model, "notes", None)
     if not parts.sheets or not notes:
         return []
@@ -496,10 +499,398 @@ def report(stack, parts: Parts, model) -> List[str]:
         else:
             out.append(f"{len(p.folds)} fold lines are on {name}, which is "
                        "not the main piece: its folds are not made here.")
-    if any(note.kind == "flat" for note in notes):
-        n = sum(1 for step in model.layout.steps if step)
-        out.append(
-            f"{main}'s " + ("fold is" if n == 1 else f"{n} folds are")
-            + " not made yet: folding pieces that are put together is "
-              "coming, and for now the stack is shown flat.")
     return out
+
+
+# -- what there is to tell of a stack folded ----------------------------------
+
+# the colours of the report's warnings: leather in the way of a fold (as
+# it is marked on the model), and leather drawn through leather
+AMBER = "#b35c00"
+RED = "#c0392b"
+WARN, BAD = "warn", "bad"       # how ``marks`` marks a piece
+
+# a fold line this near upright on the bench (the sine of its slant) is
+# across a piece's width; this near level, across its length
+_UPRIGHT = 0.17
+
+
+def _num(mm: float) -> str:
+    """A length without its unit: 97.66, 3.845."""
+    return length(mm).rsplit(" ", 1)[0]
+
+
+def _warn(text: str, colour: str = AMBER) -> str:
+    return f"<span style='color:{colour}'>⚠ {text}</span>"
+
+
+def _crossed(layout) -> bool:
+    """Whether two fold lines of the main piece cross on it."""
+    live = [h for h in layout.hinges if layout.steps[h.fold]]
+    for i, h in enumerate(live):
+        for g in live[i + 1:]:
+            if g.fold == h.fold:
+                continue
+            (ax, ay), (ex, ey), _l = layout.lines[h.fold]
+            (bx, by), (fx, fy), _m = layout.lines[g.fold]
+            den = ex * fy - ey * fx
+            if abs(den) < 1e-9:
+                continue
+            s = ((bx - ax) * fy - (by - ay) * fx) / den
+            r = ((bx - ax) * ey - (by - ay) * ex) / den
+            if h.lo - 1e-6 <= s <= h.hi + 1e-6 \
+                    and g.lo - 1e-6 <= r <= g.hi + 1e-6:
+                return True
+    return False
+
+
+def _reach_across(ring, line) -> tuple:
+    """How far an outline reaches each way across a fold line (mm, from
+    the line)."""
+    (ax, ay), (ex, ey), _l = line
+    us = [(p[1] - ay) * ex - (p[0] - ax) * ey for p in ring]
+    return min(us), max(us)
+
+
+def _to_its_ends(layout, k: int, fold: int, over: float) -> bool:
+    """Whether the piece ``k`` that goes round a fold reaches the main
+    piece's ends either side of it, as a lining does: then what it has
+    too much or too little round the bend is what it is to be cut
+    shorter or longer by."""
+    line = layout.lines[fold]
+    lo, hi = _reach_across(layout.sheets[k - 1].ring, line)
+    m0, m1 = _reach_across(layout.outline, line)
+    reach = abs(over) + 0.5
+    return abs(m1 - hi) <= reach and abs(lo - m0) <= reach
+
+
+def _narrower(stack, parts: Parts, layout, k: int, fold: int) -> str:
+    """How a piece is made to stop short of a fold, in the words of the
+    drawing: narrower where the fold runs up the piece as it is drawn,
+    shorter where it runs across it, and otherwise cut back there."""
+    (_a, (ex, ey), _l) = layout.lines[fold]
+    turn = 0.0
+    piece = stack.piece(parts.keys[k]) if stack is not None else None
+    if piece is not None and piece.placed is not None:
+        turn = math.radians(piece.placed.turn)
+    # the fold's way in the piece's own frame
+    ux = abs(ex * math.cos(turn) + ey * math.sin(turn))
+    uy = abs(-ex * math.sin(turn) + ey * math.cos(turn))
+    if ux <= _UPRIGHT:
+        return "narrower"
+    if uy <= _UPRIGHT:
+        return "shorter"
+    return ""
+
+
+def _pieces(names: List[str], who: List[int]) -> tuple:
+    """Pieces named in a sentence, and whether they are more than one:
+    A; A and B; A (and 7 more)."""
+    if len(who) > 2:
+        return f"{names[who[0]]} (and {len(who) - 1} more)", True
+    if len(who) == 2:
+        return f"{names[who[0]]} and {names[who[1]]}", True
+    return names[who[0]], False
+
+
+def _when(layout, step: int) -> str:
+    """When in the folding a thing is found: lying flat, or when the
+    folds of a step have been made."""
+    if step <= 0:
+        return "lying flat"
+    doing = [f for k, f in enumerate(layout.folds)
+             if layout.steps[k] == step]
+    if not doing:
+        return f"at step {step}"
+    shut = all(f.angle >= 175.0 for f in doing)
+    which = ("fold " if len(doing) == 1 else "folds ") \
+        + listed([f.label for f in doing])
+    return (f"when {which} "
+            + ("has" if len(doing) == 1 else "have")
+            + (" closed" if shut else " folded") + f" (step {step})")
+
+
+def _fold_words(stack, parts: Parts, layout, k: int, notes) -> List[str]:
+    """What there is to tell of one fold of a stack."""
+    names = parts.names
+    main = names[0]
+    fold = layout.folds[k]
+    label = fold.label
+    title = f"Fold {label}" + (f" ({fold.name})" if fold.name else "")
+
+    def first(kind):
+        return next((n for n in notes if n.kind == kind), None)
+
+    def height(piece):
+        return layout.sheets[piece - 1].hi if piece else 0.0
+
+    out = []
+    bend, moved = first("bend"), first("moved")
+    where = "where it forms" if moved is not None else "the fold line"
+    takes = "takes nothing" if bend is None else (
+        f"takes {length(bend.a)} of {main}, {length(bend.b)} each side of "
+        f"{where}")
+    radius = length(layout.radius[k])
+    rule = first("ride") or first("meet") or first("corner")
+    if rule is not None and rule.kind == "meet" and not rule.sheet \
+            and not rule.other[0]:
+        rule = None                    # the main piece on itself
+    if rule is None:
+        if layout.wrap[k] > 1e-6:
+            out.append(f"{title} bends at {radius} to go round what is "
+                       f"folded in before it, and {takes}.")
+        else:
+            out.append(f"{title} {takes}.")
+    elif rule.kind == "ride":
+        out.append(f"{title} goes round what rides inside it: "
+                   f"{names[rule.sheet]} stands {length(rule.b)} off the "
+                   f"face of {main} there. It bends at {radius} and "
+                   f"{takes}.")
+    elif rule.kind == "meet":
+        one, other = rule.sheet, rule.other[0]
+        h1, h2 = height(one), height(other)
+        split = ""
+        if abs(h1 + h2 - rule.b) < 1e-6:
+            if abs(h1 - h2) < 1e-6:
+                split = f", {length(h1)} on each half"
+            elif min(h1, h2) < 1e-6:
+                split = " on one half"
+            else:
+                split = (f", {length(max(h1, h2))} on one half and "
+                         f"{length(min(h1, h2))} on the other")
+        out.append(f"{title} closes over {length(rule.b)} of leather"
+                   f"{split}: {names[one]} comes to rest on {names[other]}. "
+                   f"It bends at {radius} and {takes}.")
+    else:
+        out.append(f"{title} stands open with leather on both sides of it, "
+                   f"and bends at {radius} so that {names[rule.sheet]} and "
+                   f"{names[rule.other[0]]} stand clear of each other at "
+                   f"its corner. It {takes}.")
+    if moved is not None:
+        text = (f"Fold {label} folds {length(moved.a)} off its line, "
+                f"towards panel {moved.other[0]}")
+        stuck = getattr(layout, "stuck", None)
+        out.append(text + ("." if stuck and stuck[k]
+                           else ", to go round what is folded inside it."))
+    closes = first("closes")
+    if closes is not None and closes.a == 0 < closes.b:
+        if len(closes.other) == 1:
+            out.append(f"Fold {label} closes away from "
+                       f"{names[closes.other[0]]}, laid on {main}: it ends "
+                       "up on the outside. If it belongs inside, press "
+                       "Flip.")
+        else:
+            out.append(f"Fold {label} closes away from the "
+                       f"{len(closes.other)} pieces laid on {main}: they "
+                       "end up on the outside. If they belong inside, "
+                       "press Flip.")
+    # pieces that reach into the bend the same way are told together
+    reach: Dict[tuple, List[int]] = {}
+    for n in notes:
+        if n.kind == "reach":
+            way = _narrower(stack, parts, layout, n.sheet, k)
+            reach.setdefault((length(n.a), length(n.b), way),
+                             []).append(n.sheet)
+    for (deep, stop, way), who in reach.items():
+        them, many = _pieces(names, who)
+        it = "them" if many else "it"
+        cut = f"make {it} {deep} {way}" if way \
+            else f"cut {deep} off {it} there"
+        out.append(_warn(
+            f"{them} {'reach' if many else 'reaches'} {deep} into the "
+            f"bend of fold {label}, where leather cannot lie flat. "
+            f"{'They are' if many else 'It is'} shown bent with it. Stop "
+            f"{it} {stop} from the fold line: {cut}."))
+    for n in notes:
+        name = names[n.sheet] if 0 <= n.sheet < len(names) else ""
+        if n.kind == "cross":
+            out.append(_crossing_words(layout, n, name, main, label))
+        elif n.kind == "level":
+            out.append(f"{name} goes round the inside of fold {label} and "
+                       f"is already {length(n.b)} shorter than {main} "
+                       "across it: shut, it comes level (the picture does "
+                       "not slide it).")
+        elif n.kind == "slit":
+            out.append(f"{name} lies across the end of fold {label}, where "
+                       f"{main} goes on flat beside it: it is shown cut "
+                       "there. In leather it would have to be slit there, "
+                       "or stop short of the fold.")
+        elif n.kind == "crossing":
+            other = layout.folds[n.other[0]].label
+            out.append(f"{name} lies over the place where folds {label} "
+                       f"and {other} cross. {main} is folded along one and "
+                       "then the other and passes through itself there: "
+                       f"the preview cannot show how {name} would lie.")
+    return out
+
+
+def _crossing_words(layout, n, name: str, main: str, label: str) -> str:
+    """What is said of a piece that goes round a fold (a ``"cross"``
+    note): how much leather it has too much or too little there, and
+    what that comes to however it is held."""
+    over, short = n.a, n.b
+    lining = _to_its_ends(layout, n.sheet, n.fold, over)
+    if over > 0.0:
+        if not lining:
+            return _warn(
+                f"{name} goes round the inside of fold {label} and has "
+                f"{length(over)} more leather there than the bend has room "
+                "for: free at an end, it stands that much further out when "
+                "shut; held at both ends, it wrinkles inside the fold. The "
+                "picture squeezes it to fit (marked amber).")
+        more = over - short
+        if more > 0.0:
+            return _warn(
+                f"{name} goes round the inside of fold {label} and has "
+                f"{length(more)} too much leather there. Cut it "
+                f"{length(more)} shorter across the fold and it lies smooth "
+                "and comes level when shut; sewn in flat at this length it "
+                "wrinkles inside the fold. The picture squeezes it to fit "
+                "(marked amber).")
+        return _warn(
+            f"{name} goes round the inside of fold {label} and is "
+            f"{length(short)} shorter than {main} across it, "
+            f"{length(-more)} more than the bend takes: shut, it stops short "
+            f"of the ends of {main}. Made {length(-more)} longer across the "
+            "fold it comes level. The picture squeezes it to fit (marked "
+            "amber).")
+    need = -over
+    if not lining:
+        return _warn(
+            f"{name} goes round the outside of fold {label} and needs "
+            f"{length(need)} more leather there than it has: free at an "
+            "end, it ends that much short when shut; held at both ends, it "
+            "pulls tight round the fold. The picture stretches it to fit "
+            "(marked amber).")
+    less = need + short
+    if less <= 0.0:
+        return (f"{name} goes round the outside of fold {label} and is "
+                f"already {length(-short)} longer than {main} across it: "
+                "shut, it comes level (the picture does not slide it).")
+    return _warn(
+        f"{name} goes round the outside of fold {label} and has "
+        f"{length(less)} too little leather there. Cut it {length(less)} "
+        "longer across the fold and it lies smooth and comes level when "
+        "shut; sewn on flat at this length it pulls tight round the fold. "
+        "The picture stretches it to fit (marked amber).")
+
+
+def fold_report(stack, parts: Parts, layout) -> List[str]:
+    """What there is to tell of a stack folded, after what ``report``
+    tells of it lying flat, in the order the window says it: each fold
+    of the main piece in the order they are made -- why it bends where it
+    does and what it takes, a fold that forms off its line, one that
+    closes away from the pieces laid on it, the pieces that reach into
+    its bend, go round it, are cut at the end of it or lie over a
+    crossing -- then its size folded, then what is drawn through what
+    (in red). Lengths are in the unit shown. Nothing, for a stack of one
+    piece, or one with nothing to fold."""
+    notes = getattr(layout, "notes", None)
+    if not parts.sheets or not notes or not layout.n_steps:
+        return []
+    names = parts.names
+    main = names[0]
+    out = []
+    order = sorted((k for k in range(len(layout.folds)) if layout.steps[k]),
+                   key=lambda k: (layout.steps[k], k))
+    for k in order:
+        out += _fold_words(stack, parts, layout, k,
+                           [n for n in notes if n.fold == k])
+    size = next((n for n in notes if n.kind == "size"), None)
+    shut = next((n for n in notes if n.kind == "shut"), None)
+    if size is not None and shut is not None:
+        text = (f"<b>Folded</b> it measures {_num(size.a)} × {_num(size.b)}"
+                f" × {_num(shut.a)} {U.current()}")
+        spines = [n for n in notes if n.kind == "spine"]
+        if len(spines) == 1:
+            text += f"; the spine is {length(spines[0].a)} across"
+        elif spines:
+            text += ("; the rounds of folds "
+                     + listed([layout.folds[n.fold].label for n in spines])
+                     + " are " + listed([length(n.a) for n in spines])
+                     + " across")
+        text += "."
+        leather = next((n for n in notes if n.kind == "leather"), None)
+        if leather is not None:
+            text += (f" A needle through it goes through {length(leather.a)}"
+                     f" of leather at the most and {length(leather.b)} at "
+                     "the least.")
+        out.append(text)
+    for n in notes:
+        if n.kind == "clash":
+            one, two = n.sheet, n.other[0]
+            when = _when(layout, int(round(n.b)))
+            if one == two:
+                out.append(_warn(f"{names[one]} is drawn {length(n.a)} into "
+                                 f"itself {when}.", RED))
+            else:
+                out.append(_warn(f"{names[one]} and {names[two]} are drawn "
+                                 f"{length(n.a)} into each other {when}.",
+                                 RED))
+        elif n.kind == "limit":
+            why = ("folds that cross are folded one after the other, and "
+                   "the preview cannot open the leather for the second."
+                   if _crossed(layout) else
+                   "the preview folds a piece one fold at a time and "
+                   "cannot fold it this way without that; nothing laid on "
+                   "it is the cause.")
+            out.append(_warn(f"{main} is drawn {length(n.a)} into itself at "
+                             f"step {int(round(n.b))}: {why}", RED))
+    out += [_warn(w, RED) for w in layout.warned(length)]
+    return out
+
+
+def marks(layout) -> Dict[tuple, str]:
+    """How the pieces of a stack are marked on the model, from its notes:
+    ``{(piece, fold): WARN}`` on the leather of a piece in the bend of a
+    fold that it reaches into or goes round with too much or too little
+    leather, and ``{(piece, None): BAD}`` on each piece that is drawn
+    through another (or the main piece through itself)."""
+    out: Dict[tuple, str] = {}
+    for n in getattr(layout, "notes", None) or ():
+        if n.kind in ("reach", "cross"):
+            out[(n.sheet, n.fold)] = WARN
+        elif n.kind in ("clash", "limit"):
+            for piece in (n.sheet,) + tuple(n.other[:1]):
+                out[(piece, None)] = BAD
+    return out
+
+
+def drawn_through(parts: Parts, layout) -> str:
+    """The second line of the caption when something is drawn through
+    something else, for the report to say more: how many pieces, or the
+    main piece through itself. "" when nothing is."""
+    found = [n for n in getattr(layout, "notes", None) or ()
+             if n.kind in ("clash", "limit")]
+    if not found:
+        return ""
+    who = set()
+    for n in found:
+        who.update((n.sheet,) + tuple(n.other[:1]))
+    if len(who) == 1:
+        return (f"{parts.names[next(iter(who))]} is drawn through itself: "
+                "see the report")
+    return f"{len(who)} things are drawn through each other: see the report"
+
+
+def closes_tip(parts: Parts, layout, k: int) -> str:
+    """What the way a fold closes means for the pieces laid on the main
+    piece, for its row's tooltip: "Closes over the 9 pieces laid on Outer
+    shell." "" for a fold that closes over none, or does not close."""
+    note = next((n for n in getattr(layout, "notes", None) or ()
+                 if n.kind == "closes" and n.fold == k), None)
+    if note is None:
+        return ""
+    main = parts.names[0]
+    inside, outside = int(note.a), int(note.b)
+    if not inside:
+        if outside == 1:
+            return (f"Closes away from {parts.names[note.other[0]]}, laid on "
+                    f"{main}.")
+        return f"Closes away from the {outside} pieces laid on {main}."
+    over = "the piece" if inside == 1 else f"the {inside} pieces"
+    if not outside:
+        return f"Closes over {over} laid on {main}."
+    return (f"Closes over {inside} of the pieces laid on {main}; "
+            f"{outside} end{'s' if outside == 1 else ''} up on the "
+            "outside.")

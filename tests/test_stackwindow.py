@@ -388,13 +388,17 @@ def test_the_pieces_of_a_stack_are_laid_nearest_the_main_piece_first(mm):
     assert parts.keys == [by[n].shape_id for n in ROWS[::-1]]
     assert all((s.side, s.grain) == (-1, -1) for s in parts.sheets)
     model = sm.build(parts, sm.stack_folds(stack))
-    assert isinstance(model, sh.FlatStack) and model.sheets is not None
+    # the stack folds along the shell's spine fold, the pieces with it
+    assert isinstance(model, fs.Layout) and len(model.sheets) == 9
     assert model.name == "Outer shell" and model.grain == 1
+    assert model.key == by["Outer shell"].shape_id
     assert [round(s.lo, 6) for s in model.sheets] == [
         0.0, 0.8, 1.6, 2.4, 3.2, 0.8, 1.6, 2.4, 3.2]
     assert model.notes[0].kind == "thick"
     assert model.notes[0].a == _near(5.6)
-    assert model.n_steps == 0 and model.layout.n_steps == 1
+    assert model.n_steps == 1 and model.layout is model
+    assert model.radius == _near([4.0]) and model.used == _near([4.8 *
+                                                                 math.pi])
     # the left stack is at the left of the bench: at the right of the
     # shell as it is drawn, which is how the model is built
     left = parts.sheets[1]
@@ -509,20 +513,20 @@ def test_the_bifold_put_together_opens_on_its_stack_lying_flat(qapp, mm):
         assert not t.item(8, 0).font().bold()
         # the stack lies flat on the bench, seen from above: 5.6 mm
         lay = dlg.layout_
-        assert isinstance(lay, sh.FlatStack) and lay.n_steps == 0
+        assert isinstance(lay, fs.Layout) and lay.n_steps == 1
         assert [round(s.lo, 6) for s in lay.sheets] == [
             0.0, 0.8, 1.6, 2.4, 3.2, 0.8, 1.6, 2.4, 3.2]
         assert lay.notes[0].a == _near(5.6)
         assert dlg.view.cam.turned and dlg.view.t == 0.0
         assert dlg.view.caption == ("Put together  ·  10 pieces, 5.6 mm "
-                                    "thick  ·  nothing folds yet")
-        # its fold is not made: the fold's row says flat, and what folds
-        # a piece is greyed
+                                    "thick  ·  1 step to fold")
+        # its fold is made with the pieces on it: the fold's row says
+        # what it takes, and the folding can be run
         assert dlg.table.rowCount() == 1
         assert dlg.table.item(0, 0).text() == "A  Spine fold"
-        assert dlg.table.item(0, 5).text() == "flat"
-        assert not dlg.folds_tab.isEnabled()
-        assert not dlg.btn_play.isEnabled() and not dlg.slider.isEnabled()
+        assert dlg.table.item(0, 5).text() == "15.08 mm"
+        assert dlg.folds_tab.isEnabled()
+        assert dlg.btn_play.isEnabled() and dlg.slider.isEnabled()
         assert dlg.slider_apart.isEnabled()
         # with no row chosen the thickness is the main piece's
         assert dlg.spin_t.value() == 1.6
@@ -602,8 +606,22 @@ def test_the_report_of_the_bifold_in_millimetres_and_in_inches(qapp, mm):
             "pocket 2, Left pocket 1 (front)).",
             "Left pocket backing (and 7 more) stand 2.49 mm past the edge "
             "of Outer shell.",
-            "Outer shell's fold is not made yet: folding pieces that are "
-            "put together is coming, and for now the stack is shown flat.",
+            "Fold A (Spine fold) closes over 8 mm of leather, 4 mm on each "
+            "half: Left pocket 1 (front) comes to rest on Right pocket 1 "
+            "(front). It bends at 4 mm and takes 15.08 mm of Outer shell, "
+            "7.54 mm each side of the fold line.",
+            "⚠ Left pocket backing (and 7 more) reach 5.54 mm into the "
+            "bend of fold A, where leather cannot lie flat. They are shown "
+            "bent with it. Stop them 7.54 mm from the fold line: make them "
+            "5.54 mm narrower.",
+            "⚠ Bill pocket liner goes round the inside of fold A and has "
+            "3.77 mm too much leather there. Cut it 3.77 mm shorter across "
+            "the fold and it lies smooth and comes level when shut; sewn in "
+            "flat at this length it wrinkles inside the fold. The picture "
+            "squeezes it to fit (marked amber).",
+            "Folded it measures 97.66 × 90 × 11.2 mm; the spine is 11.2 mm "
+            "across. A needle through it goes through 11.2 mm of leather at "
+            "the most and 3.2 mm at the least.",
             "Stitch holes through the layers: Outer shell's holes pass "
             "through Bill pocket liner (142), Left pocket backing (44), "
             "Left pocket 3 (37), Left pocket 2 (35), Left pocket 1 (front) "
@@ -619,9 +637,9 @@ def test_the_report_of_the_bifold_in_millimetres_and_in_inches(qapp, mm):
                                   "thickest (Outer shell, Bill pocket liner")
         assert says[1] == ("Left pocket backing (and 7 more) stand 0.098 in "
                            "past the edge of Outer shell.")
-        assert len(says) == 4 and "mm" not in _words(dlg)
+        assert len(says) == 7 and "mm" not in _words(dlg)
         assert dlg.view.caption == ("Put together  ·  10 pieces, 0.22 in "
-                                    "thick  ·  nothing folds yet")
+                                    "thick  ·  1 step to fold")
         t = dlg.pieces.pieces
         assert [t.item(r, 1).text() for r in (0, 9)] == ["0.031 in",
                                                          "0.063 in"]
@@ -828,27 +846,33 @@ def test_pull_apart_lifts_the_layers_and_play_brings_them_together_first(
         assert dlg.slider_apart.maximum() == 100 and v.apart == 0.0
         flat = v.scene.bounds()
         assert flat[0][2] == _near(-(0.8 + 4.0)) and flat[1][2] == 0.8
-        assert not dlg.btn_play.isEnabled()       # nothing to play
+        assert dlg.btn_play.isEnabled()           # it folds
         dlg.slider_apart.setValue(50)             # 5 mm a layer
         assert v.apart == 5.0 and v.scene.apart == 5.0
         lo, hi = v.scene.bounds()
         # the top pocket is five layers up: 25 mm above where it lay
         assert lo[2] == _near(-(0.8 + 4.0 + 25.0)) and hi[2] == 0.8
-        assert dlg.btn_play.isEnabled() and not dlg.slider.isEnabled()
-        # Play brings the layers together, in about 0.4 s, and stops:
-        # this stack has no folding to go on to yet
+        assert dlg.btn_play.isEnabled() and dlg.slider.isEnabled()
+        # Play brings the layers together, in about 0.4 s, and then folds
         dlg._toggle_play()
         assert dlg._playing
         dlg._last_tick -= 0.2
         dlg._tick()
-        assert 2.3 < v.apart < 2.7 and dlg._playing
+        assert 2.3 < v.apart < 2.7 and dlg._playing and v.t == 0.0
         assert dlg.slider_apart.value() == 25
-        for _ in range(4):
+        dlg._last_tick -= 0.2
+        dlg._tick()
+        assert v.apart == 0.0 and v.t == 0.0 and dlg._playing
+        assert dlg.slider_apart.value() == 0 and v.scene.bounds() == flat
+        for _ in range(2):
             dlg._last_tick -= 0.2
             dlg._tick()
-        assert v.apart == 0.0 and not dlg._playing
-        assert dlg.slider_apart.value() == 0 and v.scene.bounds() == flat
-        assert not dlg.btn_play.isEnabled()
+        # (two ticks of 0.2 s and whatever more they took, up to the
+        # 0.25 s a tick may be, of a fold that takes 1.1 s)
+        assert 0.4 / 1.1 <= v.t <= 0.5 / 1.1 and dlg._playing
+        assert not dlg.slider_apart.isEnabled()
+        dlg._go(0.0)
+        assert not dlg._playing and v.scene.bounds() == flat
         # the space bar does the same from the view
         dlg.slider_apart.setValue(100)
         assert v.apart == 10.0
@@ -1120,7 +1144,7 @@ def test_ticking_a_piece_puts_it_on_the_stack_and_unticking_takes_it_off(
             "on Outer shell · bottom centre"
         assert t.cellWidget(2, 0).text() == "Not in the stack yet"
         assert dlg.view.caption == ("Put together  ·  2 pieces, 4 mm thick"
-                                    "  ·  nothing folds yet")
+                                    "  ·  1 step to fold")
         # a piece ticked lands on the chosen piece, corner to corner ...
         _choose(dlg, "Bill pocket liner")
         dlg.pieces.spin_x.setValue(20.0)
@@ -1993,7 +2017,7 @@ def test_the_generated_bifold_opens_on_its_stack_with_ten_rows(qapp, mm):
             0.0, 0.8, 1.6, 2.4, 3.2, 0.8, 1.6, 2.4, 3.2]
         assert dlg.layout_.notes[0].a == _near(5.6)
         assert dlg.view.caption == ("Put together  ·  10 pieces, 5.6 mm "
-                                    "thick  ·  nothing folds yet")
+                                    "thick  ·  1 step to fold")
         assert doc.to_dict() == was
     finally:
         dlg.close()
@@ -2071,14 +2095,22 @@ def test_see_through_paints_what_lies_over_the_chosen_pieces_faint(
         assert dlg.chk_through.text() == "See through"
         assert not dlg.chk_through.isChecked() and dlg.chk_through.isEnabled()
         _choose(dlg, "Left pocket backing")
-        assert dlg.view.wash == {}
+        # (the strips in the spine's bend that the report warns of are
+        # marked amber all the while: see test_stackfoldwindow.py)
+        marked = dict(dlg.view.wash)
+        assert all(f == 0 for _n, f in marked)
+
+        def veiled():
+            return {key: c for key, c in dlg.view.wash.items()
+                    if key[1] is None}
+        assert veiled() == {}
         dlg.chk_through.setChecked(True)
         assert settings.value("fold3dSeeThrough", type=bool) is True
         # the three pockets over the backing, and none on the other side
         over = {dlg.parts.number(by[f"Left pocket {k}"].shape_id)
                 for k in ("3", "2", "1 (front)")}
-        assert set(n for n, _f in dlg.view.wash) == over
-        veil = next(iter(dlg.view.wash.values()))
+        assert set(n for n, _f in veiled()) == over
+        veil = next(iter(veiled().values()))
         assert veil.alpha() == 184                 # 28 % of it shows
         assert _rgb(veil) == _rgb(dlg.view.look.ground)
         # a pixel of the front pocket over it comes nearer the colour
@@ -2088,7 +2120,7 @@ def test_see_through_paints_what_lies_over_the_chosen_pieces_faint(
         x = 50.8 if dlg.parts.turned else -50.8
         on, _at = _seen(dlg, (x, -28.0, 4.0))
         dlg.chk_through.setChecked(False)
-        assert dlg.view.wash == {}
+        assert dlg.view.wash == marked
         off, _at = _seen(dlg, (x, -28.0, 4.0))
 
         def far(c):
@@ -2097,9 +2129,9 @@ def test_see_through_paints_what_lies_over_the_chosen_pieces_faint(
         dlg.chk_through.setChecked(True)
         # the main piece chosen: all nine lie over it
         _choose(dlg, "Outer shell")
-        assert len(dlg.view.wash) == 9
+        assert len(veiled()) == 9
         _choose(dlg)
-        assert dlg.view.wash == {}
+        assert dlg.view.wash == marked
         assert doc.to_dict() == was
     finally:
         dlg.close()

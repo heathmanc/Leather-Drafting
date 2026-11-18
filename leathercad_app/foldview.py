@@ -15,7 +15,9 @@ numbered.
 
 A model may be a stack of pieces (``leathercad.sheets``): then each piece
 is painted in its own leather and can be clicked on, the chosen ones are
-lit, and the layers can be lifted apart to show what lies on what.
+lit, the layers can be lifted apart to show what lies on what, and while
+it lies flat a dashed line each side of every fold shows where the bend
+begins: what is laid on the main piece is to stop there.
 """
 
 from __future__ import annotations
@@ -31,6 +33,8 @@ from PySide6.QtGui import (QBrush, QColor, QFont, QImage, QPainter,
 from PySide6.QtWidgets import QToolTip, QWidget
 
 from leathercad import bsp
+from leathercad import foldsolid as fs
+from leathercad import polycut as pc
 from leathercad.bsp import BACK, DOTS, FRONT, INNER, LINE, POLY
 from leathercad.foldsolid import LANDS, LONE, MEETS, OFF
 from leathercad.sheets import BLANK, sheet_of
@@ -47,6 +51,10 @@ _WASH = 200
 _THIN = 3.0                       # a layer under this many pixels is thin
 _GRAIN = (23.0, 41.0)             # mm the grain shifts from piece to piece
 _HINT = "Drag to turn · right-drag to slide · wheel to zoom"
+# the line where a fold's bend begins, on a stack lying flat: a dark dash
+# on a pale one, seen on every leather (colour, width in pixels)
+_CLEAR = ((QColor(255, 255, 255, 190), 3.4), (QColor(44, 66, 104), 1.5))
+_CLEAR_DASH = (7.0, 5.0)          # pixels of dash and of gap
 
 #: Leathers to show the piece in: the colour of the grain side, of the
 #: flesh side and of the cut edge.
@@ -387,14 +395,28 @@ class Scene:
         self.sheets = getattr(layout, "sheets", None) or ()
         self.apart = max(0.0, float(apart)) if self.sheets else 0.0
         self.grain = 1 if getattr(layout, "grain", 1) >= 0 else -1
+        self._box = None
         if self.sheets:
             cells = layout.solid(self.fractions, check, self.apart)
             self.folds = layout.fold_marks(self.fractions, self.apart)
             self.panels = layout.panel_marks(self.fractions, self.apart)
+            if isinstance(layout, fs.Layout):
+                # the box round a folding stack is the box round these
+                # very cells (``Layout.bounds3``): kept, not made again
+                pts = [v for c in cells for v in c.verts]
+                if pts:
+                    self._box = (tuple(min(p[k] for p in pts)
+                                       for k in range(3)),
+                                 tuple(max(p[k] for p in pts)
+                                       for k in range(3)))
         else:
             cells = layout.solid(self.fractions, check)
             self.folds = layout.fold_marks(self.fractions)
             self.panels = layout.panel_marks(self.fractions)
+        # where each fold's bend begins, while a stack that folds lies
+        # flat
+        self.clear = _keep_clear(layout, self.fractions, self.apart) \
+            if self.sheets and t <= 1e-9 and layout.n_steps else []
         if self.grain < 0:
             # the model is made with the grain on the front of the main
             # piece: here it is on its back
@@ -410,6 +432,8 @@ class Scene:
 
     def bounds(self):
         """The box round the model as it stands: ``(low corner, high)``."""
+        if self._box is not None:
+            return self._box
         if self.sheets:
             return self.layout.bounds3(self.fractions, self.apart)
         return self.layout.bounds3(self.fractions)
@@ -428,6 +452,58 @@ class Scene:
         if 0 < piece <= len(self.sheets):
             return self.sheets[piece - 1].thickness
         return self.layout.thickness
+
+
+def _keep_clear(layout, fractions, apart: float = 0.0) -> list:
+    """The lines where the bends of a stack's folds begin, either side of
+    each fold that is made (``Layout.clear_marks``), lying on whatever is
+    outermost there on each face of the main piece -- its own face, or
+    the top of the pieces laid on it -- so that they show over a piece
+    that reaches past them. ``[(from, to, normal)]``, each a stretch on one face, the
+    normal out of that face."""
+    marks = getattr(layout, "clear_marks", None)
+    if marks is None:
+        return []
+    sheets = getattr(layout, "sheets", None) or ()
+    out = []
+    for fold, lines in marks(fractions).items():
+        if not layout.steps[fold]:
+            continue                           # a fold left flat
+        for p, q, p2, q2, nn, (a, b) in lines:
+            for side, (u, v) in ((1, (p, q)), (-1, (p2, q2))):
+                # where what lies over the line changes, along it
+                cuts = {0.0, 1.0}
+                mine = [s for s in sheets if s.side == side and s.parts]
+                for s in mine:
+                    for part in s.parts:
+                        bit = pc.clip_segment_to_convex(a, b, part)
+                        if bit is None:
+                            continue
+                        for c in bit:
+                            d = (b[0] - a[0], b[1] - a[1])
+                            dd = d[0] * d[0] + d[1] * d[1]
+                            if dd > 1e-12:
+                                cuts.add(min(1.0, max(0.0, (
+                                    (c[0] - a[0]) * d[0]
+                                    + (c[1] - a[1]) * d[1]) / dd)))
+                ks = sorted(cuts)
+                for k0, k1 in zip(ks, ks[1:]):
+                    if k1 - k0 <= 1e-9:
+                        continue
+                    km = 0.5 * (k0 + k1)
+                    mid = (a[0] + (b[0] - a[0]) * km,
+                           a[1] + (b[1] - a[1]) * km)
+                    lift = max([s.hi + apart * s.rank for s in mine
+                                if any(pc.inside_convex(mid, part)
+                                       for part in s.parts)] or [0.0])
+                    ends = []
+                    for k in (k0, k1):
+                        ends.append(tuple(
+                            u[i] + (v[i] - u[i]) * k + side * lift * nn[i]
+                            for i in range(3)))
+                    out.append((ends[0], ends[1],
+                                tuple(side * c for c in nn)))
+    return out
 
 
 def _hidden(pt, discs, eye, m, reach=1e-3) -> bool:
@@ -947,9 +1023,35 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                                QPointF(run[2], run[3]))
                     if seen is not None:
                         seen.append((fi,) + run)
+    # ... and on a stack lying flat, where each fold's bend begins: a
+    # dashed line each side of it, where it is in sight
+    for q, r, nn in getattr(scene, "clear", ()):
+        if nn[0] * ex + nn[1] * ey + nn[2] * ez <= 0.02:
+            continue                           # that face is turned away
+        (x0, y0), (x1, y1) = spot(q), spot(r)
+        # (tried every dozen pixels, and where it passes out of sight
+        # looked for between: nothing is clicked on these lines)
+        pieces = max(4, min(48, 1 + int(math.hypot(x1 - x0, y1 - y0)
+                                        / 12.0)))
+        runs = _in_sight(q, r, pieces, True, discs, eye, m)
+        for colour, width in _CLEAR:
+            p.setPen(_clear_pen(colour, width))
+            for t0, t1 in runs:
+                p.drawLine(QPointF(x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0),
+                           QPointF(x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1))
     if labels:
         _paint_labels(p, scene, look, discs, eye, m, selected, looks)
     return drawn
+
+
+def _clear_pen(colour: QColor, width: float) -> QPen:
+    """A pen for the line where a bend begins: dashed, every pen of it
+    with dashes of the same length in pixels."""
+    pen = QPen(colour, width)
+    pen.setCosmetic(True)
+    pen.setCapStyle(Qt.FlatCap)
+    pen.setDashPattern([_CLEAR_DASH[0] / width, _CLEAR_DASH[1] / width])
+    return pen
 
 
 def _paint_holes(p: QPainter, spots, state: int, size: float, ink: QColor,
@@ -1269,6 +1371,7 @@ class FoldView(QWidget):
         self.labels = True
         self.follow = True            # keep the model filling the view
         self.caption = ""
+        self.alarm = ""               # a second line under it, in red
         self._drawn: List[tuple] = []
         self._seen: List[tuple] = []  # ... and the stretches of them in sight
         self._leathers: dict = {}     # the leather given for a piece
@@ -1480,6 +1583,11 @@ class FoldView(QWidget):
             p.setPen(look.faint)               # how to move it, if it fits
             p.drawText(QRectF(12, 8, w - 24, 22),
                        Qt.AlignRight | Qt.AlignVCenter, _HINT)
+        if self.alarm:
+            # what the report has in red, in a word
+            p.setPen(look.bad)
+            p.drawText(QRectF(12, 28, w - 24, 22),
+                       Qt.AlignLeft | Qt.AlignVCenter, self.alarm)
         x, y = 12.0, h - 16.0
         # the two sides of the leather: where the pieces of a stack are in
         # leathers of their own, of the piece that is chosen, or of the
@@ -1514,6 +1622,15 @@ class FoldView(QWidget):
             p.setPen(look.faint)
             p.drawText(QPointF(x + 27, y), text)
             x += 27 + fm.horizontalAdvance(text) + 16
+        if self.scene is not None and getattr(self.scene, "clear", None):
+            # the dashed line where a bend begins
+            text = "bend begins"
+            for colour, width in _CLEAR:
+                p.setPen(_clear_pen(colour, width))
+                p.drawLine(QPointF(x, y - 4), QPointF(x + 24, y - 4))
+            p.setPen(look.faint)
+            p.drawText(QPointF(x + 29, y), text)
+            x += 29 + fm.horizontalAdvance(text) + 16
         check = self._marks()
         blanks = getattr(check, "blanks", None)
         if check is None or not (check.state or blanks):

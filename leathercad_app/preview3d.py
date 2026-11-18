@@ -9,8 +9,10 @@ drawn edge to edge with no fold lines fold up along the edges they share
 
 Pieces are put together on the dialog's Pieces tab: ticked there, a piece
 is laid on the stack, each piece with its own thickness and leather, and
-the stack is shown as it lies on the bench (``stackpanel`` is that tab,
-``stackmodel`` makes the model of a stack and words what it has to tell).
+the stack is shown as it lies on the bench; it folds along the fold lines
+of its main piece, as that piece alone would, with the others folding
+with it (``stackpanel`` is that tab, ``stackmodel`` makes the model of a
+stack and words what it has to tell).
 
 The model itself comes from ``leathercad.foldsolid`` and
 ``leathercad.sheets`` and is painted by ``foldview``; this module reads
@@ -389,7 +391,7 @@ def _pair(f) -> str:
 
 def _laid_report(stack, check) -> str:
     """What the check of the stitch holes found in a stack lying flat
-    (``sheets.FlatStack.lineup``), for the report.
+    (the ``lineup`` of a stack's model), for the report.
 
     First, as plain counts, the holes of one piece that pass through
     another where it has none: the laser cuts each piece only its own
@@ -439,6 +441,59 @@ def _laid_report(stack, check) -> str:
     return "<b>Stitch holes through the layers:</b> " + " ".join(out)
 
 
+def _faced_report(check) -> str:
+    """The stitch holes of pieces of a stack that the folding brings face
+    to face (``sheets.Faced``), for the report: worded as two panels of a
+    folded piece are, with the names of the pieces and the panels they
+    lie on. "" when the folding brings none together."""
+    found = [f for f in check.findings
+             if getattr(f, "laid", True) is False]
+    if not found:
+        return ""
+
+    def who(f):
+        if f.a == f.b:
+            return f"{f.names[0]}, panels {f.panels[0]} and {f.panels[1]}"
+        return (f"{f.names[0]} (panel {f.panels[0]}) and {f.names[1]} "
+                f"(panel {f.panels[1]})")
+
+    head = "<b>Stitch holes where the folding brings pieces together:</b> "
+    return head + "<br>".join(
+        f"{who(f)}: " + _tally(f.off, f.worst, f.met, f.gap, f.lone)
+        for f in found)
+
+
+def _readings_report(parts, model, check) -> List[str]:
+    """For each piece of a stack that goes round a fold and has stitch
+    holes, the two ways they are read (``check.readings``): punched to
+    meet as the piece lies flat, and punched to meet when shut, its
+    length round the bend taken up -- and which of them the marks on the
+    model show."""
+    out = []
+    readings = getattr(check, "readings", None) or {}
+    for k, (flat, shut, kept) in sorted(readings.items()):
+        s = model.sheet(k)
+        if s is None:
+            continue
+        name, n = parts.names[k], len(s.holes)
+        on = parts.names[s.rests[0]] if s.rests else parts.names[0]
+        fold = next((model.folds[note.fold].label for note in model.notes
+                     if note.sheet == k and note.kind in ("cross", "level")),
+                    "")
+        if kept:
+            out.append(f"{name}'s holes are read as punched to meet when "
+                       f"shut, its length round fold {fold} taken up: "
+                       f"{shut} of {n} meet {on}'s shut, and "
+                       f"{flat or 'none'} lying flat. The marks on the "
+                       "model show that reading.")
+        else:
+            out.append(f"{name}'s holes are read as punched flat: {flat} "
+                       f"of {n} meet {on}'s flat, and {shut or 'none'} "
+                       "when shut. The marks on the model show that "
+                       "reading.")
+    return out
+
+
 class _RadiusSpin(MathSpinBox):
     """A bend radius, or Auto (the value below 0)."""
 
@@ -486,6 +541,7 @@ class FoldPreviewDialog(QDialog):
         self._listening = False       # to the drawing, and for the unit
         self._main: Optional[str] = None    # the piece shown, by its id
         self._built = None            # what the model shown was built from
+        self._warned = {}             # how its pieces are marked: sm.marks
         self._fold_rows = None        # ... and the rows of the fold table
 
         self.view = FoldView(self, dark)
@@ -1226,15 +1282,40 @@ class FoldPreviewDialog(QDialog):
         return out
 
     def _see_through(self):
-        """With "See through" ticked, the pieces lying over the chosen ones
-        are painted faint: the colour behind the model laid over them, so
-        that little of their leather shows."""
-        wash = {}
+        """Mark the pieces of the model: amber on the leather of a piece in
+        a bend it should not be in, red on the pieces drawn through each
+        other (what the report warns of: ``stackmodel.marks``) -- and with
+        "See through" ticked, the pieces lying over the chosen ones
+        painted faint: the colour behind the model laid over them, so
+        that little of their leather shows. A mark on a piece seen
+        through is laid on as faintly, so it is still seen for what it
+        is."""
+        look = self.view.look
+        wash = {key: QColor(look.warn if what == sm.WARN else look.bad)
+                for key, what in self._warned.items()}
         if self.chk_through.isChecked():
-            veil = QColor(self.view.look.ground)
+            veil = QColor(look.ground)
             veil.setAlpha(int(round(255 * (1.0 - self._THROUGH))))
-            wash = {(n, None): veil for n in self._over_chosen()}
+            for n in self._over_chosen():
+                for key in [key for key in wash if key[0] == n]:
+                    wash[key] = self._faint(wash[key], veil)
+                if (n, None) not in wash:
+                    wash[(n, None)] = veil
         self.view.set_wash(wash)
+
+    @staticmethod
+    def _faint(mark: QColor, veil: QColor) -> QColor:
+        """A mark on a piece that is seen through: its colour with the
+        colour behind the model laid over it as the veil is, laid on as
+        strongly as the veil."""
+        a = veil.alphaF()
+        out = QColor(
+            int(round(mark.red() + (veil.red() - mark.red()) * a * 0.6)),
+            int(round(mark.green() + (veil.green() - mark.green()) * a
+                      * 0.6)),
+            int(round(mark.blue() + (veil.blue() - mark.blue()) * a * 0.6)))
+        out.setAlpha(veil.alpha())
+        return out
 
     def _see_through_set(self, on: bool):
         if self._settings is not None:
@@ -1272,6 +1353,7 @@ class FoldPreviewDialog(QDialog):
         piece folded, or the stack laid flat."""
         item = self.current
         self.parts = None
+        self._warned = {}
         if item is None:
             self.layout_ = None
             self._built = None
@@ -1291,7 +1373,7 @@ class FoldPreviewDialog(QDialog):
             layout = sm.build(self.parts, self.folds, kw["radius"],
                               self._base)
             turned = self.parts.turned
-            leather = item.stack.main.leather
+            leather = self.parts.leather
         elif item.kind == "net":
             regions, lines = self._net
             sharp = set()
@@ -1311,8 +1393,9 @@ class FoldPreviewDialog(QDialog):
         self.view.set_turned(turned)
         self.view.set_leathers({0: leather} if leather else None)
         self.view.set_layout(layout, t, check, refit=refit)
-        # (the folds of a stack with pieces on it are not made yet)
-        self.folds_tab.setEnabled(not getattr(layout, "sheets", None))
+        # what the report warns of, marked on the pieces (see ``_washes``)
+        self._warned = sm.marks(layout) if self.parts is not None else {}
+        self.folds_tab.setEnabled(True)
         self._fill_base()
         self._fill_used()
         self._fill_readout(check)
@@ -1345,18 +1428,41 @@ class FoldPreviewDialog(QDialog):
                 rad.setSpecialValueText(
                     f"Auto ({_len(lay.radius[row])})" if lay.steps[row]
                     else "Auto")
+            way = self.table.cellWidget(row, 2)
+            if way is not None and getattr(lay, "sheets", None) \
+                    and self.parts is not None:
+                way.setToolTip(self._way_tip(row))
             self._swatch(row)
         self._busy = False
+
+    def _way_tip(self, row: int) -> str:
+        """What the way a fold of a stack folds means, in the words of the
+        leather and of the pieces laid on the main piece: "Back: the flesh
+        sides come together. Closes over the 9 pieces laid on Outer
+        shell." """
+        f = self.folds[row]
+        front = f.direction >= 0
+        # the front of the model is the main piece's grain side, unless
+        # it is drawn from its flesh side
+        side = "grain" if front == (self.parts.grain > 0) else "flesh"
+        tip = f"{'Front' if front else 'Back'}: the {side} sides come " \
+            "together."
+        more = sm.closes_tip(self.parts, self.layout_, row)
+        return f"{tip} {more}" if more else tip
 
     def _fill_readout(self, check):
         lay = self.layout_
         if getattr(lay, "sheets", None):
-            # a stack lying flat: what there is to tell of it, then its
-            # stitch holes through the layers
-            out = sm.report(self.current.stack, self.parts, lay)
-            holes = _laid_report(lay, check)
-            if holes:
-                out.append(holes)
+            # a stack: what there is to tell of it lying flat, then of it
+            # folded, then its stitch holes -- through the layers, where
+            # the folding brings pieces together, and read both ways for a
+            # piece that goes round a fold
+            stack = self.current.stack
+            out = sm.report(stack, self.parts, lay)
+            out += sm.fold_report(stack, self.parts, lay)
+            out += [text for text in (_laid_report(lay, check),
+                                      _faced_report(check)) if text]
+            out += _readings_report(self.parts, lay, check)
             self.readout.setText("<br><br>".join(out))
             return
         out = []
@@ -1500,6 +1606,8 @@ class FoldPreviewDialog(QDialog):
             QStyle.StandardPixmap.SP_MediaPause if self._playing
             else QStyle.StandardPixmap.SP_MediaPlay))
         self.view.caption = self._caption()
+        self.view.alarm = sm.drawn_through(self.parts, lay) \
+            if self.parts is not None and lay is not None else ""
         self.view.update()
 
     def _caption(self) -> str:
@@ -1507,13 +1615,14 @@ class FoldPreviewDialog(QDialog):
         if lay is None:
             return ("Nothing to fold yet. Draw a line across a piece, "
                     "right-click it and choose Mark as fold line.")
-        if getattr(lay, "sheets", None):
-            thick = next((n.a for n in lay.notes if n.kind == "thick"), 0.0)
-            waits = any(n.kind == "flat" for n in lay.notes)
-            return (f"Put together  ·  {len(lay.sheets) + 1} pieces, "
-                    f"{_len(thick)} thick  ·  nothing folds"
-                    + (" yet" if waits else ""))
         n, t = lay.n_steps, self.view.t
+        stack = bool(getattr(lay, "sheets", None))
+        if stack and (t <= 1e-9 or not n):
+            thick = next((n.a for n in lay.notes if n.kind == "thick"), 0.0)
+            return (f"Put together  ·  {len(lay.sheets) + 1} pieces, "
+                    f"{_len(thick)} thick  ·  "
+                    + (f"{n} step{'s' if n != 1 else ''} to fold" if n
+                       else "nothing folds"))
         if not n and not self.folds:
             return "Nothing folds: no fold line crosses this piece"
         if not n:
@@ -1521,6 +1630,14 @@ class FoldPreviewDialog(QDialog):
         if t <= 1e-9:
             return f"Flat  ·  {n} step{'s' if n != 1 else ''} to fold"
         if t >= n - 1e-9:
+            if stack:
+                # ... and how big it is folded
+                size = next((x for x in lay.notes if x.kind == "size"), None)
+                shut = next((x for x in lay.notes if x.kind == "shut"), None)
+                if size is not None and shut is not None:
+                    return (f"Folded  ·  {sm._num(size.a)} × "
+                            f"{sm._num(size.b)} × {sm._num(shut.a)} "
+                            f"{U.current()}")
             return "Folded"
         step = int(math.floor(t + 1e-9)) + 1
         doing = [f for k, f in enumerate(self.folds) if lay.steps[k] == step]

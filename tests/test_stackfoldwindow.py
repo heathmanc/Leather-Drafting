@@ -367,50 +367,97 @@ def _square():
     return doc
 
 
+def _channel():
+    """A channel 240 x 60 mm, 2 mm: both walls stand up, the left one
+    first, each with a tall pile on it (60 mm and 40 mm). Standing up,
+    the right wall's pile sweeps through the left wall's on the way and
+    is clear of it when the wall stands."""
+    return _drawn(_box(0, 0, 240, 60),
+                  [((80, 0), (80, 60), 90.0, 1, 1, -1.0),
+                   ((160, 0), (160, 60), 90.0, 1, 2, -1.0)],
+                  [("Left pile", _box(25, 10, 45, 50), 60.0, 1),
+                   ("Right pile", _box(165, 10, 185, 50), 40.0, 1)])
+
+
 def test_a_stack_built_to_clash_is_said_in_red_and_marked_red(qapp, mm):
-    dlg = _dialog(_square())
+    dlg = _dialog(_channel())
     try:
-        lay = dlg.layout_
-        assert lay.n_steps == 2
         found = [(n.kind, n.sheet, n.other, round(n.a, 2), n.b)
-                 for n in lay.notes if n.kind in ("clash", "limit")]
-        assert found == [("limit", 0, (0,), 1.51, 2.0),
-                         ("clash", 0, (1,), 1.47, 2.0),
-                         ("clash", 1, (1,), 0.88, 2.0)]
+                 for n in dlg.layout_.notes if n.kind in ("clash", "limit")]
+        assert found == [("clash", 1, (2,), 3.67, 1.5)]
         # the caption's second line, in red, from the start
-        assert dlg.view.caption.startswith("Put together  ·  2 pieces")
+        assert dlg.view.caption.startswith("Put together  ·  3 pieces")
         assert dlg.view.alarm == ("2 things are drawn through each other: "
                                   "see the report")
-        says = _lines(dlg)
-        assert ("⚠ Square and Patch are drawn 1.47 mm into each other when "
-                "fold B has closed (step 2).") in says
-        assert ("⚠ Patch is drawn 0.88 mm into itself when fold B has "
-                "closed (step 2).") in says
-        # the piece itself, worded as the piece's own
-        assert ("⚠ Square is drawn 1.51 mm into itself at step 2: folds "
-                "that cross are folded one after the other, and the preview "
-                "cannot open the leather for the second.") in says
-        assert ("Patch lies over the place where folds A and B cross. "
-                "Square is folded along one and then the other and passes "
-                "through itself there: the preview cannot show how Patch "
-                "would lie.") in says
-        text = dlg.readout.text()
-        assert text.count("<span style='color:#c0392b'>⚠") >= 3
+        # both names, the depth, and when: half way through the step
+        assert ("⚠ Left pile and Right pile are drawn 3.67 mm into each "
+                "other half way through step 2.") in _lines(dlg)
+        assert dlg.readout.text().count("<span style='color:#c0392b'>⚠") \
+            == 1
         # both pieces marked red, whole
         bad = _rgb(dlg.view.look.bad)
-        assert {k: _rgb(c) for k, c in dlg.view.wash.items()
-                if k[1] is None} == {(0, None): bad, (1, None): bad}
+        assert {k: _rgb(c) for k, c in dlg.view.wash.items()} == {
+            (1, None): bad, (2, None): bad}
         dlg._go(2.0)
         assert dlg.view.alarm.startswith("2 things")
     finally:
         dlg.close()
     # in inches no millimetre is left in what is said in red
     mm.set_current("in")
+    dlg = _dialog(_channel())
+    try:
+        assert ("⚠ Left pile and Right pile are drawn 0.144 in into each "
+                "other half way through step 2.") in _lines(dlg)
+        assert "mm" not in _words(dlg)
+    finally:
+        dlg.close()
+
+
+def test_a_square_folded_in_four_is_said_drawn_into_itself_and_its_patch_cut(
+        qapp, mm):
     dlg = _dialog(_square())
     try:
-        assert ("⚠ Square and Patch are drawn 0.058 in into each other when "
-                "fold B has closed (step 2).") in _lines(dlg)
-        assert "mm" not in _words(dlg)
+        lay = dlg.layout_
+        assert lay.n_steps == 2
+        # the square in itself, a quarter of the way through its first
+        # fold; nothing of two pieces in each other
+        found = [(n.kind, n.sheet, n.other, round(n.a, 2), n.b)
+                 for n in lay.notes if n.kind in ("clash", "limit")]
+        assert found == [("limit", 0, (0,), 2.85, 0.25)]
+        says = _lines(dlg)
+        assert ("⚠ Square is drawn 2.85 mm into itself a quarter of the way "
+                "through step 1: folds that cross are folded one after the "
+                "other, and the preview cannot open the leather for the "
+                "second.") in says
+        # the patch is parted where each fold bends it on one side only,
+        # and drawn into leather there: said with how long and how deep
+        assert ("⚠ Patch is parted along 14.14 mm at fold A, with Square "
+                "across it, and is drawn 1.51 mm into leather there: the "
+                "fold bends it on one side and leaves it flat on the other. "
+                "In leather it would have to be slit there, or stop short "
+                "of the fold.") in says
+        assert ("⚠ Patch is parted along 36.86 mm at fold B, with Square "
+                "across it, and is drawn 0.81 mm into leather there: the "
+                "fold bends it on one side and leaves it flat on the other. "
+                "In leather it would have to be slit there, or stop short "
+                "of the fold.") in says
+        assert ("Patch is parted along 11 mm at fold B, with Square across "
+                "it: the fold bends it on one side and leaves it flat on "
+                "the other. In leather it would have to be slit there, or "
+                "stop short of the fold.") in says
+        assert ("Patch lies over the place where folds A and B cross. "
+                "Square is folded along one and then the other and passes "
+                "through itself there: the preview cannot show how Patch "
+                "would lie.") in says
+        # red: both pieces whole, and the square's own leather left in the
+        # bend of fold B, which cannot close as drawn
+        assert lay.stuck == [False, True]
+        bad = _rgb(dlg.view.look.bad)
+        assert {k: _rgb(c) for k, c in dlg.view.wash.items()
+                if _rgb(c) == bad} == {(0, None): bad, (1, None): bad,
+                                       (0, 1): bad}
+        assert dlg.view.alarm == ("2 pieces are drawn into leather: see the "
+                                  "report")
     finally:
         dlg.close()
 
@@ -505,10 +552,15 @@ def test_a_strap_across_the_end_of_a_flap_s_hinge_is_said_and_shown_cut(
         lay = dlg.layout_
         assert [(n.sheet, n.fold) for n in lay.notes if n.kind == "slit"] \
             == [(1, 0)]
-        assert ("Strap lies across the end of fold A, where Tee goes on flat "
-                "beside it: it is shown cut there. In leather it would have "
-                "to be slit there, or stop short of the fold.") \
-            in _lines(dlg)
+        slit, = [n for n in lay.notes if n.kind == "slit"]
+        assert (round(slit.a, 2), round(slit.b, 4), slit.other) == (
+            16.0, 0.3338, (0,))
+        assert ("⚠ Strap is parted along 16 mm at fold A, with Tee across "
+                "it, and is drawn 0.33 mm into leather there: the fold "
+                "bends it on one side and leaves it flat on the other. In "
+                "leather it would have to be slit there, or stop short of "
+                "the fold.") in _lines(dlg)
+        assert dlg.view.alarm == "Strap is drawn into leather: see the report"
         # shown cut: part of it bends with the flap, part stays flat on
         # the body beside it
         mine = [c for c in lay.sheet_cells if c.sheet == 1]
@@ -661,7 +713,8 @@ def test_a_stack_with_nothing_to_fold_lies_flat_and_says_no_fold(qapp, mm):
         assert "Fold" not in says and "Folded" not in says
         assert "coming" not in says and "not made yet" not in says
         assert dlg.view.scene.clear == [] and dlg.view.alarm == ""
-        assert dlg.folds_tab.isEnabled() and dlg.table.rowCount() == 0
+        # no fold lines: the Folds tab is grey, as it was
+        assert not dlg.folds_tab.isEnabled() and dlg.table.rowCount() == 0
     finally:
         dlg.close()
 
@@ -827,3 +880,829 @@ def test_opening_writes_nothing_and_a_typed_thickness_rebuilds_once(
         assert len(built) == 1
     finally:
         _shut(win)
+
+
+# -- a fold that has moved, and what is drawn through what --------------------
+
+def _strip(*pockets, width=80.0, thick=0.8):
+    """A 270 x 90 strip of 1.4 mm leather folded in three to the front
+    along lines at x = -45 and +45, the right one first, and 50 mm deep
+    pockets of ``thick`` mm laid on its panels: "L" with its inner edge
+    5 mm short of the left fold line, "M" in the middle, "R" on the
+    right."""
+    shell = _piece("Shell", 270, 90)
+    left = _line((-45, -45), (-45, 45), "Left fold")
+    right = _line((45, -45), (45, 45), "Right fold")
+    left.fold_order, right.fold_order = 2, 1
+    at = {"L": -130 + 0.5 * width, "M": 0.0, "R": 90.0}
+    laid = [_piece(f"Pocket {k}", width, 50, at=(at[k], -15))
+            for k in pockets]
+    doc = _drawing(shell, left, right, *laid)
+    key = asm.put_on(doc, shell, thickness=1.4)
+    for p in laid:
+        asm.put_on(doc, p, key, thickness=thick)
+    return doc
+
+
+def test_a_piece_in_a_moved_fold_is_told_to_stop_where_the_dashed_line_is(
+        qapp, mm):
+    dlg = _dialog(_strip("L"))
+    try:
+        lay = dlg.layout_
+        # fold A forms 2.83 mm off its line, towards the pocket's panel:
+        # its bend, 5.65 mm of leather, runs from 5.65 mm left of the line
+        # as drawn to the line itself
+        assert lay.shift[0] == _near(0.9 * math.pi, abs=1e-3)
+        assert lay.used[0] == _near(1.8 * math.pi, abs=1e-3)
+        assert ("⚠ Pocket L reaches 0.65 mm into the bend of fold A, where "
+                "leather cannot lie flat. It is shown bent with it. Stop it "
+                "5.65 mm from the fold line: make it 0.65 mm narrower.") \
+            in _lines(dlg)
+        # the dashed line where the bend begins is there too: 5.65 mm left
+        # of the fold line as it is drawn, and the pocket's edge (at -50)
+        # stopped there lies flat
+        xs = sorted({round(q[0], 3) for q, r, _n in dlg.view.scene.clear})
+        assert xs[:2] == _near([-50.655, -45.0], abs=1e-3)
+    finally:
+        dlg.close()
+    # made 0.65 mm narrower, as it says, it is clear of the bend
+    dlg = _dialog(_strip("L", width=80.0 - 0.66))
+    try:
+        assert not [n for n in dlg.layout_.notes if n.kind == "reach"]
+        assert "⚠" not in _words(dlg)
+    finally:
+        dlg.close()
+
+
+def _noted(monkeypatch, *notes):
+    """Every model the window makes is given these notes as well, as the
+    fold engine would give them."""
+    from leathercad_app import stackmodel
+    real = stackmodel.build
+
+    def build(*a, **k):
+        lay = real(*a, **k)
+        lay.notes = list(lay.notes) + list(notes)
+        return lay
+    monkeypatch.setattr(stackmodel, "build", build)
+
+
+def test_leather_drawn_under_0_05_mm_through_itself_is_not_said_in_red(
+        qapp, mm, monkeypatch):
+    from leathercad.sheets import Note
+    # the strip with 0.2 mm pockets: the fold engine itself now says
+    # nothing of the 0.004 mm its moved fold keeps
+    dlg = _dialog(_strip("L", "M", "R", thick=0.2))
+    try:
+        assert not [n for n in dlg.layout_.notes
+                    if n.kind in ("clash", "limit", "landing")]
+        assert "#c0392b" not in dlg.readout.text()
+        assert dlg.view.alarm == "" and dlg.view.wash == {}
+    finally:
+        dlg.close()
+    # ... and the window says nothing of a finding under 0.05 mm, of any
+    # kind, where the engine gives one
+    _noted(monkeypatch, Note("limit", 0, -1, 0.04, 2.0, (0,)),
+           Note("clash", 1, -1, 0.049, 1.0, (2,)),
+           Note("landing", 0, 0, 0.03, 2.0, (("panel", 0), ("bend", 0))),
+           Note("slit", 1, 0, 30.0, 0.04, (0,), at=(0.0, 0.0)))
+    dlg = _dialog(_strip("L", "M", "R", thick=0.2))
+    try:
+        assert "#c0392b" not in dlg.readout.text()
+        assert "into itself" not in _words(dlg)
+        assert "into each other" not in _words(dlg)
+        assert dlg.view.alarm == ""
+        assert dlg.view.wash == {}
+        dlg._go(2.0)
+        assert dlg.view.alarm == ""
+    finally:
+        dlg.close()
+
+
+def test_the_main_piece_drawn_through_itself_is_said_with_no_cause_given(
+        qapp, mm, monkeypatch):
+    # (the strip with three pockets now folds clean, and no stack was
+    # found where the engine says this of folds that do not cross: the
+    # note is given to the strip as the engine would give it)
+    from leathercad.sheets import Note
+    _noted(monkeypatch, Note("limit", 0, -1, 0.94, 2.0, (0,)))
+    dlg = _dialog(_strip("L", "M", "R"))
+    try:
+        says = _lines(dlg)
+        assert ("⚠ Shell is drawn 0.94 mm into itself when fold A has "
+                "closed (step 2).") in says
+        assert not any("cause" in line for line in says)
+        assert dlg.readout.text().count(
+            "<span style='color:#c0392b'>⚠ Shell is drawn") == 1
+        assert dlg.view.alarm == ("Shell is drawn through itself: see the "
+                                  "report")
+        assert {k: _rgb(c) for k, c in dlg.view.wash.items()
+                if k[1] is None} == {(0, None): _rgb(dlg.view.look.bad)}
+    finally:
+        dlg.close()
+
+
+# -- a lining round a fold, inside and outside --------------------------------
+
+def _lining_on(width, way, shell_w=200.0):
+    """A ``shell_w`` x 90 shell of 1.6 mm folded in half along its middle
+    (to the back: a piece laid on it goes round the outside of the fold;
+    to the front: round the inside), a 0.8 mm lining ``width`` long
+    across the fold laid on it, centred."""
+    shell = _piece("Shell", shell_w, 90)
+    lining = _piece("Lining", width, 86, at=(0, 300))
+    doc = _drawing(shell, lining, _line((0, -45), (0, 45), "Spine", way))
+    key = asm.put_on(doc, shell, thickness=1.6)
+    asm.put_on(doc, lining, key, thickness=0.8)
+    asm.line_up(doc, lining, "centre")
+    asm.line_up(doc, lining, "middle")
+    return doc
+
+
+# round the bend a lining 1.2 mm from the shell's middle has pi x 1.2 mm
+# more room outside and less inside
+NEED = 1.2 * math.pi
+
+LININGS = [
+    # outside: too short, level within 0.25 mm either way, too long
+    (200.0, "back",
+     "⚠ Lining goes round the outside of fold A and has 3.77 mm too little "
+     "leather there. Cut it 3.77 mm longer across the fold and it lies "
+     "smooth and comes level when shut; sewn on flat at this length it "
+     "pulls tight round the fold. The picture stretches it to fit (marked "
+     "amber)."),
+    (200.0 + NEED - 0.3, "back",
+     "⚠ Lining goes round the outside of fold A and has 0.3 mm too little "
+     "leather there. Cut it 0.3 mm longer across the fold and it lies "
+     "smooth and comes level when shut; sewn on flat at this length it "
+     "pulls tight round the fold. The picture stretches it to fit (marked "
+     "amber)."),
+    (200.0 + NEED - 0.2, "back",
+     "Lining goes round the outside of fold A and is already 3.57 mm longer "
+     "than Shell across it: shut, it comes level (the picture does not "
+     "slide it)."),
+    (200.0 + NEED, "back",
+     "Lining goes round the outside of fold A and is already 3.77 mm longer "
+     "than Shell across it: shut, it comes level (the picture does not "
+     "slide it)."),
+    (200.0 + NEED + 0.2, "back",
+     "Lining goes round the outside of fold A and is already 3.97 mm longer "
+     "than Shell across it: shut, it comes level (the picture does not "
+     "slide it)."),
+    (200.0 + NEED + 3.0, "back",
+     "⚠ Lining goes round the outside of fold A and is 6.77 mm longer than "
+     "Shell across it, 3 mm more than the bend takes: shut, it stands 3 mm "
+     "past the ends of Shell. Cut it 3 mm shorter across the fold and it "
+     "comes level when shut. The picture stretches it round the fold and "
+     "does not slide it (marked amber)."),
+    # inside: too long, level within 0.25 mm either way, too short
+    (200.0, "front",
+     "⚠ Lining goes round the inside of fold A and has 3.77 mm too much "
+     "leather there. Cut it 3.77 mm shorter across the fold and it lies "
+     "smooth and comes level when shut; sewn in flat at this length it "
+     "wrinkles inside the fold. The picture squeezes it to fit (marked "
+     "amber)."),
+    (200.0 - NEED + 0.2, "front",
+     "Lining goes round the inside of fold A and is already 3.57 mm shorter "
+     "than Shell across it: shut, it comes level (the picture does not "
+     "slide it)."),
+    (200.0 - NEED, "front",
+     "Lining goes round the inside of fold A and is already 3.77 mm shorter "
+     "than Shell across it: shut, it comes level (the picture does not "
+     "slide it)."),
+    (200.0 - NEED - 0.2, "front",
+     "Lining goes round the inside of fold A and is already 3.97 mm shorter "
+     "than Shell across it: shut, it comes level (the picture does not "
+     "slide it)."),
+    (200.0 - NEED - 3.0, "front",
+     "⚠ Lining goes round the inside of fold A and is 6.77 mm shorter than "
+     "Shell across it, 3 mm more than the bend takes: shut, it stops short "
+     "of the ends of Shell. Made 3 mm longer across the fold it comes level. "
+     "The picture squeezes it to fit (marked amber)."),
+]
+
+
+@pytest.mark.parametrize("width, way, said", LININGS, ids=[
+    "outside-as-long", "outside-0.3-short", "outside-0.2-short",
+    "outside-level", "outside-0.2-long", "outside-3-long", "inside-as-long",
+    "inside-0.2-long", "inside-level", "inside-0.2-short",
+    "inside-3-short"])
+def test_a_lining_round_a_fold_is_too_short_level_or_too_long_within_0_25(
+        qapp, mm, width, way, said):
+    dlg = _dialog(_lining_on(width, way))
+    try:
+        says = [line for line in _lines(dlg) if "Lining goes" in line]
+        assert says == [said]
+        # amber on its strip in the bend just where the sentence warns,
+        # and the sentence is level just where the fold engine says so
+        warned = said.startswith("⚠")
+        assert [n.kind for n in dlg.layout_.notes
+                if n.kind in ("cross", "level")] == \
+            ["cross" if warned else "level"]
+        assert set(dlg.view.wash) == ({(1, 0)} if warned else set())
+        assert ("<span style='color:#b35c00'>⚠ Lining" in
+                dlg.readout.text()) == warned
+    finally:
+        dlg.close()
+
+
+def test_a_lining_cut_3_mm_too_long_stands_3_mm_past_the_ends_shut(
+        qapp, mm):
+    sizes = []
+    for width in (200.0 + NEED, 200.0 + NEED + 3.0):
+        dlg = _dialog(_lining_on(width, "back"))
+        try:
+            dlg._go(1.0)
+            lo, hi = dlg.view.scene.bounds()
+            sizes.append(hi[0] - lo[0])
+        finally:
+            dlg.close()
+    # held at its middle, 1.5 mm at each end
+    assert sizes[1] - sizes[0] == _near(1.5, abs=0.01)
+
+
+def test_a_wrap_10_mm_longer_than_its_panel_round_the_outside_is_too_long(
+        qapp, mm):
+    panel = _piece("Panel", 100, 60)
+    wrap = _piece("Wrap", 110, 60)
+    doc = _drawing(panel, wrap, _line((0, -30), (0, 30), "Middle", "back"))
+    key = asm.put_on(doc, panel, thickness=2.0)
+    asm.put_on(doc, wrap, key, thickness=1.0)
+    dlg = _dialog(doc)
+    try:
+        cross, = [n for n in dlg.layout_.notes if n.kind == "cross"]
+        assert (cross.a, cross.b) == _near((-1.5 * math.pi, -10.0))
+        assert ("⚠ Wrap goes round the outside of fold A and is 10 mm longer "
+                "than Panel across it, 5.29 mm more than the bend takes: "
+                "shut, it stands 5.29 mm past the ends of Panel. Cut it "
+                "5.29 mm shorter across the fold and it comes level when "
+                "shut. The picture stretches it round the fold and does not "
+                "slide it (marked amber).") in _lines(dlg)
+        assert set(dlg.view.wash) == {(1, 0)}
+    finally:
+        dlg.close()
+
+
+# -- Esc while a number is half typed -----------------------------------------
+
+def _in_front(qapp, doc, tmp_path, monkeypatch):
+    """The main window shown, and the preview opened from it in front."""
+    from leathercad_app.mainwindow import MainWindow
+    ini = str(tmp_path / "settings.ini")
+    monkeypatch.setattr(MainWindow, "_settings",
+                        lambda self: QSettings(ini,
+                                               QSettings.Format.IniFormat))
+    win = MainWindow(doc)
+    win.show()
+    win.canvas.rebuild()
+    win._assembly_preview()
+    dlg = win._assembly_dlg
+    dlg.activateWindow()
+    QApplication.processEvents()
+    return win, dlg
+
+BOXES = {
+    "angle": lambda dlg: dlg.table.cellWidget(0, 3),
+    "radius": lambda dlg: dlg.table.cellWidget(0, 4),
+    "bend radius": lambda dlg: dlg.spin_r,
+    "thickness": lambda dlg: dlg.spin_t,
+    "across": lambda dlg: dlg.pieces.spin_x,
+    "up": lambda dlg: dlg.pieces.spin_y,
+    "turned": lambda dlg: dlg.pieces.spin_turn,
+}
+
+
+@pytest.mark.parametrize("which", list(BOXES))
+def test_esc_lets_go_of_a_number_half_typed_for_a_stack(
+        qapp, tmp_path, monkeypatch, mm, which):
+    from PySide6.QtTest import QTest
+    doc, by = _generated()
+    was = doc.to_dict()
+    win, dlg = _in_front(qapp, doc, tmp_path, monkeypatch)
+    try:
+        if which in ("across", "up", "turned"):
+            dlg.tabs.setCurrentWidget(dlg.pieces)
+            dlg.pieces.choose([by["Left pocket 3"].shape_id])
+        radius = dlg.layout_.radius[0]
+        box = BOXES[which](dlg)
+        assert box.isEnabled()
+        box.setFocus()
+        box.lineEdit().selectAll()
+        QTest.keyClicks(box.lineEdit(), "9")
+        QApplication.processEvents()
+        QTest.keyClick(box.lineEdit(), Qt.Key_Escape)
+        QApplication.processEvents()
+        assert win.doc.to_dict() == was
+        assert _steps(win) == 0 and not win.history.can_undo()
+        assert next(s for s in win.doc.shapes
+                    if s.name == "Spine fold").fold_angle == 180.0
+        assert radius == _near(4.0)
+        # nor is it kept for next time
+        kept = QSettings(str(tmp_path / "settings.ini"),
+                         QSettings.Format.IniFormat)
+        assert float(kept.value("fold3dRadius", 0.0)) != 9.0
+        assert float(kept.value("fold3dThickness", 2.0)) != 9.0
+    finally:
+        win._unsaved_changes = False
+        win.hide()
+
+
+def test_esc_keeps_a_stack_s_finished_change_as_one_step_and_no_more(
+        qapp, tmp_path, monkeypatch, mm):
+    from PySide6.QtTest import QTest
+    doc, by = _generated()
+    win, dlg = _in_front(qapp, doc, tmp_path, monkeypatch)
+    try:
+        dlg.table.cellWidget(0, 3).setValue(120.0)       # finished
+        box = dlg.table.cellWidget(0, 4)
+        box.setFocus()
+        box.lineEdit().selectAll()
+        QTest.keyClicks(box.lineEdit(), "6")
+        QTest.keyClick(box.lineEdit(), Qt.Key_Escape)
+        QApplication.processEvents()
+        line = next(s for s in win.doc.shapes if s.name == "Spine fold")
+        assert (line.fold_angle, line.fold_radius) == (120.0, -1.0)
+        assert _steps(win) == 1
+        win.undo()
+        line = next(s for s in win.doc.shapes if s.name == "Spine fold")
+        assert (line.fold_angle, line.fold_radius) == (180.0, -1.0)
+        assert not win.history.can_undo()
+    finally:
+        win._unsaved_changes = False
+        win.hide()
+
+
+def test_a_stack_whose_fold_stands_open_is_given_its_size_and_no_more(
+        qapp, mm):
+    doc, by = _generated()
+    by["Spine fold"].fold_angle = 120.0
+    dlg = _dialog(doc)
+    try:
+        folded = [line for line in _lines(dlg) if line.startswith("Folded")]
+        assert folded == ["Folded it measures 100.14 × 90 × 90.3 mm."]
+        dlg._go(1.0)
+        assert dlg.view.caption == "Folded  ·  100.14 × 90 × 90.3 mm"
+    finally:
+        dlg.close()
+
+
+# -- names as they are written ------------------------------------------------
+
+def _as_shown(text: str) -> str:
+    """A text as a label or a tooltip shows it: rich text read, plain
+    text as it is."""
+    from PySide6.QtGui import Qt as Gui, QTextDocument
+    if not Gui.mightBeRichText(text):
+        return text
+    doc = QTextDocument()
+    doc.setHtml(text)
+    return doc.toPlainText().replace(" ", "\n")
+
+
+def test_names_with_brackets_and_ampersands_are_read_as_they_are_written(
+        qapp, mm):
+    panel = _piece("a & b", 100, 60)
+    wrap = _piece("<b>", 90, 60, at=(0, 200))
+    tag = _piece("", 30, 20, at=(200, 200))
+    doc = _drawing(panel, wrap, tag,
+                   _line((0, -30), (0, 30), "<i>Middle</i>", "back"))
+    key = asm.put_on(doc, panel, thickness=2.0)
+    for p in (wrap, tag):
+        asm.put_on(doc, p, key, thickness=1.0)
+        asm.line_up(doc, p, "centre")
+        asm.line_up(doc, p, "middle")
+    dlg = _dialog(doc)
+    try:
+        says = _as_shown(dlg.readout.text())
+        assert ("Put together: 3 pieces, 4 mm at the thickest (a & b, <b>, "
+                "Piece 30 × 20 mm).") in says
+        assert ("Fold A (<i>Middle</i>) takes 3.14 mm of a & b, 1.57 mm "
+                "each side of the fold line.") in says
+        assert ("Fold A closes away from the 2 pieces laid on a & b: they "
+                "end up on the outside. If they belong inside, press Flip."
+                ) in says
+        assert ("⚠ <b> goes round the outside of fold A and has 14.71 mm "
+                "too little leather there.") in says
+        assert ("⚠ Piece 30 × 20 mm goes round the outside of fold A and "
+                "needs 7.85 mm more leather there than it has") in says
+        # an empty name reads as the list of pieces shows it
+        names = [dlg.pieces.pieces.item(r, 0).text()
+                 for r in range(dlg.pieces.pieces.rowCount())]
+        assert "Piece 30 × 20 mm" in names and "<b>" in names
+        # the tooltips show the names as they are
+        assert _as_shown(dlg.table.cellWidget(0, 2).toolTip()) == (
+            "Back: the flesh sides come together. Closes away from the 2 "
+            "pieces laid on a & b.")
+        assert _as_shown(dlg.table.item(0, 0).toolTip()) == (
+            "Fold A, <i>Middle</i>. Untick to leave it flat")
+        row = names.index("<b>")
+        assert _as_shown(dlg.pieces.pieces.item(row, 0).toolTip()) == \
+            "<b>: untick to take it off the stack"
+        assert _as_shown(dlg.pieces.pieces.item(row, 2).toolTip()) \
+            .startswith("Lies on a & b, grain up.")
+    finally:
+        dlg.close()
+
+
+def test_the_keep_clear_lines_in_sight_are_found_once_for_a_camera(
+        qapp, mm, monkeypatch):
+    from leathercad_app import foldview
+    doc, _by = _generated()
+    dlg = _dialog(doc)
+    try:
+        view = dlg.view
+        view.repaint()
+        tried = []
+        real = foldview._in_sight
+
+        def counted(*a, **k):
+            tried.append(1)
+            return real(*a, **k)
+        monkeypatch.setattr(foldview, "_in_sight", counted)
+        view.cam.yaw += 0.05                      # a camera not seen yet
+        view.repaint()
+        first = view.grab().toImage()
+        once = len(tried)
+        del tried[:]
+        view.repaint()
+        again = view.grab().toImage()
+        # the same picture, without looking for the dashed lines again:
+        # only the fold line's stretches in sight are looked for
+        assert again == first
+        assert 0 < len(tried) < once
+        fold_lines = len(tried)
+        # turned, they are looked for afresh
+        del tried[:]
+        view.cam.yaw += 0.1
+        view.repaint()
+        assert len(tried) > fold_lines
+    finally:
+        dlg.close()
+
+
+def test_the_backings_standing_clear_of_a_shortened_liner_are_said_plainly(
+        qapp, mm):
+    doc, _by = _generated(fit=True)
+    dlg = _dialog(doc)
+    try:
+        said = [part for part in dlg.readout.text().split("<br><br>")
+                if "clear of" in part]
+        assert said == [
+            f"{side} pocket backing rests on Bill pocket liner; beyond it, "
+            "it stands 0.8 mm clear of Outer shell. On the bench it beds "
+            "down over that step: the picture keeps it flat."
+            for side in ("Left", "Right")]
+        assert dlg.view.wash == {}
+    finally:
+        dlg.close()
+
+
+# -- the fold engine's own cases, drawn ---------------------------------------
+
+def _outline(name, ring):
+    return PathShape(points=[Vec2(*p) for p in ring], close_path=True,
+                     name=name, layer="Cut")
+
+
+def _box(x0, y0, x1, y1):
+    return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+
+
+def _drawn(ring, folds, pieces, t=2.0, name="Body"):
+    """A drawing of one of ``tests/test_stackfold.py``'s stacks: the main
+    piece ``ring`` ``t`` mm thick, its fold lines ``(a, b, angle, way,
+    order, radius)`` (way 1 to the front), and the pieces ``(name, ring,
+    thickness, side)`` laid on it in that order where ``ring`` says
+    (side -1: under it). The pieces are drawn apart from the main piece,
+    as the pieces of a pattern are, and placed with Across and Up."""
+    def box(r):
+        return (min(p[0] for p in r), min(p[1] for p in r))
+
+    main = _outline(name, ring)
+    lines = []
+    for a, b, angle, way, order, radius in folds:
+        ln = _line(a, b, way="front" if way > 0 else "back", angle=angle)
+        ln.fold_order, ln.fold_radius = order, radius
+        lines.append(ln)
+    laid = [_outline(n, [(x + 1000.0 + 300.0 * k, y) for x, y in r])
+            for k, (n, r, _t, _s) in enumerate(pieces)]
+    doc = _drawing(main, *laid, *lines)
+    key = asm.put_on(doc, main, thickness=t)
+    mx, my = box(ring)
+    for shape, (_n, r, thick, _s) in zip(laid, pieces):
+        assert asm.put_on(doc, shape, key, thickness=thick) == key
+        asm.line_up(doc, shape, "left")
+        asm.line_up(doc, shape, "bottom")
+        px, py = box(r)
+        asm.set_offset(doc, shape, px - mx, py - my)
+    under = [shape for shape, p in zip(laid, pieces) if p[3] < 0]
+    if under:
+        asm.put_under(doc, under)
+    return doc
+
+
+def _wings(way):
+    """The T of ``test_stackfold``: a 100 x 60 body with a 40 x 60 flap,
+    2 mm, folded flat 3 mm up the flap, and a 1 mm liner wider than the
+    flap (its wings beside the flap, over nothing of the body) with a
+    pocket on its left wing."""
+    from test_stackfold import TEE
+    return _drawn(TEE, [((0, 63), (100, 63), 180.0, way, 0, -1.0)],
+                  [("Liner", _box(10, 50, 90, 110), 1.0, 1),
+                   ("Pocket", _box(12, 80, 28, 100), 1.0, 1)], name="Tee")
+
+
+def _ell():
+    """An L-shaped piece folded across its upright arm and then across its
+    foot: the two lines cross past its inside corner, under a liner that
+    stands out over the corner."""
+    from test_stackfold import L_SHAPE
+    return _drawn(L_SHAPE, [((0, 75), (100, 75), 180.0, 1, 1, -1.0),
+                            ((70, 0), (70, 60), 135.0, -1, 2, -1.0)],
+                  [("Liner", _box(20, 50, 100, 100), 1.0, 1)], name="Ell")
+
+
+def _tray():
+    """A tray 160 mm square, 2 mm, its four walls stood up one after the
+    other, a 1 mm liner along its left wall and one along its right."""
+    return _drawn(_box(0, 0, 160, 160),
+                  [((30, 0), (30, 160), 90.0, 1, 1, -1.0),
+                   ((130, 0), (130, 160), 90.0, 1, 2, -1.0),
+                   ((0, 30), (160, 30), 90.0, 1, 3, -1.0),
+                   ((0, 130), (160, 130), 90.0, 1, 4, -1.0)],
+                  [("Left liner", _box(2, 2, 28, 158), 1.0, 1),
+                   ("Right liner", _box(132, 2, 158, 158), 1.0, 1)],
+                  name="Tray")
+
+
+def _landing():
+    """``test_stackfold``'s piece whose fold forms off its line and
+    brings a panel down in a wall, with a small patch on its back."""
+    from test_stackfold import _limited
+    outline, folds = _limited()
+    return _drawn(outline, [(f.a, f.b, f.angle, f.direction, f.order, -1.0)
+                            for f in folds],
+                  [("Patch", _box(40, 5, 55, 20), 0.4, -1)], name="Piece")
+
+
+def _strip_77(trial):
+    """A random strip in three of ``test_stackfold`` (seed 77), drawn."""
+    import random
+    from test_stackfold import random_stack
+    rng = random.Random(77)
+    for _k in range(trial + 1):
+        out, folds, sheets, t, _base = random_stack(rng, "three")
+    return _drawn(out, [(f.a, f.b, f.angle, f.direction, f.order, f.radius)
+                        for f in folds],
+                  [(s.name, s.ring, s.thickness, s.side) for s in sheets], t)
+
+
+def _two_linings():
+    """A 200 x 100 piece of 2 mm folded flat in the middle, with two 1 mm
+    linings round the inside, one on the other: each is punched half
+    what it has too much round the bend (pi x 1.5 and pi x 2.5 mm) nearer
+    the fold each side, to meet the piece's holes when shut."""
+    shell = _piece("Shell", 200, 100)
+    pieces = [shell]
+    seams = [_seam((-90, 45), (-10, 45)), _seam((10, 45), (90, 45))]
+    for k, (name, over) in enumerate((("One", 1.5 * math.pi),
+                                      ("Two", 2.5 * math.pi))):
+        x = 300.0 * (k + 1)
+        pieces.append(_piece(name, 200, 98, at=(x, 300)))
+        pull = 0.5 * over
+        seams += [_seam((x - 90 + pull, 346), (x - 10 + pull, 346)),
+                  _seam((x + 10 - pull, 346), (x + 90 - pull, 346))]
+    doc = _drawing(*pieces, _line((0, -50), (0, 50), "Fold"), *seams)
+    key = asm.put_on(doc, shell, thickness=2.0)
+    for lining in pieces[1:]:
+        asm.put_on(doc, lining, key, thickness=1.0)
+        asm.line_up(doc, lining, "centre")
+        asm.line_up(doc, lining, "bottom")
+    return doc
+
+
+PARTED = ("the fold bends it on one side and leaves it flat on the other. "
+          "In leather it would have to be slit there, or stop short of the "
+          "fold.")
+
+
+def test_a_liner_wider_than_its_flap_is_parted_where_it_would_crimp(
+        qapp, mm):
+    dlg = _dialog(_wings(1))
+    try:
+        slits = [(n.sheet, n.fold, round(n.a, 4), round(n.b, 4), n.other)
+                 for n in dlg.layout_.notes if n.kind == "slit"]
+        assert slits == [(1, 0, 20.1416, 0.1412, (0,))] * 2
+        # to the front: parted twice along the body's edge, 0.14 mm into
+        # leather there -- a crimp, said plainly, not an alarm
+        assert ("Liner is parted along 20.14 mm in 2 places at fold A, with "
+                "Tee across it: " + PARTED + " The picture shows it 0.14 mm "
+                "into leather there, where real leather would crimp.") \
+            in _lines(dlg)
+        assert "#c0392b" not in dlg.readout.text()
+        assert dlg.view.alarm == ""
+        assert set(dlg.view.wash) == {(1, 0)}       # (amber: it goes round)
+    finally:
+        dlg.close()
+    dlg = _dialog(_wings(-1))
+    try:
+        # to the back the bend misses the body: nothing is parted
+        assert not [n for n in dlg.layout_.notes if n.kind == "slit"]
+        assert "parted" not in _words(dlg)
+    finally:
+        dlg.close()
+    mm.set_current("in")
+    dlg = _dialog(_wings(1))
+    try:
+        assert ("Liner is parted along 0.793 in in 2 places at fold A, with "
+                "Tee across it: " + PARTED + " The picture shows it 0.006 in "
+                "into leather there, where real leather would crimp.") \
+            in _lines(dlg)
+        assert "mm" not in _words(dlg)
+    finally:
+        dlg.close()
+
+
+def test_a_liner_over_where_two_folds_cross_past_the_edge_is_torn_and_cut(
+        qapp, mm):
+    dlg = _dialog(_ell())
+    try:
+        lay = dlg.layout_
+        crossing, = [n for n in lay.notes if n.kind == "crossing"]
+        # (70, 75) on the drawing, in the frame of the model
+        assert (crossing.sheet, crossing.other, crossing.at) == (
+            1, (1,), _near((20.0, 5.0)))
+        slit, = [n for n in lay.notes if n.kind == "slit"]
+        assert (round(slit.a, 4), round(slit.b, 4)) == (34.3197, 0.4672)
+        says = _lines(dlg)
+        assert ("⚠ Liner is parted along 34.32 mm at fold A, and is drawn "
+                "0.47 mm into leather there: " + PARTED) in says
+        assert ("Liner lies over the place where folds A and B cross, past "
+                "the edge of Ell: folded along one and then the other, it is "
+                "torn there, and the preview cannot show how it would lie."
+                ) in says
+        assert dlg.view.wash[(1, None)] is not None
+        assert _rgb(dlg.view.wash[(1, None)]) == _rgb(dlg.view.look.bad)
+        assert dlg.view.alarm == "Liner is drawn into leather: see the report"
+    finally:
+        dlg.close()
+
+
+def test_a_tray_s_wall_liner_is_parted_where_its_corners_part(qapp, mm):
+    dlg = _dialog(_tray())
+    try:
+        lay = dlg.layout_
+        slits = [(n.sheet, round(n.a, 4), n.at, n.other, round(n.b, 4))
+                 for n in lay.notes if n.kind == "slit"]
+        # 26 mm at (145, 30) and (145, 130) on the drawing
+        assert sorted(slits, key=lambda x: x[2][1]) == [
+            (2, 26.0, _near((65.0, -50.0)), (0,), 4.1544),
+            (2, 26.0, _near((65.0, 50.0)), (0,), 6.7675)]
+        says = _lines(dlg)
+        for fold, deep in (("B", "6.77"), ("C", "4.15")):
+            assert (f"⚠ Right liner is parted along 26 mm at fold {fold}, "
+                    f"with Tray across it, and is drawn {deep} mm into "
+                    "leather there: " + PARTED) in says
+        assert ("⚠ Tray is drawn 5.77 mm into itself a quarter of the way "
+                "through step 1: folds that cross are folded one after the "
+                "other, and the preview cannot open the leather for the "
+                "second.") in says
+        assert ("⚠ Tray and Left liner are drawn 1.95 mm into each other "
+                "when fold C has folded (step 3).") in says
+        bad = _rgb(dlg.view.look.bad)
+        assert {k for k, c in dlg.view.wash.items() if _rgb(c) == bad} == {
+            (0, None), (1, None), (2, None)}
+        assert dlg.view.alarm == ("3 pieces are drawn into leather: see the "
+                                  "report")
+    finally:
+        dlg.close()
+
+
+def test_a_fold_that_moves_says_once_what_it_brings_down_and_how_to_mend_it(
+        qapp, mm):
+    dlg = _dialog(_landing())
+    try:
+        lay = dlg.layout_
+        landing, = [n for n in lay.notes if n.kind == "landing"]
+        assert (landing.fold, landing.other, round(landing.a, 4),
+                landing.b) == (0, (("panel", 4), ("bend", 0)), 1.7854, 3.75)
+        says = _lines(dlg)
+        # the lone piece's advice and warning, said once
+        assert ("Fold A folds 3.14 mm off its line, towards panel 1, to go "
+                "round what is folded inside it. To have it fold on its "
+                "line, shorten panel 2 by 3.14 mm where it reaches into the "
+                "fold.") in says
+        assert [line for line in says if "1.79" in line] == [
+            "⚠ With fold A off its line, panel 5 and fold A are drawn "
+            "1.79 mm into each other."]
+        # red on panel 5 and on fold A's bend, and in the caption
+        bad = _rgb(dlg.view.look.bad)
+        assert {k: _rgb(c) for k, c in dlg.view.wash.items()} == {
+            (0, ("panel", 4)): bad, (0, 0): bad}
+        assert dlg.view.alarm == ("Piece is drawn through itself: see the "
+                                  "report")
+        # ... in the picture: panel 5 is red, panel 3 is not
+        dlg.chk_labels.setChecked(False)
+        dlg._look("front")
+        lo, hi = dlg.view.scene.bounds()
+        five, three = (56.0, -10.0, hi[2]), (-20.0, -10.0, hi[2])
+        marked = _seen(dlg, five), _seen(dlg, three)
+        dlg.view.set_wash({})
+        plain = _seen(dlg, five), _seen(dlg, three)
+        assert math.dist(marked[0], bad) < 60
+        assert math.dist(marked[0], plain[0]) > 40
+        assert math.dist(marked[1], plain[1]) < 3
+    finally:
+        dlg.close()
+
+
+def test_a_fold_that_cannot_close_names_the_piece_in_its_way(qapp, mm):
+    dlg = _dialog(_strip_77(23))
+    try:
+        lay = dlg.layout_
+        assert lay.stuck == [False, True]
+        stuck, = [n for n in lay.notes if n.kind == "stuck"]
+        names = dlg.parts.names
+        assert (stuck.fold, round(stuck.a, 4), round(stuck.b, 4),
+                [names[p] for p in stuck.other]) == (
+            1, 8.9047, 34.9793, ["s5"])
+        says = _lines(dlg)
+        assert ("⚠ What is folded inside fold B reaches 34.98 mm into its "
+                "bend, and the fold cannot move further out of its way: its "
+                "bend would not fit before the edge of panel 3. s5 is in its "
+                "way.") in says
+        # what it draws through what, and when: inside the second step
+        assert ("⚠ s1 and s5 are drawn 1.31 mm into each other half way "
+                "through step 2.") in says
+        assert ("⚠ s5 is drawn 0.86 mm into itself a quarter of the way "
+                "through step 2.") in says
+        s5 = names.index("s5")
+        assert _rgb(dlg.view.wash[(s5, None)]) == _rgb(dlg.view.look.bad)
+    finally:
+        dlg.close()
+
+
+def test_two_linings_punched_for_shut_are_read_shut_as_the_marks_show(
+        qapp, mm):
+    dlg = _dialog(_two_linings())
+    try:
+        check = dlg.view.check
+        assert check.readings == {1: (0, 34, True), 2: (0, 34, True)}
+        assert len(check.holes(fs.MEETS)) == 102
+        says = _lines(dlg)
+        assert ("One's holes are read as punched to meet when shut, its "
+                "length round fold A taken up: 34 of 34 meet Shell's shut, "
+                "and none lying flat. The marks on the model show that "
+                "reading.") in says
+        assert ("Two's holes are read as punched to meet when shut, its "
+                "length round fold A taken up: 34 of 34 meet One's shut, and "
+                "none lying flat. The marks on the model show that reading."
+                ) in says
+        assert "Stitch holes through the layers: ● all 102 line up." in says
+    finally:
+        dlg.close()
+
+
+def test_a_lining_half_way_between_its_readings_is_told_as_it_is_marked(
+        qapp, mm):
+    dlg = _dialog(_lined(0.25 * 1.5 * math.pi))
+    try:
+        check = dlg.view.check
+        assert check.readings == {1: (0, 0, False)}
+        # every hole is marked out of line, and nothing says they line up
+        assert len(check.off) == 68
+        says = _lines(dlg)
+        assert ("Stitch holes through the layers: Shell and Lining: ● 68 are "
+                "out of line, by up to 1.18 mm.") in says
+        assert ("Lining's holes are read as punched flat: 0 of 34 meet "
+                "Shell's flat, and none when shut. The marks on the model "
+                "show that reading.") in says
+        assert "line up" not in _words(dlg)
+    finally:
+        dlg.close()
+
+
+def test_a_kind_of_note_the_window_does_not_know_is_passed_over(
+        qapp, mm, monkeypatch):
+    from leathercad.sheets import Note
+    doc, _by = _generated()
+    dlg = _dialog(doc)
+    try:
+        said = _lines(dlg)
+    finally:
+        dlg.close()
+    _noted(monkeypatch, Note("mystery", 1, 0, 9.0, 9.0, (2,), at=(0, 0)),
+           Note("mystery", 0, -1, 9.0, 9.0), Note("clash", 1, -1, 1.0, 0.75,
+                                                  (2,)))
+    doc, _by = _generated()
+    dlg = _dialog(doc)
+    try:
+        # read as before, with the clash given, a moment inside a step
+        assert _lines(dlg) == said[:-1] + [
+            "⚠ Bill pocket liner and Left pocket backing are drawn 1 mm "
+            "into each other three quarters of the way through step 1.",
+            said[-1]]
+        dlg._go(1.0)
+        assert dlg.view.alarm.startswith("2 things")
+    finally:
+        dlg.close()

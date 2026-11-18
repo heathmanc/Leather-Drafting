@@ -29,7 +29,8 @@ from typing import List, Optional
 
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QKeySequence, QPixmap, QShortcut
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QDialog,
+from PySide6.QtWidgets import (QAbstractItemView, QAbstractSpinBox,
+                               QCheckBox, QDialog,
                                QFormLayout, QFrame, QHBoxLayout, QHeaderView,
                                QLabel, QPushButton, QScrollArea, QSlider,
                                QSplitter, QStyle, QTableWidget,
@@ -291,8 +292,13 @@ def showables(doc) -> List[Foldable]:
     can be started."""
     out: List[Foldable] = []
     taken = set()
+    titled = {}       # two stacks of one title: "... + 9 pieces (2)"
     for st in asm.stacks(doc):
-        f = Foldable("stack", st.key, sm.stack_title(st))
+        title = sm.stack_title(st)
+        titled[title] = titled.get(title, 0) + 1
+        if titled[title] > 1:
+            title += f" ({titled[title]})"
+        f = Foldable("stack", st.key, title)
         f.stack = st
         out.append(f)
         taken.update(p.key for p in st.pieces)
@@ -407,7 +413,7 @@ def _laid_report(stack, check) -> str:
                 through.setdefault(mine, []).append((other, n))
     names = {}
     for f in found:
-        names[f.a], names[f.b] = f.names
+        names[f.a], names[f.b] = (sm.escaped(n) for n in f.names)
     out = []
     for mine, where in through.items():
         if len(where) == 1:
@@ -428,13 +434,13 @@ def _laid_report(stack, check) -> str:
     passing = sum(n for where in through.values() for _o, n in where)
     if len(sewn) == 1:
         f, = sewn
-        out.append(f"{f.names[0]} and {f.names[1]}: "
+        out.append(f"{names[f.a]} and {names[f.b]}: "
                    + _tally(f.off, f.worst, f.met, f.gap, 0, f.lone))
     elif sewn:
         out.append(_tally(len(check.off), max(f.worst for f in sewn),
                           len(check.holes(fs.MEETS)),
                           max(f.gap for f in sewn), 0, passing)
-                   + "".join(f"<br>{f.names[0]} and {f.names[1]}: "
+                   + "".join(f"<br>{names[f.a]} and {names[f.b]}: "
                              f"{_pair(f)}." for f in sewn))
     if not out:
         return ""
@@ -445,17 +451,24 @@ def _faced_report(check) -> str:
     """The stitch holes of pieces of a stack that the folding brings face
     to face (``sheets.Faced``), for the report: worded as two panels of a
     folded piece are, with the names of the pieces and the panels they
-    lie on. "" when the folding brings none together."""
+    lie on, the lower panel first. A piece whose holes are read two ways
+    as it goes round a fold (``check.readings``) is not compared with
+    itself here: what the marks show of it is ``_readings_report``'s to
+    say. "" when the folding brings none together."""
+    readings = getattr(check, "readings", None) or {}
     found = [f for f in check.findings
-             if getattr(f, "laid", True) is False]
+             if getattr(f, "laid", True) is False
+             and not (f.a == f.b and f.a in readings)]
     if not found:
         return ""
 
     def who(f):
+        (one, p1), (two, p2) = sorted(
+            zip((sm.escaped(n) for n in f.names), f.panels),
+            key=lambda named: named[1])
         if f.a == f.b:
-            return f"{f.names[0]}, panels {f.panels[0]} and {f.panels[1]}"
-        return (f"{f.names[0]} (panel {f.panels[0]}) and {f.names[1]} "
-                f"(panel {f.panels[1]})")
+            return f"{one}, panels {p1} and {p2}"
+        return f"{one} (panel {p1}) and {two} (panel {p2})"
 
     head = "<b>Stitch holes where the folding brings pieces together:</b> "
     return head + "<br>".join(
@@ -465,24 +478,29 @@ def _faced_report(check) -> str:
 
 def _readings_report(parts, model, check) -> List[str]:
     """For each piece of a stack that goes round a fold and has stitch
-    holes, the two ways they are read (``check.readings``): punched to
-    meet as the piece lies flat, and punched to meet when shut, its
-    length round the bend taken up -- and which of them the marks on the
-    model show."""
+    holes, the two ways they are read (``check.readings``, over all the
+    folds it goes round): punched to meet as the piece lies flat, and
+    punched to meet when shut, its length round every bend taken up --
+    and which of them the marks on the model show."""
     out = []
     readings = getattr(check, "readings", None) or {}
     for k, (flat, shut, kept) in sorted(readings.items()):
         s = model.sheet(k)
         if s is None:
             continue
-        name, n = parts.names[k], len(s.holes)
-        on = parts.names[s.rests[0]] if s.rests else parts.names[0]
-        fold = next((model.folds[note.fold].label for note in model.notes
-                     if note.sheet == k and note.kind in ("cross", "level")),
-                    "")
+        name, n = sm.escaped(parts.names[k]), len(s.holes)
+        on = sm.escaped(parts.names[s.rests[0]] if s.rests
+                     else parts.names[0])
+        # (read shut, at every fold it goes round)
+        folds = sorted({note.fold for note in model.notes
+                        if note.sheet == k
+                        and note.kind in ("cross", "level")})
+        labels = [model.folds[j].label for j in folds]
+        round_ = ("fold " if len(labels) == 1 else "folds ") \
+            + sm.listed(labels)
         if kept:
             out.append(f"{name}'s holes are read as punched to meet when "
-                       f"shut, its length round fold {fold} taken up: "
+                       f"shut, its length round {round_} taken up: "
                        f"{shut} of {n} meet {on}'s shut, and "
                        f"{flat or 'none'} lying flat. The marks on the "
                        "model show that reading.")
@@ -1034,13 +1052,15 @@ class FoldPreviewDialog(QDialog):
             it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable
                         | Qt.ItemIsUserCheckable)
             it.setCheckState(Qt.Checked if f.active else Qt.Unchecked)
-            it.setToolTip(f"Fold {f.label}" + (f", {f.name}" if f.name else "")
-                          + ". Untick to leave it flat")
+            it.setToolTip(sm.plain(
+                f"Fold {f.label}" + (f", {f.name}" if f.name else "")
+                + ". Untick to leave it flat"))
             t.setItem(row, 0, it)
 
             step = NoWheelSpinBox()
             step.setRange(1, n)
             step.setValue(max(1, min(n, f.order)))
+            step.setKeyboardTracking(False)     # (read when typed in full)
             step.setToolTip("When it folds: 1 is first. Give two folds the "
                             "same step to fold them together")
             step.valueChanged.connect(lambda v, r=row: self._set(r, "order",
@@ -1393,9 +1413,11 @@ class FoldPreviewDialog(QDialog):
         self.view.set_turned(turned)
         self.view.set_leathers({0: leather} if leather else None)
         self.view.set_layout(layout, t, check, refit=refit)
-        # what the report warns of, marked on the pieces (see ``_washes``)
+        # what the report warns of, marked on the pieces (see
+        # ``_see_through``)
         self._warned = sm.marks(layout) if self.parts is not None else {}
-        self.folds_tab.setEnabled(True)
+        # (a stack whose main piece has no fold lines has nothing there)
+        self.folds_tab.setEnabled(self.parts is None or bool(self.folds))
         self._fill_base()
         self._fill_used()
         self._fill_readout(check)
@@ -1431,7 +1453,7 @@ class FoldPreviewDialog(QDialog):
             way = self.table.cellWidget(row, 2)
             if way is not None and getattr(lay, "sheets", None) \
                     and self.parts is not None:
-                way.setToolTip(self._way_tip(row))
+                way.setToolTip(sm.plain(self._way_tip(row)))
             self._swatch(row)
         self._busy = False
 
@@ -1630,15 +1652,9 @@ class FoldPreviewDialog(QDialog):
         if t <= 1e-9:
             return f"Flat  ·  {n} step{'s' if n != 1 else ''} to fold"
         if t >= n - 1e-9:
-            if stack:
-                # ... and how big it is folded
-                size = next((x for x in lay.notes if x.kind == "size"), None)
-                shut = next((x for x in lay.notes if x.kind == "shut"), None)
-                if size is not None and shut is not None:
-                    return (f"Folded  ·  {sm._num(size.a)} × "
-                            f"{sm._num(size.b)} × {sm._num(shut.a)} "
-                            f"{U.current()}")
-            return "Folded"
+            # ... and how big a stack is folded
+            size = sm.folded_size(lay) if stack else ""
+            return f"Folded  ·  {size}" if size else "Folded"
         step = int(math.floor(t + 1e-9)) + 1
         doing = [f for k, f in enumerate(self.folds) if lay.steps[k] == step]
         what = ", ".join(
@@ -1828,9 +1844,11 @@ class FoldPreviewDialog(QDialog):
         super().showEvent(event)
 
     def _leave(self):
-        """The window is shut, by its close button or by Esc: what was
-        changed in it last is an undo step, and it listens no more."""
+        """The window is shut, by its close button or by Esc: a number
+        half typed in a box is let go, what was changed in it before is
+        an undo step, and it listens no more."""
         self._stop()
+        self._let_go()
         self._flush_commit()
         if self._listening:
             self._listening = False
@@ -1841,6 +1859,17 @@ class FoldPreviewDialog(QDialog):
                         self._drawing_changed)
                 except (RuntimeError, TypeError):
                     pass
+
+    def _let_go(self):
+        """Every box of the window shows its value again over what is
+        typed in it and not yet read (read, it would be written to the
+        drawing as the box loses its focus, once the window has gone:
+        after its last undo step)."""
+        for box in self.findChildren(QAbstractSpinBox):
+            if box.lineEdit().isModified():
+                was = box.blockSignals(True)
+                box.setValue(box.value())
+                box.blockSignals(was)
 
     def done(self, result):
         # (Esc comes here and not to closeEvent)

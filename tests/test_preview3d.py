@@ -1434,3 +1434,68 @@ def test_nothing_to_fold_says_how_to_start(qapp, tmp_path, monkeypatch):
         assert getattr(win, "_assembly_dlg", None) is None
     finally:
         win.hide()
+
+
+def _half_typed(box, text):
+    """Type ``text`` into a box over what it shows, and go no further."""
+    from PySide6.QtTest import QTest
+    box.setFocus()
+    box.lineEdit().selectAll()
+    QTest.keyClicks(box.lineEdit(), text)
+    QApplication.processEvents()
+
+
+def _escape(dlg, box):
+    from PySide6.QtTest import QTest
+    QTest.keyClick(box.lineEdit(), Qt.Key_Escape)
+    QApplication.processEvents()
+
+
+@pytest.mark.parametrize("col, typed", [(3, "9"), (4, "7"), (1, "1")],
+                         ids=["angle", "radius", "step"])
+def test_a_number_half_typed_when_esc_shuts_the_window_is_let_go(
+        qapp, tmp_path, monkeypatch, col, typed):
+    win = _window(qapp, _trifold(), tmp_path, monkeypatch)
+    try:
+        win.show()
+        was = win.doc.to_dict()
+        win._assembly_preview()
+        dlg = win._assembly_dlg
+        dlg.activateWindow()
+        box = dlg.table.cellWidget(1, col)
+        _half_typed(box, typed)
+        _escape(dlg, box)
+        a, b = _folds(win.doc)
+        assert (b.fold_angle, b.fold_radius, b.fold_order) == \
+            (180.0, -1.0, 2)
+        assert win.doc.to_dict() == was
+        assert win.history._index == 0 and not win.history.can_undo()
+    finally:
+        win._unsaved_changes = False
+        win.hide()
+
+
+def test_esc_keeps_what_was_changed_before_and_lets_go_what_is_half_typed(
+        qapp, tmp_path, monkeypatch):
+    win = _window(qapp, _trifold(), tmp_path, monkeypatch)
+    try:
+        win.show()
+        win._assembly_preview()
+        dlg = win._assembly_dlg
+        dlg.activateWindow()
+        dlg.table.cellWidget(0, 2).setCurrentIndex(1)     # A to the back
+        dlg.spin_r.setValue(3.0)
+        box = dlg.table.cellWidget(1, 3)
+        _half_typed(box, "45")
+        _escape(dlg, box)
+        a, b = _folds(win.doc)
+        assert (a.fold_dir, b.fold_angle) == ("back", 180.0)
+        # the change made is one undo step, and only that
+        assert win.history._index == 1
+        win.undo()
+        a, b = _folds(win.doc)
+        assert (a.fold_dir, b.fold_angle) == ("front", 180.0)
+        assert not win.history.can_undo()
+    finally:
+        win._unsaved_changes = False
+        win.hide()

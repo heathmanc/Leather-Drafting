@@ -89,6 +89,7 @@ class PiecesPanel(QWidget):
         self._usual = 2.0             # the thickness of a piece with none
         self._leather = DEFAULT_LEATHER
         self._drawable = set()        # the pieces "As drawn" applies to
+        self._fixed = False           # its main piece is cut open just now
         self._busy = False            # filling widgets: ignore their signals
 
         t = self.pieces = QTableWidget(0, 3)
@@ -309,6 +310,9 @@ class PiecesPanel(QWidget):
         piece with none of its own. The rows chosen stay chosen."""
         self._stack, self._usual = stack, float(usual)
         self._leather = leather if leather in LEATHERS else DEFAULT_LEATHER
+        doc = self._doc()
+        self._fixed = bool(stack) and doc is not None \
+            and asm.main_cut_open(doc, stack)
         self._find_drawable(rows)
         shown = (tuple(r.signature() for r in rows), stack, self._usual,
                  self._leather, U.current())
@@ -398,9 +402,9 @@ class PiecesPanel(QWidget):
         it.setCheckState(Qt.Checked if r.where == sm.IN else Qt.Unchecked)
         it.setIcon(self._chip(LEATHERS[r.leather if r.leather in LEATHERS
                                        else self._leather][0]))
-        it.setToolTip(
+        it.setToolTip(sm.plain(
             f"{r.name}: untick to take it off the stack" if r.where == sm.IN
-            else f"{r.name}: tick to put it on the stack")
+            else f"{r.name}: tick to put it on the stack"))
         thick = QTableWidgetItem(
             sm.length(r.thickness) if r.thickness > 0.0
             else f"({sm.length(self._usual)})")
@@ -411,7 +415,7 @@ class PiecesPanel(QWidget):
                              "leather thickness above. It is given that "
                              "when it is put on the stack")
         lies = QTableWidgetItem(r.lies)
-        lies.setToolTip(r.tip)
+        lies.setToolTip(sm.plain(r.tip))
         if r.main:
             bold = QFont(it.font())
             bold.setBold(True)
@@ -547,6 +551,16 @@ class PiecesPanel(QWidget):
         self.cmb_colour.setCurrentIndex(max(0, self.cmb_colour.findText(
             rows[0].leather)) if rows and rows[0].leather else 0)
         self.btn_drawn.setEnabled(bool(self._to_draw()))
+        if self._fixed:
+            # its main piece is cut open: the stack is looked at, not
+            # rearranged, until that outline is closed again
+            for w in (self.btn_higher, self.btn_lower, self.btn_over,
+                      self.btn_under, self.btn_mirror, self.btn_main,
+                      self.btn_drawn, self.spin_x, self.spin_y,
+                      self.spin_turn, self.btn_ccw, self.btn_cw):
+                w.setEnabled(False)
+            for side in asm.SIDES:
+                getattr(self, f"btn_{side}").setEnabled(False)
         self._busy = was
 
     def _do(self, change, soon: bool = False) -> bool:

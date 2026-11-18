@@ -22,6 +22,7 @@ begins: what is laid on the main piece is to stop there.
 
 from __future__ import annotations
 
+import html
 import math
 import random
 from typing import List, Optional, Tuple
@@ -396,6 +397,7 @@ class Scene:
         self.apart = max(0.0, float(apart)) if self.sheets else 0.0
         self.grain = 1 if getattr(layout, "grain", 1) >= 0 else -1
         self._box = None
+        self._clear_seen = None   # (see ``_clear_in_sight``)
         if self.sheets:
             cells = layout.solid(self.fractions, check, self.apart)
             self.folds = layout.fold_marks(self.fractions, self.apart)
@@ -459,8 +461,8 @@ def _keep_clear(layout, fractions, apart: float = 0.0) -> list:
     each fold that is made (``Layout.clear_marks``), lying on whatever is
     outermost there on each face of the main piece -- its own face, or
     the top of the pieces laid on it -- so that they show over a piece
-    that reaches past them. ``[(from, to, normal)]``, each a stretch on one face, the
-    normal out of that face."""
+    that reaches past them. ``[(from, to, normal)]``, each a stretch on
+    one face, the normal out of that face."""
     marks = getattr(layout, "clear_marks", None)
     if marks is None:
         return []
@@ -607,7 +609,8 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
     so a chosen piece still shows what it is made of. ``wash`` marks
     pieces with a colour of the caller's: ``{(piece, None): colour}`` for
     a whole piece, ``{(piece, fold): colour}`` for what it has in the
-    bend of one fold. The colour is laid over the leather ``_WASH`` of
+    bend of one fold, ``{(piece, ("panel", i)): colour}`` for what it
+    has on one panel. The colour is laid over the leather ``_WASH`` of
     255 strong -- so strongly that it is the mark that is seen, whatever
     the leather -- or, if the colour has an alpha of its own below 255,
     as strongly as that says. A piece that is both chosen and marked has
@@ -796,14 +799,18 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
     def marked(piece, tag):
         # How the cells of a piece are marked: the colours laid over its
         # leather (the one for all of it, then the one for its part in
-        # this bend), and for a piece that is chosen the line along its
-        # edges
-        fold = tag[1] if tag is not None and tag[0] == "bend" else None
-        got = marks.get((piece, fold))
+        # this bend, or on this panel), and for a piece that is chosen the
+        # line along its edges
+        part = None
+        if tag is not None and tag[0] == "bend":
+            part = tag[1]
+        elif tag is not None and tag[0] == "panel":
+            part = ("panel", tag[1])
+        got = marks.get((piece, part))
         if got is None:
             over = []
             for colour in (wash.get((piece, None)),
-                           wash.get((piece, fold)) if fold is not None
+                           wash.get((piece, part)) if part is not None
                            else None):
                 if colour is not None:
                     colour = QColor(colour)
@@ -815,7 +822,7 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                 line = QPen(look.pick, 2.6)
                 line.setCosmetic(True)
                 line.setCapStyle(Qt.RoundCap)
-            got = marks[(piece, fold)] = (over, [QBrush(c) for c in over],
+            got = marks[(piece, part)] = (over, [QBrush(c) for c in over],
                                           line)
         return got
 
@@ -1025,15 +1032,8 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                         seen.append((fi,) + run)
     # ... and on a stack lying flat, where each fold's bend begins: a
     # dashed line each side of it, where it is in sight
-    for q, r, nn in getattr(scene, "clear", ()):
-        if nn[0] * ex + nn[1] * ey + nn[2] * ez <= 0.02:
-            continue                           # that face is turned away
-        (x0, y0), (x1, y1) = spot(q), spot(r)
-        # (tried every dozen pixels, and where it passes out of sight
-        # looked for between: nothing is clicked on these lines)
-        pieces = max(4, min(48, 1 + int(math.hypot(x1 - x0, y1 - y0)
-                                        / 12.0)))
-        runs = _in_sight(q, r, pieces, True, discs, eye, m)
+    for x0, y0, x1, y1, runs in _clear_in_sight(scene, w, h, m, eye, spot,
+                                                discs):
         for colour, width in _CLEAR:
             p.setPen(_clear_pen(colour, width))
             for t0, t1 in runs:
@@ -1042,6 +1042,36 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
     if labels:
         _paint_labels(p, scene, look, discs, eye, m, selected, looks)
     return drawn
+
+
+def _clear_in_sight(scene, w, h, m, eye, spot, discs) -> list:
+    """The stretches of a scene's keep-clear lines that are in sight,
+    ``[(x0, y0, x1, y1, runs)]``: each line on the screen and the runs
+    along it, as ``_in_sight`` gives them. They are worked out once for
+    the scene and the camera as they stand and kept with the scene, so
+    that a picture painted again unchanged (a piece chosen, the mouse
+    over a fold line) does not look for them again."""
+    clear = getattr(scene, "clear", None)
+    if not clear:
+        return []
+    key = (w, h, tuple(m), tuple(eye))
+    kept = getattr(scene, "_clear_seen", None)
+    if kept is not None and kept[0] == key:
+        return kept[1]
+    ex, ey, ez = eye
+    out = []
+    for q, r, nn in clear:
+        if nn[0] * ex + nn[1] * ey + nn[2] * ez <= 0.02:
+            continue                           # that face is turned away
+        (x0, y0), (x1, y1) = spot(q), spot(r)
+        # (tried every dozen pixels, and where it passes out of sight
+        # looked for between: nothing is clicked on these lines)
+        pieces = max(4, min(48, 1 + int(math.hypot(x1 - x0, y1 - y0)
+                                        / 12.0)))
+        out.append((x0, y0, x1, y1,
+                    _in_sight(q, r, pieces, True, discs, eye, m)))
+    scene._clear_seen = (key, out)
+    return out
 
 
 def _clear_pen(colour: QColor, width: float) -> QPen:
@@ -1699,6 +1729,8 @@ class FoldView(QWidget):
                 tip = f"Fold {f.label}" + (f", {f.name}" if f.name else "") \
                     + (f": to the {'front' if f.direction >= 0 else 'back'}, "
                        f"{f.angle:g}°, step {step}" if step else ": left flat")
+                if "<" in tip:                 # (shown as it is written)
+                    tip = f"<p>{html.escape(tip, quote=False)}</p>"
                 QToolTip.showText(e.globalPosition().toPoint(), tip, self)
             return
         px, py, button, shift = self._press

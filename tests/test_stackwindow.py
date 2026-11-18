@@ -1151,9 +1151,10 @@ def test_ticking_a_piece_puts_it_on_the_stack_and_unticking_takes_it_off(
         assert liner.placed.x == 20.0
         _tick(dlg, "Left pocket backing")
         backing = _named(win.doc, "Left pocket backing")
-        assert (backing.placed.order, backing.placed.x) == (3, 20.0)
+        # (held as the liner is, by the middle of the shell across)
+        assert (backing.placed.order, backing.placed.x) == (3, -30.8)
         assert _lies(dlg)["Left pocket backing"] == \
-            "on Bill pocket liner · bottom left, 20 mm across"
+            "on Bill pocket liner · bottom centre, -30.8 mm across"
         # ... and with none chosen on the top of the pile
         _choose(dlg)
         _choose(dlg, "Outer shell")
@@ -2170,7 +2171,8 @@ def test_a_main_piece_cut_open_is_said_to_be_cut_open_not_gone(qapp, mm):
         assert ("Outer shell, the piece the others are placed against, is "
                 "cut open on the drawing. Until it is a closed outline "
                 "again Bill pocket liner stands in for it; closed again, "
-                "it comes back where it lay.") in _lines(dlg)
+                "it comes back where it lay. Close its outline to go on "
+                "placing pieces.") in _lines(dlg)
         assert not any("gone from the drawing" in line
                        for line in _lines(dlg))
     finally:
@@ -2201,5 +2203,174 @@ def test_the_window_fits_in_1220_by_740_with_the_see_through_tick(qapp, mm):
         assert (dlg.width(), dlg.height()) == (1220, 740)
         assert min(dlg.btn_views[k].width() for k in dlg.btn_views) >= 56
         assert dlg.chk_through.width() >= dlg.chk_through.sizeHint().width()
+    finally:
+        dlg.close()
+
+
+def _select(win, *shapes):
+    """Select these shapes on the canvas, as a click on them does."""
+    from leathercad_app.items import ShapeItem
+    c = win.canvas
+    c.scene_obj.clearSelection()
+    for it in c.scene_obj.items():
+        if isinstance(it, ShapeItem) and any(it.model is s for s in shapes):
+            it.setSelected(True)
+    QApplication.processEvents()
+    return [it for it in c.selected_items() if isinstance(it, ShapeItem)]
+
+
+def test_a_pocket_ticked_onto_its_backing_stays_on_it_when_the_shell_widens(
+        qapp, tmp_path, monkeypatch, mm):
+    doc = _drawing(_piece("Shell", 200, 90),
+                   _piece("Backing", 98, 70, at=(250, 0)),
+                   _piece("Pocket", 98, 40, at=(400, 0)))
+    win, dlg = _opened(qapp, doc, tmp_path, monkeypatch)
+    try:
+        _tick(dlg, "Backing")               # a stack on the shell shown
+        _choose(dlg, "Backing")
+        dlg.pieces.spin_x.setValue(3.0)     # set in from the shell's edge
+        dlg.pieces.spin_y.setValue(3.0)
+        _choose(dlg, "Backing")
+        _tick(dlg, "Pocket")                # on the backing chosen
+        assert _lies(dlg)["Pocket"] == \
+            "on Backing · bottom left, 3 mm across, 3 mm up"
+        shell = _named(win.doc, "Shell")
+        win.properties.show_selection(_select(win, shell))
+        win.properties.w.setValue(220.0)
+        win.properties.w.editingFinished.emit()
+        _reread(dlg)
+        st = dlg.current.stack
+        box = {p.name: p.box for p in st.pieces}
+        assert box["Backing"] == _near((-107.0, -42.0, -9.0, 28.0))
+        assert box["Pocket"] == _near((-107.0, -42.0, -9.0, -2.0))
+        assert box["Pocket"][0] - box["Backing"][0] == _near(0.0)
+    finally:
+        _shut(win)
+
+
+def _break_shell(win):
+    """Break the shell apart on the canvas: its edges come back, still
+    chosen."""
+    from leathercad_app.items import ShapeItem
+    _select(win, _named(win.doc, "Outer shell"))
+    win.canvas.break_apart_selected()
+    return [it.model for it in win.canvas.selected_items()
+            if isinstance(it, ShapeItem)]
+
+
+def test_with_the_shell_cut_open_each_piece_is_laid_and_counted_once(
+        qapp, tmp_path, monkeypatch, mm):
+    doc = _drawing(*bifold_wallet(shell_t=1.6, inner_t=0.8))
+    win, dlg = _opened(qapp, doc, tmp_path, monkeypatch)
+    try:
+        edges = _break_shell(win)
+        _reread(dlg)
+        st = dlg.current.stack
+        assert [p.name for p in st.pieces].count("Bill pocket liner") == 1
+        assert st.main.name == "Bill pocket liner" and not st.main.above
+        assert len(st.over()) + len(st.under()) == 8
+        # nine pieces, as many layers in the model, 4 mm at the thickest
+        assert len(dlg.layout_.sheets) + 1 == 9
+        assert dlg.view.caption == ("Put together  ·  9 pieces, 4 mm "
+                                    "thick  ·  nothing folds")
+        said = _lines(dlg)[0]
+        assert said.startswith("Put together: 9 pieces, 4 mm at the "
+                               "thickest (Bill pocket liner, ")
+        assert said.count("Bill pocket liner") == 1
+        # joined again: ten, and 5.6 mm
+        _select(win, *edges)
+        win.canvas.join_selected()
+        _reread(dlg)
+        assert len(dlg.layout_.sheets) + 1 == 10
+        assert dlg.view.caption == ("Put together  ·  10 pieces, 5.6 mm "
+                                    "thick  ·  1 step to fold")
+    finally:
+        _shut(win)
+
+
+def test_with_the_main_piece_cut_open_the_controls_that_move_pieces_are_grey(
+        qapp, tmp_path, monkeypatch, mm):
+    doc = _drawing(*bifold_wallet(shell_t=1.6, inner_t=0.8))
+    win, dlg = _opened(qapp, doc, tmp_path, monkeypatch)
+    p = dlg.pieces
+    moving = [p.btn_higher, p.btn_lower, p.btn_over, p.btn_under,
+              p.btn_mirror, p.btn_main, p.spin_x, p.spin_y, p.spin_turn,
+              p.btn_ccw, p.btn_cw] + [getattr(p, f"btn_{side}")
+                                      for side in asm.SIDES]
+    try:
+        _choose(dlg, "Left pocket 2")
+        assert all(w.isEnabled() for w in moving)
+        edges = _break_shell(win)
+        win.commit()
+        _reread(dlg)
+        assert asm.main_cut_open(win.doc, dlg.current.key)
+        assert ("Outer shell, the piece the others are placed against, is "
+                "cut open on the drawing. Until it is a closed outline "
+                "again Bill pocket liner stands in for it; closed again, "
+                "it comes back where it lay. Close its outline to go on "
+                "placing pieces.") in _lines(dlg)
+        for names in (["Left pocket 2"], ["Bill pocket liner"],
+                      ["Left pocket 2", "Right pocket 3"]):
+            _choose(dlg, *names)
+            assert [w for w in moving if w.isEnabled()] == []
+            assert not p.btn_drawn.isEnabled()
+            # its leather can still be chosen, and it can be taken off
+            assert p.cmb_colour.isEnabled()
+        steps = _steps(win)
+        _tick(dlg, "Right pocket 1 (front)", False)
+        assert _named(win.doc, "Right pocket 1 (front)").placed is None
+        assert _steps(win) == steps + 1
+        # closed again, they can be used again
+        _select(win, *edges)
+        win.canvas.join_selected()
+        _reread(dlg)
+        assert not asm.main_cut_open(win.doc, dlg.current.key)
+        _choose(dlg, "Left pocket 2")
+        assert all(w.isEnabled() for w in moving)
+        assert not any("Close its outline" in line for line in _lines(dlg))
+    finally:
+        _shut(win)
+
+
+def test_a_fob_nested_in_a_window_s_waste_is_listed_and_put_on_by_a_tick(
+        qapp, tmp_path, monkeypatch, mm):
+    doc = _drawing(_piece("Panel", 200, 120), _piece("Window", 120, 80),
+                   _piece("Fob", 25, 25))
+    win, dlg = _opened(qapp, doc, tmp_path, monkeypatch)
+    try:
+        p = dlg.pieces
+        assert [(r.where, r.name, r.lies) for r in p.rows()] == [
+            ("shown", "Panel", ""),
+            ("inside", "Window", "drawn inside Panel"),
+            ("inside", "Fob", "drawn inside Window")]
+        assert p.pieces.cellWidget(1, 0).text() == "Drawn inside a piece"
+        # ticked, it is put on: a stack is started on the panel shown
+        _tick(dlg, "Fob")
+        assert _named(win.doc, "Fob").placed is not None
+        assert _named(win.doc, "Panel").placed.main
+        assert _steps(win) == 1
+        assert [(r.where, r.name) for r in p.rows()] == [
+            ("in", "Fob"), ("in", "Panel"), ("inside", "Window")]
+        # taken off again, "As drawn" passes it over
+        _tick(dlg, "Fob", False)
+        assert _steps(win) == 2
+        _choose(dlg, "Fob")
+        assert not p.btn_drawn.isEnabled()
+        _choose(dlg, "Window")
+        assert p.btn_drawn.isEnabled()
+    finally:
+        _shut(win)
+
+
+def test_two_stacks_of_one_title_are_told_apart_in_the_show_box(qapp, mm):
+    from leathercad_app.preview3d import showables
+    doc = _drawing(*bifold_wallet(), *bifold_wallet())
+    assert len(asm.stacks(doc)) == 2
+    assert [f.title for f in showables(doc) if f.kind == "stack"] == [
+        "Outer shell + 9 pieces", "Outer shell + 9 pieces (2)"]
+    dlg = _dialog(doc)
+    try:
+        assert [dlg.cmb_piece.itemText(k) for k in range(2)] == [
+            "Outer shell + 9 pieces", "Outer shell + 9 pieces (2)"]
     finally:
         dlg.close()

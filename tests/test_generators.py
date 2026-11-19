@@ -1,5 +1,6 @@
 """Parametric generators: card-pocket stack + zipper opening."""
 
+import math
 import os
 
 import pytest
@@ -219,3 +220,104 @@ def test_fold_allowance_command(qapp):
     win.undo()
     piece = [s for s in win.doc.shapes if not s.is_fold_line][0]
     assert piece.width == 100
+
+
+def _window_with_folds(qapp, angles):
+    """A main window on a 100 mm piece, selected, crossed by one fold
+    line for each of ``angles`` (None: a line marked just now, with the
+    canvas's own Mark as fold line)."""
+    from leathercad.document import Document
+    from leathercad.generators import _fold_line
+    from leathercad.shapes import Rectangle
+    from leathercad_app.mainwindow import MainWindow
+    doc = Document()
+    doc.add_shape(Rectangle(width=100, height=60, layer="Cut"))
+    for k, a in enumerate(angles):
+        x = 20 + 10 * k
+        f = _fold_line(f"f{k}", x, -30, x, 30, a or 0.0)
+        if a is None:
+            f.fold_dir = ""                # a plain line, not yet marked
+        doc.add_shape(f)
+    win = MainWindow(doc)
+    c = win.canvas
+    c.rebuild()
+    for i in list(c.scene_obj.items()):
+        m = c._item_model(i)
+        if m is not None and m.layer == "Score" and not m.is_fold_line:
+            c.toggle_fold_line(i)
+    for i in c.scene_obj.items():
+        m = c._item_model(i)
+        i.setSelected(m is not None and not m.is_fold_line)
+    return win
+
+
+def _allowance_said(qapp, angles):
+    """What the Fold allowance command says of that piece: (the box's
+    words, the status bar's, the piece's width after)."""
+    win = _window_with_folds(qapp, angles)
+    said = []
+
+    def dialog(title, hint, fields):
+        said.append(hint)
+        return {"fa_t": 2.0, "fa_r": 0.0}
+    win._gen_dialog = dialog
+    win._fold_allowance()
+    piece = [s for s in win.doc.shapes if not s.is_fold_line][0]
+    b = piece.bounds()
+    return said[0], win.statusBar().currentMessage(), b[2] - b[0]
+
+
+def test_fold_allowance_says_a_line_just_marked_is_a_90_degree_fold(qapp):
+    # A fold line starts as a 90° fold, and the dialog asks for no angle:
+    # a wallet's spine marked and lengthened at once got half its bend
+    # (1.57 mm for 3.14) with nothing to say so
+    hint, status, width = _allowance_said(qapp, [None])
+    assert abs(width - (100 + math.pi / 2)) < 1e-6
+    assert "The fold line found is a 90° fold." in hint
+    assert "set its Angle to 180° in View → 3D assembly preview…" in hint
+    assert status == "Fold allowance: 1 fold of 90°, 1.57 mm added in all"
+
+
+def test_fold_allowance_names_the_angle_of_every_fold_it_lengthens(qapp):
+    hint, status, width = _allowance_said(qapp, [180])
+    assert abs(width - (100 + math.pi)) < 1e-6
+    assert "The fold line found is a 180° fold." in hint
+    assert "starts as a 90° fold" not in hint     # nothing to put right
+    assert "A fold's Angle is set in View → 3D assembly preview…" in hint
+    assert status == "Fold allowance: 1 fold of 180°, 3.14 mm added in all"
+    hint, status, width = _allowance_said(qapp, [180, 180])
+    assert "The 2 fold lines found are 180° folds." in hint
+    assert status == "Fold allowance: 2 folds of 180°, 6.28 mm added in all"
+    hint, status, width = _allowance_said(qapp, [90, 180, 90])
+    assert "Of the 3 fold lines found, 2 fold 90° and 1 folds 180°." in hint
+    assert "starts as a 90° fold" in hint
+    assert abs(width - (100 + 2 * math.pi)) < 1e-6
+    assert status == ("Fold allowance: 3 folds (2 of 90°, 1 of 180°), "
+                      "6.28 mm added in all")
+
+
+def test_the_fold_allowance_box_shows_the_whole_of_its_hint(qapp,
+                                                            monkeypatch):
+    # With the angles in it the hint is long enough for Qt to ask for a
+    # box wider than a small screen allows; made narrower, the box kept
+    # the height of the wide one and cut the words off at the foot
+    from PySide6.QtWidgets import QDialog, QLabel
+    win = _window_with_folds(qapp, [None])
+    seen = []
+
+    def shown(dlg):
+        dlg.show()
+        for _ in range(3):
+            qapp.processEvents()
+        lab = dlg.findChild(QLabel)
+        seen.append((lab.text(), lab.height(),
+                     lab.heightForWidth(lab.width()), dlg.width()))
+        dlg.close()
+        return 0
+    monkeypatch.setattr(QDialog, "exec", shown)
+    win._fold_allowance()
+    (text, has, needs, width), = seen
+    assert "The fold line found is a 90° fold." in text
+    assert has >= needs
+    assert width < 500                 # (and it is not a wide box)
+

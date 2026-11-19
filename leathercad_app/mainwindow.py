@@ -116,6 +116,53 @@ TOOL_LAYOUT = [
 ]
 
 
+def _fold_angle(fold) -> float:
+    """The angle a fold line folds through: 90° until one is set."""
+    return float(getattr(fold, "fold_angle", 90.0) or 90.0)
+
+
+def _angle_counts(angles) -> list:
+    """``[(angle as said, how many)]``, the smallest angle first."""
+    counts = {}
+    for a in sorted(angles):
+        said = f"{a:g}°"
+        counts[said] = counts.get(said, 0) + 1
+    return list(counts.items())
+
+
+def _folds_of(angles) -> str:
+    """'1 fold of 90°', '2 folds of 180°', '3 folds (2 of 90°, 1 of
+    180°)': what the status bar says the allowance was added for."""
+    n = len(angles)
+    counts = _angle_counts(angles)
+    folds = f"{n} fold{'' if n == 1 else 's'}"
+    if len(counts) == 1:
+        return f"{folds} of {counts[0][0]}"
+    return folds + " (" + ", ".join(f"{k} of {a}" for a, k in counts) + ")"
+
+
+def _fold_angles_hint(angles) -> str:
+    """What the Fold allowance dialog says of the fold lines it found:
+    the angle of each, and where an angle is set. A fold line starts as
+    a 90° fold, and a fold that lies flat needs twice that allowance."""
+    n = len(angles)
+    counts = _angle_counts(angles)
+    if n == 1:
+        found = f"The fold line found is a {counts[0][0]} fold."
+    elif len(counts) == 1:
+        found = f"The {n} fold lines found are {counts[0][0]} folds."
+    else:
+        each = [f"{k} fold{'s' if k == 1 else ''} {a}" for a, k in counts]
+        found = (f"Of the {n} fold lines found, " + ", ".join(each[:-1])
+                 + " and " + each[-1] + ".")
+    where = "View → 3D assembly preview…"
+    if all(a >= 180.0 for a in angles):
+        return found + f" (A fold's Angle is set in {where}.)"
+    return (found + " A fold line starts as a 90° fold: for one that lies "
+            "flat, such as a wallet's spine or a hem, set its Angle to 180° "
+            f"in {where} before adding the allowance.")
+
+
 class MainWindow(QMainWindow):
     def __init__(self, document: Optional[Document] = None):
         super().__init__()
@@ -1455,6 +1502,11 @@ class MainWindow(QMainWindow):
         lay = QVBoxLayout(dlg)
         lab = QLabel(hint)
         lab.setWordWrap(True)
+        if lab.sizeHint().width() > 420:
+            # (a long hint asks for a box wider than a small screen
+            # allows, and is then cut off at the foot: held to this width
+            # it is given the height its words need)
+            lab.setMaximumWidth(420)
         lay.addWidget(lab)
         form = QFormLayout()
         widgets = {}
@@ -1667,12 +1719,15 @@ class MainWindow(QMainWindow):
                 "a line across it → Mark as fold line first). Each fold then "
                 "adds its bend allowance to the piece.")
             return
+        found = {id(f): f for _it, fl in targets for f in fl}
+        angles = [_fold_angle(f) for f in found.values()]
         v = self._gen_dialog(
             "Fold allowance",
             "Each fold line adds angle × (inside radius + ½ thickness) to the "
             "piece: the flap side slides away from the fold and the crease "
             "moves to the middle of the bend. A 180° fold in 2 mm leather "
-            f"adds {fold_allowance(180, 2.0):.2f} mm.",
+            f"adds {fold_allowance(180, 2.0):.2f} mm.\n\n"
+            + _fold_angles_hint(angles),
             [("fa_t", "Leather thickness", "mm", 2.0, (0.2, 10), ""),
              ("fa_r", "Inside bend radius (0 = sharp crease)", "mm", 0.0,
               (0, 20), "Dial up for a rolled or padded edge")])
@@ -1681,7 +1736,7 @@ class MainWindow(QMainWindow):
         from leathercad.folds import apply_fold_allowance
         c._suppress_commit = True
         total = 0.0
-        n = 0
+        added = []                     # the angle of each fold lengthened
         for it, fl in targets:
             res = apply_fold_allowance(self.doc, it.model, fl, v["fa_t"],
                                        v["fa_r"])
@@ -1695,12 +1750,13 @@ class MainWindow(QMainWindow):
                 c._remove_item(it)
                 c._add_item(ShapeItem(new, c))
             total += sum(a for _f, a, _p in res)
-            n += len(res)
+            added += [_fold_angle(f) for f, _a, _p in res]
         c._suppress_commit = False
         c.rebuild()
         self.canvas._emit_commit()
         self.statusBar().showMessage(
-            f"Fold allowance: {n} fold(s), {total:.2f} mm added in all", 6000)
+            f"Fold allowance: {_folds_of(added)}, {total:.2f} mm added in "
+            "all", 6000)
 
     def _params_dialog(self):
         """Edit the document's named parameters (usable in any numeric field);

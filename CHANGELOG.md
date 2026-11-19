@@ -118,6 +118,16 @@ made only when the release workflow is run by hand with it ticked.
   fold line moved in the drawing was not noticed until the preview was
   opened again.
 
+### Fold allowance
+* **The box says which angle it is adding for.** Fold allowance goes by
+  the angle each fold line has, and a line just marked is a 90° fold —
+  so a wallet's spine, marked and lengthened at once, got half its bend
+  (1.57 mm for 3.14 in 2 mm leather) with nothing to say so. The box now
+  names the angle of every fold line it found and where to change it
+  (the **Angle** column of the 3D assembly preview), and the status bar
+  says what was added: *Fold allowance: 1 fold of 180°, 3.14 mm added in
+  all*.
+
 ## 0.4.13 — 2026-11-17
 
 ### A library of the things you've made

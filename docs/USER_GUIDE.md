@@ -561,14 +561,22 @@ in the pattern, so the seam still parts round it.
 
 Leather bends round a radius, so a piece that folds needs to be cut
 **longer** than it measures finished — by *angle × (inside radius + ½
-thickness)* per fold (3.1 mm for a 180° fold in 2 mm leather). Draw the
-piece finished-size, mark the crease (right-click a line across it → **Mark
-as fold line**), select the piece and choose **Edit → Fold allowance…**.
-Give it the thickness (and an inside radius for a rolled edge) and the
-flap side slides away from the fold by the allowance, taking any holes,
-seams and hardware on it along; the fold line moves to the middle of the
-bend zone. The 3D assembly preview bends the same length of leather into
-each fold.
+thickness)* per fold (3.14 mm for a 180° fold in 2 mm leather, half that
+for a 90° one). Draw the piece finished-size, mark the crease
+(right-click a line across it → **Mark as fold line**), select the piece
+and choose **Edit → Fold allowance…**. Give it the thickness (and an
+inside radius for a rolled edge) and the flap side slides away from the
+fold by the allowance, taking any holes, seams and hardware on it along;
+the fold line moves to the middle of the bend zone. The 3D assembly
+preview bends the same length of leather into each fold.
+
+The allowance goes by the angle each fold line has, and **a line you
+have just marked is a 90° fold**. For a fold that lies flat — a wallet's
+spine, a hem — open **View → 3D assembly preview…** and set that fold's
+**Angle** to 180° first. The Fold allowance box names the angle of every
+fold line it found (*The fold line found is a 90° fold.*), and the status
+bar says what it added: *Fold allowance: 1 fold of 180°, 3.14 mm added
+in all*.
 
 ### Folding it up in 3D
 

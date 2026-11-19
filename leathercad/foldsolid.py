@@ -1282,8 +1282,30 @@ class Layout:
                 wh, wg = self.used[h.fold], self.used[g.fold]
                 if wh <= 0.0 or wg <= 0.0:
                     continue
-                if abs(h.e[0] * g.e[1] - h.e[1] * g.e[0]) > 0.26:
+                turn = abs(h.e[0] * g.e[1] - h.e[1] * g.e[0])
+                if turn > 0.26:
                     continue                  # not nearly side by side
+                # Two bends can meet only where they are side by side. A
+                # bend turns its leather about a line along its hinge, so
+                # it keeps to its own stretch of that line; but where the
+                # two lines are not quite parallel the other bend, as wide
+                # across as it is, reaches a little along this one. So the
+                # strip each bend takes on the pattern -- its hinge's
+                # stretch, half the bend's width to either side -- is set
+                # along each line in turn, and two strips that do not
+                # overlap along either one are not close, however near
+                # their lines are (two tabs folded on one line)
+                parted = False
+                for u, v, wv in ((h, g, wg), (g, h, wh)):
+                    at = [(v.a[0] + v.e[0] * k - u.a[0]) * u.e[0]
+                          + (v.a[1] + v.e[1] * k - u.a[1]) * u.e[1]
+                          for k in (v.k0, v.k1)]
+                    out = 0.5 * wv * turn
+                    if (min(at) - out >= max(u.k0, u.k1) - 1e-6
+                            or max(at) + out <= min(u.k0, u.k1) + 1e-6):
+                        parted = True
+                if parted:
+                    continue
                 # the gap between the two lines where g runs
                 mid = 0.5 * (g.k0 + g.k1)
                 q = (g.a[0] + g.e[0] * mid, g.a[1] + g.e[1] * mid)
@@ -3498,17 +3520,37 @@ def fold_piece(outline: Sequence[Pt], folds: Sequence[FoldLine], *,
     # clean (found to a hair between that and the last that does not).
     # So is one put back on its line because its first move brought
     # nothing clear: what moved with it may yet be left behind further on.
+    # And so is one refused its first move because its bend, round the
+    # pile, would not fit before the edge of the panel: it is tried the
+    # way the leather in its bend would have it go. (One with leather in
+    # its bend from both sides has no way to go, and stays as it is.)
     # A fold that closes clean nowhere is left stuck, and the next is tried.
+    def short(lay, k):
+        # (the way a fold still on its line was refused for want of room:
+        # 1.0 to its left, -1.0 to its right; 0.0 for any other)
+        if lay.moved[k] or k in wants or k in held or k in fixed:
+            return 0.0
+        got = lay._look(k)
+        if got is None or got.cut is not None:
+            return 0.0
+        over = [way for way, side in ((1.0, got.left), (-1.0, got.right))
+                if side[0] > _TOUCH]
+        if len(over) != 1 or lay._room(k, over[0] > 0.0)[0] > 0.5 * _REACH:
+            return 0.0
+        return over[0]
+
     tried: set = set()
     for _round in range(n if sheets else 0):
+        way: Dict[int, float] = {}
         fi = next((k for k in sorted(range(n), key=lambda k: (lay.steps[k],
                                                              k))
                    if lay.stuck[k] and k not in tried
-                   and (lay.moved[k] or k in wants)), None)
+                   and (lay.moved[k] or k in wants
+                        or way.setdefault(k, short(lay, k)))), None)
         if fi is None:
             break
         got = _further(ring, first, lay, fi, held, fixed, kw, folds,
-                       wants.get(fi, 0.0))
+                       wants.get(fi, 0.0) or way.get(fi, 0.0))
         if got is None:
             tried.add(fi)
             continue

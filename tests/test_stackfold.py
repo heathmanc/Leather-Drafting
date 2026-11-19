@@ -2035,6 +2035,163 @@ def test_a_fold_on_its_line_with_no_way_to_go_is_tried_nowhere(
     assert real(ring, first, lay, fi, held, fixed, kw, folds, 0.0) is None
     assert cuts == []
 
+
+def test_a_fold_refused_its_first_move_for_want_of_room_is_tried_further_on(
+        monkeypatch):
+    # a 60 mm square, 2.6 mm, with a wing on its left (A) folded in over
+    # it, a 4 mm piece on the wing, and a 10 mm flap on top (D). The wing
+    # reaches 4 mm past D's line: round the pile D's bend would not fit
+    # before the edge of the flap, so D was given no move at all and said
+    # to be stuck, "cannot move out of its way". 6.5 mm on, past the
+    # pile, it bends tighter and closes clean
+    real, seen = fs._further, []
+    monkeypatch.setattr(fs, "_further",
+                        lambda *args: seen.append(args) or real(*args))
+    lay = stack([(0, 0), (60, 0), (60, 60), (55, 60), (55, 70), (5, 70),
+                 (5, 60), (0, 60), (0, 64), (-60, 64), (-60, 0)],
+                [fold(0, 0, 0, 60, order=1),
+                 fold(5, 60, 55, 60, order=2, label="D")],
+                [(rect(-55, 5, -5, 63), 4.0, 1)], t=2.6)
+    # (tried on its line, to its left: the way the wing's leather is in)
+    assert [(args[3], args[2].moved[args[3]], args[-1]) for args in seen] \
+        == [(1, 0.0, 1.0)]
+    assert lay.shift == pytest.approx([0.0, 6.5], abs=1e-3)
+    assert lay.stuck == [False, False] and lay.radius[1] == 0.0
+    assert not _notes(lay, "stuck", "clash")
+    # what D brings, formed there, is told: the wing's end is drawn
+    # 0.77 mm into the square at rest (as it is with D drawn there)
+    assert sorted((n.kind, n.other, round(n.rest, 3))
+                  for n in _notes(lay, "limit", "landing")) == [
+        ("landing", (("bend", 0), ("bend", 1)), 0.0),
+        ("landing", (("panel", 1), ("bend", 0)), 0.771),
+        ("limit", (0,), 0.771)]
+    assert lay.warnings == ["With fold D off its line, panel 2 and fold A "
+                            "are drawn 0.77 mm into each other."]
+    assert witnesses(lay, 9, 3) == []
+
+
+def _cross(scale):
+    # the cross of the test of the next fold to be tried, all its leather
+    # ``scale`` times as thick
+    return stack(
+        [(0, 0), (5, 0), (5, -80), (65, -80), (65, 0), (70, 0), (70, 5),
+         (80, 5), (80, 65), (70, 65), (70, 70), (65, 70), (65, 80),
+         (5, 80), (5, 70), (0, 70), (0, 65), (-80, 65), (-80, 5), (0, 5)],
+        [fold(0, 5, 0, 65, order=1),
+         fold(5, 0, 65, 0, order=2, label="C"),
+         fold(70, 5, 70, 65, order=3, label="B"),
+         fold(5, 70, 65, 70, order=4, label="D")],
+        [(rect(-75, 10, -5, 60), scale, 1), (rect(10, -75, 60, -5), scale,
+                                              1)], t=2.0 * scale)
+
+
+@pytest.mark.parametrize("scale, shift, landing, limit", [
+    (1.3, [0.0, 1.1261, 1.8319, 6.375], 0.143, 1.839),
+    (1.6, [0.0, 2.5398, 0.0, 4.9688], 1.421, 2.264)])
+def test_a_thicker_cross_frees_its_top_tab_where_its_bend_fits(
+        scale, shift, landing, limit):
+    # in thicker leather tab D wraps the pile and was refused its first
+    # move -- "its bend would not fit before the edge of panel 2" -- and
+    # left stuck. Tried further on it closes clean, its bend drawn a
+    # little into flap C's bend, which is told; tab B closes clean nowhere
+    lay = _cross(scale)
+    assert lay.shift == pytest.approx(shift, abs=1e-4)
+    assert lay.stuck == [False, False, True, False]
+    assert [n.fold for n in _notes(lay, "stuck")] == [2]
+    assert len(lay.warnings) == 1 and "fold B " in lay.warnings[0]
+    assert not any("fold D" in w for w in lay.warnings)
+    told = {(n.kind, n.other): round(n.rest, 3)
+            for n in _notes(lay, "clash", "limit", "landing")}
+    assert told[("landing", (("panel", 1), ("bend", 2)))] == landing
+    assert told[("limit", (0,))] == limit
+    # (and nothing between the pieces that is not told)
+    assert witnesses(lay, 9, 3) == []
+
+
+def test_two_stuck_tabs_in_a_row_leave_the_third_to_be_tried(monkeypatch):
+    # the cross with two tabs on its right on one line, B1 (y 5..30) and
+    # B2 (y 40..65): each closes clean nowhere, and D, tried after both,
+    # closes clean 7.51 mm off its line. The two tabs' bends lie on
+    # separate stretches of their line: they are not too close
+    real, seen = fs._further, []
+    monkeypatch.setattr(fs, "_further",
+                        lambda *args: seen.append(args[3]) or real(*args))
+    lay = stack(
+        [(0, 0), (5, 0), (5, -80), (65, -80), (65, 0), (70, 0), (70, 5),
+         (80, 5), (80, 30), (70, 30), (70, 40), (80, 40), (80, 65),
+         (70, 65), (70, 70), (65, 70), (65, 80), (5, 80), (5, 70), (0, 70),
+         (0, 65), (-80, 65), (-80, 5), (0, 5)],
+        [fold(0, 5, 0, 65, order=1),
+         fold(5, 0, 65, 0, order=2, label="C"),
+         fold(70, 5, 70, 30, order=3, label="B1"),
+         fold(70, 40, 70, 65, order=4, label="B2"),
+         fold(5, 70, 65, 70, order=5, label="D")],
+        [(rect(-75, 10, -5, 60), 1.0, 1), (rect(10, -75, 60, -5), 1.0, 1)])
+    assert sorted(seen) == [2, 3, 4]
+    assert lay.shift == pytest.approx([0.0, 0.0, 3.7168, 3.7168, 7.5137],
+                                      abs=1e-4)
+    assert lay.stuck == [False, False, True, True, False]
+    assert sorted((n.kind, n.other, round(n.rest, 3))
+                  for n in _notes(lay, "clash", "limit", "landing")) == [
+        ("clash", (1,), 1.333), ("limit", (0,), 1.415)]
+    assert not any("apart" in w for w in lay.warnings)
+    assert [w[:40] for w in lay.warnings] == [
+        "What is folded inside fold B1 reaches 14",
+        "What is folded inside fold B2 reaches 14"]
+
+
+def test_a_fold_refused_its_first_move_is_tried_the_way_its_leather_is(
+        monkeypatch):
+    # the stack of the fold refused its first move for want of room (above)
+    # drawn mirrored: the wing's leather is now in D's bend from its
+    # right, and D is tried that way (to its right), freed just as far on,
+    # and what it brings told the same
+    real, seen = fs._further, []
+    monkeypatch.setattr(fs, "_further",
+                        lambda *args: seen.append(args) or real(*args))
+    lay = stack([(60, 0), (60, 64), (0, 64), (0, 60), (-5, 60), (-5, 70),
+                 (-55, 70), (-55, 60), (-60, 60), (-60, 0), (0, 0)],
+                [fold(0, 0, 0, 60, order=1),
+                 fold(-5, 60, -55, 60, order=2, label="D")],
+                [(rect(5, 5, 55, 63), 4.0, 1)], t=2.6)
+    assert [(args[3], args[2].moved[args[3]], args[-1]) for args in seen] \
+        == [(1, 0.0, -1.0)]
+    assert lay.shift == pytest.approx([0.0, 6.5], abs=1e-3)
+    assert lay.stuck == [False, False]
+    assert sorted((n.kind, n.other, round(n.rest, 3))
+                  for n in _notes(lay, "limit", "landing")) == [
+        ("landing", (("bend", 0), ("bend", 1)), 0.0),
+        ("landing", (("panel", 0), ("bend", 0)), 0.771),
+        ("limit", (0,), 0.771)]
+    assert lay.warnings == ["With fold D off its line, panel 1 and fold A "
+                            "are drawn 0.77 mm into each other."]
+
+
+def test_a_fold_with_leather_in_its_bend_from_both_sides_is_tried_nowhere(
+        monkeypatch):
+    # the same square and wing, and on D's flap a tab E folded down over
+    # it first, 4 mm past D's line: leather comes into D's bend from both
+    # sides, and going either way would only bring one side further in.
+    # D is not tried further on, and says so
+    real, seen = fs._further, []
+    monkeypatch.setattr(fs, "_further",
+                        lambda *args: seen.append(args[3]) or real(*args))
+    lay = stack([(0, 0), (60, 0), (60, 60), (55, 60), (55, 70), (40, 70),
+                 (40, 84), (20, 84), (20, 70), (5, 70), (5, 60), (0, 60),
+                 (0, 64), (-60, 64), (-60, 0)],
+                [fold(0, 0, 0, 60, order=1),
+                 fold(40, 70, 20, 70, order=1, label="E"),
+                 fold(5, 60, 55, 60, order=2, label="D")],
+                [(rect(-55, 5, -5, 63), 4.0, 1)], t=2.6)
+    assert seen == [1]
+    assert lay.shift == pytest.approx([0.0, 3.6484, 0.0], abs=1e-4)
+    assert lay.stuck == [False, False, True]
+    assert lay.warnings[-1] == (
+        "What is folded inside fold D reaches into its bend from both "
+        "sides: panel 1 by 11.16 mm and panel 2 by 9.11 mm. Put fold E "
+        "right first.")
+
+
 def _windowed(where):
     # a 200 by 90 mm shell, 1.6 mm, folded in the middle, with a 20 mm
     # square window: in the shell's still half under a 1 mm liner over

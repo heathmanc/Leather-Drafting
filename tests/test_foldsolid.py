@@ -1990,3 +1990,107 @@ def test_the_hole_check_agrees_with_measuring_every_pair():
     assert len(check.state) == findings[0].holes
     assert len(check.holes(fs.LONE)) == lone
     assert len(check.holes(fs.MEETS)) == findings[0].met
+
+
+# -- folds on one line, on separate tabs -------------------------------------
+
+def _two_tabs(y0, y1, out=0.0, angle=180.0, second=2):
+    # a 70 mm square with two 10 mm tabs on its right, folded at x = 70
+    # (y 5..30) and at x = 70 + out (y y0..y1): the second tab's foot
+    # stands ``out`` further out
+    x = 70 + out
+    ring = [(0, 0), (70, 0), (70, 5), (80, 5), (80, 30), (70, 30),
+            (70, y0), (x, y0), (x + 10, y0), (x + 10, y1), (x, y1),
+            (70, y1), (70, 70), (0, 70)]
+    ring = [p for k, p in enumerate(ring) if p != ring[k - 1]]
+    folds = [fs.FoldLine((70, 5), (70, 30), angle, 1, order=1, label="B1"),
+             fs.FoldLine((x, y0), (x, y1), angle, 1, order=second,
+                         label="B2")]
+    return fs.fold_piece(ring, folds, thickness=2.0)
+
+
+def test_two_folds_on_one_line_on_separate_tabs_are_not_too_close():
+    # each bend keeps to its own tab's stretch of the line, so the two
+    # cannot meet, however near the tabs are along it (they were said to
+    # be 0.0 mm apart and to need 3.1 mm, or 1.6 mm at 90 degrees)
+    for y0, y1, out, angle, second in (
+            (40, 65, 0, 180, 2), (32, 65, 0, 180, 2), (55, 65, 0, 180, 2),
+            (40, 65, 0, 180, 1), (40, 65, 0, 90, 2), (32, 65, 0, 90, 1),
+            (40, 65, 1, 180, 2), (40, 65, 1, 90, 1)):
+        lay = _two_tabs(y0, y1, out, angle, second)
+        assert lay.warnings == [] and lay._close == set()
+        assert lay.shift == [0.0, 0.0] and lay.stuck == [False, False]
+        assert _near(lay.used, [math.radians(angle)] * 2)
+
+
+def test_folds_side_by_side_along_their_lines_are_still_too_close():
+    # a fold at x = 70 (y 5..30) and one 1 mm further out (y 15..30)
+    # on a narrower tab beyond it: their bends lie side by side
+    ring = [(0, 0), (70, 0), (70, 5), (71, 5), (71, 15), (85, 15),
+            (85, 30), (70, 30), (70, 70), (0, 70)]
+    for first, second, way, need in ((90, 90, 1, "1.6"),
+                                     (180, 180, -1, "3.1"),
+                                     (90, 180, 1, "2.4")):
+        folds = [fs.FoldLine((70, 5), (70, 30), first, 1, order=1,
+                             label="B1"),
+                 fs.FoldLine((71, 15), (71, 30), second, way, order=2,
+                             label="B2")]
+        lay = fs.fold_piece(ring, folds, thickness=2.0)
+        assert lay._close == {(0, 1)}
+        assert lay.warnings[0] == (f"Folds B1 and B2 are 1.0 mm apart, but "
+                                   f"their bends need {need} mm between "
+                                   f"them.")
+
+
+def test_a_fold_on_one_line_with_another_tab_is_still_told_what_to_shorten():
+    # tabs L (y 0.5..50) and M (y 53..59) folded on one line x = 0; the
+    # long flap on the right, folded first, reaches past that line, so
+    # fold L moves 8.71 mm on to its tab. Shortening the flap by as much
+    # brings L back on its line, beside M: that is no reason to say
+    # nothing of it (it once was)
+    ring = [(0, 0), (58, 0), (58, 10), (120, 10), (120, 50), (58, 50),
+            (58, 60), (0, 60), (0, 59), (-20, 59), (-20, 53), (0, 53),
+            (0, 50), (-30, 50), (-30, 0.5), (0, 0.5)]
+    folds = [fs.FoldLine((58, 10), (58, 50), 180, 1, order=1, label="R"),
+             fs.FoldLine((0, 0.5), (0, 50), 180, 1, order=2, label="L"),
+             fs.FoldLine((0, 53), (0, 59), 180, 1, order=2, label="M")]
+    lay = fs.fold_piece(ring, folds, thickness=3.0)
+    assert [round(mm, 4) for mm in lay.shift] == [0.0, 8.7124, 0.0]
+    assert lay.shift_toward == [None, 1, None] and not lay.warnings
+    assert lay.shift_for == [None, 4, None]
+    assert [(p, round(mm, 4), g) for p, mm, g in lay.shift_trim[1]] \
+        == [(4, 8.7124, None)]
+    assert lay.remedy(1) == ("To have it fold on its line, shorten panel 4 "
+                             "by 8.71 mm where it reaches into the fold.")
+
+
+def _tilted(x, y, length, rise):
+    # a fold at x = 70 (y 5..30) on one tab, and on a second tab one that
+    # starts at (x, y) and leans out ``rise`` mm in its ``length``
+    ring = [(0, 0), (70, 0), (70, 5), (80, 5), (80, 30), (70, 30), (70, y),
+            (x + 10, y), (x + 10 + rise, y + length), (x + rise, y + length),
+            (x + rise, 70), (0, 70)]
+    folds = [fs.FoldLine((70, 5), (70, 30), 180, 1, order=1, label="B1"),
+             fs.FoldLine((x, y), (x + rise, y + length), 180, -1, order=2,
+                         label="B2")]
+    return fs.fold_piece(ring, folds, thickness=2.0)
+
+
+def test_tilted_folds_are_close_where_their_bends_reach_round_the_ends():
+    # B2 leans 11.3 degrees: its bend, 3.14 mm wide across it, reaches
+    # 0.31 mm along B1's line past its own end, and B1's as far along
+    # B2's. Starting 0.25 mm past B1's end it is still too close, and
+    # 0.4 mm past it is not; nor is it 0.2 mm past and 1 mm out, where
+    # the two come apart along B2's line only (and 0.1 mm past they meet)
+    for x, y, length, rise, gap in ((70, 30.25, 25, 5, "2.5"),
+                                    (70, 30.4, 25, 5, None),
+                                    (71, 30.1, 10, 2, "2.0"),
+                                    (71, 30.2, 10, 2, None)):
+        lay = _tilted(x, y, length, rise)
+        if gap is None:
+            assert lay.warnings == [] and lay._close == set()
+        else:
+            assert lay._close == {(0, 1)}
+            assert lay.warnings == [f"Folds B1 and B2 are {gap} mm apart, "
+                                    f"but their bends need 3.1 mm between "
+                                    f"them."]

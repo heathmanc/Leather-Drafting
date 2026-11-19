@@ -38,6 +38,7 @@ _SHARP = 0.02                   # a bend narrower than this (mm) is a crease
 _REACH = 0.02                   # leather this far (mm) into a bend is let be
 _TOUCH = 0.05                   # ... and this far into other leather, not said
 _LAP = 0.3                      # layers this far (mm) over each other lie flat
+_FURTHER = 80                   # places a stuck fold is tried at further on
 # A face of a bend this near (mm) the line the bend goes round is a crease:
 # it is laid on that line itself, every rung of it, so that a bend with no
 # inside radius has no face there at all, not one made of rounding.
@@ -3420,6 +3421,9 @@ def fold_piece(outline: Sequence[Pt], folds: Sequence[FoldLine], *,
     held: set = set()
     fixed: set = set()
     goes = [0] * n
+    # (the way each fold put back where it was had set out to move: 1.0 to
+    # its left, -1.0 to its right)
+    wants: Dict[int, float] = {}
     # One fold at a time, in the order they are made. A fold moves once,
     # as a rule: the leather inside it comes clear by just as much as the
     # fold has moved. It may have a little further to go -- it bends at
@@ -3478,6 +3482,7 @@ def fold_piece(outline: Sequence[Pt], folds: Sequence[FoldLine], *,
                     cut = new
                     continue
                 held.add(fi)
+                wants[fi] = 1.0 if step > 0.0 else -1.0
             lay = Layout(cut[0], folds, cut[1], moved=was.moved, held=held,
                          fixed=fixed, least=was._least, **kw)
         return lay, cut
@@ -3489,15 +3494,22 @@ def fold_piece(outline: Sequence[Pt], folds: Sequence[FoldLine], *,
     # millimetre at a time up to where the piece no longer parts so, the
     # pile measured anew at each, and kept at the first place it closes
     # clean (found to a hair between that and the last that does not).
+    # So is one put back on its line because its first move brought
+    # nothing clear: what moved with it may yet be left behind further on.
+    # A fold that closes clean nowhere is left stuck, and the next is tried.
+    tried: set = set()
     for _round in range(n if sheets else 0):
         fi = next((k for k in sorted(range(n), key=lambda k: (lay.steps[k],
                                                              k))
-                   if lay.stuck[k] and lay.moved[k]), None)
+                   if lay.stuck[k] and k not in tried
+                   and (lay.moved[k] or k in wants)), None)
         if fi is None:
             break
-        got = _further(ring, first, lay, fi, held, fixed, kw, folds)
+        got = _further(ring, first, lay, fi, held, fixed, kw, folds,
+                       wants.get(fi, 0.0))
         if got is None:
-            break
+            tried.add(fi)
+            continue
         lay, cut = settle(*got)
 
     if any(lay.shift):
@@ -3509,11 +3521,27 @@ def fold_piece(outline: Sequence[Pt], folds: Sequence[FoldLine], *,
 
 
 def _further(ring, first: Layout, lay: Layout, fi: int, held, fixed, kw,
-             folds):
-    """Where fold ``fi`` of a stack, stuck in ``lay`` for want of room, can
-    form clean further on (see ``fold_piece``): ``(layout, cut)``, or None
-    if nowhere up to the end of the panel."""
-    way = 1.0 if lay.moved[fi] > 0.0 else -1.0
+             folds, way: float):
+    """Where fold ``fi`` of a stack, stuck in ``lay`` for want of room or
+    put back on its line, can form clean further on (see ``fold_piece``):
+    ``(layout, cut)``, or None if nowhere up to the end of the panel (or
+    ``_FURTHER`` places on). It goes on the way the fold has moved, or,
+    for one still on its line, ``way`` (1.0 to its left, -1.0 to its
+    right; None at once for one on its line with no way).
+
+    A place is clean when the layout made there, the pile measured anew
+    and the fold held where it is, finds no leather more than ``_TOUCH``
+    into the fold's bend and does not send the fold back because its bend
+    no longer fits there: no more than that. (A layout that first sends
+    another fold back measures nothing of this one, and its place counts
+    as clean; the moves that follow from it measure the fold again.) What
+    else the fold formed there brings into other leather is told as for
+    any fold that has moved (the ``landing`` and ``clash`` notes, and the
+    warning that gives the depth with the fold on its line as well)."""
+    if lay.moved[fi]:
+        way = 1.0 if lay.moved[fi] > 0.0 else -1.0
+    if not way:
+        return None
 
     def clean(d):
         trial = list(lay.moved)
@@ -3530,7 +3558,7 @@ def _further(ring, first: Layout, lay: Layout, fi: int, held, fixed, kw,
         return ok, (got, new)
 
     last = 0.0
-    for k in range(1, 81):
+    for k in range(1, _FURTHER + 1):
         d = float(k) if k <= 40 else 40.0 + 2.0 * (k - 40)
         ok, got = clean(d)
         if ok is None:

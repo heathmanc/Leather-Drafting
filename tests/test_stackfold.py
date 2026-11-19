@@ -1590,6 +1590,266 @@ def test_leather_riding_round_a_bend_past_its_hinge_end_moves_its_fold():
                                                "landing")] == []
     assert witnesses(lay, 9, 3) == []
 
+
+def _seed_493():
+    # the checker's generated stack 493: an L-shaped shell, 1.6 mm, shut
+    # across its corner (A, 175 degrees) and then turned up across its arm
+    # (B), with a 3 mm piece and a 0.6 mm liner on its back
+    return stack(
+        [(132.5, 204.7), (-29.1, 94.5), (31.9, 4.9), (130.5, 72.2),
+         (161.7, 26.3), (224.8, 69.4)],
+        [fold(196.5, 110.9, 34.8, 0.7, 175, -1, radius=1, order=0),
+         fold(37.7, 140.1, 98.8, 50.6, 90, -1, radius=0, order=2,
+              label="B")],
+        [([(119.2, 105.1), (111.6, 99.9), (112, 99), (112, 98), (111.6, 97.1),
+           (110.9, 96.4), (110, 96), (109, 96), (108.1, 96.4), (107.4, 97.1),
+           (99.8, 91.9), (118.5, 64.5), (137.9, 77.7)], 3.0, -1),
+         ([(8.7, 130.2), (67.8, -34.2), (166.4, 1.2), (107.3, 165.7)], 0.6,
+          -1)], t=1.6)
+
+
+def test_a_fold_whose_first_move_brings_nothing_clear_is_tried_further_on():
+    # fold A's first move, 7.21 mm, leaves the 3 mm piece as far in its
+    # bend as before (it rides on the panel that moves with the fold), and
+    # A was put back on its line and said to be stuck. Further on the
+    # piece no longer rides in the bend: A forms clean 38.31 mm along
+    lay = _seed_493()
+    assert lay.shift == pytest.approx([38.3125, 0.0], abs=1e-3)
+    assert lay.stuck == [False, False] and not lay.warnings
+    assert not _notes(lay, "stuck", "clash", "limit", "landing")
+    assert witnesses(lay, 9, 3) == []
+
+
+def _seed_392():
+    # the checker's generated stack 392: a shell shut twice, B on A's
+    # panel, with six pieces on it
+    return stack(
+        [(0, 0), (164.4, 0), (164.4, 98.3), (0, 98.3)],
+        [fold(61.3, 0, 61.3, 98.3, 180, -1, radius=-1, order=2),
+         fold(80.9, 0, 80.9, 98.3, 180, -1, radius=2.5, order=1,
+              label="B")],
+        [(rect(44.8, 46.2, 76.2, 65), 0.8, 1),
+         (rect(88.9, 36, 132.4, 95.1), 0.8, 1),
+         ([(98, 28.7), (97.8, 30), (97.3, 31.2), (96.5, 32.3), (95.5, 33.1),
+           (94.3, 33.6), (93, 33.7), (78.8, 33.7), (77.5, 33.6), (76.3, 33.1),
+           (75.3, 32.3), (74.5, 31.2), (74, 30), (73.8, 28.7), (73.8, 14.1),
+           (74, 12.8), (74.5, 11.6), (75.3, 10.5), (76.3, 9.7), (77.5, 9.2),
+           (78.8, 9), (93, 9), (94.3, 9.2), (95.5, 9.7), (96.5, 10.5),
+           (97.3, 11.6), (97.8, 12.8), (98, 14.1)], 1.2, -1),
+         (rect(47.6, 52.9, 58.8, 63.4), 0.8, 1),
+         (rect(42.4, 43.6, 68.5, 103.3), 2.0, 1),
+         ([(31.7, 88.5), (31.5, 90), (30.9, 91.4), (30, 92.6), (28.8, 93.5),
+           (27.4, 94), (25.9, 94.2), (-8, 94.2), (-9.5, 94), (-10.9, 93.5),
+           (-12.1, 92.6), (-13, 91.4), (-13.6, 90), (-13.8, 88.5),
+           (-13.8, 81.4), (-13.6, 79.9), (-13, 78.5), (-12.1, 77.3),
+           (-10.9, 76.4), (-9.5, 75.8), (-8, 75.6), (25.9, 75.6),
+           (27.4, 75.8), (28.8, 76.4), (30, 77.3), (30.9, 78.5),
+           (31.5, 79.9), (31.7, 81.4)], 1.6, -1)], t=1.6)
+
+
+def _seed_476():
+    # the checker's generated stack 476: a 2.5 mm strip shut twice, B on
+    # the far panel, with six pieces on it
+    return stack(
+        [(196, 63.5), (195.9, 64.3), (195.6, 65), (195.1, 65.7),
+         (194.5, 66.1), (193.8, 66.4), (193, 66.5), (3, 66.5), (2.2, 66.4),
+         (1.5, 66.1), (0.9, 65.7), (0.4, 65), (0.1, 64.3), (0, 63.5), (0, 3),
+         (0.1, 2.2), (0.4, 1.5), (0.9, 0.9), (1.5, 0.4), (2.2, 0.1), (3, 0),
+         (193, 0), (193.8, 0.1), (194.5, 0.4), (195.1, 0.9), (195.6, 1.5),
+         (195.9, 2.2), (196, 3)],
+        [fold(111.1, 0, 111.1, 66.5, 180, -1, radius=-1, order=1),
+         fold(145.8, 0, 145.8, 66.5, 180, -1, radius=-1, order=2,
+              label="B")],
+        [([(177.2, 30), (177, 31.4), (176.5, 32.7), (175.6, 33.9),
+           (174.4, 34.8), (173.1, 35.3), (171.7, 35.5), (34.9, 35.5),
+           (33.4, 35.3), (32.1, 34.8), (30.9, 33.9), (30, 32.7),
+           (29.5, 31.4), (29.3, 30), (29.3, -0.2), (29.5, -1.7), (30, -3),
+           (30.9, -4.2), (32.1, -5.1), (33.4, -5.6), (34.9, -5.8),
+           (171.7, -5.8), (173.1, -5.6), (174.4, -5.1), (175.6, -4.2),
+           (176.5, -3), (177, -1.7), (177.2, -0.2)], 0.8, 1),
+         (rect(118.4, 9.8, 140.5, 69.3), 2.0, -1),
+         ([(205.7, 63.6), (205.5, 65.4), (204.8, 67.1), (203.6, 68.6),
+           (202.2, 69.7), (200.5, 70.4), (198.6, 70.7), (177.6, 70.7),
+           (175.8, 70.4), (174.1, 69.7), (172.6, 68.6), (171.5, 67.1),
+           (170.8, 65.4), (170.5, 63.6), (170.5, 11.6), (170.8, 9.8),
+           (171.5, 8.1), (172.6, 6.6), (174.1, 5.5), (175.8, 4.8),
+           (177.6, 4.6), (198.6, 4.6), (200.5, 4.8), (202.2, 5.5),
+           (203.6, 6.6), (204.8, 8.1), (205.5, 9.8), (205.7, 11.6)], 2.5, 1),
+         ([(150.9, 70), (150.8, 70.8), (150.5, 71.6), (149.9, 72.3),
+           (149.3, 72.8), (148.5, 73.1), (147.7, 73.2), (142.4, 73.2),
+           (141.5, 73.1), (140.7, 72.8), (140.1, 72.3), (139.6, 71.6),
+           (139.2, 70.8), (139.1, 70), (139.1, 29.9), (139.2, 29.1),
+           (139.6, 28.3), (140.1, 27.6), (140.7, 27.1), (141.5, 26.8),
+           (142.4, 26.7), (147.7, 26.7), (148.5, 26.8), (149.3, 27.1),
+           (149.9, 27.6), (150.5, 28.3), (150.8, 29.1), (150.9, 29.9)], 1.6,
+          1),
+         (rect(61.2, 28.6, 124.9, 71.5), 0.8, 1),
+         ([(130.2, 3.2), (190.7, 3.2), (190.7, 71.5), (173.6, 71.5),
+           (172.6, 66.5), (169.7, 62.2), (165.5, 59.4), (160.5, 58.4),
+           (155.5, 59.4), (151.2, 62.2), (148.4, 66.5), (147.4, 71.5),
+           (130.2, 71.5)], 1.0, 1)], t=2.5)
+
+
+@pytest.mark.parametrize("seed, moved, reach", [
+    (392, [53.6031, 0.0], (0, 17.9938, 71.5969, (0,))),
+    (476, [0.0, 43.4456], (1, 37.0256, 80.4711, (0, 1)))])
+def test_a_fold_that_closes_clean_nowhere_up_to_its_panels_edge_is_stuck(
+        seed, moved, reach):
+    # each stuck fold has been tried at every place on to the edge of the
+    # panel it moves over: nowhere is its bend clear
+    lay = _seed_392() if seed == 392 else _seed_476()
+    assert lay.shift == pytest.approx(moved, abs=1e-3)
+    assert lay.stuck == [i == reach[0] for i in range(2)]
+    stuck, = _notes(lay, "stuck")
+    assert (stuck.fold, round(stuck.a, 4), round(stuck.b, 4),
+            stuck.other) == reach
+
+
+def _seed_531():
+    # the checker's generated stack 531: a 3 mm strip folded three times,
+    # C shut last on the far panel, with six pieces on it
+    return stack(
+        [(237.1, 79.9), (236.9, 80.7), (236.6, 81.4), (236.1, 82),
+         (235.4, 82.4), (234.7, 82.7), (233.9, 82.8), (1.1, 70.3),
+         (0.4, 70.2), (-0.4, 69.8), (-1, 69.3), (-1.4, 68.7), (-1.7, 67.9),
+         (-1.7, 67.2), (2.1, -3.3), (2.2, -4.1), (2.5, -4.8), (3, -5.4),
+         (3.7, -5.8), (4.4, -6.1), (5.2, -6.2), (238, 6.3), (238.8, 6.4),
+         (239.5, 6.8), (240.1, 7.3), (240.5, 7.9), (240.8, 8.7),
+         (240.8, 9.4)],
+        [fold(53, -3.6, 48.9, 72.9, 120, 1, radius=-1, order=3),
+         fold(110.8, -0.5, 106.7, 76, 175, 1, radius=-1, order=1,
+              label="B"),
+         fold(182.5, 3.3, 178.4, 79.8, 180, 1, radius=-1, order=2,
+              label="C")],
+        [([(113, 53.8), (113.4, 54.2), (113.6, 54.6), (113.8, 55.1),
+           (113.8, 55.6), (113.7, 56), (113.5, 56.5), (90, 91.2),
+           (89.6, 91.6), (89.2, 91.8), (88.7, 92), (88.2, 92), (87.7, 91.9),
+           (87.3, 91.7), (67, 77.9), (66.6, 77.6), (66.3, 77.2), (66.2, 76.7),
+           (66.2, 76.2), (66.3, 75.7), (66.5, 75.3), (90, 40.6), (90.4, 40.2),
+           (90.8, 39.9), (91.2, 39.8), (91.7, 39.7), (92.2, 39.8),
+           (92.7, 40.1)], 0.4, 1),
+         ([(87.1, 74.4), (86.8, 75.8), (86.2, 77.1), (85.3, 78.2), (84.1, 79),
+           (82.7, 79.5), (81.3, 79.6), (4.2, 75.5), (2.8, 75.2), (1.5, 74.6),
+           (0.4, 73.7), (-0.4, 72.5), (-0.9, 71.2), (-1, 69.7), (-0.2, 54.3),
+           (0.1, 52.9), (0.7, 51.6), (1.6, 50.5), (2.8, 49.7), (4.1, 49.2),
+           (5.6, 49.1), (82.7, 53.2), (84.1, 53.5), (85.4, 54.1), (86.5, 55),
+           (87.3, 56.2), (87.8, 57.6), (87.9, 59)], 2.0, 1),
+         ([(225.8, 50.7), (225.7, 51), (225.6, 51.3), (225.4, 51.5),
+           (225.2, 51.7), (224.9, 51.8), (224.6, 51.8), (193.5, 50.2),
+           (193.2, 50.1), (192.9, 50), (192.7, 49.8), (192.5, 49.5),
+           (192.4, 49.3), (192.4, 48.9), (194.4, 12.5), (194.4, 12.2),
+           (194.5, 11.9), (194.7, 11.7), (195, 11.5), (195.3, 11.4),
+           (195.6, 11.4), (226.6, 13.1), (226.9, 13.1), (227.2, 13.3),
+           (227.4, 13.5), (227.6, 13.7), (227.7, 14), (227.7, 14.3)], 2.5, 1),
+         ([(65.9, 25.4), (88, 70.6), (73.7, 77.6), (51.5, 32.4)], 0.4, -1),
+         ([(67.5, 38.5), (69.4, 39), (71.1, 40), (72.6, 41.3), (73.6, 43),
+           (74.2, 44.9), (74.2, 46.9), (73.1, 57.4), (72.6, 59.3),
+           (71.7, 61.1), (70.3, 62.5), (68.6, 63.5), (66.7, 64.1),
+           (64.7, 64.2), (63.9, 64.1), (62, 63.6), (60.3, 62.7), (58.8, 61.3),
+           (57.8, 59.6), (57.2, 57.7), (57.2, 55.7), (58.3, 45.2),
+           (58.8, 43.3), (59.7, 41.5), (61.1, 40.1), (62.8, 39.1),
+           (64.7, 38.5), (66.7, 38.5)], 2.0, -1),
+         ([(229, 45.1), (229.7, 46), (230, 46.9), (230.1, 47.9), (230, 49),
+           (229.5, 49.9), (228.9, 50.7), (166.1, 110.2), (165.2, 110.8),
+           (164.3, 111.2), (163.3, 111.3), (162.2, 111.1), (161.3, 110.7),
+           (160.5, 110), (142.4, 90.9), (141.8, 90.1), (141.4, 89.1),
+           (141.3, 88.1), (141.5, 87.1), (141.9, 86.1), (142.5, 85.3),
+           (205.3, 25.8), (206.2, 25.2), (207.1, 24.9), (208.2, 24.7),
+           (209.2, 24.9), (210.1, 25.3), (210.9, 26)], 1.0, -1)], t=3.0)
+
+
+def _at_rest(lay):
+    # how deep each two pieces are drawn into each other at rest, as the
+    # notes say: {(piece, piece): mm}, the main piece in itself (0, 0)
+    out = {}
+    for n in lay.notes:
+        if n.kind in ("clash", "limit", "landing") and n.rest > 0.0:
+            key = (n.sheet, n.other[0]) if n.kind == "clash" else (0, 0)
+            out[key] = max(out.get(key, 0.0), round(n.rest, 3))
+    return out
+
+
+def test_a_fold_clear_further_on_is_kept_there_and_the_rest_is_told(
+        monkeypatch):
+    # "clear" is the fold's own bend: C, stopped 46.10 mm off its line
+    # with the pile 2.81 mm in its bend (48.91 mm on its line), forms
+    # clear 0.81 mm further on. The stack is drawn through at rest all the
+    # same, two pieces by two no deeper than where C stopped, and each
+    # pair is told: the landing with its depth with C on its line as well
+    lay = _seed_531()
+    assert lay.shift == pytest.approx([0.0, 0.0, 46.9107], abs=1e-3)
+    assert lay.stuck == [False, False, False]
+    assert sorted((n.kind, n.other, round(n.rest, 3)) for n in lay.notes
+                  if n.kind == "landing") == [
+        ("landing", (("panel", 0), ("panel", 2)), 6.689),
+        ("landing", (("panel", 0), ("panel", 3)), 1.196)]
+    assert lay.warnings == [
+        "With fold C off its line, panel 1 and panel 3 are drawn 6.69 mm "
+        "into each other (5.91 mm with the fold on its line) (and they "
+        "are not the only ones)."]
+    rest = {(0, 0): 6.689, (0, 2): 7.704, (0, 6): 7.689, (2, 6): 8.704}
+    assert _at_rest(lay) == rest
+    # (where it stopped, the pile in its bend: a limit of 1.93 at rest in
+    # place of the landing of 1.20 between panels 1 and 4)
+    monkeypatch.setattr(fs, "_further", lambda *args: None)
+    stopped = _seed_531()
+    assert stopped.stuck == [False, False, True]
+    assert stopped.shift[2] == pytest.approx(46.0982, abs=1e-3)
+    stuck, = _notes(stopped, "stuck")
+    assert (round(stuck.a, 2), round(stuck.b, 2)) == (2.81, 48.91)
+    limit, = _notes(stopped, "limit")
+    assert round(limit.rest, 3) == 1.928
+    assert _at_rest(stopped) == rest
+
+
+def test_a_fold_that_closes_clean_nowhere_leaves_the_next_one_to_be_tried():
+    # a cross: a 70 mm square with a flap on its left and one below, each
+    # with a 1 mm patch on it, folded in over it, and a 10 mm tab on its
+    # right (B) and on top (D) folded over them. Both tabs move and stop
+    # for want of room. B closes clean nowhere; D, tried after it, closes
+    # clean 7.51 mm off its line, its bend clear of the flaps' leather
+    lay = stack(
+        [(0, 0), (5, 0), (5, -80), (65, -80), (65, 0), (70, 0), (70, 5),
+         (80, 5), (80, 65), (70, 65), (70, 70), (65, 70), (65, 80),
+         (5, 80), (5, 70), (0, 70), (0, 65), (-80, 65), (-80, 5), (0, 5)],
+        [fold(0, 5, 0, 65, order=1),
+         fold(5, 0, 65, 0, order=2, label="C"),
+         fold(70, 5, 70, 65, order=3, label="B"),
+         fold(5, 70, 65, 70, order=4, label="D")],
+        [(rect(-75, 10, -5, 60), 1.0, 1), (rect(10, -75, 60, -5), 1.0, 1)])
+    assert lay.shift == pytest.approx([0.0, 0.0, 3.7168, 7.5137], abs=1e-4)
+    assert lay.stuck == [False, False, True, False]
+    stuck, = _notes(lay, "stuck")
+    assert (stuck.fold, round(stuck.a, 4), round(stuck.b, 4)) == (
+        2, 10.3303, 14.0471)
+    assert lay.warnings == [
+        "What is folded inside fold B reaches 14.05 mm into its bend, and "
+        "the fold cannot move further out of its way: its bend would not "
+        "fit before the edge of panel 5."]
+    # (what B leaves in the patches is told; D brings nothing more)
+    assert sorted((n.kind, n.other, round(n.rest, 3))
+                  for n in _notes(lay, "clash", "limit", "landing")) == [
+        ("clash", (1,), 1.333), ("limit", (0,), 1.415)]
+    assert witnesses(lay, 9, 3) == []
+
+
+def test_a_fold_on_its_line_with_no_way_to_go_is_tried_nowhere(
+        monkeypatch):
+    # fold A of 493 is searched on its line the way its first move went
+    # (to its left); told no way, the search tries no place at all, not
+    # the drawn line itself again
+    real, seen = fs._further, []
+    monkeypatch.setattr(fs, "_further",
+                        lambda *args: seen.append(args) or real(*args))
+    _seed_493()
+    (ring, first, lay, fi, held, fixed, kw, folds, way), = seen
+    assert (fi, lay.moved[fi], way) == (0, 0.0, 1.0)
+    recut, cuts = fs._recut, []
+    monkeypatch.setattr(fs, "_recut",
+                        lambda *args: cuts.append(args) or recut(*args))
+    assert real(ring, first, lay, fi, held, fixed, kw, folds, 0.0) is None
+    assert cuts == []
+
 def _windowed(where):
     # a 200 by 90 mm shell, 1.6 mm, folded in the middle, with a 20 mm
     # square window: in the shell's still half under a 1 mm liner over

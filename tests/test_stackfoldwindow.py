@@ -890,7 +890,7 @@ def test_a_lining_with_holes_round_a_fold_is_read_both_ways(qapp, mm):
         # (held as the fold engine finds best, 33 would meet shut)
         assert dlg.view.check.readings == {1: (34, 33, False)}
         says = _lines(dlg)
-        assert READ_FLAT.format("all 68 do") in says
+        assert READ_FLAT.format("all 68 do, against 67 when shut") in says
         assert ("Lining, round fold A: 33 of its 34 holes meet when shut, 34 "
                 "lying flat.") in says
         cross, = [n for n in dlg.layout_.notes if n.kind == "cross"]
@@ -901,7 +901,8 @@ def test_a_lining_with_holes_round_a_fold_is_read_both_ways(qapp, mm):
     try:
         assert dlg.view.check.readings == {1: (0, 34, True)}
         says = _lines(dlg)
-        assert READ_SHUT.format("all 68 do") in says
+        assert READ_SHUT.format("all 68 do, against none lying flat") \
+            in says
         assert ("Lining, round fold A: 34 of its 34 holes meet when shut, "
                 "none lying flat.") in says
     finally:
@@ -1717,7 +1718,8 @@ def test_two_linings_punched_for_shut_are_read_shut_as_the_marks_show(
         assert len(check.holes(fs.MEETS)) == 102
         says = _lines(dlg)
         # one reading for the whole stack, said once
-        assert says.count(READ_SHUT.format("all 102 do")) == 1
+        assert says.count(READ_SHUT.format(
+            "all 102 do, against none lying flat")) == 1
         for name in ("One", "Two"):
             assert (f"{name}, round fold A: 34 of its 34 holes meet when "
                     "shut, none lying flat.") in says
@@ -1737,10 +1739,16 @@ def test_a_lining_half_way_between_its_readings_is_told_as_it_is_marked(
         says = _lines(dlg)
         assert ("Stitch holes through the layers: Shell and Lining: ● 68 are "
                 "out of line, by up to 1.18 mm.") in says
-        assert READ_FLAT.format("none of its 68 do") in says
+        assert READ_FLAT.format("none of its 68 do, against none when "
+                                "shut") in says
+        # (its halves, facing, line up with each other, but are marked
+        # out of line with the Shell's: so said, where once nothing was)
         assert ("Lining, round fold A: none of its 34 holes meet when shut, "
-                "none lying flat.") in says
-        assert "line up" not in _words(dlg)
+                "none lying flat. Where the folding brings its panels 1 and "
+                "2 face to face, ● 34 of their holes line up with each "
+                "other, but are red all the same: their needle lines are out "
+                "of line elsewhere.") in says
+        assert _words(dlg).count("line up") == 1
     finally:
         dlg.close()
 
@@ -1800,24 +1808,39 @@ def _marked(dlg, state):
 
 
 def _said_out_of_line(dlg):
-    """Each count of stitch holes the report says are out of line, with
-    the pieces and panels it says them of: ``[(count, {(piece, panel or
-    None for all its panels)})]``."""
+    """Each count of stitch holes the report says are red -- out of line,
+    or in line with each other and red all the same -- with the pieces and
+    panels it says them of: ``[(count, {(piece, panel or None for all its
+    panels)})]``, None for a count of the whole stack's."""
+    def red(text):
+        n = sum(int(got.group(1)) for got in re.finditer(
+            r"(\d+) (?:of their holes )?(?:is|are) out of line", text))
+        n += sum(int(got.group(1)) for got in re.finditer(
+            r"(\d+) of them red all the same", text))
+        return n + sum(int(got.group(1)) for got in re.finditer(
+            r"(\d+) (?:of their holes )?lines? up with (?:each other|the "
+            r"other's)(?:, to within [\d.]+ mm)?, but (?:is|are) red", text))
+
     said = []
     for line in _lines(dlg):
         line = line.replace("Stitch holes where the folding brings pieces "
                             "together: ", "").replace(
             "Stitch holes through the layers: ", "")
-        got = re.search(r"(\d+) (?:of their holes )?(?:is|are) out of line",
-                        line) or re.search(r"(\d+) miss", line)
-        if not got:
+        own = re.match(r"(\w+), round .*? lying flat\.", line)
+        if own:
+            # (each two of its panels the folding brings face to face)
+            for clause in line.split(" Where the folding brings its panels "
+                                     )[1:]:
+                p, q = re.match(r"(\d+) and (\d+)", clause).groups()
+                said.append((red(clause), {(own.group(1), int(p)),
+                                           (own.group(1), int(q))}))
             continue
-        n = int(got.group(1))
+        n = red(line)
+        if not n:
+            continue
         faced = re.match(r"(\w+) \(panel (\d+)\) and (\w+) \(panel "
                          r"(\d+)\):", line)
-        own = re.match(r"(\w+), panels (\d+) and (\d+):", line) \
-            or re.match(r"(\w+), round .* brings its panels (\d+) and "
-                        r"(\d+) face to face", line)
+        own = re.match(r"(\w+), panels (\d+) and (\d+):", line)
         laid = re.match(r"(?:.*\. )?(\w+) and (\w+): ", line)
         if faced:
             a, p, b, q = faced.groups()
@@ -1863,14 +1886,32 @@ def test_the_holes_said_to_meet_and_out_of_line_are_those_marked(
                                if who == s.name)
         assert "The marks on the model show that reading." in words
         assert "by up to 0 mm" not in words
-        # every hole marked out of line is said so, once: by each sentence,
-        # of the pieces and panels it names
+        # every hole marked out of line is said so, once in the sentence
+        # of each two pieces or panels it is counted by: as out of line
+        # with the other, or as lining up with it and red all the same (a
+        # hole on a needle line through the layers and across a fold is in
+        # a sentence of each; once each was in one only); and a head says
+        # no more than are marked at all
         said = _said_out_of_line(dlg)
-        assert sum(n for n, _at in said) == sum(off.values())
-        for n, at in said:
-            assert at is not None
-            assert n == sum(count for (who, panel), count in off.items()
-                            if (who, panel) in at or (who, None) in at)
+        names = [lay.name] + [s.name for s in lay.sheets]
+        heads = [n for n, at in said if at is None]
+        said = {frozenset(at): n for n, at in said if at is not None}
+        red = set()
+        for f in check.findings:
+            if f.laid:
+                at = {(names[f.a], None), (names[f.b], None)}
+            else:
+                at = set(zip((names[f.a], names[f.b]), f.panels))
+            n = sum(check.state.get(k) == fs.OFF for k in f.numbers)
+            if frozenset(at) in said:
+                assert said[frozenset(at)] == n
+                red |= {k for k in f.numbers
+                        if check.state.get(k) == fs.OFF}
+        assert red == check.off
+        assert all(0 < n <= len(check.off) for n in heads)
+        for who, panel in off:
+            assert any((who, panel) in at or (who, None) in at
+                       for at in said)
     finally:
         dlg.close()
 
@@ -1880,52 +1921,82 @@ def test_a_c_fold_lining_punched_flat_is_told_as_the_model_marks_it(
     dlg = _dialog(_c_fold("flat"))
     try:
         check = dlg.view.check
-        assert check.readings == {1: (6, 8, False)}
+        # (the three panels' rows lie on the same needle lines shut: a
+        # hole is marked out of line where any hole on its line misses,
+        # the Shell's middle and right panels' too -- once 8 and 7 met)
+        assert check.readings == {1: (4, 2, False)}
         assert _marked(dlg, fs.MEETS) == {
-            ("Shell", 1): 1, ("Shell", 2): 8, ("Shell", 3): 7,
-            ("Liner", 1): 2, ("Liner", 2): 3, ("Liner", 3): 1}
+            ("Shell", 1): 1, ("Shell", 2): 2, ("Shell", 3): 1,
+            ("Liner", 1): 1, ("Liner", 2): 2, ("Liner", 3): 1}
         assert _marked(dlg, fs.OFF) == {
-            ("Shell", 1): 6, ("Liner", 1): 5, ("Liner", 2): 5,
-            ("Liner", 3): 6}
+            ("Shell", 1): 6, ("Shell", 2): 6, ("Shell", 3): 6,
+            ("Liner", 1): 6, ("Liner", 2): 6, ("Liner", 3): 6}
         says = _lines(dlg)
-        assert says[-4:] == [
+        # (the Shell and the Liner line up with each other as they lie:
+        # their line says so, and why 36 of those are red all the same;
+        # each two panels the folding brings face to face say what they do
+        # with each other -- the Shell's own too)
+        assert says[-12] == (
             "Stitch holes through the layers: Shell and Liner: ● all 44 line "
-            "up.",
-            "Stitch holes where the folding brings pieces together: Shell "
-            "(panel 1) and Liner (panel 3): ● 12 are out of line, by up to "
-            "3.33 mm.",
+            "up with each other, 36 of them red all the same: their needle "
+            "lines are out of line elsewhere.")
+        assert says[-11:-8] == [
+            "Stitch holes where the folding brings pieces together: ● 36 are "
+            "out of line, by up to 3.33 mm; ● 8 line up, to within 0.48 mm.",
+            "Shell, panels 1 and 2: ● 10 are out of line, by up to 2.86 mm; "
+            "● 4 line up with each other, to within 0.48 mm, 2 of them red "
+            "all the same: their needle lines are out of line elsewhere.",
+            "Shell, panels 1 and 3: ● 12 are out of line, by up to 3.33 mm."]
+        assert "Shell (panel 1) and Liner (panel 3): ● 12 are out of line, " \
+            "by up to 3.33 mm." in says
+        assert says[-2:] == [
             "Stitch holes of the pieces that go round a fold: the stack is "
             "read as punched to meet lying flat, the reading in which at "
-            "least as many of the whole stack's holes meet as the other: 22 "
-            "of its 44 do. Liner has more of its own holes meet when shut, "
-            "but the stack as a whole does not. The marks on the model show "
+            "least as many of the whole stack's holes meet as the other: 8 "
+            "of its 44 do, against 6 when shut. The marks on the model show "
             "that reading.",
-            "Liner, round folds A and B: 8 of its 22 holes meet when shut, 6 "
-            "lying flat. Where the folding brings its panels 1 and 2 face "
-            "to face, ● 10 of their holes are out of line with each other, "
-            "by up to 2.86 mm."]
+            "Liner, round folds A and B: 2 of its 22 holes meet when shut, 4 "
+            "lying flat. Where the folding brings its panels 2 and 3 face "
+            "to face, ● 10 of their holes are out of line, by up to 2.86 mm; "
+            "● 2 line up with each other, but are red all the same: their "
+            "needle lines are out of line elsewhere. Where the folding "
+            "brings its panels 1 and 3 face to face, ● 12 of their holes are "
+            "out of line, by up to 3.33 mm. Where the folding brings its "
+            "panels 1 and 2 face to face, ● 10 of their holes are out of "
+            "line, by up to 2.86 mm; ● 2 line up with each other, but are "
+            "red all the same: their needle lines are out of line "
+            "elsewhere."]
     finally:
         dlg.close()
 
 
-def test_holes_put_out_of_line_by_the_folding_are_not_said_of_the_layers(
+def test_holes_put_out_of_line_by_the_folding_are_said_of_the_layers_too(
         qapp, mm):
     dlg = _dialog(_c_fold("flat", "flat"))
     try:
         check = dlg.view.check
-        # every pair of layers lines up; 22 holes are marked out of line,
-        # all of them with what the folding brings onto them
-        assert [f.off for f in check.findings if f.laid] == [0, 0, 0]
-        assert len(check.off) == 22
+        # every pair of layers lines up as it lies; but 54 holes are marked
+        # out of line, on needle lines that what the folding brings onto
+        # them misses: the layers' head counts them as marked, and each
+        # pair of layers says it lines up, and how many of those are red
+        # all the same (once none was said, 22 marked)
+        assert [(f.off, f.met, f.red) for f in check.findings if f.laid] \
+            == [(0, 44, 36)] * 3
+        assert len(check.off) == 54
         says = _lines(dlg)
-        assert "Stitch holes through the layers: ● 44 line up." in says
-        assert ("Stitch holes where the folding brings pieces together: "
-                "Shell (panel 1) and Liner2 (panel 3): ● 12 are out of line, "
+        assert ("Stitch holes through the layers: ● 54 are out of line, by "
+                "up to 3.33 mm; ● 12 line up.") in says
+        assert "Shell and Liner1: 44 line up with each other, 36 of them " \
+            "red all the same: their needle lines are out of line " \
+            "elsewhere." in says
+        assert ("Shell (panel 1) and Liner2 (panel 3): ● 12 are out of line, "
                 "by up to 3.33 mm.") in says
-        assert ("Liner2, round folds A and B: 13 of its 22 holes meet when "
-                "shut, 6 lying flat. Where the folding brings its panels 1 "
-                "and 2 face to face, ● 10 of their holes are out of line "
-                "with each other, by up to 2.86 mm.") in says
+        assert ("Liner2, round folds A and B: 2 of its 22 holes meet when "
+                "shut, 4 lying flat. Where the folding brings its panels 2 "
+                "and 3 face to face, ● 10 of their holes are out of line, by "
+                "up to 2.86 mm; ● 2 line up with each other, but are red all "
+                "the same: their needle lines are out of line elsewhere.") \
+            in " ".join(says)
     finally:
         dlg.close()
 
@@ -1936,11 +2007,11 @@ def test_the_marks_are_said_to_show_the_reading_only_where_they_do(
     dlg = _dialog(_c_fold("flat"))
     try:
         check = dlg.view.check
-        assert check.readings == {1: (6, 8, False)}
+        assert check.readings == {1: (4, 2, False)}
         said = preview3d._readings_report(dlg.parts, dlg.layout_, check)
         assert "The marks on the model show that reading." in said[0]
         # counted as the marks were before the folding brought the Liner's
-        # panels face to face (22 meeting lying flat, 6 marked): not said
+        # panels face to face (22 meeting lying flat, 4 marked): not said
         monkeypatch.setattr(check, "readings", {1: (22, 8, False)})
         said = preview3d._readings_report(dlg.parts, dlg.layout_, check)
         assert "22 lying flat" in said[0]
@@ -2091,3 +2162,211 @@ def test_a_crossing_drawn_through_at_rest_is_said_in_red_and_marked(
                                   "report")
     finally:
         dlg.close()
+
+
+# -- two stitch holes on one needle line meet, and are said to ---------------
+
+def _rect(x0, y0, x1, y1):
+    return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+
+
+def _hole_words(lay):
+    """What the report says of a stack's stitch holes, in plain text, with
+    the check it was read from."""
+    from leathercad_app import preview3d
+
+    class Parts:
+        names = [lay.name] + [s.name for s in lay.sheets]
+
+    check = lay.lineup()
+    said = [preview3d._laid_report(lay, check),
+            preview3d._faced_report(check)] \
+        + preview3d._readings_report(Parts(), lay, check)
+    return check, [re.sub(r"<[^>]+>", "", x.replace("<br>", "\n"))
+                   for x in said if x]
+
+
+def _folded(holes, sheets, size=(200, 100), at=100.0, t=2.0, across=False):
+    lay = fs.fold_piece(_rect(0, 0, *size), [fs.FoldLine(
+        (0, at) if across else (at, 0),
+        (size[0], at) if across else (at, size[1]), 180.0, 1,
+        label="A")], thickness=t, holes=holes, sheets=sheets)
+    lay.name = "Shell"
+    return lay
+
+
+def test_a_seam_facing_through_a_lining_with_no_hole_there_is_said_to_meet(
+        qapp, mm):
+    from leathercad import sheets as sh
+    # 1.6 mm folded flat, 10 holes; two 0.8 mm linings outside, the inner
+    # punched 6 mm off: the Shell's halves face 0 mm apart, and all 10 are
+    # said to line up, as marked (once "none of the 10 has a hole to meet")
+    row = [(100 - 10 - 17 * i, 90.0, 1.0) for i in range(5)] + \
+        [(100 + 10 + 17 * i, 90.0, 1.0) for i in range(5)]
+    check, said = _hole_words(_folded(row, [
+        sh.Sheet(_rect(0, 0, 200, 97), 0.8, -1, name="Inner",
+                 holes=[(x, y - 6.0, d) for x, y, d in row]),
+        sh.Sheet(_rect(0, 0, 200, 97), 0.8, -1, name="Outer", holes=row)],
+        t=1.6))
+    assert [check.state.get(i) for i in range(10)] == [fs.MEETS] * 10
+    assert ("Stitch holes where the folding brings pieces together: Shell, "
+            "panels 1 and 2: ● all 10 line up.") in said
+    assert "All 10 of Shell's holes pass through Inner, which has no holes " \
+        "there." in said[0]
+    assert not any("hole to meet" in x for x in said)
+
+
+@pytest.mark.parametrize("side", [-1, 1])
+def test_a_patch_with_one_snap_hole_far_off_is_told_as_one_with_none(
+        qapp, mm, side):
+    from leathercad import sheets as sh
+    # a seam of 5 + 5 holes along x = 20 across a fold on y = 60; a 1 mm
+    # patch on the lower half, outside or inside, with no holes and with
+    # one 8 mm snap hole at (100, 30): the same marks and the same words
+    # of the seam (with the snap hole it was once unmarked and said to
+    # have no hole to meet; inside, never marked or said)
+    row = [(20.0, 54.0 - 10 * i, 1.2) for i in range(5)] + \
+        [(20.0, 66.0 + 10 * i, 1.2) for i in range(5)]
+    got = []
+    for holes in ([], [(100.0, 30.0, 8.0)]):
+        check, said = _hole_words(_folded(row, [sh.Sheet(
+            _rect(2, 5, 140, 58), 1.0, side, name="Patch", holes=holes)],
+            size=(150, 120), at=60.0, across=True))
+        assert [check.state.get(i) for i in range(10)] == [fs.MEETS] * 10
+        # (inside, the patch lies between the halves when shut, and the
+        # other half's holes come through it there too)
+        assert said[0].startswith(
+            "Stitch holes through the layers: "
+            + ("5 of Shell's 10" if side < 0 else "All 10 of Shell's")
+            + " holes pass through Patch, which has no holes there. The "
+            "laser will not cut them in that piece.")
+        got.append([x for x in said[1].split("\n") if "Shell, panels" in x])
+    # (the snap hole, facing the Shell's other half when shut, is said to
+    # have no hole to meet, in a line of its own)
+    assert got == [["Stitch holes where the folding brings pieces together: "
+                    "Shell, panels 1 and 2: ● all 10 line up."]] * 2 \
+        if side < 0 else [[
+            "Stitch holes where the folding brings pieces together: Shell, "
+            "panels 1 and 2: ● all 10 line up."], [
+            "Shell, panels 1 and 2: ● all 10 line up."]]
+
+
+def test_holes_moved_by_the_shut_reading_are_said_where_they_land(qapp, mm):
+    from leathercad import sheets as sh
+    # 2 mm folded flat; a 1 mm lining inside punched for shut and a patch
+    # on it over the left half with the Shell's holes there: every hole
+    # meets where it lands, and nothing is said out of line (14 once were,
+    # by 2.36 mm; and the layers 7, "by up to 0 mm")
+    row = [(100 - 8 - 13 * i, 95.0, 1.0) for i in range(7)] + \
+        [(100 + 8 + 13 * i, 95.0, 1.0) for i in range(7)]
+    pull = 0.75 * math.pi
+    check, said = _hole_words(_folded(row, [
+        sh.Sheet(_rect(0, 0, 200, 98), 1.0, 1, name="Lining",
+                 holes=[(x + (pull if x < 100 else -pull), y, d)
+                        for x, y, d in row]),
+        sh.Sheet(_rect(5, 60, 95, 99), 1.0, 1, name="Patch",
+                 holes=row[:7])]))
+    assert len(check.holes(fs.MEETS)) == 35
+    words = " ".join(said)
+    assert "out of line" not in words and "by up to 0" not in words
+    assert ("Stitch holes where the folding brings pieces together: Patch "
+            "(panel 1) and Lining (panel 2): ● all 14 line up.") in said
+    assert said[-1].startswith(
+        "Stitch holes of the pieces that go round a fold: the stack is read "
+        "as punched to meet when shut, each piece's length round its folds "
+        "taken up, the reading in which more of the whole stack's holes "
+        "meet: all 35 do, against none lying flat.")
+
+
+def test_a_c_fold_lining_punched_for_shut_is_told_as_the_model_marks_it(
+        qapp, mm):
+    # read shut, the Liner's holes are compared where they land: the
+    # sentence of the Shell's first panel and the Liner's third says the
+    # out of line holes marked on those two panels (once 10, with 5
+    # marked), and the Liner's own panels facing are said too (once left
+    # out read shut)
+    dlg = _dialog(_c_fold("shut"))
+    try:
+        check = dlg.view.check
+        assert check.readings == {1: (2, 4, True)}
+        off = _marked(dlg, fs.OFF)
+        says = _lines(dlg)
+        faced, = [x for x in says if "Shell (panel 1) and Liner (panel 3)"
+                  in x]
+        n = int(re.search(r"(\d+) are out of line", faced).group(1))
+        assert n == off[("Shell", 1)] + off[("Liner", 3)] == 12
+        liner, = [x for x in says if x.startswith("Liner, round ")]
+        assert ("Where the folding brings its panels 1 and 2 face to face, "
+                "● 10 of their holes are out of line, by up to 2.86 mm; ● 2 "
+                "line up with each other, but are red all the same: their "
+                "needle lines are out of line elsewhere.") in liner
+        assert "by up to 0 mm" not in _words(dlg)
+    finally:
+        dlg.close()
+
+
+def test_two_pieces_in_line_are_said_to_be_and_why_they_are_red(qapp, mm):
+    from leathercad import sheets as sh
+    # 1.2 mm folded flat; 0.6 mm linings: one outside punched 5.5 mm off,
+    # one inside where the Shell is, one inside that punched for shut.
+    # Read flat, the Shell and the first inside lining line up with each
+    # other hole for hole, red only because the third's halves, folded,
+    # are 2.36 mm off their needle lines: said so (once "28 are out of
+    # line, by up to 2.36 mm", of two pieces that coincide)
+    row = [(100 - 8 - 13 * i, 95.0, 1.0) for i in range(7)] + \
+        [(100 + 8 + 13 * i, 95.0, 1.0) for i in range(7)]
+    pull = 0.75 * math.pi
+    check, said = _hole_words(_folded(row, [
+        sh.Sheet(_rect(0, 0, 200, 98), 0.6, -1, name="Out",
+                 holes=[(x, y - 5.5, d) for x, y, d in row]),
+        sh.Sheet(_rect(0, 0, 200, 98), 0.6, 1, name="In", holes=row),
+        sh.Sheet(_rect(0, 0, 200, 98), 0.6, 1, name="Pulled",
+                 holes=[(x + (pull if x < 100 else -pull), y, d)
+                        for x, y, d in row])], t=1.2))
+    layers = said[0].split("\n")
+    assert layers[0].endswith("● 42 are out of line, by up to 2.36 mm.")
+    assert layers[1:] == [
+        "Shell and In: 28 line up with each other, but are red all the "
+        "same: their needle lines are out of line elsewhere.",
+        "Shell and Pulled: 28 are out of line, by up to 2.36 mm.",
+        "In and Pulled: 28 are out of line, by up to 2.36 mm."]
+
+
+def test_a_piece_between_two_halves_shut_is_said_to_be_passed_through(
+        qapp, mm):
+    from leathercad import sheets as sh
+    # a 1 mm strip in three, folded right onto middle, then left onto
+    # right; holes on the left and middle panels that land on each other
+    # through the right, and a patch with no holes on the right: the
+    # needle goes through both, and that is said (once nothing was)
+    mid = [(110.0 + 10 * i, 50.0, 1.0) for i in range(5)]
+    lay = fs.fold_piece(
+        _rect(0, 0, 260, 100),
+        [fs.FoldLine((80, 0), (80, 100), 180.0, 1, label="A", order=2),
+         fs.FoldLine((180, 0), (180, 100), 180.0, 1, label="B", order=1)],
+        thickness=1.0, base=1,
+        holes=mid + [(160.0 - x, y, d) for x, y, d in mid],
+        sheets=[sh.Sheet(_rect(185, 10, 255, 90), 0.6, 1, name="Patch")])
+    lay.name = "Shell"
+    _check, said = _hole_words(lay)
+    assert said[0] == (
+        "Stitch holes through the layers: All 10 of Shell's holes pass "
+        "through Patch, which has no holes there. The laser will not cut "
+        "them in that piece. 10 of Shell's holes pass through its own "
+        "panel 3 when it is shut, which has no holes there.")
+    assert said[1] == ("Stitch holes where the folding brings pieces "
+                       "together: Shell, panels 1 and 2: ● all 10 line up.")
+
+
+def test_one_hole_passing_through_a_piece_is_said_as_one(qapp, mm):
+    from leathercad import sheets as sh
+    # a patch with a single snap hole, where the Shell has no hole: said
+    # of one hole (once "All 1 of Patch's holes pass through")
+    row = [(20.0, 54.0 - 10 * i, 1.2) for i in range(5)] + \
+        [(20.0, 66.0 + 10 * i, 1.2) for i in range(5)]
+    _check, said = _hole_words(_folded(row, [sh.Sheet(
+        _rect(2, 5, 140, 58), 1.0, -1, name="Patch",
+        holes=[(100.0, 30.0, 8.0)])], size=(150, 120), at=60.0,
+        across=True))
+    assert "Patch's hole passes through Shell, which has no hole there. " \
+        "The laser will not cut it in that piece." in said[0]

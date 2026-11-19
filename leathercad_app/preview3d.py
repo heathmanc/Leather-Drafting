@@ -395,58 +395,143 @@ def _pair(f) -> str:
     return "; ".join(bits) or "none line up"
 
 
+def _sewn(off: int, worst: float, met: int, gap: float, lone: int,
+          red: int, more: int = 0, dots: bool = True) -> str:
+    """What two pieces of a stack do with each other's stitch holes, in
+    words: as ``_tally`` (with its dots), or as ``_pair`` for one line of
+    a list (without), and of those that line up with each other, how many are
+    marked out of line all the same (``red``) -- something else on their
+    needle line is out of line -- so that every red mark on the two is
+    accounted for and neither is blamed for it."""
+    def dot(state):
+        return f"{_bullet(state)} " if dots else ""
+
+    bits = []
+    if off:
+        bits.append(f"{dot(fs.OFF)}{off} "
+                    + ("is out of line, by " if off == 1
+                       else "are out of line, by up to ") + _len(worst))
+    if met:
+        close = f", to within {_len(gap)}" if gap > 0.05 else ""
+        some = f"all {met}" if dots and met > 1 \
+            and not (off or lone or more) else f"{met}"
+        if not red:
+            said = ("lines up" if met == 1 else "line up") + close
+        else:
+            said = ("lines up with the other's" if met == 1
+                    else "line up with each other") + close
+            said += (", but " + ("is" if met == 1 else "are")
+                     if red == met else f", {red} of them") \
+                + " red all the same: " \
+                + ("its needle line is" if red == 1
+                   else "their needle lines are") \
+                + " out of line elsewhere"
+        bits.append(f"{dot(fs.MEETS)}{some} {said}")
+    if lone:
+        bits.append(f"{dot(fs.LONE)}"
+                    + (f"none of the {lone} has a hole to meet"
+                       if lone > 1 and not (off or met)
+                       else f"{lone} " + ("has" if lone == 1 else "have")
+                       + " no hole to meet"))
+    return "; ".join(bits)
+
+
 def _laid_report(stack, check) -> str:
     """What the check of the stitch holes found in a stack lying flat
     (the ``lineup`` of a stack's model), for the report.
 
     First, as plain counts, the holes of one piece that pass through
-    another where it has none: the laser cuts each piece only its own
+    another where it has none -- through the layers, and, folded, through
+    what lies between two pieces the folding brings face to face, the
+    piece's own other panels too: the laser cuts each piece only its own
     holes, so this is how the pattern stands, not a fault. Then the holes
     that are meant to meet, worded as for a folded piece, with the names
-    of the pieces where that says which panels."""
+    of the pieces where that says which panels: the head counts them as
+    the marks show them, each pair's line what those two do with each
+    other (``_sewn``)."""
     found = [f for f in check.findings if getattr(f, "laid", False)]
-    through = {}                # a piece: the pieces its holes pass through
-    for f in found:
-        for mine, other, n in ((f.a, f.b, f.through[0]),
-                               (f.b, f.a, f.through[1])):
-            if n:
-                through.setdefault(mine, []).append((other, n))
     names = {}
     for f in found:
         names[f.a], names[f.b] = (sm.escaped(n) for n in f.names)
+    for k, name in enumerate([getattr(stack, "name", "")] + [
+            s.name for s in getattr(stack, "sheets", [])]):
+        names.setdefault(k, sm.escaped(name or ""))
+    through = {}                # a piece: the pieces its holes pass through
+    own = {}                    # a piece: its own panels they pass through
+    passes = getattr(check, "passes", None)
+    if passes is None:
+        for f in found:
+            for mine, other, n in ((f.a, f.b, f.through[0]),
+                                   (f.b, f.a, f.through[1])):
+                if n:
+                    through.setdefault(mine, []).append((other, n))
+    for (mine, other, panel), ks in (passes or {}).items():
+        through.setdefault(mine, [])
+        if other == mine:
+            got = own.setdefault(mine, ([], set()))
+            got[0].append(panel)
+            got[1].update(ks)
+        else:
+            through[mine].append((other, len(ks)))
     out = []
     for mine, where in through.items():
         if len(where) == 1:
             (other, n), = where
             total = stack.hole_sheet.count(mine)
-            some = f"All {n} of {names[mine]}'s" if n >= total \
-                else f"{n} of {names[mine]}'s {total}"
-            out.append(f"{some} holes pass through {names[other]}, which "
-                       "has no holes there. The laser will not cut them "
-                       "in that piece.")
-        else:
+            if n == 1:
+                some = f"{names[mine]}'s hole passes" if total == 1 \
+                    else f"1 of {names[mine]}'s {total} holes passes"
+                out.append(f"{some} through {names[other]}, which has no "
+                           "hole there. The laser will not cut it in that "
+                           "piece.")
+            else:
+                some = f"All {n} of {names[mine]}'s" if n >= total \
+                    else f"{n} of {names[mine]}'s {total}"
+                out.append(f"{some} holes pass through {names[other]}, "
+                           "which has no holes there. The laser will not "
+                           "cut them in that piece.")
+        elif where:
             out.append(
                 f"{names[mine]}'s holes pass through "
                 + sm.listed([f"{names[other]} ({n})" for other, n in where])
                 + ", which have no holes there. The laser will not cut "
                   "them in those pieces.")
+        if mine in own:
+            panels, ks = own[mine]
+            n = len(ks)
+            out.append(
+                f"{n} of {names[mine]}'s holes "
+                + ("passes" if n == 1 else "pass") + " through its own "
+                + ("" if mine == 0 else "leather on ")
+                + ("panel " if len(panels) == 1 else "panels ")
+                + sm.listed([str(p) for p in sorted(panels)])
+                + " when it is shut, which has no "
+                + ("hole" if n == 1 else "holes") + " there.")
     sewn = [f for f in found if f.met or f.off]
-    passing = sum(n for where in through.values() for _o, n in where)
-    # (the holes the layers found out of line are those with a hole they
-    # miss, ``lands``: the others marked out of line are out of line with
-    # what the folding brings onto them, which ``_faced_report`` says)
-    off = len([k for k in check.off if k in check.lands])
+    passing = sum(n for where in through.values() for _o, n in where) \
+        + sum(len(ks) for _p, ks in own.values())
+    # (the head counts the holes of the layers -- those that meet or miss
+    # a hole of a piece they lie on, ``sewn`` -- as the marks show them,
+    # with the furthest miss on their needle lines, ``apart``; the others
+    # marked meet only what the folding brings onto them, which
+    # ``_faced_report`` says)
+    off = check.off & check.sewn
+    apart = getattr(check, "apart", {})
     if len(sewn) == 1:
         f, = sewn
         out.append(f"{names[f.a]} and {names[f.b]}: "
-                   + _tally(f.off, f.worst, f.met, f.gap, 0, f.lone))
+                   + _sewn(f.off, f.worst, f.met, f.gap, 0,
+                           getattr(f, "red", 0), f.lone) + ".")
     elif sewn:
-        out.append(_tally(off, max(f.worst for f in sewn),
-                          len(check.holes(fs.MEETS)),
+        out.append(_tally(len(off), max([apart.get(k, 0.0) for k in off]
+                                        + [f.worst for f in sewn]),
+                          len(check.holes(fs.MEETS) & check.sewn),
                           max(f.gap for f in sewn), 0,
-                          passing + len(check.off) - off)
+                          passing + len(check.off) - len(off))
                    + "".join(f"<br>{names[f.a]} and {names[f.b]}: "
-                             f"{_pair(f)}." for f in sewn))
+                             + _sewn(f.off, f.worst, f.met, f.gap, 0,
+                                     getattr(f, "red", 0), dots=False)
+                             + "." for f in sewn))
     if not out:
         return ""
     return "<b>Stitch holes through the layers:</b> " + " ".join(out)
@@ -456,12 +541,13 @@ def _faced_report(check) -> str:
     """The stitch holes of pieces of a stack that the folding brings face
     to face (``sheets.Faced``), for the report: worded as two panels of a
     folded piece are, with the names of the pieces and the panels they
-    lie on, the lower panel first. A piece whose holes are read two ways
-    as it goes round a fold (``check.readings``) is not compared with
-    itself here: what the marks show of it is ``_readings_report``'s to
-    say, and it says it where the stack is read lying flat (read shut,
-    those holes are not marked out of line). "" when the folding brings
-    none together."""
+    lie on, the lower panel first, each line what those two do with each
+    other (``_sewn``); with more than one, first the holes they are
+    about, each once, as the marks show them. A piece whose holes are
+    read two ways as it goes round a fold (``check.readings``) is not
+    compared with itself here: what the marks show of it is
+    ``_readings_report``'s to say. "" when the folding brings none
+    together."""
     readings = getattr(check, "readings", None) or {}
     found = [f for f in check.findings
              if getattr(f, "laid", True) is False
@@ -478,9 +564,21 @@ def _faced_report(check) -> str:
         return f"{one} (panel {p1}) and {two} (panel {p2})"
 
     head = "<b>Stitch holes where the folding brings pieces together:</b> "
-    return head + "<br>".join(
-        f"{who(f)}: " + _tally(f.off, f.worst, f.met, f.gap, f.lone)
-        for f in found)
+    lines = [f"{who(f)}: " + _sewn(f.off, f.worst, f.met, f.gap, f.lone,
+                                   getattr(f, "red", 0)) + "."
+             for f in found]
+    if len(found) == 1:
+        return head + lines[0]
+    holes = set().union(*(getattr(f, "numbers", ()) for f in found))
+    off = {k for k in holes if check.state.get(k) == fs.OFF}
+    apart = getattr(check, "apart", {})
+    return head + _tally(
+        len(off), max([apart.get(k, 0.0) for k in off]
+                      + [f.worst for f in found]),
+        sum(1 for k in holes if check.state.get(k) == fs.MEETS),
+        max(f.gap for f in found),
+        sum(1 for k in holes if check.state.get(k) is None)) \
+        + "<br>" + "<br>".join(lines)
 
 
 def _readings_report(parts, model, check) -> List[str]:
@@ -488,18 +586,17 @@ def _readings_report(parts, model, check) -> List[str]:
     are read (``check.readings``): the whole stack one way, punched to
     meet lying flat or punched to meet when shut (the length of each
     piece round every bend taken up), whichever has more of the whole
-    stack's holes meeting -- said once, with how many of them meet so,
-    and that the marks on the model show it where they do -- then for
-    each such piece how many of its holes meet each way. Read lying
-    flat, the holes of such a piece that are out of line with its own
-    where the folding brings two of its panels face to face are said
-    with it (read shut, those holes are marked where they land, not
-    where the model lays them, and the folding does not mark them)."""
+    stack's holes meeting -- said once, with how many of them meet so and
+    the other way, and that the marks on the model show it where they do
+    -- then for each such piece how many of its holes meet each way, and
+    how many of its own are marked out of line where the folding brings
+    two of its panels face to face (read shut, as they land)."""
     readings = getattr(check, "readings", None) or {}
     if not readings:
         return []
     shut = any(shown for _f, _s, shown in readings.values())
     met, n = len(check.holes(fs.MEETS)), len(model.holes)
+    other = getattr(check, "totals", (met, met))[0 if shut else 1]
     # (a piece of them may have more of its own holes meet the other way)
     better = [sm.escaped(parts.names[k])
               for k, (flat, folded, _shown) in sorted(readings.items())
@@ -512,8 +609,10 @@ def _readings_report(parts, model, check) -> List[str]:
            + (", the reading in which more of the whole stack's holes meet"
               if shut else ", the reading in which at least as many of the "
               "whole stack's holes meet as the other")
-           + (f": all {n} do." if met == n and n > 1
-              else f": {met or 'none'} of its {n} do.")
+           + (f": all {n} do" if met == n and n > 1
+              else f": {met or 'none'} of its {n} do")
+           + f", against {other or 'none'} "
+           + ("lying flat." if shut else "when shut.")
            + (f" {sm.listed(better)} "
               + ("has" if len(better) == 1 else "have")
               + " more of " + ("its" if len(better) == 1 else "their")
@@ -540,18 +639,32 @@ def _readings_report(parts, model, check) -> List[str]:
         line = (f"{name}, round {round_}: {folded or 'none'} of its {n} "
                 f"holes meet when shut, {flat or 'none'} lying flat.")
         # its holes out of line with its own, where the folding brings two
-        # of its panels face to face (``_faced_report`` leaves these out)
+        # of its panels face to face, and those in line with each other
+        # there that are marked out of line all the same
+        # (``_faced_report`` leaves these out)
         for f in [f for f in check.findings
                   if getattr(f, "laid", True) is False
-                  and f.a == f.b == k and f.off and not shut]:
+                  and f.a == f.b == k and (f.off or getattr(f, "red", 0))]:
             one, two = sorted(f.panels)
+            bits = []
+            if f.off:
+                bits.append(f"{_bullet(fs.OFF)} {f.off} of their holes "
+                            + (f"is out of line, by {_len(f.worst)}"
+                               if f.off == 1 else
+                               f"are out of line, by up to "
+                               f"{_len(f.worst)}"))
+            if getattr(f, "red", 0):
+                bits.append(f"{_bullet(fs.OFF)} {f.red} "
+                            + ("" if f.off else "of their holes ")
+                            + ("lines up with the other's, but is"
+                               if f.red == 1 else
+                               "line up with each other, but are")
+                            + " red all the same: "
+                            + ("its needle line is" if f.red == 1
+                               else "their needle lines are")
+                            + " out of line elsewhere")
             line += (f" Where the folding brings its panels {one} and "
-                     f"{two} face to face, {_bullet(fs.OFF)} {f.off} of "
-                     "their holes "
-                     + (f"is out of line with another, by {_len(f.worst)}."
-                        if f.off == 1 else
-                        f"are out of line with each other, by up to "
-                        f"{_len(f.worst)}."))
+                     f"{two} face to face, " + "; ".join(bits) + ".")
         out.append(line)
     return ["<br>".join(out)]
 

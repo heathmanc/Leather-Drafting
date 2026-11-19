@@ -2634,7 +2634,12 @@ def ends(layout, h, half: float):
             if not (b[0] < rb[2] and rb[0] < b[2] and b[1] < rb[3]
                     and rb[1] < b[3]):
                 continue
+            # (without the edges of no length clipping leaves where a
+            # corner of the cell lies on the band's edge: such an edge
+            # points any way at all, and would put a point well inside
+            # the part outside it)
             got = pc.clip_to_convex(c.pts, rect)
+            got, _f = pc.tidy(got, [0] * len(got))
             if len(got) >= 3 and abs(pc.area(got)) > 1e-9:
                 flat.append(pc.ccw(got))
         out.append(flat)

@@ -1537,6 +1537,187 @@ def test_no_point_of_the_still_panel_has_more_or_less_leather_than_told(
     assert min(found) == pytest.approx(leather.b, abs=0.01)
 
 
+# -- a stack turned on the page -----------------------------------------------
+
+# (each angle with the point it is turned about: turned 30 degrees about
+# the origin, or 137 about (37, -11), the slit flap's liner was once
+# bent past the hinge's end over the body's flat leather, on its left,
+# and so said to be slit there for 46.4632 mm against 26.1416 on its
+# right)
+TURNS = [(0.0, 0.0, 0.0), (15.0, 0.0, 0.0), (30.0, 0.0, 0.0),
+         (45.0, 0.0, 0.0), (60.0, 0.0, 0.0), (90.0, 0.0, 0.0),
+         (137.0, 37.0, -11.0)]
+
+
+def _turned_stack(ring, line, way, pieces, turn, **kw):
+    deg, cx, cy = turn
+    (x0, y0), (x1, y1) = turned(line, deg, cx, cy)
+    return stack(turned(ring, deg, cx, cy),
+                 [fold(x0, y0, x1, y1, 180.0, way, **kw)],
+                 [(turned(p, deg, cx, cy), t, 1) for p, t in pieces])
+
+
+def _back(turn, p):
+    deg, cx, cy = turn
+    return turned([p], -deg, cx, cy)[0]
+
+
+def _slits_back(lay, turn):
+    return [(round(n.a, 4), _back(turn, n.at))
+            for n in _notes(lay, "slit")]
+
+
+@pytest.mark.parametrize("turn", TURNS)
+@pytest.mark.parametrize("way, long", [(1, 26.1416), (-1, 24.0708)])
+def test_a_slit_flaps_liner_is_slit_as_long_however_the_stack_is_turned(
+        turn, way, long):
+    # the flap cut 3 mm into the body by two slits half a mm wide, folded
+    # at 57 mm, under a 1 mm liner from 40 to 70 mm: parted from what is
+    # glued to the body beside each slit, the same length either side
+    # and at every angle, as drawn
+    lay = _turned_stack(_slit_tee(3.0), [(30, 57), (70, 57)], way,
+                        [(rect(10, 40, 90, 70), 1.0)], turn)
+    got = sorted(_slits_back(lay, turn), key=lambda s: s[1][0])
+    assert [a for a, _at in got] == [long, long]
+    assert [at for _a, at in got] == [
+        pytest.approx((19.75, 60.0), abs=1e-6),
+        pytest.approx((80.25, 60.0), abs=1e-6)]
+    # none of the liner bends where it is glued to the body's flat
+    # leather past the hinge's ends, below the body's edge beside the
+    # slits
+    bent = [_back(turn, p) for c in lay.sheet_cells
+            if c.hinge is not None for p in c.pts]
+    assert not [(x, y) for x, y in bent
+                if (x < 29.5 - 1e-6 or x > 70.5 + 1e-6) and y < 60 - 1e-6]
+
+
+@pytest.mark.parametrize("turn", [(196.0, 0.0, 0.0), (41.0, 37.0, -11.0)])
+def test_a_slit_flaps_liner_mirrored_and_turned_is_slit_as_long(turn):
+    # the same stack drawn mirrored (x to -x) and turned 196 degrees
+    # about the origin or 41 about (37, -11): once bent over the body's
+    # flat leather past the hinge's far end, and said to be slit there
+    # for 45.0002 mm against 26.1416 on the other side
+    def mirrored(pts):
+        return [(-x, y) for x, y in reversed(pts)]
+    lay = _turned_stack(mirrored(_slit_tee(3.0)), [(-70, 57), (-30, 57)],
+                        1, [(mirrored(rect(10, 40, 90, 70)), 1.0)], turn)
+    got = sorted(_slits_back(lay, turn), key=lambda s: s[1][0])
+    assert [a for a, _at in got] == [26.1416, 26.1416]
+    assert [at for _a, at in got] == [
+        pytest.approx((-80.25, 60.0), abs=1e-6),
+        pytest.approx((-19.75, 60.0), abs=1e-6)]
+
+
+@pytest.mark.parametrize("turn", TURNS + [(250.0, 37.0, -11.0),
+                                          (270.0, 37.0, -11.0)])
+@pytest.mark.parametrize("way, long", [(1, 26.1416), (-1, 24.0708)])
+def test_a_strip_across_a_slit_flaps_hinge_is_slit_alike_however_turned(
+        turn, way, long):
+    # a strip from 50 to 70 mm across the same slit flap's fold line
+    # (turned 250 or 270 degrees about (37, -11), once 46.4632 mm on one
+    # side)
+    lay = _turned_stack(_slit_tee(3.0), [(30, 57), (70, 57)], way,
+                        [(rect(10, 50, 90, 70), 1.0)], turn)
+    got = sorted(_slits_back(lay, turn), key=lambda s: s[1][0])
+    assert [a for a, _at in got] == [long, long]
+    assert [at for _a, at in got] == [
+        pytest.approx((19.75, 60.0), abs=1e-6),
+        pytest.approx((80.25, 60.0), abs=1e-6)]
+
+
+@pytest.mark.parametrize("turn", TURNS)
+@pytest.mark.parametrize("way, long", [(1, 23.1416), (-1, 21.5708)])
+def test_the_plain_tees_liner_is_slit_as_long_however_the_stack_is_turned(
+        turn, way, long):
+    lay = _turned_stack(TEE, [(0, 60), (100, 60)], way,
+                        [(rect(10, 40, 90, 70), 1.0)], turn)
+    got = sorted(_slits_back(lay, turn), key=lambda s: s[1][0])
+    assert [a for a, _at in got] == [long, long]
+    assert [at for _a, at in got] == [
+        pytest.approx((20.0, 60.0), abs=1e-6),
+        pytest.approx((80.0, 60.0), abs=1e-6)]
+
+
+@pytest.mark.parametrize("turn", TURNS)
+@pytest.mark.parametrize("way", [1, -1])
+def test_a_strap_across_a_hinges_end_is_slit_as_long_however_turned(
+        turn, way):
+    # the T folded across its flap at 65 mm, and a strap from x 20 to 40
+    # across the end of the hinge: parted along the body's edge beside
+    # the flap, 15.9956 mm
+    lay = _turned_stack(TEE, [(0, 65), (100, 65)], way,
+                        [(rect(20, 50, 40, 80), 1.0)], turn, radius=6.0)
+    (a, at), = _slits_back(lay, turn)
+    assert a == 15.9956
+    assert at == pytest.approx((25.0, 60.0), abs=1e-6)
+
+
+@pytest.mark.parametrize("turn", TURNS)
+def test_a_liner_over_two_folds_that_cross_is_said_alike_however_turned(
+        turn):
+    # the L-shaped piece and its liner standing out over the corner where
+    # its two fold lines cross (see above): the same crossing and the
+    # same slit at every angle
+    deg, cx, cy = turn
+    (a0, a1), (b0, b1) = (turned(line, deg, cx, cy) for line in (
+        [(0, 75), (100, 75)], [(70, 0), (70, 60)]))
+    lay = stack(turned(L_SHAPE, deg, cx, cy),
+                [fold(*a0, *a1, 180.0, 1, order=1),
+                 fold(*b0, *b1, 135.0, -1, label="B", order=2)],
+                [(turned(rect(20, 50, 100, 100), deg, cx, cy), 1.0, 1)])
+    crossing, = _notes(lay, "crossing")
+    assert (crossing.sheet, crossing.fold, crossing.other) == (1, 0, (1,))
+    assert _back(turn, crossing.at) == pytest.approx((70.0, 75.0),
+                                                          abs=1e-6)
+    (a, at), = _slits_back(lay, turn)
+    assert a == 34.3197
+    assert at == pytest.approx((85.59, 75.0), abs=0.01)
+
+
+def test_a_square_stack_is_not_slit_over_the_body_past_its_hinges_end():
+    # a T 138.59 mm wide whose 41.63 mm flap is cut 1.31 mm into the body
+    # by two 1 mm slits, folded shut at 0.1 mm below the body's edge, and
+    # four pieces under it: drawn square to the page, but the body's
+    # cells past the hinge's far end were once clipped with an edge of
+    # 7.1e-15 mm, and the liners over them bent and said to be slit for
+    # 27.7509 and 42.3426 mm on the right; it is one parting of
+    # 34.8377 mm along the body's edge, like the 66.3832 on the left
+    top = 59.098365
+    ring = [(0, 0), (138.590324, 0), (138.590324, top),
+            (117.519018, top), (117.519018, 57.791869),
+            (116.519018, 57.791869), (116.519018, 129.214131),
+            (74.891949, 129.214131), (74.891949, 57.791869),
+            (73.891949, 57.791869), (73.891949, top), (0, top)]
+    tab = [(17.891949, 48.998365), (79.817677, 48.998365),
+           (81.027064, 55.078365), (84.471108, 60.23274),
+           (89.625483, 63.676783), (95.705483, 64.886171),
+           (101.785483, 63.676783), (106.939859, 60.23274),
+           (110.383902, 55.078365), (111.593289, 48.998365),
+           (173.519018, 48.998365), (173.519018, 103.520492),
+           (17.891949, 103.520492)]
+    patch = [(138.891254, 56.637106), (189.115945, 56.637106),
+             (189.115945, 70.929042), (158.668508, 70.929042),
+             (158.668508, 82.727208), (138.891254, 82.727208)]
+    lay = stack(ring, [fold(74.891949, 58.998365, 116.519018, 58.998365,
+                            180.0, -1, radius=0.0)],
+                [(rect(14.891949, 41.615105, 176.519018, 75.957246),
+                  0.6, -1), (patch, 1.0, -1), (tab, 0.6, -1),
+                 (rect(35.421617, 25.877559, 78.96515, 56.281229),
+                  1.0, -1)], t=1.6)
+    got = sorted((n.sheet, round(n.a, 4), round(n.at[0], 4),
+                  round(n.at[1], 4)) for n in _notes(lay, "slit"))
+    assert got == [(1, 34.8377, 128.0547, 59.0984),
+                   (1, 66.3832, 44.3919, 59.0984),
+                   (3, 34.8377, 128.0547, 59.0984),
+                   (3, 63.3832, 45.8919, 59.0984),
+                   (4, 3.566, 74.8919, 53.8933)]
+    # nothing of the liners bends over the body past the slit beyond the
+    # hinge's far end (past the body's right side, at 138.59 mm, they may)
+    assert not [p for c in lay.sheet_cells if c.hinge is not None
+                for p in c.pts if 117.519018 + 1e-6 < p[0] < 138.59
+                and p[1] < top - 1e-6]
+
+
 def test_a_slab_of_leather_tipped_up_is_met_as_a_plane_says_piece_by_piece():
     # a 20 by 10 mm slab, 2 mm thick, tipped 30 degrees about its 10 mm
     # edge: seen from above, a needle goes through 2 / cos 30 of it where

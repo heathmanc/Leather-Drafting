@@ -55,7 +55,11 @@ made only when the release workflow is run by hand with it ticked.
   cut them in those pieces.* A lining with holes of its own that goes
   round a fold is read both ways — punched to meet lying flat, or
   punched to meet when shut — and the report says which reading the
-  marks show and how many holes meet in each.
+  marks show and how many holes meet in each. Pieces the fold shuts on
+  to each other, a pocket on each half, are checked as well. Each pair
+  of pieces is told what it does with the other, so the pair to put
+  right is named with its own distance, and a hole is red when anything
+  on its needle line is out of line.
 * **Generated wallets arrive put together.** The Bifold wallet and Card
   pocket stack generators and the Card holder and Slim card holder
   templates come as stacks, ready to look at. The bifold dialog asks for

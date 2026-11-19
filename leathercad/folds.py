@@ -27,6 +27,14 @@ def fold_allowance(angle_deg: float, thickness: float, radius: float = 0.0,
     return math.radians(abs(angle_deg)) * (radius + k * thickness)
 
 
+def fold_angle_of(fold) -> float:
+    """The angle (degrees) a fold line folds through: what it is set to
+    -- 0 for a fold left flat, which takes no leather -- and 90 for a line
+    with none set."""
+    angle = getattr(fold, "fold_angle", None)
+    return 90.0 if angle is None else abs(float(angle))
+
+
 def _fold_axis(fold) -> Optional[Tuple[Vec2, Vec2]]:
     """World (point, unit direction) of a fold line shape."""
     pts = fold.world_polyline()[0]
@@ -77,8 +85,7 @@ def apply_fold_allowance(doc, piece, folds: Sequence, thickness: float,
             continue
         a, u = ax
         n = Vec2(-u.y, u.x)                      # the flap moves along +/- n
-        allow = fold_allowance(getattr(fold, "fold_angle", 90.0) or 90.0,
-                               thickness, radius, k)
+        allow = fold_allowance(fold_angle_of(fold), thickness, radius, k)
         if allow <= 1e-9:
             continue
         # the piece as nodes we can move

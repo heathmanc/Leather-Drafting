@@ -283,7 +283,8 @@ def test_fold_allowance_names_the_angle_of_every_fold_it_lengthens(qapp):
     assert abs(width - (100 + math.pi)) < 1e-6
     assert "The fold line found is a 180° fold." in hint
     assert "starts as a 90° fold" not in hint     # nothing to put right
-    assert "A fold's Angle is set in View → 3D assembly preview…" in hint
+    assert hint.endswith(
+        "(A fold's Angle is set in View → 3D assembly preview…)")
     assert status == "Fold allowance: 1 fold of 180°, 3.14 mm added in all"
     hint, status, width = _allowance_said(qapp, [180, 180])
     assert "The 2 fold lines found are 180° folds." in hint
@@ -294,6 +295,59 @@ def test_fold_allowance_names_the_angle_of_every_fold_it_lengthens(qapp):
     assert abs(width - (100 + 2 * math.pi)) < 1e-6
     assert status == ("Fold allowance: 3 folds (2 of 90°, 1 of 180°), "
                       "6.28 mm added in all")
+
+
+def test_a_fold_set_to_0_degrees_is_left_flat_and_adds_nothing(qapp):
+    # The preview's Angle goes down to 0°, a fold left flat. Fold
+    # allowance read a 0 as "not set" and lengthened the piece as for a
+    # 90° fold, 1.57 mm in 2 mm leather
+    from leathercad.document import Document
+    from leathercad.folds import apply_fold_allowance, fold_angle_of
+    from leathercad.generators import _fold_line
+    from leathercad.shapes import Rectangle
+    d = Document()
+    r = Rectangle(width=100, height=60, layer="Cut")
+    f = _fold_line("f", 20, -30, 20, 30, 0.0)
+    d.add_shape(r)
+    d.add_shape(f)
+    assert fold_angle_of(f) == 0.0
+    assert apply_fold_allowance(d, r, [f], 2.0) == []
+    assert (r.width, f.transform.x) == (100, 0.0)
+    # and the command says so, and takes no step to undo
+    win = _window_with_folds(qapp, [0])
+    before = win.doc.to_dict()
+    said = []
+
+    def dialog(title, hint, fields):
+        said.append(hint)
+        return {"fa_t": 2.0, "fa_r": 0.0}
+    win._gen_dialog = dialog
+    win._fold_allowance()
+    assert ("The fold line found is a 0° fold. A fold of 0° is left flat: "
+            "nothing is added for it.") in said[0]
+    assert "starts as a 90° fold" not in said[0]
+    assert win.statusBar().currentMessage() == \
+        "Fold allowance: nothing added: a fold of 0° is left flat"
+    assert win.doc.to_dict() == before
+    # with a fold that does fold beside it, that one alone is lengthened
+    hint, status, width = _allowance_said(qapp, [0, 180])
+    assert "Of the 2 fold lines found, 1 folds 0° and 1 folds 180°." in hint
+    assert "nothing is added for it" in hint
+    assert abs(width - (100 + math.pi)) < 1e-6
+    assert status == "Fold allowance: 1 fold of 180°, 3.14 mm added in all"
+
+
+def test_fold_allowance_says_what_it_added_in_the_unit_chosen(qapp):
+    from leathercad_app import units as U
+    win = _window_with_folds(qapp, [180])
+    win._gen_dialog = lambda *a, **k: {"fa_t": 2.0, "fa_r": 0.0}
+    U.set_current("in")
+    try:
+        win._fold_allowance()
+        assert win.statusBar().currentMessage() == \
+            "Fold allowance: 1 fold of 180°, 0.124 in added in all"
+    finally:
+        U.set_current("mm")
 
 
 def test_the_fold_allowance_box_shows_the_whole_of_its_hint(qapp,

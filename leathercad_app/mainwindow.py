@@ -116,11 +116,6 @@ TOOL_LAYOUT = [
 ]
 
 
-def _fold_angle(fold) -> float:
-    """The angle a fold line folds through: 90° until one is set."""
-    return float(getattr(fold, "fold_angle", 90.0) or 90.0)
-
-
 def _angle_counts(angles) -> list:
     """``[(angle as said, how many)]``, the smallest angle first."""
     counts = {}
@@ -144,7 +139,8 @@ def _folds_of(angles) -> str:
 def _fold_angles_hint(angles) -> str:
     """What the Fold allowance dialog says of the fold lines it found:
     the angle of each, and where an angle is set. A fold line starts as
-    a 90° fold, and a fold that lies flat needs twice that allowance."""
+    a 90° fold, and a fold that lies flat needs twice that allowance; one
+    set to 0° is left flat and needs none."""
     n = len(angles)
     counts = _angle_counts(angles)
     if n == 1:
@@ -155,9 +151,11 @@ def _fold_angles_hint(angles) -> str:
         each = [f"{k} fold{'s' if k == 1 else ''} {a}" for a, k in counts]
         found = (f"Of the {n} fold lines found, " + ", ".join(each[:-1])
                  + " and " + each[-1] + ".")
+    if any(a <= 0.0 for a in angles):
+        found += " A fold of 0° is left flat: nothing is added for it."
     where = "View → 3D assembly preview…"
-    if all(a >= 180.0 for a in angles):
-        return found + f" (A fold's Angle is set in {where}.)"
+    if all(a >= 180.0 or a <= 0.0 for a in angles):
+        return found + f" (A fold's Angle is set in {where})"
     return (found + " A fold line starts as a 90° fold: for one that lies "
             "flat, such as a wallet's spine or a hem, set its Angle to 180° "
             f"in {where} before adding the allowance.")
@@ -1699,7 +1697,8 @@ class MainWindow(QMainWindow):
     def _fold_allowance(self):
         """Lengthen the selected piece(s) across their fold lines by each
         fold's bend allowance, so a piece drawn finished-size cuts true."""
-        from leathercad.folds import folds_crossing, fold_allowance
+        from leathercad.folds import (fold_allowance, fold_angle_of,
+                                      folds_crossing)
         from leathercad_app.items import ShapeItem
         c = self.canvas
         sel = [it for it in c.selected_items() if isinstance(it, ShapeItem)]
@@ -1720,7 +1719,7 @@ class MainWindow(QMainWindow):
                 "adds its bend allowance to the piece.")
             return
         found = {id(f): f for _it, fl in targets for f in fl}
-        angles = [_fold_angle(f) for f in found.values()]
+        angles = [fold_angle_of(f) for f in found.values()]
         v = self._gen_dialog(
             "Fold allowance",
             "Each fold line adds angle × (inside radius + ½ thickness) to the "
@@ -1750,13 +1749,19 @@ class MainWindow(QMainWindow):
                 c._remove_item(it)
                 c._add_item(ShapeItem(new, c))
             total += sum(a for _f, a, _p in res)
-            added += [_fold_angle(f) for f, _a, _p in res]
+            added += [fold_angle_of(f) for f, _a, _p in res]
         c._suppress_commit = False
+        if not added:
+            why = (": a fold of 0° is left flat"
+                   if all(a <= 0.0 for a in angles) else "")
+            self.statusBar().showMessage(
+                "Fold allowance: nothing added" + why, 6000)
+            return
         c.rebuild()
         self.canvas._emit_commit()
         self.statusBar().showMessage(
-            f"Fold allowance: {_folds_of(added)}, {total:.2f} mm added in "
-            "all", 6000)
+            f"Fold allowance: {_folds_of(added)}, {_units.fmt(total)} added "
+            "in all", 6000)
 
     def _params_dialog(self):
         """Edit the document's named parameters (usable in any numeric field);

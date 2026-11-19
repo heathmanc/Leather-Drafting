@@ -573,10 +573,10 @@ preview bends the same length of leather into each fold.
 The allowance goes by the angle each fold line has, and **a line you
 have just marked is a 90° fold**. For a fold that lies flat — a wallet's
 spine, a hem — open **View → 3D assembly preview…** and set that fold's
-**Angle** to 180° first. The Fold allowance box names the angle of every
-fold line it found (*The fold line found is a 90° fold.*), and the status
-bar says what it added: *Fold allowance: 1 fold of 180°, 3.14 mm added
-in all*.
+**Angle** to 180° first. (A fold set to 0° stays flat, and nothing is
+added for it.) The Fold allowance box names the angle of every fold line
+it found (*The fold line found is a 90° fold.*), and the status bar says
+what it added: *Fold allowance: 1 fold of 180°, 3.14 mm added in all*.
 
 ### Folding it up in 3D
 
@@ -683,10 +683,12 @@ What you set here — step, direction, angle, radius — is kept on the fold
 lines and saved with the drawing, and a **Leather thickness** you type
 is given to the piece itself, as if you had typed it in Properties; a
 run of changes is one **Undo** in the main window. You can leave the
-preview open while you draw: it follows the drawing. When the drawing
-has more than one piece, **Show** chooses which the preview shows (it
-opens on the one that's selected): stacks first, then the pieces that
-fold, then, below a line, the ones that don't.
+preview open while you draw: it follows the drawing. When there is more
+than one thing the preview could show, **Show** chooses which (it opens
+on the one that's selected): stacks first, then the pieces that fold,
+then, below a line, the ones that don't. A piece that is on a stack is
+shown with its stack and not listed by itself, so a wallet whose pieces
+are all on one stack has no **Show** box.
 
 With no fold lines, panels drawn edge to edge fold along the edges they
 share, like a paper net (what you set for a net lasts while the preview is
@@ -748,15 +750,17 @@ takes the preview's own Leather thickness when it is put on a stack.
 
 **Put them on.** With two or more pieces in the drawing, **View → 3D
 assembly preview…** has a **Pieces** tab that lists every piece. The
-piece the preview is showing — named in **Show**, and in bold at the
-top of the list — is the **main piece**: tick another and it goes on
-it. The others are placed against the main piece, and the stack folds
-along *its* fold lines. For a wallet that is the outer shell with its
-spine fold, so have the shell showing before you tick anything: choose
-it in **Show**. Each piece you tick lands on the piece chosen in the
-list, or on the top of the pile if none is chosen, their bottom-left
-corners together; one drawn overlapping the main piece goes where it is
-drawn. Then put it where it goes:
+piece the preview is showing, named in **Show**, is the **main piece**:
+tick another and it goes on it. The others are placed against the main
+piece, and the stack folds along *its* fold lines. For a wallet that is
+the outer shell with its spine fold, so have the shell showing before
+you tick anything: choose it in **Show**. The main piece is the one in
+bold in the list: at the top before anything is on it, and at the
+bottom of its pile once there is one, for the list then runs from the
+top of the pile down. Each piece you tick lands on the piece chosen in
+the list, or on the top of the pile if none is chosen, their
+bottom-left corners together; one drawn overlapping the main piece goes
+where it is drawn. Then put it where it goes:
 
 | | |
 |---|---|
@@ -804,7 +808,8 @@ is not cut, the report says so and the stack holds still until it is a
 closed outline on a cut layer again: the next piece stands in for it,
 the others stay where they lay, and nothing can be moved or put on
 (pieces can still be taken off). Any other piece of the stack that is
-cut open is left out until it is closed.
+cut open, or moved to a layer that is not cut, is left out until it is
+put right.
 
 **Fold it.** The **Folds** tab works for a stack as it does for one
 piece, on the main piece's fold lines, and Play closes the whole thing:
@@ -840,7 +845,10 @@ marks it amber on the model:
   to change it. A piece that does not reach the main piece's ends — a
   strap, a patch — is told how much more leather it has than the bend
   has room for: *free at an end, it stands that much further out when
-  shut; held at both ends, it wrinkles inside the fold.*
+  shut; held at both ends, it wrinkles inside the fold.* Round the
+  outside of a fold it is told how much more it needs: *free at an
+  end, it ends that much short when shut; held at both ends, it pulls
+  tight round the fold.*
 
 The picture keeps every layer where you laid it and squeezes it to fit
 round the bend; the millimetres in the report are the true ones.

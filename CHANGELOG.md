@@ -40,10 +40,10 @@ made only when the release workflow is run by hand with it ticked.
   least leather a needle goes through (windows and other cut-outs left
   out); and in red, by name and with how deep, anything still drawn
   through other leather where it ends up — two piles that meet, or a
-  piece across a fold that would have to be slit there and is left in
-  the leather. A piece the fold only parts, like a strap laid across
-  the end of a narrow flap's fold, is named in plain words, with how
-  long a slit it would need.
+  piece that crosses a fold and still runs into the leather there. A
+  piece the fold only parts, like a strap laid across the end of a
+  narrow flap's fold, is named in plain words, with how long a slit it
+  would need.
 * **At rest, and on the way.** Red is kept for what stays drawn through
   something else where the leather ends up, when a step of the folding
   is done. What the picture draws through something only on the way
@@ -130,12 +130,16 @@ made only when the release workflow is run by hand with it ticked.
 ### Fold allowance
 * **The box says which angle it is adding for.** Fold allowance goes by
   the angle each fold line has, and a line just marked is a 90° fold —
-  so a wallet's spine, marked and lengthened at once, got half its bend
-  (1.57 mm for 3.14 in 2 mm leather) with nothing to say so. The box now
-  names the angle of every fold line it found and where to change it
-  (the **Angle** column of the 3D assembly preview), and the status bar
-  says what was added: *Fold allowance: 1 fold of 180°, 3.14 mm added in
+  so a wallet's spine, marked and lengthened at once, got only half the
+  length its fold needs (1.57 mm instead of 3.14 mm in 2 mm leather),
+  and nothing said so. The box now names the angle of every fold line
+  it found and where to change it (the **Angle** column of the 3D
+  assembly preview), and the status bar says what was added, in the
+  unit you work in: *Fold allowance: 1 fold of 180°, 3.14 mm added in
   all*.
+* **A fold set to 0° adds nothing.** A fold left flat in the preview —
+  its Angle set to 0° — was lengthened as if it were a 90° fold. It is
+  now left alone, and the box says so.
 
 ## 0.4.13 — 2026-11-17
 

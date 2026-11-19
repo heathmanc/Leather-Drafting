@@ -1574,15 +1574,28 @@ def laid_check(layers, tol: float = 0.75, near: float = 4.0,
         for k in members:
             check.state[k] = what
     # ... and for every hole of a stack with a miss in it, where the hole
-    # that was missed is: on each other piece of that stack
+    # that was missed is: on each other piece of that stack, where that
+    # piece has leather (not in its cutouts, nor within a hair of an
+    # edge, where nothing is to be marked)
     for k, k2 in misses:
         x2, y2, dia = holes[k2]
         for m in stacks[stack(k)]:
-            if owner[m] == owner[k2]:
+            if owner[m] == owner[k2] or \
+                    not _has_leather(layers[owner[m]], (x2, y2)):
                 continue
             check.lands.setdefault(m, []).append((x2, y2, dia))
             spot(check.landed, owner[m], x2, y2, dia)
     return check
+
+
+def _has_leather(layer, p: Pt) -> bool:
+    """Whether a piece has leather at a point: inside its outline and
+    outside its cutouts, and more than ``HAIR`` from the edge of either
+    (the rule of ``laid_check``)."""
+    if not pc.inside(p, layer.ring) or _on_edge(p, layer.ring):
+        return False
+    return not any(pc.inside(p, c) or _on_edge(p, c)
+                   for c in layer.cutouts)
 
 
 def _top(link: Dict[int, int], h: int) -> int:

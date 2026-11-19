@@ -1969,3 +1969,89 @@ def test_a_sheet_over_nothing_is_drawn_on_the_nearest_panel():
                          (_rect(30, 20, 90, 80), 0)):
         stack = sh.FlatStack(lay, [sh.Sheet(where, 1.0)])
         assert stack.solid([])[-1].tag == ("panel", panel, 1), where
+
+
+# -- marks only where a piece has leather ------------------------------------
+
+def _windowed(d, side=1):
+    """A pocket 100 x 80 mm with a window (40, 30)-(100, 70) cut in it,
+    stitched every 4 mm round the window 2 mm outside it, on a main piece
+    140 x 100 mm whose own ring of holes is the pocket's moved ``d`` mm in
+    towards the window: ``(the layout, its check)``."""
+    def round_window(off):
+        x0, y0, x1, y1 = 40 - off, 30 - off, 100 + off, 70 + off
+        out = []
+        x = x0
+        while x <= x1 + 1e-9:
+            out += [(x, y0, 1.0), (x, y1, 1.0)]
+            x += 4.0
+        y = y0 + 4.0
+        while y < y1 - 1e-9:
+            out += [(x0, y, 1.0), (x1, y, 1.0)]
+            y += 4.0
+        return out
+    pocket = sh.Sheet(_rect(20, 10, 120, 90), 1.0, side, name="Pocket",
+                      holes=round_window(2.0),
+                      cutouts=[_rect(40, 30, 100, 70)])
+    lay = fs.fold_piece(_rect(0, 0, 140, 100), [], thickness=2.0,
+                        holes=round_window(2.0 - d), sheets=[pocket])
+    return lay, lay.lineup()
+
+
+@pytest.mark.parametrize("side", [1, -1])
+@pytest.mark.parametrize("d, off", [(2.0, 54), (3.5, 49), (4.0, 50)])
+def test_a_missed_hole_in_a_pockets_window_is_not_ringed_on_the_window(
+        d, off, side):
+    # the main piece's holes lie on the window's edge (d = 2) or 1.5 and
+    # 2 mm inside it: the pocket's holes miss them, and are still off ...
+    lay, check = _windowed(d, side)
+    assert len(check.holes(fs.OFF)) == off
+    # ... but where the missed holes are, the pocket has no leather: no
+    # spot of them is told of it, and no ring is drawn on its window
+    assert check.landed == {} and check.lands == {}
+    in_window = [q for cell in lay.solid([], check)
+                 if sh.sheet_of(cell.tag) == 1 for f in cell.faces
+                 for kind, geo, style in f.decals or ()
+                 if kind == bsp.DOTS and style[1] == fs.LANDS for q in geo
+                 if 40 <= q[0] <= 100 and 30 <= q[1] <= 70]
+    assert in_window == []
+
+
+def test_a_missed_hole_is_still_ringed_where_the_other_piece_has_leather():
+    # the main piece's ring 2 mm further out than the pocket's: each piece
+    # has leather where the other's holes are, and both are ringed there
+    lay, check = _windowed(-2.0)
+    assert len(check.holes(fs.OFF)) == 112
+    assert {k: len(v) for k, v in check.landed.items()} == {0: 52, 1: 54}
+    for x, y, _dia in check.landed[1]:
+        assert not (40 <= x <= 100 and 30 <= y <= 70)
+        assert 20 < x < 120 and 10 < y < 90
+    rings = [q for cell in lay.solid([], check)
+             if sh.sheet_of(cell.tag) == 1 for f in cell.faces
+             for kind, geo, style in f.decals or ()
+             if kind == bsp.DOTS and style[1] == fs.LANDS for q in geo]
+    assert rings and not any(40 <= q[0] <= 100 and 30 <= q[1] <= 70
+                             for q in rings)
+
+
+@pytest.mark.parametrize("dx, dy, turn", [
+    (0.0, 0.0, 0.0), (10000.0, 10000.0, 0.0), (0.0, 0.0, 37.0),
+    (0.0, 0.0, 90.0), (0.0, 0.0, 180.0), (500.0, -80.0, 211.0)])
+def test_the_two_pieces_that_clear_each_other_at_a_corner_are_named_in_order(
+        dx, dy, turn):
+    # two piles the same each side of a fold standing at a right angle:
+    # the two top pieces ask for the room, and are named by their numbers
+    # (which half stays still goes by where the halves lie on the page)
+    a = math.radians(turn)
+    c, s = math.cos(a), math.sin(a)
+
+    def f(p):
+        return (dx + p[0] * c - p[1] * s, dy + p[0] * s + p[1] * c)
+    sheets = [sh.Sheet([f(p) for p in r], t, 1) for r, t in (
+        (_rect(60, 10, 99, 90), 1.0), (_rect(101, 10, 140, 90), 1.0),
+        (_rect(70, 20, 99, 80), 0.8), (_rect(101, 20, 130, 80), 0.8))]
+    lay = fs.fold_piece([f(p) for p in _rect(0, 0, 200, 100)],
+                        [fs.FoldLine(f((100, -5)), f((100, 105)), 90.0, 1)],
+                        thickness=1.5, sheets=sheets)
+    assert lay.why == [("corner", 3, 4)]
+    assert lay.radius[0] == pytest.approx(1.8, abs=1e-6)

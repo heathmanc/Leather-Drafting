@@ -861,7 +861,9 @@ class Layout:
                 if least > self.radius[fi] + 1e-12:
                     self.wrap[fi] += least - self.radius[fi]
                     self.radius[fi] = least
-                    self.why[fi] = ("corner",) + who
+                    # (the two by their numbers: which of them is on the
+                    # panel that stays still is no matter here)
+                    self.why[fi] = ("corner",) + tuple(sorted(who))
             done[fi] = theta[fi]
         self.used = [theta[k] * (self.radius[k] + 0.5 * t) for k in range(n)]
         for k in range(n):

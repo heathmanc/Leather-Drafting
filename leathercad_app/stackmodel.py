@@ -698,21 +698,37 @@ _PARTS = ((0.0625, "a sixteenth of the way"), (0.125, "an eighth of the way"),
 
 
 def _part(moment: float) -> str:
-    """How far through its step a moment inside one is, in words: "half
-    way", "an eighth of the way", "part of the way"."""
+    """How far through its step a moment inside one is, in words, to go
+    before "through" or "of" and the step: "half way through", "about
+    three eighths of the way through" (a moment between the named ones
+    is said as about the nearest), "the very start of", "just before
+    the end of" (nearer an end of the step than any named moment)."""
     whole = math.floor(moment)
-    return next((words for at, words in _PARTS
-                 if abs(moment - whole - at) < 1e-6), "part of the way")
+    at, words = min(((at, words) for at, words in
+                     ((0.0, "the very start of"),) + _PARTS
+                     + ((1.0, "just before the end of"),)),
+                    key=lambda aw: abs(moment - whole - aw[0]))
+    if at in (0.0, 1.0):
+        return words
+    return (words if abs(moment - whole - at) < 1e-6
+            else f"about {words}") + " through"
 
 
 def _when(layout, moment: float) -> str:
     """When in the folding a thing is first seen: lying flat, when the
     folds of a step have been made, or part of the way through a step
     (``moment`` as ``Layout.fractions`` takes it: 1.5 is half way
-    through step 2)."""
+    through step 2) -- just before the folds of a step are made, where
+    it is nearer that than any moment named inside the step."""
     step = int(round(moment))
     if abs(moment - step) > 1e-6:
-        return f"{_part(moment)} through step {int(math.floor(moment)) + 1}"
+        part = _part(moment)
+        if part.startswith("just before") and step > 0:
+            done = _when(layout, float(step))
+            return "just before " + (done[len("when "):]
+                                     if done.startswith("when ")
+                                     else f"the end of step {step}")
+        return f"{part} step {int(math.floor(moment)) + 1}"
     if step <= 0:
         return "lying flat"
     doing = [f for k, f in enumerate(layout.folds)
@@ -1098,22 +1114,39 @@ def fold_report(stack, parts: Parts, layout) -> List[str]:
         rest = (f"{length(_rest(n))} into %s at rest"
                 + _on_the_way(n, n.a, THROUGH)
                 + f", from {_when(layout, n.b)}")
+        # (drawn in at rest only up to a step before the last -- or only
+        # lying flat -- and clear at every whole step after it: when, and
+        # that it comes clear)
+        last = int(round(getattr(n, "last", 0.0)))
+        if (last > 0 or n.b <= 0.0) and last < layout.n_steps:
+            inside = math.ceil(n.b - 1e-6) == last
+            rest = (f"{length(_rest(n))} into %s "
+                    + (_when(layout, float(last)) if inside else
+                       f"at rest up to {_when(layout, float(last))}")
+                    + _on_the_way(n, n.a, THROUGH)
+                    + ("" if abs(n.b - last) < 1e-6 else
+                       f", from {_part(n.b)} it" if inside else
+                       f", from {_when(layout, n.b)}")
+                    + f"; from {_when(layout, float(last + 1))} %s clear "
+                    "again")
         if n.kind == "clash":
             one, two = n.sheet, n.other[0]
             if one == two:
                 out.append(_warn(f"{names[one]} is drawn "
-                                 + rest % "itself" + ".", RED))
+                                 + _clear(rest, "itself", "it is") + ".",
+                                 RED))
             else:
                 out.append(_warn(f"{names[one]} and {names[two]} are drawn "
-                                 + rest % "each other" + ".", RED))
+                                 + _clear(rest, "each other", "they are")
+                                 + ".", RED))
         elif n.kind == "limit":
             # (where its folds cross, that is why; otherwise the judge
             # says only how deep and when)
             why = (": folds that cross are folded one after the other, "
                    "and the preview cannot open the leather for the "
                    "second." if _crossed(layout) else ".")
-            out.append(_warn(f"{main} is drawn " + rest % "itself" + why,
-                             RED))
+            out.append(_warn(f"{main} is drawn "
+                             + _clear(rest, "itself", "it is") + why, RED))
         # (a part of the main piece that a moved fold brings down in
         # another is in the fold engine's own warnings, below)
     out += _passed(layout, names)
@@ -1121,10 +1154,17 @@ def fold_report(stack, parts: Parts, layout) -> List[str]:
     return out
 
 
+def _clear(rest: str, into: str, they: str) -> str:
+    """A red sentence's account of how deep and when, ``rest`` from
+    ``fold_report``, with what the leather is drawn into and, where it
+    says it comes clear again, who does."""
+    return rest % ((into, they) if rest.count("%s") == 2 else into)
+
+
 def _passed(layout, names) -> List[str]:
     """What the picture draws into what only on the way through a step,
     clear of it at rest (``_passing``): said plainly, one sentence a
-    step, each pair once, with how deep and when."""
+    step, each pair once, with how deep at the most and from when."""
     main = names[0]
     steps: Dict[int, List[tuple]] = {}
     for n in getattr(layout, "notes", None) or ():
@@ -1143,10 +1183,12 @@ def _passed(layout, names) -> List[str]:
             into, many = "each other", 1
         whole = int(math.floor(n.b))
         step = whole + 1 if abs(n.b - whole) > 1e-6 else whole
+        part = _part(n.b)
+        part += " it" if part.endswith(" of") else ""
         steps.setdefault(step, []).append(
-            (f"{who} up to {length(n.a)} into {into} "
-             f"({_part(n.b)} through)" if step != whole else
-             f"{who} up to {length(n.a)} into {into}", many))
+            (f"{who} into {into} (up to {length(n.a)}, from {part})"
+             if step != whole else
+             f"{who} into {into} (up to {length(n.a)})", many))
     out = []
     for step, said in sorted(steps.items()):
         clear = "they are" if len(said) > 1 or said[0][1] else "it is"

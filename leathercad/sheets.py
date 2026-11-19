@@ -186,7 +186,10 @@ class Note(NamedTuple):
     the folding is as ``Layout.fractions`` takes it: 1.0 the end of step
     1, 0.5 half way through it. ``rest``, on a note that says leather is
     drawn into leather, is how deep at rest -- at a whole step of the
-    folding, where things end up -- beside the deepest on the way.
+    folding, where things end up -- beside the deepest on the way; and
+    ``last``, on a ``"clash"``, ``"limit"`` or ``"landing"``, the last
+    whole step at which it is drawn in at rest (0 for none, or only
+    lying flat: ``rest`` tells the two apart).
 
     What ``settle`` tells of a flat stack:
 
@@ -283,14 +286,16 @@ class Note(NamedTuple):
                    not where finding it would take too long (``_BOXES``)
     ``"clash"``    the judge finds ``sheet`` and ``other[0]`` ``a`` mm
                    into each other at the deepest, at any moment it looks
-                   at; ``b`` is the first moment it looks at at which they
-                   are deeper than 0.05 mm -- it looks at the whole steps,
-                   at eighths of each step and a sixteenth in from each
-                   end, and round the deepest of those -- so they may be
-                   that deep up to an eighth of a step before ``b``;
-                   ``rest`` how deep at rest, at the deepest whole step
-                   (0: only on the way, inside a step, where leather
-                   gives). A sheet with itself
+                   at -- the whole steps, eighths of each step and a
+                   sixteenth in from each end, and round the deepest of
+                   those; ``b`` is the first moment they are deeper than
+                   0.05 mm, to within a two-thousandth of a step (closed
+                   in on from the moment looked at before the first at
+                   which they are, where they are not); ``rest`` how deep
+                   at rest, at the deepest whole step (0: only on the way,
+                   inside a step, where leather gives), and ``last`` the
+                   last whole step at which they are drawn in at rest. A
+                   sheet with itself
                    is never so told where it is slit or over a crossing
                    (that note says it)
     ``"limit"``    ... the main piece in itself: a known limit of folding
@@ -301,11 +306,10 @@ class Note(NamedTuple):
                    main piece (``other``, as the tags of their cells,
                    ``("panel", i)`` -- panel number ``i + 1`` -- or
                    ``("bend", fold)``) drawn ``a`` mm into each other,
-                   first at the moment ``b`` (as for ``"clash"``: the
-                   first looked at), that are only ``c`` mm into
-                   each other with every fold on its line: the move's
-                   doing, laid at the door of fold ``fold``; ``rest`` as
-                   for ``"clash"``
+                   first at the moment ``b`` (as for ``"clash"``), that
+                   are only ``c`` mm into each other with every fold on
+                   its line: the move's doing, laid at the door of fold
+                   ``fold``; ``rest`` and ``last`` as for ``"clash"``
 
     Nothing drawn into anything by 0.05 mm or less (``foldsolid._TOUCH``)
     is told."""
@@ -319,6 +323,7 @@ class Note(NamedTuple):
     at: Optional[Pt] = None
     c: float = 0.0
     rest: float = 0.0
+    last: float = 0.0
 
 
 def sheet_of(tag) -> int:
@@ -3728,6 +3733,10 @@ _EIGHTHS = 8        # moments looked at inside a step: eighths of it, and
 #                     a sixteenth in from each end, where a piece parted at
 #                     the end of a hinge comes into itself
 _HALVINGS = 8       # ... and how closely each two's deepest is closed in on
+_ONSET = 8          # ... and the moment each two are first found deeper
+#                     than ``foldsolid._TOUCH``: halvings of the gap from the
+#                     moment looked at before it, an eighth of a step at
+#                     most, so to within a two-thousandth of a step
 
 
 def judge(layout) -> List[Note]:
@@ -3745,7 +3754,12 @@ def judge(layout) -> List[Note]:
     the deepest at any whole step (0 for what is so only on the way), and
     ``a``, the deepest at any moment looked at, with ``b`` the first
     moment it is deeper than ``_TOUCH`` (1.0 the end of step 1, 0.5 half
-    way through it).
+    way through it): the first moment looked at where it is, closed in
+    on from the moment looked at before it, where it is not, by halving
+    the gap between them (``_ONSET`` times), the two cells found there
+    and any others of the same two pieces found with them tried at each
+    -- so to within a two-thousandth of a step. ``last`` is the last
+    whole step at which it is deeper than ``_TOUCH``, at rest.
 
     ``"clash"``: two pieces. What a sheet does to itself, or the main
     piece to it, where the sheet is noted slit or lies over a crossing of
@@ -3767,7 +3781,8 @@ def judge(layout) -> List[Note]:
     spots = [(note.sheet, note.at, note.fold, note.other[0])
              for note in layout.notes if note.kind == "crossing"]
     # what was found, by what it is: [deepest, first moment, deepest at
-    # rest, and for a landing how deep the two are folded on their lines]
+    # rest, and for a landing how deep the two are folded on their lines,
+    # the two cells found at the first moment, the last whole step]
     found: Dict[tuple, list] = {}
     poses: Dict[float, tuple] = {}
     lined: Dict[float, list] = {}
@@ -3812,12 +3827,16 @@ def judge(layout) -> List[Note]:
             key = ("found", a, b) if key is None else key
         else:
             key = ("found", a, b)
-        got = found.setdefault(key, [0.0, t, 0.0, 0.0])
+        got = found.setdefault(key, [0.0, t, 0.0, 0.0, [], 0.0])
         if deep > got[0]:
             got[0], got[3] = deep, was
-        got[1] = min(got[1], t)
+        if t < got[1]:
+            got[1], got[4] = t, []
+        if t == got[1]:
+            got[4].append((ca, cb))
         if whole:
             got[2] = max(got[2], deep)
+            got[5] = max(got[5], t)
 
     # at rest: every two cells at each whole step
     for step in range(n + 1):
@@ -3875,6 +3894,29 @@ def judge(layout) -> List[Note]:
                         best, when = f2, x2
             if best > g:
                 say(ca, cb, best, when, False)
+    # the moment each is first deeper than ``least``, closed in on between
+    # the first moment it was found and the moment looked at before it
+    looked = sorted({float(step) for step in range(n + 1)}
+                    | {step - 1 + k for step in range(1, n + 1)
+                       for k in inner})
+    for key, got in found.items():
+        if key[0] in ("slit", "crossing") or got[1] <= 0.0:
+            continue
+        lo = max(x for x in looked if x < got[1] - 1e-12)
+        hi = got[1]
+
+        def deepest(x, two=got[4]):
+            cells = [(one(ca, x), one(cb, x)) for ca, cb in two]
+            return max((clash.depth(p, q) for p, q in cells
+                        if p is not None and q is not None), default=0.0)
+
+        for _half in range(_ONSET):
+            mid = 0.5 * (lo + hi)
+            if deepest(mid) > least:
+                hi = mid
+            else:
+                lo = mid
+        got[1] = hi
     # the depths at slits and crossings, into their notes
     count = {"slit": 0, "crossing": 0}
     for m, note in enumerate(layout.notes):
@@ -3884,16 +3926,16 @@ def judge(layout) -> List[Note]:
             if got is not None:
                 layout.notes[m] = note._replace(b=got[0], rest=got[2])
     out = []
-    for key, (deep, t, rest, was) in sorted(
+    for key, (deep, t, rest, was, _two, last) in sorted(
             found.items(), key=lambda kv: -kv[1][0]):
         if key[0] == "found":
             a, b = key[1:]
             out.append(Note("limit" if (a, b) == (0, 0) else "clash", a, -1,
-                            deep, t, (b,), rest=rest))
+                            deep, t, (b,), rest=rest, last=last))
         elif key[0] == "landing":
             ta, tb = key[1:]
             out.append(Note("landing", 0, layout._blame(ta, tb), deep, t,
-                            (ta, tb), c=was, rest=rest))
+                            (ta, tb), c=was, rest=rest, last=last))
     return out
 
 

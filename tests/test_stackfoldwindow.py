@@ -388,16 +388,16 @@ def test_a_stack_built_to_clash_is_said_in_red_and_marked_red(qapp, mm):
     try:
         found = [(n.sheet, n.other, round(n.a, 2), n.b, round(n.rest, 2))
                  for n in dlg.layout_.notes if n.kind == "clash"]
-        assert found == [(0, (1,), 2.47, 3.0, 1.0), (1, (2,), 0.57, 3.0,
-                                                      0.57)]
+        assert found == [(0, (1,), 2.47, _near(2.9902, 1e-3), 1.0),
+                         (1, (2,), 0.57, _near(2.9902, 1e-3), 0.57)]
         # both names, the depth where they end up, and when
         says = _lines(dlg)
         assert ("⚠ Left liner and Right liner are drawn 0.57 mm into each "
-                "other at rest, from when fold C has folded (step 3).") \
-            in says
+                "other at rest, from just before fold C has folded (step "
+                "3).") in says
         assert ("⚠ Tray and Left liner are drawn 1 mm into each other at "
-                "rest, and up to 2.47 mm on the way, from when fold C has "
-                "folded (step 3).") in says
+                "rest, and up to 2.47 mm on the way, from just before fold C "
+                "has folded (step 3).") in says
         # both pieces marked red, whole, and counted in the caption
         bad = _rgb(dlg.view.look.bad)
         assert _rgb(dlg.view.wash[(1, None)]) == bad
@@ -410,8 +410,8 @@ def test_a_stack_built_to_clash_is_said_in_red_and_marked_red(qapp, mm):
     dlg = _dialog(_tray())
     try:
         assert ("⚠ Left liner and Right liner are drawn 0.022 in into each "
-                "other at rest, from when fold C has folded (step 3).") \
-            in _lines(dlg)
+                "other at rest, from just before fold C has folded (step "
+                "3).") in _lines(dlg)
         assert "mm" not in _words(dlg)
     finally:
         dlg.close()
@@ -422,13 +422,13 @@ def test_two_piles_that_pass_only_on_the_way_are_said_plainly(qapp, mm):
     try:
         clash, = [n for n in dlg.layout_.notes if n.kind == "clash"]
         assert (clash.sheet, clash.other, round(clash.a, 2), clash.b,
-                clash.rest) == (1, (2,), 6.82, 1.5, 0.0)
+                clash.rest) == (1, (2,), 6.82, _near(1.3872, 1e-3), 0.0)
         # not an alarm: said plainly, nothing red, nothing counted
         assert ("On the way through step 2 the picture draws Left pile and "
-                "Right pile up to 6.82 mm into each other (half way "
-                "through); at rest they are clear. The preview turns each "
-                "panel as one stiff piece, where leather gives.") \
-            in _lines(dlg)
+                "Right pile into each other (up to 6.82 mm, from about three "
+                "eighths of the way through); at rest they are clear. The "
+                "preview turns each panel as one stiff piece, where leather "
+                "gives.") in _lines(dlg)
         assert "⚠" not in _words(dlg) and "#c0392b" not in \
             dlg.readout.text()
         assert dlg.view.alarm == "" and dlg.view.wash == {}
@@ -439,7 +439,7 @@ def test_two_piles_that_pass_only_on_the_way_are_said_plainly(qapp, mm):
     mm.set_current("in")
     dlg = _dialog(_channel())
     try:
-        assert "up to 0.269 in into each other" in _words(dlg)
+        assert "into each other (up to 0.269 in, from" in _words(dlg)
         assert "mm" not in _words(dlg)
     finally:
         dlg.close()
@@ -456,13 +456,13 @@ def test_a_square_folded_in_four_is_said_drawn_into_itself_and_its_patch_cut(
         found = [(n.kind, n.sheet, n.other, round(n.a, 2), n.b,
                   round(n.rest, 2))
                  for n in lay.notes if n.kind in ("clash", "limit")]
-        assert found == [("limit", 0, (0,), 3.11, 0.0625, 1.51)]
+        assert found == [("limit", 0, (0,), 3.11, _near(0.0339, 1e-3), 1.51)]
         says = _lines(dlg)
         assert ("⚠ Square is drawn 1.51 mm into itself at rest, and up to "
-                "3.11 mm on the way, from a sixteenth of the way through "
-                "step 1: folds that cross are folded one after the other, "
-                "and the preview cannot open the leather for the second.") \
-            in says
+                "3.11 mm on the way, from about a sixteenth of the way "
+                "through step 1: folds that cross are folded one after the "
+                "other, and the preview cannot open the leather for the "
+                "second.") in says
         # the patch is parted where each fold bends it on one side only,
         # and drawn into leather there: said with how long and how deep
         assert ("⚠ Patch is parted along 14.14 mm at fold A, with Square "
@@ -871,14 +871,16 @@ def _lined(pull=0.0):
 
 
 # how the stitch holes of a stack whose pieces go round a fold are read:
-# the whole stack one way, said once
+# the whole stack one way, said once, with how many of its holes meet so
 READ_FLAT = ("Stitch holes of the pieces that go round a fold: the stack is "
-             "read as punched to meet lying flat, the reading in which more "
-             "holes meet. The marks on the model show that reading.")
+             "read as punched to meet lying flat, the reading in which at "
+             "least as many of the whole stack's holes meet as the other: "
+             "{}. The marks on the model show that reading.")
 READ_SHUT = ("Stitch holes of the pieces that go round a fold: the stack is "
              "read as punched to meet when shut, each piece's length round "
-             "its folds taken up, the reading in which more holes meet. The "
-             "marks on the model show that reading.")
+             "its folds taken up, the reading in which more of the whole "
+             "stack's holes meet: {}. The marks on the model show that "
+             "reading.")
 
 
 def test_a_lining_with_holes_round_a_fold_is_read_both_ways(qapp, mm):
@@ -888,7 +890,7 @@ def test_a_lining_with_holes_round_a_fold_is_read_both_ways(qapp, mm):
         # (held as the fold engine finds best, 33 would meet shut)
         assert dlg.view.check.readings == {1: (34, 33, False)}
         says = _lines(dlg)
-        assert READ_FLAT in says
+        assert READ_FLAT.format("all 68 do") in says
         assert ("Lining, round fold A: 33 of its 34 holes meet when shut, 34 "
                 "lying flat.") in says
         cross, = [n for n in dlg.layout_.notes if n.kind == "cross"]
@@ -899,7 +901,7 @@ def test_a_lining_with_holes_round_a_fold_is_read_both_ways(qapp, mm):
     try:
         assert dlg.view.check.readings == {1: (0, 34, True)}
         says = _lines(dlg)
-        assert READ_SHUT in says
+        assert READ_SHUT.format("all 68 do") in says
         assert ("Lining, round fold A: 34 of its 34 holes meet when shut, "
                 "none lying flat.") in says
     finally:
@@ -1046,11 +1048,11 @@ def test_the_main_piece_drawn_through_itself_is_said_with_no_cause_given(
         dlg.cmb_base.setCurrentIndex(1)
         limit, = [n for n in dlg.layout_.notes if n.kind == "limit"]
         assert (round(limit.a, 2), limit.b, round(limit.rest, 2)) == (
-            1.8, 1.125, 1.21)
+            1.8, _near(1.0889, 1e-3), 1.21)
         says = _lines(dlg)
         assert ("⚠ Strip is drawn 1.21 mm into itself at rest, and up to "
-                "1.8 mm on the way, from an eighth of the way through step "
-                "2.") in says
+                "1.8 mm on the way, from about a sixteenth of the way "
+                "through step 2.") in says
         assert not any("cause" in line or "folds that cross" in line
                        for line in says)
         assert _rgb(dlg.view.wash[(0, None)]) == _rgb(dlg.view.look.bad)
@@ -1625,9 +1627,10 @@ def test_a_tray_s_wall_liner_is_parted_where_its_corners_part(qapp, mm):
                 in says
         limit, = [n for n in lay.notes if n.kind == "limit"]
         assert (round(limit.a, 2), limit.b, round(limit.rest, 4)) == (
-            6.34, 0.125, 2.0)
+            6.34, _near(0.0647, 1e-3), 2.0)
         assert ("⚠ Tray is drawn 2 mm into itself at rest, and up to 6.34 mm "
-                "on the way, from an eighth of the way through step 1: "
+                "on the way, from about a sixteenth of the way through step "
+                "1: "
                 "folds that cross are folded one after the other, and the "
                 "preview cannot open the leather for the second.") in says
         bad = _rgb(dlg.view.look.bad)
@@ -1646,7 +1649,8 @@ def test_a_fold_that_moves_says_once_what_it_brings_down_and_how_to_mend_it(
         lay = dlg.layout_
         landing, = [n for n in lay.notes if n.kind == "landing"]
         assert (landing.fold, landing.other, round(landing.a, 4),
-                landing.b) == (0, (("panel", 4), ("bend", 0)), 1.7854, 3.75)
+                landing.b) == (0, (("panel", 4), ("bend", 0)), 1.7854,
+                               _near(3.6821, 1e-3))
         says = _lines(dlg)
         # the lone piece's advice and warning, said once
         assert ("Fold A folds 3.14 mm off its line, towards panel 1, to go "
@@ -1695,7 +1699,7 @@ def test_a_fold_that_cannot_close_names_the_piece_in_its_way(qapp, mm):
                 "bend would not fit before the edge of panel 3. Patch is in "
                 "its way.") in says
         assert ("⚠ Strip and Patch are drawn 0.93 mm into each other at "
-                "rest, from a sixteenth of the way through step 2.") in says
+                "rest, from the very start of step 2.") in says
         bad = _rgb(dlg.view.look.bad)
         # the patch whole, and the strip in fold B's bend
         assert _rgb(dlg.view.wash[(1, None)]) == bad
@@ -1713,7 +1717,7 @@ def test_two_linings_punched_for_shut_are_read_shut_as_the_marks_show(
         assert len(check.holes(fs.MEETS)) == 102
         says = _lines(dlg)
         # one reading for the whole stack, said once
-        assert says.count(READ_SHUT) == 1
+        assert says.count(READ_SHUT.format("all 102 do")) == 1
         for name in ("One", "Two"):
             assert (f"{name}, round fold A: 34 of its 34 holes meet when "
                     "shut, none lying flat.") in says
@@ -1733,10 +1737,262 @@ def test_a_lining_half_way_between_its_readings_is_told_as_it_is_marked(
         says = _lines(dlg)
         assert ("Stitch holes through the layers: Shell and Lining: ● 68 are "
                 "out of line, by up to 1.18 mm.") in says
-        assert READ_FLAT in says
+        assert READ_FLAT.format("none of its 68 do") in says
         assert ("Lining, round fold A: none of its 34 holes meet when shut, "
                 "none lying flat.") in says
         assert "line up" not in _words(dlg)
+    finally:
+        dlg.close()
+
+
+def _c_fold(*linings):
+    """A 240 x 80 shell of 2 mm folded in a C: to the front at x = -45
+    (fold A, step 1) and x = 45 (fold B, step 2), the middle panel
+    still; with linings of its size, 1 mm, one on the other, each sewn
+    along y = 30 on each panel as the shell is, at a pitch of 11 mm. A
+    lining "flat" is punched to meet lying flat; one "shut" has the rows
+    of its two end panels pi x (1 + what lies under it + 0.5) mm nearer
+    the folds, to meet when shut."""
+    spans = ((-115, -51), (-39, 39), (51, 115))
+    shell = _piece("Shell", 240, 80)
+    pieces, seams = [shell], []
+    for a, b in spans:
+        seams.append(_seam((a, 30), (b, 30), 11.0))
+    for k, how in enumerate(linings):
+        x = 500.0 * (k + 1)
+        name = "Liner" if len(linings) == 1 else f"Liner{k + 1}"
+        pieces.append(_piece(name, 240, 80, at=(x, 0)))
+        pull = math.pi * (1.0 + k + 0.5) if how == "shut" else 0.0
+        for (a, b), d in zip(spans, (pull, 0.0, -pull)):
+            seams.append(_seam((x + a + d, 30), (x + b + d, 30), 11.0))
+    folds = [_line((-45, -40), (-45, 40), "F1"), _line((45, -40), (45, 40),
+                                                       "F2")]
+    for order, fold in enumerate(folds, 1):
+        fold.fold_order = order
+    doc = _drawing(*pieces, *folds, *seams)
+    key = asm.put_on(doc, shell, thickness=2.0)
+    for lining in pieces[1:]:
+        asm.put_on(doc, lining, key, thickness=1.0)
+        asm.line_up(doc, lining, "centre")
+        asm.line_up(doc, lining, "bottom")
+    return doc
+
+
+def _marked(dlg, state):
+    """How many holes the model marks in a state, by the name of their
+    piece and the number of the panel of the main piece they lie on
+    (None in a bend)."""
+    from leathercad import sheets as sh
+    lay, check = dlg.layout_, dlg.view.check
+    names = [lay.name] + [s.name for s in lay.sheets]
+    out = {}
+    for i, (x, y, _d) in enumerate(lay.holes):
+        if check.state.get(i) != state:
+            continue
+        k = lay.hole_sheet[i]
+        cell = sh._cell_at([c for c in lay.sheet_cells
+                            if c.sheet == k and c.hinge is None], x, y)
+        panel = lay.hole_panel[i] if k == 0 else \
+            cell.panel if cell is not None else None
+        at = (names[k], None if panel is None else lay.panels[panel].number)
+        out[at] = out.get(at, 0) + 1
+    return out
+
+
+def _said_out_of_line(dlg):
+    """Each count of stitch holes the report says are out of line, with
+    the pieces and panels it says them of: ``[(count, {(piece, panel or
+    None for all its panels)})]``."""
+    said = []
+    for line in _lines(dlg):
+        line = line.replace("Stitch holes where the folding brings pieces "
+                            "together: ", "").replace(
+            "Stitch holes through the layers: ", "")
+        got = re.search(r"(\d+) (?:of their holes )?(?:is|are) out of line",
+                        line) or re.search(r"(\d+) miss", line)
+        if not got:
+            continue
+        n = int(got.group(1))
+        faced = re.match(r"(\w+) \(panel (\d+)\) and (\w+) \(panel "
+                         r"(\d+)\):", line)
+        own = re.match(r"(\w+), panels (\d+) and (\d+):", line) \
+            or re.match(r"(\w+), round .* brings its panels (\d+) and "
+                        r"(\d+) face to face", line)
+        laid = re.match(r"(?:.*\. )?(\w+) and (\w+): ", line)
+        if faced:
+            a, p, b, q = faced.groups()
+            said.append((n, {(a, int(p)), (b, int(q))}))
+        elif own:
+            a, p, q = own.groups()
+            said.append((n, {(a, int(p)), (a, int(q))}))
+        elif laid:
+            said.append((n, {(laid.group(1), None), (laid.group(2), None)}))
+        else:
+            said.append((n, None))      # (of the holes of the whole stack)
+    return said
+
+
+@pytest.mark.parametrize("stack", ["C, one lining flat",
+                                   "C, linings shut and flat",
+                                   "C, linings flat and shut",
+                                   "one fold", "one fold, pulled"])
+def test_the_holes_said_to_meet_and_out_of_line_are_those_marked(
+        qapp, mm, stack):
+    doc = {"C, one lining flat": lambda: _c_fold("flat"),
+           "C, linings shut and flat": lambda: _c_fold("shut", "flat"),
+           "C, linings flat and shut": lambda: _c_fold("flat", "shut"),
+           "one fold": _lined,
+           "one fold, pulled": lambda: _lined(0.25 * 1.5 * math.pi)}[stack]()
+    dlg = _dialog(doc)
+    try:
+        check, lay, says = dlg.view.check, dlg.layout_, _lines(dlg)
+        words = _words(dlg)
+        met, off = _marked(dlg, fs.MEETS), _marked(dlg, fs.OFF)
+        shut = any(shown for _f, _s, shown in check.readings.values())
+        # each piece read round its folds: what is said to meet in the
+        # reading shown is what is marked meeting, hole by hole
+        assert check.readings
+        for k, s in enumerate(lay.sheets, 1):
+            if k not in check.readings:
+                continue
+            line, = [x for x in says if x.startswith(f"{s.name}, round ")]
+            when, flat = re.search(r"(\w+) of its \d+ holes meet when shut, "
+                                   r"(\w+) lying flat", line).groups()
+            said = int((when if shut else flat).replace("none", "0"))
+            assert said == sum(n for (who, _p), n in met.items()
+                               if who == s.name)
+        assert "The marks on the model show that reading." in words
+        assert "by up to 0 mm" not in words
+        # every hole marked out of line is said so, once: by each sentence,
+        # of the pieces and panels it names
+        said = _said_out_of_line(dlg)
+        assert sum(n for n, _at in said) == sum(off.values())
+        for n, at in said:
+            assert at is not None
+            assert n == sum(count for (who, panel), count in off.items()
+                            if (who, panel) in at or (who, None) in at)
+    finally:
+        dlg.close()
+
+
+def test_a_c_fold_lining_punched_flat_is_told_as_the_model_marks_it(
+        qapp, mm):
+    dlg = _dialog(_c_fold("flat"))
+    try:
+        check = dlg.view.check
+        assert check.readings == {1: (6, 8, False)}
+        assert _marked(dlg, fs.MEETS) == {
+            ("Shell", 1): 1, ("Shell", 2): 8, ("Shell", 3): 7,
+            ("Liner", 1): 2, ("Liner", 2): 3, ("Liner", 3): 1}
+        assert _marked(dlg, fs.OFF) == {
+            ("Shell", 1): 6, ("Liner", 1): 5, ("Liner", 2): 5,
+            ("Liner", 3): 6}
+        says = _lines(dlg)
+        assert says[-4:] == [
+            "Stitch holes through the layers: Shell and Liner: ● all 44 line "
+            "up.",
+            "Stitch holes where the folding brings pieces together: Shell "
+            "(panel 1) and Liner (panel 3): ● 12 are out of line, by up to "
+            "3.33 mm.",
+            "Stitch holes of the pieces that go round a fold: the stack is "
+            "read as punched to meet lying flat, the reading in which at "
+            "least as many of the whole stack's holes meet as the other: 22 "
+            "of its 44 do. Liner has more of its own holes meet when shut, "
+            "but the stack as a whole does not. The marks on the model show "
+            "that reading.",
+            "Liner, round folds A and B: 8 of its 22 holes meet when shut, 6 "
+            "lying flat. Where the folding brings its panels 1 and 2 face "
+            "to face, ● 10 of their holes are out of line with each other, "
+            "by up to 2.86 mm."]
+    finally:
+        dlg.close()
+
+
+def test_holes_put_out_of_line_by_the_folding_are_not_said_of_the_layers(
+        qapp, mm):
+    dlg = _dialog(_c_fold("flat", "flat"))
+    try:
+        check = dlg.view.check
+        # every pair of layers lines up; 22 holes are marked out of line,
+        # all of them with what the folding brings onto them
+        assert [f.off for f in check.findings if f.laid] == [0, 0, 0]
+        assert len(check.off) == 22
+        says = _lines(dlg)
+        assert "Stitch holes through the layers: ● 44 line up." in says
+        assert ("Stitch holes where the folding brings pieces together: "
+                "Shell (panel 1) and Liner2 (panel 3): ● 12 are out of line, "
+                "by up to 3.33 mm.") in says
+        assert ("Liner2, round folds A and B: 13 of its 22 holes meet when "
+                "shut, 6 lying flat. Where the folding brings its panels 1 "
+                "and 2 face to face, ● 10 of their holes are out of line "
+                "with each other, by up to 2.86 mm.") in says
+    finally:
+        dlg.close()
+
+
+def test_the_marks_are_said_to_show_the_reading_only_where_they_do(
+        qapp, mm, monkeypatch):
+    from leathercad_app import preview3d
+    dlg = _dialog(_c_fold("flat"))
+    try:
+        check = dlg.view.check
+        assert check.readings == {1: (6, 8, False)}
+        said = preview3d._readings_report(dlg.parts, dlg.layout_, check)
+        assert "The marks on the model show that reading." in said[0]
+        # counted as the marks were before the folding brought the Liner's
+        # panels face to face (22 meeting lying flat, 6 marked): not said
+        monkeypatch.setattr(check, "readings", {1: (22, 8, False)})
+        said = preview3d._readings_report(dlg.parts, dlg.layout_, check)
+        assert "22 lying flat" in said[0]
+        assert "The marks on the model show" not in said[0]
+    finally:
+        dlg.close()
+
+
+def _goes():
+    """A strip 240 x 60 mm, 2 mm: fold A to the front (step 1) and fold B
+    to the back (step 2), 90 degrees each, a pile on each side of them
+    (60 mm and 20 mm). When fold A has folded the piles are 15.79 mm into
+    each other; when fold B has, they stand clear."""
+    return _drawn(_box(0, 0, 240, 60),
+                  [((80, 0), (80, 60), 90.0, 1, 1, -1.0),
+                   ((120, 0), (120, 60), 90.0, -1, 2, -1.0)],
+                  [("Left pile", _box(40, 10, 75, 50), 60.0, 1),
+                   ("Right pile", _box(125, 10, 160, 50), 20.0, 1)])
+
+
+def test_leather_drawn_in_at_one_step_and_clear_at_the_next_is_said_so(
+        qapp, mm):
+    dlg = _dialog(_goes())
+    try:
+        clash, = [n for n in dlg.layout_.notes if n.kind == "clash"]
+        assert (round(clash.rest, 2), clash.last) == (15.79, 1.0)
+        assert clash.b == _near(0.7891, 1e-3)
+        # in red, as the rule is (drawn in at a whole step), with when it
+        # comes clear again
+        assert ("⚠ Left pile and Right pile are drawn 15.79 mm into each "
+                "other when fold A has folded (step 1), from about three "
+                "quarters of the way through it; from when fold B has "
+                "folded (step 2) they are clear again.") in _lines(dlg)
+        # the caption's count and the red wash are of the whole folding
+        assert dlg.view.alarm == ("2 things are drawn through each "
+                                  "other: see the report")
+        dlg._go(2.0)
+        assert dlg.view.alarm == ("2 things are drawn through each "
+                                  "other: see the report")
+        bad = _rgb(dlg.view.look.bad)
+        assert _rgb(dlg.view.wash[(1, None)]) == bad
+        assert _rgb(dlg.view.wash[(2, None)]) == bad
+    finally:
+        dlg.close()
+    mm.set_current("in")
+    dlg = _dialog(_goes())
+    try:
+        assert ("⚠ Left pile and Right pile are drawn 0.621 in into each "
+                "other when fold A has folded (step 1), from about three "
+                "quarters of the way through it; from when fold B has "
+                "folded (step 2) they are clear again.") in _lines(dlg)
+        assert "mm" not in _words(dlg)
     finally:
         dlg.close()
 
@@ -1796,13 +2052,13 @@ def test_what_is_drawn_through_only_on_the_way_is_said_plainly_once_a_step(
     dlg = _dialog(_strip("L", "M", "R"))
     try:
         says = _lines(dlg)
-        assert ("On the way through step 2 the picture draws Shell up to 3 "
-                "mm into itself (a quarter of the way through), Pocket L and "
-                "Pocket M up to 0.8 mm into each other (half way through) "
-                "and panel 1 and fold A of Shell up to 1.2 mm into each "
-                "other (three quarters of the way through); at rest each is "
-                "clear. The preview turns each panel as one stiff piece, "
-                "where leather gives.") in says
+        assert ("On the way through step 2 the picture draws Shell into "
+                "itself (up to 3 mm, from a quarter of the way through), "
+                "Pocket L and Pocket M into each other (up to 0.8 mm, from "
+                "half way through) and panel 1 and fold A of Shell into each "
+                "other (up to 1.2 mm, from three quarters of the way "
+                "through); at rest each is clear. The preview turns each "
+                "panel as one stiff piece, where leather gives.") in says
         assert ("Pocket L lies over the place where folds A and B cross. "
                 "Shell is folded along one and then the other and passes "
                 "through itself there: the preview cannot show how Pocket L "

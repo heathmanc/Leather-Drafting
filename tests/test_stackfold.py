@@ -937,11 +937,11 @@ def test_two_piles_that_pass_through_each_other_inside_a_step_are_said():
                  fold(160, 0, 160, 60, 90.0, order=2, label="B")],
                 [(rect(25, 10, 45, 50), 60.0, 1),
                  (rect(165, 10, 185, 50), 40.0, 1)], base=1)
-    # 6.82 mm into each other on the way, first seen half way through the
-    # second step; nothing at rest
+    # 6.82 mm into each other on the way, first 0.387 of the way through
+    # the second step; nothing at rest
     clash, = _notes(lay, "clash", "limit")
     assert (clash.kind, clash.sheet, clash.other, clash.b, clash.rest) == (
-        "clash", 1, (2,), 1.5, 0.0)
+        "clash", 1, (2,), pytest.approx(1.3872, abs=1e-3), 0.0)
     assert clash.a == pytest.approx(6.8231, abs=1e-4)
     for t in (0.0, 1.0, 2.0):
         assert not overlaps(lay.solid(lay.fractions(t)))
@@ -2460,6 +2460,57 @@ def test_forty_pieces_on_a_trifold_build_in_well_under_half_a_second():
     assert best < 0.5
 
 
+def _deep_between(lay, t, a, b):
+    """How far the cells of pieces ``a`` and ``b`` are drawn into each
+    other at the moment ``t``, at the deepest two."""
+    from leathercad import clash
+    posed = lay._posed(lay.fractions(t))
+    return max((clash.depth(x, y) for c, x in posed if c.sheet == a
+                for d, y in posed if d.sheet == b), default=0.0)
+
+
+def test_the_moment_two_piles_first_pass_is_found_to_a_five_hundredth():
+    # the channel: the second wall's pile first sweeps into the first
+    # wall's 0.387 of the way through step 2, before the half way the
+    # judge looks at; it is closed in on from three eighths, where they
+    # are clear
+    lay = stack(rect(0, 0, 240, 60),
+                [fold(80, 0, 80, 60, 90.0, order=1),
+                 fold(160, 0, 160, 60, 90.0, order=2, label="B")],
+                [(rect(25, 10, 45, 50), 60.0, 1),
+                 (rect(165, 10, 185, 50), 40.0, 1)], base=1)
+    clash, = _notes(lay, "clash", "limit")
+    assert clash.b == pytest.approx(1.3872, abs=1e-3)
+    assert _deep_between(lay, clash.b, 1, 2) > fs._TOUCH
+    assert _deep_between(lay, clash.b - 1 / 500, 1, 2) <= fs._TOUCH
+    assert _deep_between(lay, 1.5, 1, 2) == pytest.approx(2.48, abs=0.01)
+    # the depths are as they were: 6.82 mm at the deepest, none at rest
+    assert (clash.a, clash.rest, clash.last) == (
+        pytest.approx(6.8231, abs=1e-4), 0.0, 0.0)
+
+
+def test_leather_drawn_in_at_one_step_and_clear_at_the_next_says_so():
+    # a strip, fold A to the front (step 1) and fold B to the back (step
+    # 2), a pile each side: 15.79 mm into each other when fold A has
+    # folded, clear when fold B has. They first pass 0.789 of the way
+    # through step 1, not at the seven eighths looked at
+    lay = stack(rect(0, 0, 240, 60),
+                [fold(80, 0, 80, 60, 90.0, order=1),
+                 fold(120, 0, 120, 60, 90.0, -1, order=2, label="B")],
+                [(rect(40, 10, 75, 50), 60.0, 1),
+                 (rect(125, 10, 160, 50), 20.0, 1)])
+    clash, = _notes(lay, "clash", "limit")
+    assert (clash.sheet, clash.other) == (1, (2,))
+    assert clash.a == clash.rest == pytest.approx(15.7854, abs=1e-4)
+    assert clash.last == 1.0
+    assert _deep_between(lay, 1.0, 1, 2) == pytest.approx(15.7854,
+                                                          abs=1e-4)
+    assert _deep_between(lay, 2.0, 1, 2) <= fs._TOUCH
+    assert clash.b == pytest.approx(0.7891, abs=1e-3)
+    assert _deep_between(lay, clash.b, 1, 2) > fs._TOUCH
+    assert _deep_between(lay, clash.b - 1 / 500, 1, 2) <= fs._TOUCH
+
+
 def _limited():
     # a piece whose fold B forms off its line (the fault left over from
     # the fold fix, at its smallest), with a small patch on its back far
@@ -2492,8 +2543,8 @@ def test_a_stack_whose_fold_moves_is_told_what_the_move_brings_down():
     # folding the piece, which it is not with the fold on its line
     landing, = _notes(lay, "landing")
     assert (landing.fold, landing.other, round(landing.a, 4), landing.b,
-            landing.c) == (1, (("panel", 4), ("bend", 1)), 1.7854, 3.75,
-                           0.0)
+            landing.c) == (1, (("panel", 4), ("bend", 1)), 1.7854,
+                           pytest.approx(3.6821, abs=1e-3), 0.0)
     assert not _notes(lay, "limit", "clash")
 
 

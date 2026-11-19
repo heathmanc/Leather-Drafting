@@ -432,14 +432,19 @@ def _laid_report(stack, check) -> str:
                   "them in those pieces.")
     sewn = [f for f in found if f.met or f.off]
     passing = sum(n for where in through.values() for _o, n in where)
+    # (the holes the layers found out of line are those with a hole they
+    # miss, ``lands``: the others marked out of line are out of line with
+    # what the folding brings onto them, which ``_faced_report`` says)
+    off = len([k for k in check.off if k in check.lands])
     if len(sewn) == 1:
         f, = sewn
         out.append(f"{names[f.a]} and {names[f.b]}: "
                    + _tally(f.off, f.worst, f.met, f.gap, 0, f.lone))
     elif sewn:
-        out.append(_tally(len(check.off), max(f.worst for f in sewn),
+        out.append(_tally(off, max(f.worst for f in sewn),
                           len(check.holes(fs.MEETS)),
-                          max(f.gap for f in sewn), 0, passing)
+                          max(f.gap for f in sewn), 0,
+                          passing + len(check.off) - off)
                    + "".join(f"<br>{names[f.a]} and {names[f.b]}: "
                              f"{_pair(f)}." for f in sewn))
     if not out:
@@ -454,7 +459,9 @@ def _faced_report(check) -> str:
     lie on, the lower panel first. A piece whose holes are read two ways
     as it goes round a fold (``check.readings``) is not compared with
     itself here: what the marks show of it is ``_readings_report``'s to
-    say. "" when the folding brings none together."""
+    say, and it says it where the stack is read lying flat (read shut,
+    those holes are not marked out of line). "" when the folding brings
+    none together."""
     readings = getattr(check, "readings", None) or {}
     found = [f for f in check.findings
              if getattr(f, "laid", True) is False
@@ -480,19 +487,44 @@ def _readings_report(parts, model, check) -> List[str]:
     """How the stitch holes of a stack whose pieces go round its folds
     are read (``check.readings``): the whole stack one way, punched to
     meet lying flat or punched to meet when shut (the length of each
-    piece round every bend taken up), whichever has more holes meeting --
-    said once, as the marks on the model show it -- then for each such
-    piece how many of its holes meet each way."""
+    piece round every bend taken up), whichever has more of the whole
+    stack's holes meeting -- said once, with how many of them meet so,
+    and that the marks on the model show it where they do -- then for
+    each such piece how many of its holes meet each way. Read lying
+    flat, the holes of such a piece that are out of line with its own
+    where the folding brings two of its panels face to face are said
+    with it (read shut, those holes are marked where they land, not
+    where the model lays them, and the folding does not mark them)."""
     readings = getattr(check, "readings", None) or {}
     if not readings:
         return []
     shut = any(shown for _f, _s, shown in readings.values())
+    met, n = len(check.holes(fs.MEETS)), len(model.holes)
+    # (a piece of them may have more of its own holes meet the other way)
+    better = [sm.escaped(parts.names[k])
+              for k, (flat, folded, _shown) in sorted(readings.items())
+              if model.sheet(k) is not None
+              and (flat > folded if shut else folded > flat)]
     out = ["<b>Stitch holes of the pieces that go round a fold:</b> the "
            "stack is read as punched to meet "
            + ("when shut, each piece's length round its folds taken up"
               if shut else "lying flat")
-           + ", the reading in which more holes meet. The marks on the "
-           "model show that reading."]
+           + (", the reading in which more of the whole stack's holes meet"
+              if shut else ", the reading in which at least as many of the "
+              "whole stack's holes meet as the other")
+           + (f": all {n} do." if met == n and n > 1
+              else f": {met or 'none'} of its {n} do.")
+           + (f" {sm.listed(better)} "
+              + ("has" if len(better) == 1 else "have")
+              + " more of " + ("its" if len(better) == 1 else "their")
+              + " own holes meet "
+              + ("lying flat" if shut else "when shut")
+              + ", but the stack as a whole does not." if better else "")
+           + (" The marks on the model show that reading." if all(
+               sum(1 for i, w in enumerate(model.hole_sheet)
+                   if w == k and check.state.get(i) == fs.MEETS)
+               == (folded if shut else flat)
+               for k, (flat, folded, _s) in readings.items()) else "")]
     for k, (flat, folded, _shown) in sorted(readings.items()):
         s = model.sheet(k)
         if s is None:
@@ -505,8 +537,22 @@ def _readings_report(parts, model, check) -> List[str]:
         labels = [model.folds[j].label for j in folds]
         round_ = ("fold " if len(labels) == 1 else "folds ") \
             + sm.listed(labels) if labels else "its folds"
-        out.append(f"{name}, round {round_}: {folded or 'none'} of its {n} "
-                   f"holes meet when shut, {flat or 'none'} lying flat.")
+        line = (f"{name}, round {round_}: {folded or 'none'} of its {n} "
+                f"holes meet when shut, {flat or 'none'} lying flat.")
+        # its holes out of line with its own, where the folding brings two
+        # of its panels face to face (``_faced_report`` leaves these out)
+        for f in [f for f in check.findings
+                  if getattr(f, "laid", True) is False
+                  and f.a == f.b == k and f.off and not shut]:
+            one, two = sorted(f.panels)
+            line += (f" Where the folding brings its panels {one} and "
+                     f"{two} face to face, {_bullet(fs.OFF)} {f.off} of "
+                     "their holes "
+                     + (f"is out of line with another, by {_len(f.worst)}."
+                        if f.off == 1 else
+                        f"are out of line with each other, by up to "
+                        f"{_len(f.worst)}."))
+        out.append(line)
     return ["<br>".join(out)]
 
 

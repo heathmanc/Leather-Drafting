@@ -2032,3 +2032,130 @@ def test_a_piece_outside_a_fold_cut_long_enough_comes_level():
     level, = _notes(lay, "level")
     assert (level.a, level.b) == (pytest.approx(-3.7699, abs=1e-4),
                                   pytest.approx(-3.77, abs=1e-9))
+
+
+# -- a short liner over a flap cut into its body ------------------------------
+
+def _slit_tee(deep):
+    # the T with its flap cut down into the body by two slits half a mm
+    # wide, to 3 mm below where it is folded, ``deep`` mm into the body
+    foot = 57.0 - deep
+    return [(0, 0), (100, 0), (100, 60), (70.5, 60), (70.5, foot),
+            (70, foot), (70, 120), (30, 120), (30, foot), (29.5, foot),
+            (29.5, 60), (0, 60)]
+
+
+def _short_liner(deep, way, liner):
+    y = 60.0 - deep
+    lay = stack(_slit_tee(deep), [fold(30, y, 70, y, 180.0, way)],
+                [(liner, 1.0, 1)])
+    flap = next(p.index for p in lay.panels if p.box[1] >= y - 1e-9)
+    return lay, flap
+
+
+@pytest.mark.parametrize("top", [66.0, 70.0, 75.0, 80.0, 85.0, 90.0])
+@pytest.mark.parametrize("deep, way, slit, b", [
+    (3.0, 1, 26.1416, 0.3394), (3.0, -1, 24.0708, 0.0),
+    (6.0, 1, 29.1416, 0.1412), (6.0, -1, 27.0708, 0.0)])
+def test_a_liner_ending_a_short_way_past_a_slit_flaps_body_goes_with_it(
+        top, deep, way, slit, b):
+    # a liner 80 mm wide over the flap and the body beside it, ending 6
+    # to 30 mm above the body's edge: all of it past the fold line that
+    # is not glued to the body's leather goes with the flap, as on the
+    # plain T, however short it is (once those ending below about 79 mm
+    # kept their wings on the body, parted along the flap's sides
+    # instead, the shorter cut)
+    lay, flap = _short_liner(deep, way, rect(10, 40, 90, top))
+    above = [(p, tuple(round(v, 6) for v in pc.bounds(q)))
+             for p, q, _f in lay._regions[0] if pc.bounds(q)[1] >= 60.0]
+    assert sorted(above) == [
+        (flap, (10.0, 60.0, 29.5, top)), (flap, (29.5, 60.0, 30.0, top)),
+        (flap, (30.0, 60.0, 70.0, top)), (flap, (70.0, 60.0, 90.0, top))]
+    # parted from what is glued to the body beside the slits: along the
+    # body's edge (19.5 mm), down the slit's far side to the bend's edge
+    # and across the slit's foot -- the same wherever the liner ends
+    slits = _notes(lay, "slit")
+    assert [(n.sheet, n.fold, round(n.a, 4), round(n.b, 4), n.at)
+            for n in slits] == [(1, 0, slit, b, (19.75, 60.0)),
+                                (1, 0, slit, b, (80.25, 60.0))]
+    assert not _notes(lay, "clash", "limit", "crossing")
+    assert witnesses(lay, 9, 3) == []
+
+
+@pytest.mark.parametrize("way, slit, b", [(1, 26.1416, 0.3394),
+                                          (-1, 24.0708, 0.0)])
+def test_a_strip_across_a_slit_flaps_hinge_goes_with_the_flap_past_it(
+        way, slit, b):
+    # a strip from 50 to 70 mm, across the fold line 3 mm into the body
+    lay, flap = _short_liner(3.0, way, rect(10, 50, 90, 70))
+    assert {p for p, q, _f in lay._regions[0]
+            if pc.bounds(q)[1] >= 60.0} == {flap}
+    assert [(round(n.a, 4), round(n.b, 4), n.at)
+            for n in _notes(lay, "slit")] == [(slit, b, (19.75, 60.0)),
+                                              (slit, b, (80.25, 60.0))]
+    assert not _notes(lay, "clash", "limit", "crossing")
+    assert witnesses(lay, 9, 3) == []
+
+
+@pytest.mark.parametrize("top", [70.0, 75.0])
+@pytest.mark.parametrize("way, slit, b", [(1, 23.1416, 0.5369),
+                                          (-1, 21.5708, 0.0)])
+def test_the_same_short_liners_on_the_plain_tee_go_with_its_flap(
+        top, way, slit, b):
+    # the rule the slit flap now shares: cut along the fold line, the
+    # part past it goes whole with the flap, parted from the body's
+    # leather along its edge beside the hinge
+    lay = stack(TEE, [fold(0, 60, 100, 60, 180.0, way)],
+                [(rect(10, 40, 90, top), 1.0, 1)])
+    flap = next(p.index for p in lay.panels if p.box[1] >= 60.0 - 1e-9)
+    assert _panels_of(lay, 1) == sorted([
+        (1 - flap, (10.0, 40.0, 90.0, 60.0)), (flap, (10.0, 60.0, 90.0, top))])
+    assert [(round(n.a, 4), round(n.b, 4), n.at, n.other)
+            for n in _notes(lay, "slit")] == [
+        (slit, b, (20.0, 60.0), (0,)), (slit, b, (80.0, 60.0), (0,))]
+    assert not _notes(lay, "clash", "limit", "crossing")
+    assert witnesses(lay, 9, 3) == []
+
+
+# a body cut in two by a fold at x = 50, with a flap on each half cut
+# into it by slits, both flaps on one fold line 3 mm into the body
+TWO_SLIT_FLAPS = [(0, 0), (100, 0), (100, 60), (80.5, 60), (80.5, 54),
+                  (80, 54), (80, 120), (55, 120), (55, 54), (54.5, 54),
+                  (54.5, 60), (45.5, 60), (45.5, 54), (45, 54), (45, 120),
+                  (20, 120), (20, 54), (19.5, 54), (19.5, 60), (0, 60)]
+
+
+@pytest.mark.parametrize("way, slit, b", [(1, 16.1416, 0.3394),
+                                          (-1, 14.0708, 0.0)])
+def test_a_short_liners_wing_goes_with_the_flap_beside_it_not_the_first(
+        way, slit, b):
+    # the right half and its flap turn on the fold at x = 50 first, so the
+    # two flaps do not move alike: the wing past the right flap, and the
+    # strip over its left slit, go with the right flap and the bit of
+    # body between the slits right of x = 50, the hinges nearest them --
+    # not with the first hinge along the fold line the liner touches,
+    # the bit of body left of x = 50 (which tore the wing from the right
+    # flap along its sides, noted slit 30.5 and 31.64 mm at y 67.57)
+    lay = stack(TWO_SLIT_FLAPS,
+                [fold(20, 57, 80, 57, 180.0, way, order=1),
+                 fold(50, 0, 50, 60, 90.0, 1, label="B", order=0)],
+                [(rect(10, 40, 90, 75), 1.0, 1)])
+    at = {tuple(p.box): p.index for p in lay.panels}
+    left, right = at[(20.0, 57.0, 45.0, 120.0)], at[(55.0, 57.0, 80.0, 120.0)]
+    tongue = (at[(45.5, 57.0, 50.0, 60.0)], at[(50.0, 57.0, 54.5, 60.0)])
+    above = [(p, tuple(round(v, 6) for v in pc.bounds(q)))
+             for p, q, _f in lay._regions[0] if pc.bounds(q)[1] >= 60.0]
+    assert sorted(above) == sorted([
+        (left, (10.0, 60.0, 20.0, 75.0)), (left, (20.0, 60.0, 45.0, 75.0)),
+        (tongue[0], (45.0, 60.0, 50.0, 75.0)),
+        (tongue[1], (50.0, 60.0, 54.5, 75.0)),
+        (tongue[1], (54.5, 60.0, 55.0, 75.0)),
+        (right, (55.0, 60.0, 80.0, 75.0)), (right, (80.0, 60.0, 90.0, 75.0))])
+    # parted from what is glued to the body beside each outer slit, as on
+    # one slit flap: 9.5 mm along the body's edge, 6 down the slit, 0.5
+    # across its foot and what is left of the bend
+    assert sorted((n.at, round(n.a, 4), round(n.b, 4))
+                  for n in _notes(lay, "slit") if n.fold == 0
+                  and n.at[1] == 60.0) == [((14.75, 60.0), slit, b),
+                                           ((85.25, 60.0), slit, b)]
+    assert witnesses(lay, 9, 3) == []

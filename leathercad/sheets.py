@@ -2164,8 +2164,11 @@ def seat(layout) -> List[list]:
     say -- is cut along the edge of one of them, until each part lies
     over one. A part over the main piece's leather rides on the panel
     under it; a part over none rides on the panel on its side of a fold
-    line it is cut along, else on what it rests on there (``_follow``),
-    else on the nearest panel.
+    line it, or the part it was cut from along the main piece's edge, is
+    cut along, by the hinge nearest it -- so that all of a liner past a
+    flap's fold line goes with the flap beside it, however far the flap
+    is cut into the body -- else on
+    what it rests on there (``_follow``), else on the nearest panel.
 
     The layout keeps what this finds in ``_seated``, for each sheet
     ``[[panel, outline, flags, how]]`` with ``how`` "on" (over the main
@@ -2188,15 +2191,20 @@ def seat(layout) -> List[list]:
             regions = [piece for pts, flags in regions
                        for piece in pc.cut(pts, flags, a, e, want, fi)]
         mine = []
-        regions = [bit for pts, flags in regions
+        regions = [(bit, (pts, flags)) for pts, flags in regions
                    for bit in _edged(layout, pts, flags)]
-        for pts, flags in regions:
+        for (pts, flags), whole in regions:
             for q, f in _parted(layout, pts, flags):
                 over = _over(layout, q, f)
                 if over:
                     mine.append([max(over, key=over.get), q, f, "on"])
                     continue
                 panel = _flagged(layout, q, f)
+                if panel is None:
+                    # (a bit cut off along the main piece's edge keeps the
+                    # side of the fold line the part it was cut from lies
+                    # on, by the hinge nearest the bit itself)
+                    panel = _flagged(layout, *whole, near=q)
                 mine.append([panel, q, f, "free" if panel is None
                              else "cut"])
         layout._seated.append(mine)
@@ -2363,13 +2371,15 @@ def _parted(layout, pts, flags, rounds: int = 24):
     return out + [(P, F) for P, F, _o in todo]
 
 
-def _flagged(layout, pts, flags) -> Optional[int]:
+def _flagged(layout, pts, flags, near=None) -> Optional[int]:
     """The panel on the side of a fold line that a part of a sheet was cut
     along (None for a part cut along none): the one the hinge nearest
     along the line has there. Of the edges cut along fold lines, the one
     nearest a hinge along its line goes: a part cut along two lines, one
     of them only where it runs on past the end of its hinge, goes by the
-    other."""
+    other. Given ``near``, a bit of the part, the hinge nearest that bit
+    goes instead of the one nearest the edge -- of two flaps on one fold
+    line, the one beside the bit; of two lines, the one it stands by."""
     n = len(pts)
     best = None
     for k in range(n):
@@ -2380,10 +2390,17 @@ def _flagged(layout, pts, flags) -> Optional[int]:
         p, q = pts[k], pts[(k + 1) % n]
         sp = (p[0] - a[0]) * e[0] + (p[1] - a[1]) * e[1]
         sq = (q[0] - a[0]) * e[0] + (q[1] - a[1]) * e[1]
-        lo, hi = min(sp, sq), max(sp, sq)
+        lo, hi, aside = min(sp, sq), max(sp, sq), 0.0
+        if near is not None:
+            along = [(r[0] - a[0]) * e[0] + (r[1] - a[1]) * e[1]
+                     for r in near]
+            lo, hi = min(along), max(along)
+            aside = min(abs((r[1] - a[1]) * e[0] - (r[0] - a[0]) * e[1])
+                        for r in near)
         for h in layout.hinges:
             if h.fold == fi:
-                off = max(0.0, max(h.lo, lo) - min(h.hi, hi))
+                off = math.hypot(
+                    max(0.0, max(h.lo, lo) - min(h.hi, hi)), aside)
                 # (it runs along the line: the part lies to its left)
                 panel = h.left if sq > sp else h.right
                 if best is None or off < best[0]:

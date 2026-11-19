@@ -606,7 +606,7 @@ to slide it, roll the wheel to zoom; **Fit** or a double-click brings it
 back. Click a fold line to choose its row in the table: it lights up
 through whatever is folded over it.
 
-Each fold line has a row:
+Each fold line has a row on the **Folds** tab:
 
 | | |
 |---|---|
@@ -617,13 +617,16 @@ Each fold line has a row:
 | **Radius** | the inside radius of this bend. **Auto** uses the piece's Bend radius (step down past 0, or type `auto`, to go back to it) |
 | **Leather used** | the length of leather the bend takes up |
 
-Above the table, **Leather thickness** and **Bend radius** are for the
-whole piece — a bend radius of 0 is a sharp crease, and the leather still
-takes half its thickness to get round — and **Stays still** chooses the
-panel the rest folds about. **Leather colour** is the leather the preview
-shows the piece in: natural, tan, chestnut, dark brown, black, burgundy,
-navy or olive. It changes the picture only — nothing about it is saved in
-the drawing — and the preview opens in the one you chose last.
+**Leather thickness**, above the tabs, and **Bend radius**, above the
+table, are for the whole piece — a bend radius of 0 is a sharp crease,
+and the leather still takes half its thickness to get round — and
+**Stays still** chooses the panel the rest folds about. **Leather
+colour** is the leather the preview shows the piece in: natural, tan,
+chestnut, dark brown, black, burgundy, navy or olive. It changes the
+picture only — the box is not saved in the drawing — and the preview
+opens in the one you chose last. A piece given a leather of its own
+(**This piece's leather**, on the **Pieces** tab) keeps that, whatever
+the box says.
 
 **The order matters.** A fold that closes flat over leather folded in
 before it has to go round that leather, so it bends at a bigger radius and
@@ -649,9 +652,12 @@ that closes over another one that is off its line says only to put that
 one right first. Where a fold has no room to move — its bend would run off
 the leather or into the next fold, it is at the foot of a flap, or leather
 comes into it from both sides — the report says so in red, with what to
-shorten if that puts it right; and if a fold that has moved brings what it
-carries down in other leather (a flap that stopped short of a wall, say),
-it says which.
+shorten if that puts it right. A fold with room to move only part of the
+way moves that far (*Fold C folds 1.29 mm off its line, towards panel
+4.*), and the red line under it says how much is still in its bend and
+what to shorten. And if a fold that has moved brings what it carries
+down in other leather (a flap that stopped short of a wall, say), it
+says which.
 
 Under the view, the buttons and the slider fold the piece up a step at a
 time, or play it through. With the view clicked: `Space` plays, `←` `→`
@@ -674,14 +680,20 @@ Below the table the preview reports:
   [Do the stitch holes line up?](#do-the-stitch-holes-line-up)
 
 What you set here — step, direction, angle, radius — is kept on the fold
-lines and saved with the drawing; a run of changes is one **Undo** in the
-main window. You can leave the preview open while you draw: it follows the
-drawing. When several pieces have fold lines, **Show** chooses which to
-fold (it opens on the one that's selected).
+lines and saved with the drawing, and a **Leather thickness** you type
+is given to the piece itself, as if you had typed it in Properties; a
+run of changes is one **Undo** in the main window. You can leave the
+preview open while you draw: it follows the drawing. When the drawing
+has more than one piece, **Show** chooses which the preview shows (it
+opens on the one that's selected): stacks first, then the pieces that
+fold, then, below a line, the ones that don't.
 
 With no fold lines, panels drawn edge to edge fold along the edges they
 share, like a paper net (what you set for a net lasts while the preview is
-open). Folds that cross are folded one after the other, as you would by
+open). A net folds exactly on the edges you drew: its folds never move
+aside for what is folded inside them, so where something is in the way
+the report says in red how far it reaches into the bend and which panel
+to shorten. Folds that cross are folded one after the other, as you would by
 hand; the layers inside the second fold are shown cut along it, and the
 report says how far the cut ends reach into its bend — that much cut back
 at the fold (a notch in a hem, where the piece folds across it) clears it.
@@ -706,10 +718,12 @@ enough to the middle one but too far from each other, all three are red —
 so a fault under the top layer shows from on top. Holes that lie on no
 other holes are left plain.
 
-Under the table the preview counts each kind, says how far out the worst
-is, and — when more than two panels are stacked — which panels the holes
-that line up or miss are on. **Hole check**, under the view, puts the marks
-away when you want a clean picture.
+Under the table the preview counts each kind and says how far out the
+worst is. Where holes lie on more than one pair of panels — two flaps
+folded on to one panel, or three layers stacked — it then goes through
+the pairs: how many holes of those two panels line up, and how many
+miss. **Hole check**, under the view, puts the marks away when you want
+a clean picture.
 
 ### Putting pieces together
 
@@ -733,13 +747,16 @@ with several selected it goes to all of them. A piece that has none
 takes the preview's own Leather thickness when it is put on a stack.
 
 **Put them on.** With two or more pieces in the drawing, **View → 3D
-assembly preview…** has a **Pieces** tab that lists every piece. Tick
-one to put it on the stack. The first you tick is the **main piece**:
-the others are placed against it, and the stack folds along *its* fold
-lines — for a wallet, the outer shell with its spine fold. Each piece
-you tick after that lands on the piece chosen in the list, their
-bottom-left corners together — or, if it is drawn overlapping the main
-piece, where it is drawn. Then put it where it goes:
+assembly preview…** has a **Pieces** tab that lists every piece. The
+piece the preview is showing — named in **Show**, and in bold at the
+top of the list — is the **main piece**: tick another and it goes on
+it. The others are placed against the main piece, and the stack folds
+along *its* fold lines. For a wallet that is the outer shell with its
+spine fold, so have the shell showing before you tick anything: choose
+it in **Show**. Each piece you tick lands on the piece chosen in the
+list, or on the top of the pile if none is chosen, their bottom-left
+corners together; one drawn overlapping the main piece goes where it is
+drawn. Then put it where it goes:
 
 | | |
 |---|---|
@@ -772,12 +789,22 @@ templates.
 **What it tells you while the stack lies flat.** How many pieces there
 are and how thick the thickest place is, and what is in it; pieces that
 stand past the edge of the main piece; a piece that lies half on
-another and stands clear of what is under the rest of it. And the
+another and stands clear of what is under the rest of it; a piece moved
+right off the main piece, which *lies on nothing*; and one that rests
+on another by a sliver (*rides up onto … on only 0.4 mm of overlap*) —
+most often a wrong number in **Across** or **Up**. And the
 stitch holes, layer by layer: holes that meet are marked as when one
 piece is [folded on itself](#do-the-stitch-holes-line-up), and where a
 hole goes through a piece that has none there the report counts them —
 *Outer shell's holes pass through Bill pocket liner (142)…, which have
 no holes there. The laser will not cut them in those pieces.*
+
+If the main piece is cut open in the drawing, or moved to a layer that
+is not cut, the report says so and the stack holds still until it is a
+closed outline on a cut layer again: the next piece stands in for it,
+the others stay where they lay, and nothing can be moved or put on
+(pieces can still be taken off). Any other piece of the stack that is
+cut open is left out until it is closed.
 
 **Fold it.** The **Folds** tab works for a stack as it does for one
 piece, on the main piece's fold lines, and Play closes the whole thing:
@@ -789,8 +816,12 @@ A fold with leather inside it needs room, and the preview gives it what
 the pile needs: *Fold A (Spine fold) closes over 8 mm of leather, 4 mm
 on each half: Left pocket 1 (front) comes to rest on Right pocket 1
 (front). It bends at 4 mm and takes 15.08 mm of Outer shell, 7.54 mm
-each side of the fold line.* Then it says what is in the way of that
-bend, and marks it amber on the model:
+each side of the fold line.* A fold set to close the other way leaves
+what you laid on the main piece on the outside, and the report says
+that instead: *Fold A closes away from Lining, laid on Shell: it ends
+up on the outside. If it belongs inside, press Flip.* (**Flip** is on
+the **Folds** tab.) Then it says what is in the way of the bend, and
+marks it amber on the model:
 
 * **Pieces that reach into the bend**, where leather cannot lie flat:
   *Left pocket backing (and 7 more) reach 5.54 mm into the bend of fold
@@ -801,9 +832,15 @@ bend, and marks it amber on the model:
   less far to go than the shell: *Bill pocket liner goes round the
   inside of fold A and has 3.77 mm too much leather there. Cut it
   3.77 mm shorter across the fold and it lies smooth and comes level
-  when shut; sewn in flat at this length it wrinkles inside the fold.*
+  when shut; sewn in flat at this length it wrinkles inside the fold…*
   Once it is that much shorter the line reads *shut, it comes level*.
   A piece round the outside of a fold needs that much more instead.
+  One cut too short stops short of the ends of the main piece when
+  shut, one too long stands past them, and each line says by how much
+  to change it. A piece that does not reach the main piece's ends — a
+  strap, a patch — is told how much more leather it has than the bend
+  has room for: *free at an end, it stands that much further out when
+  shut; held at both ends, it wrinkles inside the fold.*
 
 The picture keeps every layer where you laid it and squeezes it to fit
 round the bend; the millimetres in the report are the true ones.
@@ -812,8 +849,9 @@ warnings go. **Make room for the fold**, in the Bifold wallet
 generator, sizes the shell, the lining and the pockets that way from
 the two thicknesses you give it.
 
-Last it gives the size folded and, once every fold is shut, how much
-leather a needle goes through, most and least. Where pieces that go
+Then it gives the size folded and, once every fold is shut, how much
+leather a needle goes through, most and least; after that what is drawn
+through what, and last the stitch holes. Where pieces that go
 round a fold have stitch holes of their own, it says how it read them
 — punched to meet lying flat, or punched to meet when shut, whichever
 has more holes meeting — and how many of each piece's holes meet either
@@ -824,10 +862,16 @@ through something else where the leather ends up: *at rest*, when a
 step of the folding is done. What the picture draws through something
 only on the way through a step is said plainly, with *at rest they are
 clear* — the preview turns each panel as one stiff piece, where leather
-gives. In red too is a piece the folds would part: one laid across the
-end of a narrow flap's fold, or over two folds that cross, cannot
-follow both sides, and the report says where and for how long it would
-have to be slit.
+gives.
+
+The report also names a piece the folds would part. One laid across the
+end of a narrow flap's fold is bent on one side of the fold and left
+flat on the other: the report says where it is parted and along how
+long, and that in leather it would have to be slit there, or stop short
+of the fold. A piece over the place where two folds cross is named
+too, with no length: the preview cannot show how it would lie there.
+Both are in plain words, and in red only where the piece also ends up
+drawn into leather.
 
 What you set is kept in the drawing with each piece — its thickness,
 its leather, where it lies — and a run of changes is one **Undo** in
@@ -844,19 +888,21 @@ piece's holes through the pieces under it for you.
 
 ### Generators
 
-**Edit → Generate** drafts whole parts from a few numbers, grouped and
-placed at the view centre: **Card pocket stack**, **Zipper opening**,
+**Edit → Generate** drafts whole parts from a few numbers and places
+them at the view centre: **Card pocket stack**, **Zipper opening**,
 **Strap / belt** (round, English-point or square tip, buckle-tongue slot,
 turn-back fold, hole ladder), **Box gusset** and **Curved gusset** (strip
 length worked out from the body, with corner folds or curve marks),
 **Bifold wallet** (shell, spine fold, bill liner and a pocket stack per
 side; give it the **Shell leather** and the **Lining and pocket leather**
 and tick **Make room for the fold** to have the spine, the lining and
-the pockets sized for the bend those leathers need), **Key tab** (fold-over ring tab with rivet holes) and **Hemmed
-pocket** (folded top edge: cut taller by the hem plus its bend allowance,
-mouth left unsewn). Every dialog remembers your last values. The bifold
-and the card pocket stack arrive [put together](#putting-pieces-together),
-ready to look at in the 3D assembly preview; folds that close a piece
+the pockets sized for the bend those leathers need), **Key tab**
+(fold-over ring tab with rivet holes) and **Hemmed pocket (folded
+edge)** (cut taller by the hem plus its bend allowance, mouth left
+unsewn). Every dialog remembers your last values. The bifold and the
+card pocket stack arrive [put together](#putting-pieces-together),
+ready to look at in the 3D assembly preview, and the others arrive
+grouped, so that their pieces move as one; folds that close a piece
 on itself — the wallet's spine, the key tab's ring fold, the strap's
 turn-back — fold to the back, so the grain ends up outside.
 

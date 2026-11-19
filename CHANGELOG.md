@@ -8,10 +8,10 @@ made only when the release workflow is run by hand with it ticked.
 
 ### Putting pieces together
 * **Stack the pieces of a pattern and see the finished thing.** The 3D
-  assembly preview has a new **Pieces** tab. Tick the pieces of a drawing
-  on to a stack — the first is the main piece, the others are placed
-  against it — and they are shown lying on each other as they will be
-  sewn, each at its own thickness and in its own leather. Line a piece up
+  assembly preview has a new **Pieces** tab. Show the main piece — a
+  wallet's shell — and tick the other pieces of the drawing on to it:
+  they are placed against it, and shown lying on each other as they
+  will be sewn, each at its own thickness and in its own leather. Line a piece up
   with the main piece or another piece (left, centre, right, bottom,
   middle, top), type how far across and up it lies, turn it, turn it over
   grain down, put it underneath, or lay it where it is drawn. **Pull
@@ -35,12 +35,15 @@ made only when the release workflow is run by hand with it ticked.
   5.54 mm narrower*; dashed lines on the flat stack show where each bend
   begins). A lining that goes round the inside of a fold has less far to
   go than the shell: *Cut it 3.77 mm shorter across the fold and it lies
-  smooth and comes level when shut* — and once it is, the report says so.
+  smooth and comes level when shut…* — and once it is, the report says so.
   It gives the size folded and, once every fold is shut, the most and
   least leather a needle goes through (windows and other cut-outs left
-  out); and in red, by name and with how deep, anything that cannot be
-  where it is drawn — two piles that meet, or a piece laid across the
-  end of a narrow flap's fold that would have to be slit there.
+  out); and in red, by name and with how deep, anything still drawn
+  through other leather where it ends up — two piles that meet, or a
+  piece across a fold that would have to be slit there and is left in
+  the leather. A piece the fold only parts, like a strap laid across
+  the end of a narrow flap's fold, is named in plain words, with how
+  long a slit it would need.
 * **At rest, and on the way.** Red is kept for what stays drawn through
   something else where the leather ends up, when a step of the folding
   is done. What the picture draws through something only on the way
@@ -112,6 +115,12 @@ made only when the release workflow is run by hand with it ticked.
   for room, and a panel came out on the wrong side of another. It now goes
   round the fold inside and the gap it holds open; what ends short of the
   round of such a fold still lies in the gap.
+* **Two tabs along one edge are no longer said to be too close.** Where
+  two tabs stand side by side along one edge, each folding on its own
+  stretch of one line, the preview warned *Folds A and B are 0.0 mm
+  apart, but their bends need 3.1 mm between them*. Each bend is on its
+  own tab and they never meet, so the warning is gone; two folds that
+  do lie side by side are still warned of when they are too close.
 * **Every length in the report is in the unit you work in** — the
   warnings too, which stayed in millimetres with inches chosen.
 * **The preview follows a fold line you move.** With the preview open, a

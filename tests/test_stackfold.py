@@ -2414,22 +2414,21 @@ def test_the_wallet_builds_as_fast_with_its_spine_standing_open():
         assert len(_notes(lay, "leather")) == (1 if angle >= 175.0 else 0)
 
 
-def test_random_shut_stacks_get_their_needle_figure_and_quickly():
+def test_random_shut_stacks_get_their_needle_figure_in_few_boxes(
+        monkeypatch):
     # fifteen stacks of up to seven pieces of every shape on a shell
     # folded shut: the search cuts its boxes along the outlines' own
-    # sides, so each gets its figure within the search's ceiling, and
-    # none takes longer than 0.14 s to build (1.0 s, before)
-    import time
+    # sides, so each gets its figure in no more than 400 boxes -- a
+    # third of them took more than 4,000 when boxes were only halved,
+    # and a second each to build. (The boxes are counted, not the
+    # time: a clock reads several times too long on a busy machine.)
+    monkeypatch.setattr(sh, "_BOXES", 500)
     rng = random.Random(7)
-    worst = 0.0
     for _k in range(15):
         outline, folds, sheets, t, base = random_stack(rng, "shut")
-        t0 = time.process_time()
         lay = fs.fold_piece(outline, folds, thickness=t, sheets=sheets,
                             base=base)
-        worst = max(worst, time.process_time() - t0)
         assert len(_notes(lay, "leather")) == 1
-    assert worst < 0.5
 
 
 def test_a_search_cut_short_gives_no_needle_figure_rather_than_a_wrong_one(

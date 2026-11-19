@@ -1300,7 +1300,7 @@ def _strip_lining(wa, wb, angle_a, punch):
 OV = math.pi * 1.2      # what a bend flat takes of the lining, more or less
 
 
-@pytest.mark.parametrize("name, wa, wb, angle_a, at_middle, at_still", [
+@pytest.mark.parametrize("name, wa, wb, angle_a, ends_even, at_still", [
     # inside both folds: held at the middle panel or so that its ends
     # come equally far, each flap lands OV further out
     ("C", 1, 1, 180.0, (OV, -OV), (OV, -OV)),
@@ -1308,11 +1308,15 @@ OV = math.pi * 1.2      # what a bend flat takes of the lining, more or less
     # come equally far, its middle lands OV towards the first fold; held
     # at the still middle panel, both flaps land OV away from it
     ("Z", 1, -1, 180.0, (0.0, 0.0, -OV), (OV, OV, 0.0)),
-    # a right angle and a flat fold: the first takes half as much
-    ("C at 90", 1, 1, 90.0, (0.5 * OV, -OV), (0.5 * OV, -OV))])
+    # a right angle and a flat fold: the first takes half as much. Held
+    # at the still middle panel, the flaps land OV / 2 and OV out; held so
+    # that its ends come equally far, each 3 OV / 4, and its middle OV / 4
+    # towards the first
+    ("C at 90", 1, 1, 90.0, (0.75 * OV, -0.75 * OV, 0.25 * OV),
+     (0.5 * OV, -OV))])
 def test_a_lining_round_two_folds_is_read_shut_where_it_lands(
-        name, wa, wb, angle_a, at_middle, at_still):
-    for pull in (at_middle, at_still):
+        name, wa, wb, angle_a, ends_even, at_still):
+    for pull in (ends_even, at_still):
         left, right = pull[0], pull[1]
         mid = pull[2] if len(pull) > 2 else 0.0
 
@@ -1876,6 +1880,308 @@ def test_a_needle_through_a_window_goes_through_no_leather_of_it(
     # liner's other half covers
     leather, = _notes(_windowed(where), "leather")
     assert (leather.a, leather.b) == pytest.approx((most, least), abs=1e-9)
+
+
+# -- the stitch holes of a stack, read as the marks show them ----------------
+
+def _marked(lay, check):
+    """For each sheet, how many of its holes the marks show meeting."""
+    out, first = {}, lay._own_holes
+    for k, s in enumerate(lay.sheets, 1):
+        out[k] = sum(1 for i in range(first, first + len(s.holes))
+                     if check.state.get(i) == fs.MEETS)
+        first += len(s.holes)
+    return out
+
+
+def _as_marked(check, marked):
+    """Whether each piece's reading, in the reading shown, is its marks."""
+    return all(marked[k] == (shut if shown else flat)
+               for k, (flat, shut, shown) in check.readings.items())
+
+
+def _row13(y):
+    # a row of 14 stitch holes 13 mm apart along ``y``, the nearest 8 mm
+    # each side of a fold at x = 100
+    return [(100 - 8 - 13 * i, y, 1.0) for i in range(7)] + \
+        [(100 + 8 + 13 * i, y, 1.0) for i in range(7)]
+
+
+# a 2 mm piece folded flat at x = 100, with such a row along y = 50
+ROW13 = _row13(50.0)
+
+
+def _linings13(pulls, dy=0.0):
+    # 1 mm linings, one on another inside it, each punched where the
+    # piece is, drawn ``pull`` mm nearer the fold each side, and ``dy`` up
+    return fs.fold_piece(rect(0, 0, 200, 100), [fold(100, 0, 100, 100)],
+                         holes=ROW13, sheets=[
+        sh.Sheet(rect(0, 0, 200, 98), 1.0, name=f"l{k}", holes=[
+            (x + (pull if x < 100 else -pull), y + dy, d)
+            for x, y, d in ROW13]) for k, pull in enumerate(pulls, 1)])
+
+
+def test_a_lining_punched_flat_round_a_c_fold_is_counted_as_it_is_marked():
+    # a strip in three, 1.6 mm, folded in on its still middle from both
+    # ends; a 0.8 mm lining round both folds punched where the strip is,
+    # every 13 mm. Flat, all 18 holes meet the strip's; but the lining's
+    # ends, folded on to its middle, have them 3 mm off theirs, so 10
+    # are out of line -- and are so counted (once said to be 18)
+    holes = [(6 + 13 * i, 95.0, 1.0) for i in range(20)
+             if abs(6 + 13 * i - 80) > 7 and abs(6 + 13 * i - 180) > 7]
+    lining = sh.Sheet(rect(0, 0, 260, 98), 0.8, name="lining", holes=holes)
+    lay = fs.fold_piece(rect(0, 0, 260, 100),
+                        [fold(80, 0, 80, 100, order=2),
+                         fold(180, 0, 180, 100, order=1, label="B")],
+                        thickness=1.6, base=1, holes=holes, sheets=[lining])
+    check = lay.lineup()
+    assert check.readings == {1: (8, 6, False)}
+    assert _marked(lay, check) == {1: 8}
+    assert len(check.off) == 10
+
+
+def test_linings_read_flat_are_counted_as_they_are_marked():
+    # three linings, the third punched for shut (pi x 3.5 mm too long
+    # round the inside, half that nearer the fold each side): read flat,
+    # as more holes meet so. Its holes come through the other linings'
+    # leather where they have none (5.5 mm off): none meets, though they
+    # line up with one another across the fold (12 were once marked so)
+    lay = _linings13((0.0, 0.0, 1.75 * math.pi))
+    check = lay.lineup()
+    assert check.readings == {1: (14, 0, False), 2: (14, 0, False),
+                              3: (0, 0, False)}
+    assert _marked(lay, check) == {1: 14, 2: 14, 3: 0}
+    assert len(check.holes(fs.MEETS)) == 42
+
+
+@pytest.mark.parametrize("dy", [5.5, 20.0])
+def test_holes_that_line_up_across_a_fold_through_leather_without_any_miss(
+        dy):
+    # a lining whose row is ``dy`` mm off the piece's: its holes come
+    # through the piece's leather where it has none, and the piece's
+    # through the lining's. Folded, the lining's halves face each other
+    # and their holes line up -- but a needle cannot go through the
+    # leather behind them, so none is said to meet (all 14 once were),
+    # and the finding counts them as having no hole to meet (it once
+    # said all 14 line up)
+    for pull in (0.0, 0.75 * math.pi):
+        lay = _linings13((pull,), dy)
+        check = lay.lineup()
+        assert check.readings == {1: (0, 0, False)}
+        assert check.state == {}
+        assert sorted(check.alone) == list(range(28))
+        faced, = [f for f in check.findings if not f.laid]
+        assert (faced.a, faced.b, faced.holes, faced.met, faced.lone) == \
+            (1, 1, 14, 0, 14)
+
+
+def test_holes_facing_across_a_fold_meet_both_or_neither():
+    # a 2 mm piece folded flat, its row along y = 50; a 1 mm patch on the
+    # outside of its left half only, its own row 5.5 mm above the piece's.
+    # Folded, the piece's halves face each other with nothing between,
+    # and each hole lines up with its partner -- but the needle through
+    # the two goes through the patch where it has no hole, so neither
+    # half is said to meet (the right half once was, the left not), and
+    # none is counted as meeting
+    def patched(holes):
+        return fs.fold_piece(rect(0, 0, 200, 100), [fold(100, 0, 100, 100)],
+                             holes=ROW13, sheets=[
+                                 sh.Sheet(rect(5, 10, 95, 90), 1.0, -1,
+                                          name="patch", holes=holes)])
+
+    check = patched([(x, y + 5.5, d) for x, y, d in ROW13[:7]]).lineup()
+    assert check.readings == {}
+    assert sorted(check.alone) == list(range(7)) + list(range(14, 21))
+    assert check.state == {}
+    faced, = [f for f in check.findings if not f.laid]
+    assert (faced.a, faced.b, faced.holes, faced.met, faced.lone) == \
+        (0, 0, 14, 0, 14)
+    # a patch with no holes at all is punched through as it is put on:
+    # both halves meet (the left once not)
+    check = patched([]).lineup()
+    assert check.alone == set()
+    assert len(check.holes(fs.MEETS)) == 14
+    faced, = [f for f in check.findings if not f.laid]
+    assert (faced.holes, faced.met, faced.lone) == (14, 14, 0)
+    # ... and with a hole in it behind each of the left half's, they meet
+    check = patched(ROW13[:7]).lineup()
+    assert check.alone == set()
+    assert len(check.holes(fs.MEETS)) == 21
+    faced, = [f for f in check.findings if not f.laid]
+    assert (faced.holes, faced.met, faced.lone) == (14, 14, 0)
+
+
+def test_holes_moved_by_the_shut_reading_are_not_marked_as_they_lie():
+    # the first lining punched for shut, the second flat: read shut, the
+    # second's holes land 7.85 mm out on the half it is not held on, and
+    # 7 of its 14 meet
+    lay = _linings13((0.75 * math.pi, 0.0))
+    check = lay.lineup()
+    assert check.readings == {1: (0, 14, True), 2: (0, 7, True)}
+    assert _marked(lay, check) == {1: 14, 2: 7}
+    # a lining standing 10 mm past the piece's top edge, punched for shut
+    # along the piece's row and as it lies along a row of its own past the
+    # edge: read shut, as more meet so, each hole of that row lands
+    # 2.36 mm from where the model lays it. As the model lays them,
+    # folded, they would line up with each other: they are not marked so
+    # (all 14 were, without the rule) -- nor counted
+    pull = 0.75 * math.pi
+    lay = fs.fold_piece(rect(0, 0, 200, 100), [fold(100, 0, 100, 100)],
+                        holes=_row13(95.0), sheets=[sh.Sheet(
+                            rect(0, 0, 200, 110), 1.0, name="lining",
+                            holes=[(x + (pull if x < 100 else -pull), y, d)
+                                   for x, y, d in _row13(95.0)]
+                            + _row13(105.0))])
+    check = lay.lineup()
+    assert check.readings == {1: (14, 14, True)}
+    assert [check.state.get(i) for i in range(14, 28)] == [fs.MEETS] * 14
+    assert [check.state.get(i) for i in range(28, 42)] == [None] * 14
+
+
+def test_eight_linings_round_a_fold_are_read_quickly():
+    # eight 0.6 mm linings of 128 holes each round a 2 mm piece folded
+    # flat: each is tried held each way it may be, but only its own holes
+    # are read again for that. 2.2 s once; now about 0.24 s -- 1 s for a
+    # busy machine. Punched as they lie, every lining's holes meet but
+    # the innermost's, folded on themselves (12 of 128)
+    import time
+    holes = [(x, y, 1.0) for y in (95.0, 60.0) for x in range(5, 196, 3)]
+    lay = fs.fold_piece(rect(0, 0, 200, 100), [fold(100, 0, 100, 100)],
+                        holes=holes, sheets=[
+        sh.Sheet(rect(0, 0, 200, 98), 0.6, name=f"l{k}", holes=holes)
+        for k in range(8)])
+    best = math.inf
+    for _try in range(3):
+        t0 = time.process_time()
+        check = lay.lineup()
+        best = min(best, time.process_time() - t0)
+    assert check.readings == {**{k: (128, 0, False) for k in range(1, 8)},
+                              8: (12, 0, False)}
+    assert _marked(lay, check) == {**{k: 128 for k in range(1, 8)}, 8: 12}
+    assert best < 1.0
+
+
+def test_a_patch_past_the_edge_beside_a_flap_goes_where_most_joined():
+    # a flap cut into a body by two slits half a mm wide, folded over at
+    # its foot; a patch across the right-hand slit stands 10 mm past the
+    # top edge of both. What stands past the edge, with what lies over
+    # the slit, is joined to the patch on the body along 24.5 mm and to
+    # that on the flap along 15: it lies on the body, and the patch is
+    # parted along the flap's edge (by the side of the fold it is on it
+    # would swing with the flap, the patch parted along the body's edge)
+    for way in (1, -1):
+        lay = stack(TONGUE, [fold(40, 50, 60, 50, 180.0, way)],
+                    [(rect(55, 90, 75, 110), 1.0, 1)])
+        flap = next(p.index for p in lay.panels if p.box[0] >= 40.0 - 1e-9)
+        body = 1 - flap
+        assert sorted((p, tuple(round(v, 6) for v in pc.bounds(q)))
+                      for p, q, _f in lay._regions[0]) == sorted([
+            (flap, (55.0, 90.0, 60.0, 100.0)),
+            (body, (55.0, 100.0, 60.0, 110.0)),
+            (body, (60.0, 90.0, 60.5, 100.0)),
+            (body, (60.0, 100.0, 75.0, 110.0)),
+            (body, (60.5, 90.0, 75.0, 100.0))])
+        assert [(round(n.a, 9), n.at) for n in _notes(lay, "slit")] == [
+            (15.0, (60.0, 95.0))]
+        assert witnesses(lay, 5, 3) == []
+
+
+def test_a_lining_holed_off_one_half_is_held_by_what_meets_with_the_others():
+    # a 2 mm piece folded flat; two 1 mm linings inside it, the second
+    # punched for shut. On the left half the second's holes land 3.6 mm
+    # off the piece's (they miss), and the first's are 0.6 mm the other
+    # way (they meet the piece's, and are 4.2 mm from the second's: no
+    # miss of their own). So read shut, every hole of the left half is in
+    # a stack with a miss in it, and the first lining is held so that its
+    # right half meets: 7 of its holes, where held to meet on the left
+    # none would
+    a2 = math.pi * 2.5
+    l1 = [(x - 0.6 if x < 100 else x, y, d) for x, y, d in ROW13]
+    l2 = [(x + a2 / 2 + 3.6 if x < 100 else x - a2 / 2, y, d)
+          for x, y, d in ROW13]
+    lay = fs.fold_piece(rect(0, 0, 200, 100), [fold(100, 0, 100, 100)],
+                        holes=ROW13, sheets=[
+        sh.Sheet(rect(0, 0, 200, 98), 1.0, name="l1", holes=l1),
+        sh.Sheet(rect(0, 0, 200, 98), 1.0, name="l2", holes=l2)])
+    check = lay.lineup()
+    assert check.readings == {1: (7, 7, True), 2: (0, 7, True)}
+    assert _marked(lay, check) == {1: 7, 2: 7}
+    assert [check.state.get(i) for i in range(14)] == \
+        [fs.OFF] * 7 + [fs.MEETS] * 7
+    assert [check.state.get(i) for i in range(14, 28)] == \
+        [None] * 7 + [fs.MEETS] * 7
+
+
+def test_a_hole_as_near_two_holes_of_a_piece_meets_the_first_of_them():
+    # a hole 0.4 mm from each of two holes of the piece under it, the
+    # second of which a third piece's hole misses: it meets the first,
+    # as it always has, and the second has no state of its own
+    a = sh._Layer(rect(45, 45, 50.2, 52), [], [(50.0, 50.0, 1.0)], "a")
+    b = sh._Layer(rect(0, 0, 100, 100), [],
+                  [(49.6, 50.0, 1.0), (50.4, 50.0, 1.0)], "b")
+    c = sh._Layer(rect(49.9, 51, 52, 56), [], [(50.4, 53.5, 1.0)], "c")
+    check = sh.laid_check([a, b, c])
+    assert check.state == {0: fs.MEETS, 1: fs.MEETS, 3: fs.OFF}
+
+
+def test_a_stack_read_again_through_the_memo_reads_as_read_afresh():
+    # three pieces with a row of eight holes, read once; then again with
+    # the first one hole short, the other two the same objects: the holes
+    # are numbered anew, and so read (hole 23, which there is not, was
+    # once said to meet, and hole 7 not)
+    row = [(10.0 + 10 * i, 50.0, 1.0) for i in range(8)]
+    b, c = (sh._Layer(rect(0, 0, 100, 100), [], row, n) for n in "bc")
+    memo = {}
+    sh.laid_check([sh._Layer(rect(0, 0, 100, 100), [], row, "a"), b, c],
+                  memo=memo)
+    again = [sh._Layer(rect(0, 0, 100, 100), [], row[1:], "a"), b, c]
+    got = sh.laid_check(again, memo=memo)
+    assert got.state == sh.laid_check(again).state == {
+        i: fs.MEETS for i in range(23)}
+    # two pieces whose holes are 2 mm apart: a miss within a reach of
+    # 4 mm, through leather with no hole within one of 1 mm -- however
+    # they were read before
+    two = [b, sh._Layer(rect(0, 0, 100, 100), [],
+                        [(x + 2.0, y, d) for x, y, d in row], "d")]
+    memo = {}
+    assert len(sh.laid_check(two, 0.75, 4.0, memo).holes(fs.OFF)) == 16
+    got = sh.laid_check(two, 0.75, 1.0, memo)
+    assert (got.state, len(got.alone)) == ({}, 16)
+
+
+def test_a_patch_across_slits_narrower_than_a_hair_is_parted_on_the_flap():
+    # the flap cut into a body by slits 0.04 mm wide, less than a hair: a
+    # patch across both lies over no gap that counts, and is parted along
+    # the flap's own edges, what lies over the slits going with the body
+    # (cut along the body's edges first, it would go with the flap)
+    w = 0.04
+    lay = stack([(0, 0), (100, 0), (100, 100), (60 + w, 100), (60 + w, 50),
+                 (60, 50), (60, 100), (40, 100), (40, 50), (40 - w, 50),
+                 (40 - w, 100), (0, 100)], [fold(40, 50, 60, 50)],
+                [(rect(30, 70, 70, 85), 1.0, 1)])
+    flap = next(p.index for p in lay.panels if p.box[0] >= 40.0 - 1e-9)
+    body = 1 - flap
+    assert {(p, tuple(round(v, 6) for v in pc.bounds(q)))
+            for p, q, _f in lay._regions[0]} == {
+        (body, (30.0, 70.0, 40.0, 85.0)), (flap, (40.0, 70.0, 60.0, 85.0)),
+        (body, (60.0, 70.0, 70.0, 85.0))}
+    assert [(round(n.a, 9), n.at) for n in _notes(lay, "slit")] == [
+        (15.0, (40.0, 77.5)), (15.0, (60.0, 77.5))]
+    assert witnesses(lay, 5, 3) == []
+
+
+def test_a_cell_kept_from_moment_to_moment_shows_its_bend_as_it_lies_now():
+    # the still panel lies as it lay a moment before, but the bend it
+    # goes on into does not: kept, its cells' edges along the bend are
+    # turned as the bend lies now, as made anew
+    lay = fs.fold_piece(rect(0, 0, 200, 100), [fold(100, 0, 100, 100)])
+    memo = {}
+    for t in (0.25, 0.75, 0.5):
+        kept = lay._posed(lay.fractions(t), memo=memo)
+        made = lay._posed(lay.fractions(t))
+        assert any(c.turns for c, _x in kept if c.hinge is None)
+        assert [[f.edges for f in x.faces] for _c, x in kept] == [
+            [f.edges for f in x.faces] for _c, x in made]
 
 
 def _many(n):

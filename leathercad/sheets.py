@@ -261,7 +261,10 @@ class Note(NamedTuple):
                    the run goes through its leather), ``b`` how deep the
                    sheet is drawn into itself, or the main piece into it,
                    there at any moment looked at (0 for not at all), and
-                   ``rest`` how deep at rest. One note for each run
+                   ``rest`` how deep at rest. One note for each run, its
+                   ``b`` and ``rest`` that run's own: two notes of one
+                   sheet (a run at each end of a hinge, say) can say two
+                   depths, and neither is the depth of the other run
     ``"crossing"`` ``sheet`` lies over the place ``at`` where fold and
                    fold ``other[0]`` cross, and is cut or bent along both
                    there -- inside the main piece or past its edge: the
@@ -280,7 +283,11 @@ class Note(NamedTuple):
                    not where finding it would take too long (``_BOXES``)
     ``"clash"``    the judge finds ``sheet`` and ``other[0]`` ``a`` mm
                    into each other at the deepest, at any moment it looks
-                   at, first seen deeper than 0.05 mm at the moment ``b``;
+                   at; ``b`` is the first moment it looks at at which they
+                   are deeper than 0.05 mm -- it looks at the whole steps,
+                   at eighths of each step and a sixteenth in from each
+                   end, and round the deepest of those -- so they may be
+                   that deep up to an eighth of a step before ``b``;
                    ``rest`` how deep at rest, at the deepest whole step
                    (0: only on the way, inside a step, where leather
                    gives). A sheet with itself
@@ -294,7 +301,8 @@ class Note(NamedTuple):
                    main piece (``other``, as the tags of their cells,
                    ``("panel", i)`` -- panel number ``i + 1`` -- or
                    ``("bend", fold)``) drawn ``a`` mm into each other,
-                   first at the moment ``b``, that are only ``c`` mm into
+                   first at the moment ``b`` (as for ``"clash"``: the
+                   first looked at), that are only ``c`` mm into
                    each other with every fold on its line: the move's
                    doing, laid at the door of fold ``fold``; ``rest`` as
                    for ``"clash"``
@@ -1462,12 +1470,17 @@ class LaidCheck(fs.Check):
     ``blanks`` are the same spots sorted by the cell they are on, for the
     model (filled in by whoever has the cells). (``passed`` is an older
     name for ``through``: the spots a hole passed through, not anything
-    that passed the check.)"""
+    that passed the check.) ``alone`` is the set of holes, by number,
+    that come through leather with no hole in it somewhere, of a piece
+    that has stitch holes of its own: its holes are where the needle
+    goes through it, and that is not one. (A piece with none at all is
+    punched through as the stack is put together.)"""
 
-    __slots__ = ("blanks", "landed", "through")
+    __slots__ = ("alone", "blanks", "landed", "through")
 
     def __init__(self):
         super().__init__()
+        self.alone: set = set()
         self.blanks: Dict[int, List[Tuple[float, float, float]]] = {}
         self.landed: Dict[int, List[Tuple[float, float, float]]] = {}
         self.through: Dict[int, List[Tuple[float, float, float]]] = {}
@@ -1489,7 +1502,8 @@ class _Layer:
         self.name = name
 
 
-def laid_check(layers, tol: float = 0.75, near: float = 4.0) -> LaidCheck:
+def laid_check(layers, tol: float = 0.75, near: float = 4.0,
+               memo: Optional[dict] = None) -> LaidCheck:
     """Check the stitch holes of a stack lying flat: does every hole go
     through holes in the other pieces it passes through?
 
@@ -1508,39 +1522,17 @@ def laid_check(layers, tol: float = 0.75, near: float = 4.0) -> LaidCheck:
     it, and otherwise comes through leather with no hole in it, which is
     told and marked but is no fault. As in ``Layout.lineup`` a hole is
     then given what its whole stack of holes comes to: ``OFF`` if any two
-    in it miss, ``MEETS`` if it has company and none does."""
+    in it miss, ``MEETS`` if it has company and none does.
+
+    ``memo``, a dict kept from one call to the next, keeps what each two
+    pieces came to, so that a stack read again with only some of its
+    pieces changed (the others the same objects, unchanged, in the same
+    places) compares only the pairs with a changed piece in them. Two
+    pieces are taken as before only where their holes are numbered as
+    before and ``tol`` and ``near`` are the same: no piece's outline,
+    cutouts or holes may be changed in place."""
     check = LaidCheck()
-    holes: List[tuple] = []
-    owner: List[int] = []
-    mine: List[List[int]] = []
-    for i, layer in enumerate(layers):
-        mine.append(list(range(len(holes), len(holes) + len(layer.holes))))
-        holes += [tuple(h) for h in layer.holes]
-        owner += [i] * len(layer.holes)
-    boxes = [pc.bounds(layer.ring) if len(layer.ring) >= 3
-             and abs(pc.area(layer.ring)) > 1e-9 else None
-             for layer in layers]               # None: it has no leather
-    # ... and then its holes are in nothing: numbered, but not looked at
-    mine = [ks if box is not None else [] for ks, box in zip(mine, boxes)]
-    grids = []                                 # each piece's holes, by square
-    for ks in mine:
-        grid: Dict[tuple, list] = {}
-        for k in ks:
-            grid.setdefault((math.floor(holes[k][0] / near),
-                             math.floor(holes[k][1] / near)), []).append(k)
-        grids.append(grid)
-
-    def leather(i, p):
-        box = boxes[i]
-        if box is None or not (box[0] <= p[0] <= box[2]
-                               and box[1] <= p[1] <= box[3]):
-            return False
-        ring = layers[i].ring
-        if not pc.inside(p, ring) or _on_edge(p, ring):
-            return False
-        return not any(pc.inside(p, c) or _on_edge(p, c)
-                       for c in layers[i].cutouts)
-
+    holes, owner, pairs = _compared(layers, tol, near, memo)
     link: Dict[int, int] = {}                  # holes that meet, in stacks
     misses: List[Tuple[int, int]] = []         # (hole, the one it misses)
     seen = set()
@@ -1559,42 +1551,19 @@ def laid_check(layers, tol: float = 0.75, near: float = 4.0) -> LaidCheck:
             spots.add(key)
             table.setdefault(piece, []).append((x, y, dia))
 
-    for i in range(len(layers)):
-        for j in range(i + 1, len(layers)):
-            if not mine[i] and not mine[j]:
-                continue
-            looked = off = 0
-            worst = apart = 0.0
-            through = [0, 0]
-            for way, (a, b) in enumerate(((i, j), (j, i))):
-                for k in mine[a]:
-                    x, y, dia = holes[k]
-                    if not leather(b, (x, y)):
-                        continue
-                    looked += 1
-                    gx, gy = math.floor(x / near), math.floor(y / near)
-                    d, k2 = min(
-                        ((math.hypot(x - holes[k3][0], y - holes[k3][1]), k3)
-                         for ix in (gx - 1, gx, gx + 1)
-                         for iy in (gy - 1, gy, gy + 1)
-                         for k3 in grids[b].get((ix, iy), ())),
-                        default=(2.0 * near, -1))
-                    if d <= tol:
-                        seen.update((k, k2))
-                        apart = max(apart, d)
-                        link[stack(k)] = stack(k2)
-                    elif d <= near:
-                        seen.add(k)
-                        off += 1
-                        worst = max(worst, d)
-                        misses.append((k, k2))
-                    else:
-                        through[way] += 1
-                        spot(check.through, b, x, y, dia)
-            if looked:
-                check.findings.append(Laid(
-                    i, j, looked, off, worst, sum(through), apart,
-                    (layers[i].name, layers[j].name), True, tuple(through)))
+    for _i, _j, met, missed, lone, found in pairs:
+        for k, k2 in met:
+            seen.update((k, k2))
+            link[stack(k)] = stack(k2)
+        for k, k2 in missed:
+            seen.add(k)
+            misses.append((k, k2))
+        for k, b, x, y, dia in lone:
+            if layers[b].holes:
+                check.alone.add(k)
+            spot(check.through, b, x, y, dia)
+        if found is not None:
+            check.findings.append(found)
     # each hole by the stack it is in, as ``Layout.lineup`` does
     stacks: Dict[int, List[int]] = {}
     for k in seen:
@@ -1614,6 +1583,136 @@ def laid_check(layers, tol: float = 0.75, near: float = 4.0) -> LaidCheck:
             check.lands.setdefault(m, []).append((x2, y2, dia))
             spot(check.landed, owner[m], x2, y2, dia)
     return check
+
+
+def _top(link: Dict[int, int], h: int) -> int:
+    """The hole that stands for the stack hole ``h`` is in, of the stacks
+    ``link`` makes (each hole to one in its stack, the one that stands for
+    it to itself), the way there shortened as it goes."""
+    while link.setdefault(h, h) != h:
+        link[h] = link[link[h]]
+        h = link[h]
+    return h
+
+
+def _compared(layers, tol: float, near: float, memo: Optional[dict] = None,
+              only: Optional[int] = None):
+    """The holes of a stack's pieces compared two by two, as
+    ``laid_check`` compares them: ``(holes, owner, pairs)``, every hole
+    as ``(x, y, diameter)`` numbered through the stack, the piece each is
+    of, and for each two pieces ``i < j`` that have holes ``(i, j, met,
+    missed, lone, found)``: the holes of either that meet a hole of the
+    other, with the hole each meets; those that miss one, with the hole
+    each misses; those that come through the other's leather with no
+    hole in it, as ``(hole, the piece it comes through, x, y,
+    diameter)``; and the ``Laid`` finding, None where no hole of either
+    lies on the other's leather. Only the pairs with piece ``only`` in
+    them, if it is given. ``memo``: see ``laid_check``."""
+    holes: List[tuple] = []
+    owner: List[int] = []
+    mine: List[List[int]] = []
+    firsts: List[int] = []
+    for i, layer in enumerate(layers):
+        firsts.append(len(holes))
+        mine.append(list(range(len(holes), len(holes) + len(layer.holes))))
+        holes += [tuple(h) for h in layer.holes]
+        owner += [i] * len(layer.holes)
+    boxes = [pc.bounds(layer.ring) if len(layer.ring) >= 3
+             and abs(pc.area(layer.ring)) > 1e-9 else None
+             for layer in layers]               # None: it has no leather
+    # ... and then its holes are in nothing: numbered, but not looked at
+    mine = [ks if box is not None else [] for ks, box in zip(mine, boxes)]
+    grids: List[Optional[dict]] = [None] * len(layers)
+
+    def grid(b):                       # each piece's holes, by square
+        if grids[b] is None:
+            got: Dict[tuple, list] = {}
+            for k in mine[b]:
+                got.setdefault((math.floor(holes[k][0] / near),
+                                math.floor(holes[k][1] / near)),
+                               []).append(k)
+            grids[b] = got
+        return grids[b]
+
+    def leather(i, p):
+        box = boxes[i]
+        if box is None or not (box[0] <= p[0] <= box[2]
+                               and box[1] <= p[1] <= box[3]):
+            return False
+        ring = layers[i].ring
+        if not pc.inside(p, ring) or _on_edge(p, ring):
+            return False
+        return not any(pc.inside(p, c) or _on_edge(p, c)
+                       for c in layers[i].cutouts)
+
+    # (whether a spot is on a piece's leather, kept with the memo: the
+    # same piece, or one cut the same, is looked at again at many of the
+    # same spots)
+    skin: dict = memo.setdefault("skin", {}) if memo is not None else {}
+
+    ids = [id(layer) for layer in layers]
+    cuts = [(id(layer.ring), id(layer.cutouts)) for layer in layers]
+
+    def look(b, x, y):
+        cut = (cuts[b], x, y)
+        on = skin.get(cut)
+        if on is None:
+            on = skin[cut] = leather(b, (x, y))
+        if not on:
+            return (False, 0.0, -1)
+        gx, gy = math.floor(x / near), math.floor(y / near)
+        squares = grids[b] if grids[b] is not None else grid(b)
+        d, k2 = math.inf, -1
+        for ix in (gx - 1, gx, gx + 1):
+            for iy in (gy - 1, gy, gy + 1):
+                for k3 in squares.get((ix, iy), ()):
+                    e = math.hypot(x - holes[k3][0], y - holes[k3][1])
+                    if e < d or e == d and k3 < k2:
+                        d, k2 = e, k3
+        return (True, d if k2 >= 0 else 2.0 * near, k2)
+
+    def compare(i, j):
+        met, missed, lone = [], [], []
+        looked = off = 0
+        worst = apart = 0.0
+        through = [0, 0]
+        for way, (a, b) in enumerate(((i, j), (j, i))):
+            for k in mine[a]:
+                x, y, dia = holes[k]
+                inside, d, k2 = look(b, x, y)
+                if not inside:
+                    continue
+                looked += 1
+                if d <= tol:
+                    apart = max(apart, d)
+                    met.append((k, k2))
+                elif d <= near:
+                    off += 1
+                    worst = max(worst, d)
+                    missed.append((k, k2))
+                else:
+                    through[way] += 1
+                    lone.append((k, b, x, y, dia))
+        found = Laid(i, j, looked, off, worst, sum(through), apart,
+                     (layers[i].name, layers[j].name), True,
+                     tuple(through)) if looked else None
+        return (i, j, met, missed, lone, found)
+
+    pairs = []
+    for i in range(len(layers)):
+        for j in range(i + 1, len(layers)):
+            if not mine[i] and not mine[j] or only not in (None, i, j):
+                continue
+            # (the same two pieces as an earlier reading: as found then)
+            # (and numbered from the same holes, and read as near)
+            key = (i, j, ids[i], ids[j], firsts[i], firsts[j], tol, near)
+            got = memo.get(key) if memo is not None else None
+            if got is None:
+                got = (compare(i, j), layers[i], layers[j])
+                if memo is not None:
+                    memo[key] = got
+            pairs.append(got[0])
+    return holes, owner, pairs
 
 
 # -- the stack as a model -----------------------------------------------------
@@ -3727,7 +3826,6 @@ def judge(layout) -> List[Note]:
                 key = (id(ca), id(cb))
                 if key not in follow or g > follow[key][0]:
                     follow[key] = [g, t, ca, cb]
-        lo_t, hi_t = step - 1.0, float(step)
         for g, t, ca, cb in follow.values():
 
             def depth_at(x, ca=ca, cb=cb):
@@ -3954,8 +4052,8 @@ class StackCheck(LaidCheck):
 
     def __init__(self, found: LaidCheck):
         super().__init__()
-        for name in ("findings", "state", "lands", "rings", "blanks",
-                     "landed", "through"):
+        for name in ("findings", "state", "lands", "rings", "alone",
+                     "blanks", "landed", "through"):
             setattr(self, name, getattr(found, name))
         self.readings: Dict[int, Tuple[int, int, bool]] = {}
 
@@ -3980,15 +4078,23 @@ def stack_check(layout, tol: float = 0.75, near: float = 4.0):
     The stack is read twice, whole, through its layers (``laid_check``):
     FLAT, every piece as it lies, and SHUT, every piece that goes round a
     bend (a ``"cross"`` or ``"level"`` note) with its holes where they
-    land when the stack is shut (``_landed``). The marks show the reading
-    in which more holes meet (flat, where as many do). ``readings`` says,
-    for each piece that goes round a bend and has holes, ``(how many of
-    its holes meet flat, how many shut, whether the shut reading is the
-    one shown)`` -- the last the same for every piece. Then the pieces
-    the folding brings face to face with nothing between are compared as
-    ``Layout.lineup`` compares two panels, within the same reach (it is
-    not made longer by the piles): ``Faced`` findings. The spots it marks
-    are sorted by cell for ``solid``. A ``StackCheck``."""
+    land when the stack is shut (``_landed``). In each reading the pieces
+    the folding brings face to face with nothing between are then
+    compared as ``Layout.lineup`` compares two panels, within the same
+    reach (it is not made longer by the piles): ``Faced`` findings. Two
+    holes that line up only so, across a fold, where either comes through
+    leather with no hole in it of a piece that has holes of its own
+    (``alone``), do not meet: the needle cannot go through that leather
+    where it has none. (Leather of a piece with no holes at all is
+    punched through as the stack is put together, as ``laid_check``
+    takes it; and a hole that meets a hole of a piece it lies on, as it
+    lies, meets, as there.) The marks show the reading in which more
+    holes meet (flat, where as many do), and ``readings`` counts the
+    holes as the marks show them: for each piece that goes round a bend
+    and has holes, ``(how many of its holes meet flat, how many shut,
+    whether the shut reading is the one shown)`` -- the last the same for
+    every piece. The spots it marks are sorted by
+    cell for ``solid``. A ``StackCheck``."""
     own = layout._own_holes
     main = _Layer(layout.outline, layout.cutouts, layout.holes[:own],
                   getattr(layout, "name", ""))
@@ -4003,9 +4109,12 @@ def stack_check(layout, tol: float = 0.75, near: float = 4.0):
         mine = range(starts[k], starts[k] + len(layout.sheets[k - 1].holes))
         return sum(1 for i in mine if found.state.get(i) == fs.MEETS)
 
+    memo: dict = {}             # each two pieces, read once
+
     def read(shut):
         return laid_check([shut.get(k, layer)
-                           for k, layer in enumerate(layers)], tol, near)
+                           for k, layer in enumerate(layers)], tol, near,
+                          memo)
 
     # each piece that goes round a bend, with its holes as they land when
     # it is held each way it may be (``_landed``): the way most of its own
@@ -4014,29 +4123,62 @@ def stack_check(layout, tol: float = 0.75, near: float = 4.0):
     holds = {k: _landed(layout, k) for k in range(1, len(layers))}
     holds = {k: got for k, got in holds.items() if got}
     middle = {k: got[0] for k, got in holds.items()}
+    # (only piece k's own pairs change from one way of holding it to the
+    # next: the stacks the other pieces' holes make among themselves, and
+    # which of those have a miss in them, are found once)
+    pairs = _compared([middle.get(k, layer) for k, layer
+                       in enumerate(layers)], tol, near, memo)[2]
     shut: Dict[int, _Layer] = {}
     for k, ways in holds.items():
+        mine = range(starts[k], starts[k] + len(layout.sheets[k - 1].holes))
+        others: Dict[int, int] = {}        # the other pieces' stacks
+        bad = []
+        for i, j, met_, missed, _lone, _found in pairs:
+            if k not in (i, j):
+                for h, h2 in met_:
+                    others[_top(others, h)] = _top(others, h2)
+                bad += [h for h, _h2 in missed]
+        rest = {h: _top(others, h) for h in others}
+        bad = {rest.get(h, h) for h in bad}
         best, most = ways[0], -1
         for way in ways:
-            got = met(read({**middle, k: way}), k)
+            link: Dict[int, int] = {}      # those stacks, joined by k's
+            seen = set()
+            off = []
+            for _i, _j, met_, missed, _lone, _found in _compared(
+                    [{**middle, k: way}.get(i, layer)
+                     for i, layer in enumerate(layers)],
+                    tol, near, memo, k)[2]:
+                for h, h2 in met_:
+                    seen.update((h, h2))
+                    link[_top(link, rest.get(h, h))] = \
+                        _top(link, rest.get(h2, h2))
+                off += [h for h, _h2 in missed]
+            out = {_top(link, h) for h in bad} \
+                | {_top(link, rest.get(h, h)) for h in off}
+            got = sum(1 for h in mine
+                      if h in seen and _top(link, h) not in out)
             if got > most:
                 best, most = way, got
         shut[k] = best
+    # each reading with the pieces the folding brings face to face; and
+    # the counts are of the holes as the marks show them, after that
     flat = read({})
     if shut:
         closed = read(shut)
+        # (holes the shut reading has moved are not compared as they lie)
+        _faced(layout, [(flat, frozenset()), (closed, {
+            i for k in shut for i in range(
+                starts[k], starts[k] + len(layout.sheets[k - 1].holes))})],
+            tol, near)
         shown = len(closed.holes(fs.MEETS)) > len(flat.holes(fs.MEETS))
     else:
+        _faced(layout, [(flat, frozenset())], tol, near)
         closed, shown = flat, False
     check = closed if shown else flat
     readings = {k: (met(flat, k), met(closed, k), shown) for k in shut}
     check = StackCheck(check)
     check.readings = readings
-    # (holes the shut reading has moved are not compared as they lie)
-    _faced(layout, check, tol, near,
-           {i for k in (shut if shown else ())
-            for i in range(starts[k],
-                           starts[k] + len(layout.sheets[k - 1].holes))})
     for found, rings in ((check.landed, check.rings),
                          (check.passed, check.blanks)):
         for piece, spots in found.items():
@@ -4120,16 +4262,22 @@ def _landed(layout, k: int) -> List["_Layer"]:
     return out
 
 
-def _faced(layout, check, tol: float, near: float, moved=frozenset()
-           ) -> None:
-    """Add to ``check`` the pieces that the folding brings face to face
-    with nothing between (see ``stack_check``): each body of leather
-    (``bodies``) against each on another panel, folded right up, where
-    their planes lie together and their faces are no further apart than
-    ``Layout.lineup`` lets two panels be. A hole of either that meets or
-    misses one of the other is given that, as the flat reading does --
-    but for the holes in ``moved``, which the reading shown has where
-    they land, not where the model lays them."""
+def _faced(layout, reads, tol: float, near: float) -> None:
+    """Add to each check of ``reads``, ``[(check, moved)]``, the pieces
+    that the folding brings face to face with nothing between (see
+    ``stack_check``): each body of leather (``bodies``) against each on
+    another panel, folded right up, where their planes lie together and
+    their faces are no further apart than ``Layout.lineup`` lets two
+    panels be. A hole of either that misses one of the other is given
+    that, and one that meets one of the other is said to meet, as the
+    flat reading does -- but for the holes in ``moved``, which that
+    reading has where they land, not where the model lays them; and two
+    holes that line up so, where either comes through leather with no
+    hole in it (``alone``: see ``stack_check``), are neither said to meet
+    by it: the needle cannot go through that leather, so the two are
+    counted as having no hole to meet (``lone``), and the finding's count
+    of those that meet is of the holes the marks show meeting. Each check
+    of ``reads`` gets a finding of its own."""
     n = len(layout.folds)
     if not layout.n_steps:
         return
@@ -4193,28 +4341,50 @@ def _faced(layout, check, tol: float, near: float, moved=frozenset()
                       if any(pc.inside_convex(p, A, 0.0) for A in parts_a)]
             if not mine or not theirs:
                 continue
-            off = lone = 0
-            worst = apart = 0.0
+            off = 0
+            worst = 0.0
+            # (how many have no hole to meet, and how far apart those that
+            # meet are, each reading its own: what is ``alone`` differs)
+            lone = [0] * len(reads)
+            apart = [0.0] * len(reads)
             for one, other in ((mine, theirs), (theirs, mine)):
+                # (the other's holes by square: one within ``near`` of a
+                # hole is in its square or the eight round it)
+                squares: Dict[tuple, list] = {}
+                for k3, q in other:
+                    squares.setdefault((math.floor(q[0] / near),
+                                        math.floor(q[1] / near)),
+                                       []).append((k3, q))
                 for k, p in one:
-                    d, k2 = min(((math.dist(p, q), k3) for k3, q in other),
+                    gx, gy = math.floor(p[0] / near), math.floor(p[1] / near)
+                    d, k2 = min(((math.dist(p, q), k3)
+                                 for ix in (gx - 1, gx, gx + 1)
+                                 for iy in (gy - 1, gy, gy + 1)
+                                 for k3, q in squares.get((ix, iy), ())),
                                 default=(2.0 * near, -1))
                     if d <= tol:
-                        apart = max(apart, d)
-                        if check.state.get(k) != fs.OFF \
-                                and k not in moved:
-                            check.state[k] = fs.MEETS
+                        for r, (check, moved) in enumerate(reads):
+                            if k in check.alone or k2 in check.alone:
+                                lone[r] += 1
+                                continue
+                            apart[r] = max(apart[r], d)
+                            if check.state.get(k) != fs.OFF \
+                                    and k not in moved:
+                                check.state[k] = fs.MEETS
                     elif d <= near:
                         off += 1
                         worst = max(worst, d)
-                        if k not in moved:
-                            check.state[k] = fs.OFF
+                        for check, moved in reads:
+                            if k not in moved:
+                                check.state[k] = fs.OFF
                     else:
-                        lone += 1
-            check.findings.append(Faced(
-                ka, kb, len(mine) + len(theirs), off, worst, lone, apart,
-                (names[ka], names[kb]), False,
-                (layout.panels[pa].number, layout.panels[pb].number)))
+                        for r in range(len(reads)):
+                            lone[r] += 1
+            for r, (check, _moved) in enumerate(reads):
+                check.findings.append(Faced(
+                    ka, kb, len(mine) + len(theirs), off, worst, lone[r],
+                    apart[r], (names[ka], names[kb]), False,
+                    (layout.panels[pa].number, layout.panels[pb].number)))
 
 
 def _between(layout, found, frames, fa, onto, lo, hi, parts_a, flat_b,

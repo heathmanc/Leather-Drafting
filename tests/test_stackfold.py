@@ -2853,3 +2853,203 @@ def test_a_short_liners_wing_goes_with_the_flap_beside_it_not_the_first(
                   and n.at[1] == 60.0) == [((14.75, 60.0), slit, b),
                                            ((85.25, 60.0), slit, b)]
     assert witnesses(lay, 9, 3) == []
+
+
+# -- two flaps far from the origin, and a liner over the gap between them -----
+
+@pytest.mark.parametrize("deg", [137.0, 210.0])
+@pytest.mark.parametrize("off", [(10000.0, 10000.0), (30000.0, 30000.0)])
+def test_two_slit_flaps_ten_metres_off_are_slit_as_long_as_drawn(deg, off):
+    # the two slit flaps and their liner turned and drawn 10 or 30 m from
+    # the origin: a convex part of the body there came with one corner
+    # twice, 1e-12 mm apart, the edge between them said a point well
+    # inside lay outside, and a sliver of the liner bent with the flap:
+    # slit 35.1418 mm at (14.75, 53.97) for 16.1416
+    def placed(pts):
+        return [(x + off[0], y + off[1]) for x, y in turned(pts, deg, 0, 0)]
+    (a0, a1), (b0, b1) = placed([(20, 57), (80, 57)]), placed([(50, 0),
+                                                               (50, 60)])
+    lay = stack(placed(TWO_SLIT_FLAPS),
+                [fold(*a0, *a1, 180.0, 1, order=1),
+                 fold(*b0, *b1, 90.0, 1, label="B")],
+                [(placed(rect(10, 40, 90, 75)), 1.0, 1)])
+    for at in placed([(14.75, 60.0), (85.25, 60.0)]):
+        slit, = [n for n in _notes(lay, "slit") if math.dist(n.at, at) < 1e-6]
+        assert slit.a == pytest.approx(16.1416, abs=1e-4)
+
+
+def _gap_ring(foot):
+    # TWO_SLIT_FLAPS with the body between the flaps cut down to ``foot``
+    # all across: no tongue
+    return [(0, 0), (100, 0), (100, 60), (80.5, 60), (80.5, foot),
+            (80, foot), (80, 120), (55, 120), (55, foot), (45, foot),
+            (45, 120), (20, 120), (20, foot), (19.5, foot), (19.5, 60),
+            (0, 60)]
+
+
+def _gap_stack(xb, way=1, swap=False, foot=54.0, mirror=False, deg=0.0,
+               dx=0.0, dy=0.0):
+    """The flaps without a tongue, B along x = ``xb`` up to the gap's foot,
+    the liner over all, drawn mirrored (x to -x), turned about the origin
+    and moved: the layout and the panels of the left and right flaps."""
+    def placed(pts):
+        if mirror:
+            pts = [(-x, y) for x, y in reversed(pts)]
+        return [(x + dx, y + dy) for x, y in turned(pts, deg, 0, 0)]
+    a, b = placed([(20, 57), (80, 57)]), placed([(xb, 0), (xb, foot)])
+    if mirror:
+        a, b = a[::-1], b[::-1]
+    folds = [fold(*a[0], *a[1], 180.0, way, order=1),
+             fold(*b[0], *b[1], 90.0, 1, label="B")]
+    lay = stack(placed(_gap_ring(foot)), folds[::-1] if swap else folds,
+                [(placed(rect(10, 40, 90, 75)), 1.0, 1)])
+    lay._placed = placed
+    flaps = [next(p.index for p in lay.panels
+                  if pc.inside(placed([q])[0], p.pts))
+             for q in ((30, 100), (70, 100))]
+    return lay, flaps
+
+
+def _riding(lay, p):
+    q = lay._placed([p])[0]
+    return {panel for panel, pts, _f in lay._regions[0]
+            if pc.inside(q, pts)}
+
+
+def _gap_back(at, mirror=False, deg=0.0, dx=0.0, dy=0.0):
+    x, y = turned([(at[0] - dx, at[1] - dy)], -deg, 0, 0)[0]
+    return (-x, y) if mirror else (x, y)
+
+
+@pytest.mark.parametrize("foot", [54.0, 57.0])
+@pytest.mark.parametrize("xb", [50.0, 53.0])
+@pytest.mark.parametrize("way", [1, -1])
+def test_liner_over_the_gap_goes_with_the_flap_beside_it_however_listed(
+        xb, way, foot):
+    # the bit of liner over the gap right of B lies past fold A, over no
+    # leather: it goes with the right flap, whichever fold is listed
+    # first (listed B first, it once rode the body right of B, a loose
+    # patch beside it, parted from the right flap along its edge, 18.43
+    # mm; listed A first, it went with the left flap, the whole gap bit
+    # with it, parted from the right flap along its edge, 27.71 mm). With
+    # the gap cut down to A's line, where B's hinge ends, the strip over
+    # the gap's foot is as near B's hinge as A's: past the end of B's, it
+    # goes by A's
+    seen = []
+    for swap in (False, True):
+        lay, (left, right) = _gap_stack(xb, way, swap, foot)
+        for y in (58.0, 61.0, 74.0):
+            assert _riding(lay, (45.25, y)) == {left}
+            assert _riding(lay, (xb - 0.25, y)) == {left}
+            assert _riding(lay, (xb + 0.25, y)) == {right}
+            assert _riding(lay, (54.75, y)) == {right}
+        slits = _notes(lay, "slit")
+        assert not [n for n in slits if abs(n.at[0] - 55.0) < 1e-6]
+        # parted between the flaps along B's line, past the gap's foot
+        assert [round(n.a, 4) for n in slits if n.at[0] == xb
+                and n.at[1] > 60.0] == [14.8584 if way == 1 else 16.4292]
+        seen.append((sorted((round(n.a, 4), n.at) for n in slits),
+                     [_riding(lay, (x + 0.25, y + 0.25))
+                      for x in range(10, 90) for y in range(40, 75)]))
+        assert witnesses(lay, 9, 3) == []
+    # every point of the liner on the same panel, parted alike (how deep a
+    # parting is said to be still hangs on the order: not asked here)
+    assert seen[0] == seen[1]
+
+
+@pytest.mark.parametrize("foot", [54.0, 57.0])
+@pytest.mark.parametrize("xb", [50.0, 52.0])
+def test_liner_over_the_gap_is_decided_alike_however_the_stack_lies(
+        foot, xb):
+    # each bit of the liner over the gap goes with the flap on its side of
+    # B's line, however the stack is drawn: once the whole gap bit went
+    # with the left flap as drawn and with the right one mirrored or
+    # turned (the two as near it, the first listed won), and its strip
+    # over the gap's foot at times with the other (slit 37.71 for 27.71)
+    ways = [dict(), dict(mirror=True), dict(deg=30.0), dict(deg=90.0),
+            dict(deg=137.0), dict(deg=180.0)]
+    seen = []
+    for how in ways:
+        lay, (left, right) = _gap_stack(xb, foot=foot, **how)
+        for y in (58.0, 61.0, 74.0):
+            for x in (45.25, xb - 0.25, xb + 0.25, 54.75):
+                assert _riding(lay, (x, y)) == {left if x < xb else right}
+        seen.append(sorted(
+            (n.kind, n.fold, round(n.a, 4), round(n.b, 4))
+            for n in lay.notes))
+        edges = sorted(tuple(round(v, 6) for v in _gap_back(n.at, **how))
+                       for n in _notes(lay, "slit") if n.fold == 0
+                       and abs(_gap_back(n.at, **how)[1] - 60.0) < 1e-6)
+        assert edges == [(14.75, 60.0), (85.25, 60.0)]
+    assert all(s == seen[0] for s in seen)
+
+
+def test_a_wing_past_two_lines_goes_by_the_hinge_it_stands_beside():
+    # the re-check's stack: two slit flaps 6 mm into a body cut by B, the
+    # liner past both. Its wing left of the left flap is cut along fold
+    # A's line, and lies within the span of B's line too, but stands
+    # beside A's hinge and 16 mm aside from B's: it rides the left flap,
+    # not the bit of body between the slits (which it did when how far
+    # aside it lies was not counted)
+    l0, l1, r0, r1, xb = 8.425, 36.894, 71.110, 92.064, 56.522
+    ring = [(0, 0), (100, 0), (100, 60), (r1 + .5, 60), (r1 + .5, 54),
+            (r1, 54), (r1, 120), (r0, 120), (r0, 54), (r0 - .5, 54),
+            (r0 - .5, 60), (l1 + .5, 60), (l1 + .5, 54), (l1, 54),
+            (l1, 120), (l0, 120), (l0, 54), (l0 - .5, 54), (l0 - .5, 60),
+            (0, 60)]
+    lay = stack(ring, [fold(l0, 57, r1, 57, 180.0, -1, order=1),
+                       fold(xb, 0, xb, 60, 90.0, -1, label="B")],
+                [(rect(0.559, 52.237, 93.698, 76.152), 1.0, 1)])
+    box = {p.index: tuple(round(v, 3) for v in p.box) for p in lay.panels}
+    above = sorted((tuple(round(v, 3) for v in pc.bounds(q)), box[p])
+                   for p, q, _f in lay._regions[0] if pc.bounds(q)[3] > 60)
+    flap, right = (8.425, 57.0, 36.894, 120.0), (71.11, 57.0, 92.064, 120.0)
+    assert above == [
+        ((0.559, 60.0, 7.925, 76.152), flap),
+        ((7.925, 60.0, 8.425, 76.152), flap),
+        ((8.425, 60.0, 36.894, 76.152), flap),
+        ((36.894, 60.0, 56.522, 76.152), (37.394, 57.0, 56.522, 60.0)),
+        ((56.522, 60.0, 71.11, 76.152), (56.522, 57.0, 70.61, 60.0)),
+        ((71.11, 60.0, 92.064, 76.152), right),
+        ((92.064, 60.0, 93.698, 76.152), right)]
+    assert sorted((round(n.a, 4), round(n.b, 4),
+                   tuple(round(v, 3) for v in n.at))
+                  for n in _notes(lay, "slit")) == [
+        (2.3562, 0.0, (57.307, 55.92)), (3.927, 3.7854, (56.522, 55.92)),
+        (5.7048, 0.0, (92.564, 59.285)), (11.9368, 0.0, (4.242, 60.0)),
+        (17.5812, 0.0, (56.522, 68.076))]
+    assert witnesses(lay, 9, 3) == []
+
+
+def test_liner_over_the_gap_above_two_lines_is_cut_along_both():
+    # B and C both run up to the gap's foot. The bit of liner over the gap
+    # is as near the hinges of both flaps, and is cut along every fold
+    # line between them, not the first listed: its strip between B and C
+    # goes with the right flap, the nearer (3 mm against 5), listed A, B,
+    # C or A, C, B or B, A, C (listed A, C, B it went with the left one,
+    # cut along C alone). Listed with B and C both before A, or C first,
+    # B's or C's own cut runs on up the liner before A's, and the strip
+    # is decided otherwise: that is not asked here
+    folds = {"A": fold(20, 57, 80, 57, 180.0, 1, order=1),
+             "B": fold(50, 0, 50, 54, 90.0, 1, label="B"),
+             "C": fold(52, 0, 52, 54, 45.0, 1, label="C")}
+    seen = []
+    for order in ("ABC", "ACB", "BAC"):
+        lay = stack(_gap_ring(54.0), [folds[k] for k in order],
+                    [(rect(10, 40, 90, 75), 1.0, 1)])
+        left, right = [next(p.index for p in lay.panels
+                            if pc.inside(q, p.pts))
+                       for q in ((30, 100), (70, 100))]
+        for y in (58.0, 65.0, 74.0):
+            for x in (45.25, 49.75, 50.25, 51.75, 52.25, 54.75):
+                riding = {panel for panel, pts, _f in lay._regions[0]
+                          if pc.inside((x, y), pts)}
+                assert riding == {left if x < 50 else right}
+        slits = _notes(lay, "slit")
+        assert sorted((round(n.a, 4), tuple(round(v, 4) for v in n.at))
+                      for n in slits if n.at[1] > 59.9) == [
+            (14.8584, (50.0, 67.5708)), (16.1416, (14.75, 60.0)),
+            (16.1416, (85.25, 60.0))]
+        seen.append(sorted((round(n.a, 4), n.at) for n in slits))
+        assert witnesses(lay, 9, 3) == []
+    assert seen[0] == seen[1] == seen[2]

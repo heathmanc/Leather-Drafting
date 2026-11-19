@@ -160,3 +160,77 @@ def test_convex_tests():
     assert pc.clip_segment_to_convex((-5, 5), (15, 5), SQUARE) \
         == ((0.0, 5.0), (10.0, 5.0))
     assert pc.clip_segment_to_convex((-5, 15), (15, 15), SQUARE) is None
+
+
+# -- a corner given twice -----------------------------------------------------
+
+def _square_with_a_corner_twice(k, x0=10000.0, y0=10000.0):
+    # a 50 mm square 10 m from the origin, its corner k given twice: the
+    # second a hair (1e-12 mm each way) from the first, square to the way
+    # the middle lies from it, so that the edge of no length between them
+    # points along the square's other edges' lines, not into it
+    sq = [(x0, y0), (x0 + 50, y0), (x0 + 50, y0 + 50), (x0, y0 + 50)]
+    x, y = sq[k]
+    dx, dy = x0 + 25 - x, y0 + 25 - y
+    twin = (x - math.copysign(1e-12, dy), y + math.copysign(1e-12, dx))
+    assert twin != (x, y)
+    return sq[:k + 1] + [twin] + sq[k + 1:]
+
+
+def test_an_edge_of_no_length_decides_nothing_inside_a_convex_polygon():
+    # once the edge between the two decided: its direction is noise, and
+    # the middle of the square, 25 mm inside, was outside it
+    for k in range(4):
+        pts = _square_with_a_corner_twice(k)
+        assert pc.inside_convex((10025, 10025), pts)
+        assert pc.inside_convex((10001, 10049), pts)
+        assert pc.inside_convex((10050, 10025), pts)       # on an edge
+        assert not pc.inside_convex((10060, 10025), pts)
+        assert not pc.inside_convex((10025, 9990), pts)
+        assert not pc.inside_convex((9990, 9990), pts)    # past a corner
+        assert pc.inside_convex((10025, 10025), pts, 0.0)
+        assert not pc.inside_convex((10060, 10025), pts, 0.0)
+
+
+def test_a_sliver_thinner_than_the_tolerance_still_ends_at_its_ends():
+    # its ends are edges of no length, but a point past them is outside
+    sliver = [(0, 0), (100, 0), (100, 1e-10), (0, 1e-10)]
+    assert pc.inside_convex((50, 0), sliver)
+    assert not pc.inside_convex((150, 0), sliver)
+    assert not pc.inside_convex((-50, 0), sliver)
+
+
+def test_convex_parts_give_a_corner_given_twice_once():
+    for k in range(4):
+        pts = _square_with_a_corner_twice(k)
+        (part, flags), = pc.convex_parts(pts, [1, 2, 3, 4, 5])
+        assert len(part) == len(flags) == 4
+        assert abs(pc.area(part) - 2500.0) < 1e-6
+        assert pc.inside_convex((10025, 10025), part)
+
+
+def test_a_corner_given_twice_thirty_metres_off_is_judged_by_its_size():
+    # 30 m from the origin the rounding of a corner is about 4e-12 mm, and
+    # two copies of one 1e-10 mm apart are still one corner: what counts
+    # as no length grows with the distance, not a fixed 1e-11 mm. Its edge
+    # points so that the middle lies past its line
+    sq = [(30000, 30000), (30050, 30000), (30050, 30050), (30000, 30050)]
+    for k in range(4):
+        x, y = sq[k]
+        dx, dy = 30025 - x, 30025 - y
+        twin = (x - math.copysign(1e-10, dy), y + math.copysign(1e-10, dx))
+        pts = sq[:k + 1] + [twin] + sq[k + 1:]
+        assert 1e-10 < math.dist(pts[k], pts[k + 1]) < 2e-10
+        assert pc.inside_convex((30025, 30025), pts, 0.0)
+        assert not pc.inside_convex((30060, 30025), pts, 0.0)
+        (part, flags), = pc.convex_parts(pts, [1, 2, 3, 4, 5])
+        assert len(part) == len(flags) == 4
+
+
+def test_past_an_edge_of_no_length_an_edge_still_counts_to_the_tolerance():
+    # a point a hair past the right edge, on the wrong side of the edge of
+    # no length at its foot, is on that edge to within the tolerance
+    pts = _square_with_a_corner_twice(1)
+    assert pc.inside_convex((10050 + 5e-7, 10025), pts, 1e-6)
+    assert pc.inside_convex((10050 + 5e-7, 10000 - 5e-7), pts, 1e-6)
+    assert not pc.inside_convex((10050 + 2e-6, 10025), pts, 1e-6)

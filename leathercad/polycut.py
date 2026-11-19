@@ -21,6 +21,8 @@ Poly = Tuple[List[Pt], List[int]]
 
 OUTLINE = -1          # a real edge of the piece: the leather ends here
 INNER = -2            # a dividing line only: the leather carries on across it
+_HAIR = 1e-11         # two corners this close (times 1 + how far they lie
+#                       from the origin, mm) are one: rounding parts them
 
 
 # -- measures ----------------------------------------------------------------
@@ -352,12 +354,20 @@ def convex_parts(pts: Sequence[Pt], flags: Sequence[int],
                  inner: int = INNER) -> List[Poly]:
     """Split a counter-clockwise polygon into convex ones (few of them: the
     triangles of an ear clipping, merged back wherever the result stays
-    convex). Edges the split adds get the ``inner`` flag."""
+    convex). Edges the split adds get the ``inner`` flag. A corner given
+    twice, the two a rounding apart, is given once."""
     pts = list(pts)
     flags = list(flags)
     n = len(pts)
     if n < 3:
         return []
+    hair = _HAIR * (1.0 + max(max(abs(x), abs(y)) for x, y in pts))
+    if any(abs(pts[i][0] - pts[i - 1][0]) <= hair
+           and abs(pts[i][1] - pts[i - 1][1]) <= hair for i in range(n)):
+        pts, flags = tidy(pts, flags, hair)
+        n = len(pts)
+        if n < 3:
+            return []
     if is_convex(pts):
         return [(pts, flags)]
     polys = {k: list(t) for k, t in enumerate(_triangles(pts))}
@@ -411,15 +421,31 @@ def convex_parts(pts: Sequence[Pt], flags: Sequence[int],
 
 def inside_convex(p: Pt, pts: Sequence[Pt], tol: float = 1e-9) -> bool:
     """Whether ``p`` is in a counter-clockwise convex polygon (its edge
-    counts, to within ``tol`` mm)."""
+    counts, to within ``tol`` mm).
+
+    An edge no longer than ``tol``, or than the rounding of corners this
+    far from the origin (one corner given twice), bounds nothing: its
+    direction is noise, and would put a point well inside outside. A
+    point past such an edge must still lie in the polygon's box, so that
+    a polygon thinner than ``tol`` still ends at its ends."""
     px, py = p
     x0, y0 = pts[-1]
+    nil = max(tol, _HAIR * (1.0 + abs(x0) + abs(y0)))
+    nil *= nil
+    skipped = False
     for x1, y1 in pts:
         dx, dy = x1 - x0, y1 - y0
         c = dx * (py - y0) - dy * (px - x0)
-        if c < 0.0 and c * c > tol * tol * (dx * dx + dy * dy):
-            return False
+        if c < 0.0:
+            ll = dx * dx + dy * dy
+            if ll <= nil:
+                skipped = True
+            elif c * c > tol * tol * ll:
+                return False
         x0, y0 = x1, y1
+    if skipped:
+        x0, y0, x1, y1 = bounds(pts)
+        return (x0 - tol <= px <= x1 + tol) and (y0 - tol <= py <= y1 + tol)
     return True
 
 

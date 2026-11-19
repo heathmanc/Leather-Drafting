@@ -4237,7 +4237,13 @@ def stack_check(layout, tol: float = 0.75, near: float = 4.0):
     land when the stack is shut (``_landed``). In each reading the pieces
     the folding brings face to face are then compared as
     ``Layout.lineup`` compares two panels, each with its holes where that
-    reading has them: ``Faced`` findings (``_faced``). Two holes that lie
+    reading has them (``_Faces.read``), and said in ``Faced`` findings
+    (``_Faces._told``: two pieces next to each other on a needle line,
+    and two panels of the main piece that miss each other, whatever lies
+    between them; two further apart only for a miss that none of those
+    says, the two furthest out of line first, then those with the least
+    leather between them; a finding says all its two do with each other,
+    so a miss can be said by two). Two holes that lie
     on one needle line meet, whatever leather lies between them: leather
     on it with no hole there is told (``through``, ``passes``) and never
     keeps two holes from meeting. Every hole is then given what its whole
@@ -4376,7 +4382,13 @@ def _landed(layout, k: int) -> List["_Layer"]:
     has (less, outside the bend), and what lies beyond the bend from
     where it is held is pushed that much further from the fold line (on
     the inside; drawn nearer, outside). Where along its length it is held
-    is the one thing not fixed."""
+    is the one thing not fixed.
+
+    What is not modelled: a hole that lies on the curve of a bend when
+    the stack is shut, punched there or landed there. Through the layers
+    it is compared as if its leather lay flat; across the folds it is
+    not compared at all (``_Faces.holes`` takes only holes on flat
+    leather)."""
     s = layout.sheets[k - 1]
     over = {note.fold: note.a for note in layout.notes
             if note.sheet == k and note.kind in ("cross", "level")}
@@ -4433,19 +4445,6 @@ def _landed(layout, k: int) -> List["_Layer"]:
     for hold in panels:
         out.append(held({p: push(hold, p) for p in panels}))
     return out
-
-
-def _faced(layout, reads, tol: float, near: float,
-           memo: Optional[dict] = None, faces: Optional["_Faces"] = None,
-           ) -> None:
-    """Add to each reading of ``reads``, ``[(check, layers)]`` -- what
-    ``laid_check`` found and the pieces it was given -- the pieces that
-    the folding brings face to face (see ``stack_check``, and ``_Faces``,
-    which ``faces`` is, made here if not given), with their findings."""
-    if faces is None:
-        faces = _Faces(layout, tol, near)
-    for check, layers in reads:
-        faces.read(check, layers, memo)
 
 
 class _Faces:
@@ -4648,43 +4647,165 @@ class _Faces:
             for k, _p, k2, d in here:
                 (met if d <= tol else missed).append((k, k2, d))
             got.append((pair, mine, theirs, here))
-        _stacked(check, layers, met, missed, tol, self.near, memo)
-        self._told(check, layers, got)
+        stacks = _stacked(check, layers, met, missed, tol, self.near, memo)
+        self._told(check, layers, got, *stacks)
 
-    def bare(self, layers, pair, here) -> bool:
-        """Whether a hole of ``here`` meets or misses one of the other
-        body through leather between them that has no hole near it."""
-        i, between = pair[0], pair[4]
-        return any(all(_nearest(self.onto(layers, n, i), p, self.near)[0]
-                       > self.near for n in between)
-                   for _k, p, _k2, _d in here)
+    def crossed(self, layers, pair, here) -> list:
+        """For each hole of ``here``, the bodies between the two of
+        ``pair`` that it comes through, by the rule of ``laid_check``: on
+        that body, and where its piece has leather (``_has_leather``, on
+        its own plane: more than ``HAIR`` inside its outline and outside
+        its cutouts). Each as ``(the body, whether it has a hole within
+        ``near`` there, where on its plane)``. (Whether a hole comes
+        through a body, and where, is the same whichever pair it is of:
+        found once, as the first pair to ask has it.)"""
+        i, j, between = pair[0], pair[1], pair[4]
+        key = ("crossed", i, j, id(layers[self.found[i][4]]),
+               id(layers[self.found[j][4]])) \
+            + tuple(id(layers[self.found[n][4]]) for n in between)
+        got = self.kept.get(key)
+        if got is not None:
+            return got
+        got = self.kept[key] = [[] for _h in here]
+        near, kept, owner = self.near, self.kept, self.owner
+        for n in between:
+            _panel, parts, _lo, _hi, piece = self.found[n]
+            key2 = ("parts", n, i)
+            flat = kept.get(key2)
+            if flat is None:
+                (c0, c1), (u0, u1), (w0, w1) = self.mapping(i, n)
+                flat = kept[key2] = [pc.ccw([
+                    (c0 + x * u0 + y * w0, c1 + x * u1 + y * w1)
+                    for x, y in part]) for part in parts]
+            squares = self.onto(layers, n, i)
+            (c0, c1), (u0, u1), (w0, w1) = self.mapping(n, i)
+            layer = layers[piece]
+            mine = ("through", n, id(layer))
+            # (a spot more than a hair inside a part of the body is in it,
+            # and more than a hair inside the outline the part is of: only
+            # one nearer an edge, or by a cutout, is looked at closely)
+            sides = kept.get(("sides", n, i))
+            if sides is None:
+                sides = kept["sides", n, i] = [[
+                    (x0, y0, x1 - x0, y1 - y0)
+                    for (x0, y0), (x1, y1) in zip(C[-1:] + C[:-1], C)]
+                    for C in flat]
+            if layer.cutouts:
+                sides = []
+            for at, (k, p, _k2, _d) in enumerate(here):
+                key3 = (mine, k, id(layers[owner[k]]))
+                hit = kept.get(key3)
+                if hit is None:
+                    hit = kept[key3] = ()
+                    q = (c0 + p[0] * u0 + p[1] * w0,
+                         c1 + p[0] * u1 + p[1] * w1)
+                    if _deep(p, sides) or any(
+                            pc.inside_convex(p, C, 0.0) for C in flat) \
+                            and _has_leather(layer, q):
+                        hit = kept[key3] = (
+                            n, _nearest(squares, p, near)[0] <= near, q)
+                if hit:
+                    got[at].append(hit)
+        return got
 
-    def _told(self, check, layers, got) -> None:
+    def bare(self, layers, pair, here) -> List[bool]:
+        """For each hole of ``here``, whether it meets or misses the other
+        body's with no leather between them there that has a hole near it
+        (``crossed``): the two bodies are then next to each other on its
+        needle line."""
+        return [not bodies or not any(holed for _n, holed, _q in bodies)
+                for bodies in self.crossed(layers, pair, here)]
+
+    def _told(self, check, layers, got, link=None, laid=()) -> None:
         """The findings of a reading, and the holes that come through
         leather between two bodies face to face where it has no hole.
 
-        Two bodies get a finding where nothing lies between them, where a
-        hole of one meets or misses one of the other through leather with
-        no hole near it, and where one misses one of the other: elsewhere
-        each faces what is between, and is said there -- unless some hole
-        of theirs marked out of line would then be said by no line. Each
-        counts what the two do with each other: of the holes of either
-        that lie over the other, those that come down near one of the
-        other's, missing it or meeting it, and those that have nothing at
-        all to meet (no state); and how many of those that meet are
+        Two bodies are next to each other on a needle line where nothing
+        lies between them there but leather with no hole near it (which
+        has no say), and two pieces laid on each other always are. Two
+        bodies get a finding where nothing at all lies between them, and
+        where they are next to each other on the needle line of some hole
+        of theirs that meets or misses one of the other's -- unless every
+        miss between them is where holed leather lies between them (with
+        a hole near either of the two holes that miss). Two panels of the
+        main piece, the pattern the others are cut to, get one whenever
+        they miss each other, whatever lies between them. The others get
+        one only for a miss that none of those findings, nor the layers,
+        says: where every two next to each other on that needle line line
+        up and these two do not (``link`` are the stacks of holes that
+        meet, ``laid`` the misses through the layers, as ``_stacked``
+        gives them; a finding says a miss of the stacks of the two holes
+        it counts out of line). Of several such, the two furthest out of
+        line are said first, and of two as far, the two with the least
+        leather between them (all that lies between their two bodies,
+        over the whole of where they overlap); the others then only for a
+        miss on a needle line that still has none said -- needle line by
+        needle line: two bodies said for one of them are not thereby
+        said for another, where two others may be further out of line.
+        And none is left out if some hole of theirs marked out of line
+        would then be said by no line.
+
+        A finding says all that its two do with each other: a miss of
+        theirs that a finding of two next to each other also says is
+        then said twice.
+
+        Each counts what the two do with each other: of the holes of
+        either that lie over the other, those that come down near one of
+        the other's, missing it or meeting it, and those that have nothing
+        at all to meet (no state); and how many of those that meet are
         marked out of line all the same (``red``). A hole of either that
         meets or misses one of the other's through leather between them
         where it has no hole near is told (``passes``, ``through``)."""
-        tol, near, state = self.tol, self.near, check.state
+        tol, state = self.tol, check.state
         layout, names = self.layout, self.names
-        said, rest = [], []
+        link = {} if link is None else link
+        said, far = [], []
+        found = self.found
         for item in got:
             pair, _mine, _theirs, here = item
-            if not pair[4] or any(d > tol for _k, _p, _k2, d in here) \
-                    or self.bare(layers, pair, here):
+            bare = self.bare(layers, pair, here)
+            # (two holes that miss each other have holed leather between
+            # them if it has a hole near either of them)
+            apart = {frozenset((k, k2)) for (k, _p, k2, d), next_
+                     in zip(here, bare) if d > tol and not next_}
+            nexts = {next_ and frozenset((k, k2)) not in apart
+                     for (k, _p, k2, d), next_ in zip(here, bare)
+                     if d > tol}
+            # (the main piece's own panels, the pattern the others are cut
+            # to, are said whenever they miss each other)
+            own = not found[pair[0]][4] and not found[pair[1]][4] \
+                and bool(nexts)
+            if not pair[4] or own or any(bare) and nexts != {False}:
                 said.append(item)
             else:
-                rest.append(item)
+                far.append(item)
+        told: Optional[set] = None      # the stacks a line says a miss in
+        rest = []
+        # (the misses of the pairs further apart, the furthest first, then
+        # those with the least leather between them: two misses as far to
+        # a millionth of a millimetre are as far, or the last digit of a
+        # sum would choose between two pairs whose holes coincide)
+        order = sorted(
+            (-round(d, 6), sum(found[n][3] - found[n][2] for n in item[0][4]),
+             at, k, k2) for at, item in enumerate(far)
+            for k, _p, k2, d in item[3] if d > tol)
+        named = set()
+        for _d, _leather, at, k, k2 in order:
+            if told is None:
+                told = set()
+                for h, h2 in list(laid) + [
+                        (h, h2) for _pr, _m, _t, here in said
+                        for h, _p, h2, d in here if d > tol]:
+                    told.update((_top(link, h), _top(link, h2)))
+            # (this miss alone is then said, not every miss of its two
+            # bodies: on another needle line two others may be further
+            # out of line than they are, and are the ones to say there)
+            tops = {_top(link, k), _top(link, k2)}
+            if tops - told:
+                named.add(at)
+                told.update(tops)
+        for at, item in enumerate(far):
+            (said if at in named else rest).append(item)
         kept = set(check.sewn)
         for _pair, _mine, _theirs, here in said:
             kept.update(k for k, _p, _k2, _d in here)
@@ -4721,31 +4842,39 @@ class _Faces:
                  for piece, where in check.through.items()
                  for x, y, _d in where}
         for pair, _mine, _theirs, here in got:
-            i = pair[0]
+            crossed = self.crossed(layers, pair, here)
             for n in pair[4]:
-                panel, parts, _lo, _hi, piece = self.found[n]
-                key = ("parts", n, i)
-                flat = self.kept.get(key)
-                if flat is None:
-                    (c0, c1), (u0, u1), (w0, w1) = self.mapping(i, n)
-                    flat = self.kept[key] = [pc.ccw([
-                        (c0 + x * u0 + y * w0, c1 + x * u1 + y * w1)
-                        for x, y in part]) for part in parts]
-                squares = self.onto(layers, n, i)
-                for k, p, _k2, _d in here:
-                    if not any(pc.inside_convex(p, C, 0.0) for C in flat) \
-                            or _nearest(squares, p, near)[0] <= near:
+                panel, piece = self.found[n][0], self.found[n][4]
+                for (k, _p, _k2, _d), bodies in zip(here, crossed):
+                    at = next((q for n2, holed, q in bodies
+                               if n2 == n and not holed), None)
+                    if at is None:
                         continue
+                    x, y = at
                     whose = self.owner[k]
                     check.passes.setdefault(
                         (whose, piece, layout.panels[panel].number
                          if whose == piece else 0), set()).add(k)
-                    (_k, (x, y)), = _mapped([(k, p)], self.mapping(n, i))
                     if (piece, round(x, 3), round(y, 3)) not in spots:
                         spots.add((piece, round(x, 3), round(y, 3)))
                         dia = layers[whose].holes[k - self.firsts[whose]][2]
                         check.through.setdefault(piece, []).append(
                             (x, y, dia))
+
+
+def _deep(p, sides) -> bool:
+    """Whether ``p`` is more than ``HAIR`` inside one of some
+    counter-clockwise convex polygons, each given by its sides as ``(x,
+    y, dx, dy)``."""
+    px, py = p
+    for edges in sides:
+        for x0, y0, dx, dy in edges:
+            c = dx * (py - y0) - dy * (px - x0)
+            if c <= 0.0 or c * c <= HAIR * HAIR * (dx * dx + dy * dy):
+                break
+        else:
+            return True
+    return False
 
 
 def _mapped(holes, cuw) -> list:
@@ -4783,7 +4912,7 @@ def _nearest(squares, p, near: float) -> Tuple[float, int]:
 
 
 def _stacked(check, layers, met, missed, tol: float, near: float,
-             memo: Optional[dict] = None) -> None:
+             memo: Optional[dict] = None) -> Tuple[dict, list]:
     """Give every hole of a reading what its whole stack of holes comes
     to, as ``laid_check`` does, with the holes that meet and miss across
     the folds -- ``met`` and ``missed``, ``(hole, the other, how far)`` --
@@ -4792,7 +4921,9 @@ def _stacked(check, layers, met, missed, tol: float, near: float,
     stack with a miss in it is ``OFF`` (``apart``: the furthest miss in
     it). Each ``Laid`` finding of ``check`` keeps what its two pieces do
     with each other, with how many of the holes it says meet are now
-    marked out of line (``red``)."""
+    marked out of line (``red``). Gives the stacks (each hole to one in
+    its stack, as ``_top`` reads them) and the misses through the layers,
+    ``[(hole, the one it misses)]``."""
     holes, _owner, pairs = _compared(layers, tol, near, memo)
     link: Dict[int, int] = {}
     stated = set()
@@ -4801,11 +4932,13 @@ def _stacked(check, layers, met, missed, tol: float, near: float,
         link[_top(link, k)] = _top(link, k2)
         stated.update((k, k2))
     laid = []
+    laid_misses = []
     for _i, _j, met_, missed_, _lone, found in pairs:
         for k, k2 in met_:
             link[_top(link, k)] = _top(link, k2)
             stated.update((k, k2))
         for k, k2 in missed_:
+            laid_misses.append((k, k2))
             misses.append((k, k2, math.hypot(holes[k][0] - holes[k2][0],
                                              holes[k][1] - holes[k2][1])))
         if found is not None:
@@ -4827,6 +4960,7 @@ def _stacked(check, layers, met, missed, tol: float, near: float,
     check.findings = [replace(found, red=sum(
         check.state[k] == fs.OFF for k, _k2 in met_))
         for found, met_ in laid]
+    return link, laid_misses
 
 
 def _between(layout, found, frames, fa, onto, lo, hi, parts_a, flat_b,

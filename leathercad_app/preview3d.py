@@ -610,7 +610,9 @@ def _readings_report(parts, model, check) -> List[str]:
               if shut else ", the reading in which at least as many of the "
               "whole stack's holes meet as the other")
            + (f": all {n} do" if met == n and n > 1
-              else f": {met or 'none'} of its {n} do")
+              else ": its one hole " + ("does" if met else "does not")
+              if n == 1 else f": {met or 'none'} of its {n} "
+              + ("does" if met == 1 else "do"))
            + f", against {other or 'none'} "
            + ("lying flat." if shut else "when shut.")
            + (f" {sm.listed(better)} "
@@ -636,8 +638,16 @@ def _readings_report(parts, model, check) -> List[str]:
         labels = [model.folds[j].label for j in folds]
         round_ = ("fold " if len(labels) == 1 else "folds ") \
             + sm.listed(labels) if labels else "its folds"
-        line = (f"{name}, round {round_}: {folded or 'none'} of its {n} "
-                f"holes meet when shut, {flat or 'none'} lying flat.")
+        if n == 1:
+            line = (f"{name}, round {round_}: its one hole "
+                    + ("meets" if folded else "does not meet")
+                    + " when shut, "
+                    + (("and" if folded else "but does") if flat
+                       else ("not" if folded else "nor")) + " lying flat.")
+        else:
+            line = (f"{name}, round {round_}: {folded or 'none'} of its "
+                    f"{n} holes " + ("meets" if folded == 1 else "meet")
+                    + f" when shut, {flat or 'none'} lying flat.")
         # its holes out of line with its own, where the folding brings two
         # of its panels face to face, and those in line with each other
         # there that are marked out of line all the same

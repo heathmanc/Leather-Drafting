@@ -2784,6 +2784,189 @@ def test_each_lining_is_held_as_the_whole_reading_marks_it():
     assert check.totals == (42, 42)
 
 
+# -- each miss on a needle line said once: by the two next to it, or the ends -
+
+def test_a_lining_off_its_piece_is_not_found_out_of_line_again_folded():
+    # a 2 mm piece folded flat, a 1 mm lining inside punched 3.77 mm
+    # nearer the fold each side: the layers say the miss; folded, the
+    # piece's halves face the lining's other half through the lining's
+    # holed leather, the same miss -- no finding (once one each way, 14
+    # out of line, by up to 3.77 mm); the lining's own halves, next to
+    # each other, line up and are red all the same
+    check = _needled(2.0, [(1.0, 1, 3.77, 0.0)]).lineup()
+    assert [(f.a, f.b, f.panels, f.holes, f.met, f.off, f.red)
+            for f in check.findings if not f.laid] == [
+        (1, 1, (2, 1), 14, 14, 0, 14)]
+    laid, = [f for f in check.findings if f.laid]
+    assert (laid.off, round(laid.worst, 2)) == (28, 3.77)
+
+
+def test_a_creep_through_three_layers_is_found_of_the_two_ends():
+    # a seam across a fold, its upper half 1 mm along from the lower, and
+    # a 1 mm patch inside on the lower half punched half way: each 0.5 mm
+    # from the next, all in line, the two ends 1 mm apart -- a miss no two
+    # next to each other make: the piece's own halves, with the holed
+    # patch between them, are found out of line, and only they
+    row = [(20.0, 54.0 - 10 * i, 1.2) for i in range(5)] + \
+        [(21.0, 66.0 + 10 * i, 1.2) for i in range(5)]
+    lay = fs.fold_piece(rect(0, 0, 150, 120), [fold(0, 60, 150, 60)],
+                        holes=row, sheets=[sh.Sheet(
+                            rect(2, 5, 140, 58), 1.0, 1, name="patch",
+                            holes=[(20.5, y, d) for _x, y, d in row[:5]])])
+    check = lay.lineup()
+    assert len(check.off) == 15
+    assert sorted((f.a, f.b, f.laid, f.off, round(f.worst, 2), f.met, f.red)
+                  for f in check.findings) == [
+        (0, 0, False, 10, 1.0, 0, 0), (0, 1, False, 0, 0.0, 10, 10),
+        (0, 1, True, 0, 0.0, 10, 10)]
+
+
+def _creep(a, b, sheets):
+    # a 150 by 120 mm piece folded in half at y = 60, its seam's lower half
+    # ``a`` and its upper half ``b`` from the left edge
+    row = [(a, 54.0 - 10 * i, 1.2) for i in range(5)] + \
+        [(b, 66.0 + 10 * i, 1.2) for i in range(5)]
+    return fs.fold_piece(rect(0, 0, 150, 120), [fold(0, 60, 150, 60)],
+                         holes=row, sheets=sheets)
+
+
+def _faced_found(check):
+    return sorted((f.a, f.b, f.panels, f.off, round(f.worst, 2), f.met,
+                   f.red) for f in check.findings if not f.laid)
+
+
+def test_a_creep_through_four_layers_is_found_of_the_piece_itself():
+    # a patch inside each half, each layer 0.5 mm along from the next:
+    # shell 20, lower patch 20.5, upper patch 21, shell 21.5. The two
+    # patches, next to each other, line up; the piece's own halves are
+    # 1.5 mm apart and are found so, and the pairs further apart, whose
+    # misses that says, are not (once only the lower patch's with the
+    # shell's upper half, 1 mm: the whole drift said nowhere)
+    check = _creep(20.0, 21.5, [
+        sh.Sheet(rect(2, 5, 140, 58), 1.0, 1, name="lower",
+                 holes=[(20.5, 54.0 - 10 * i, 1.2) for i in range(5)]),
+        sh.Sheet(rect(2, 62, 140, 115), 1.0, 1, name="upper",
+                 holes=[(21.0, 66.0 + 10 * i, 1.2) for i in range(5)])]
+    ).lineup()
+    assert len(check.off) == 20
+    assert _faced_found(check) == [(0, 0, (1, 2), 10, 1.5, 0, 0),
+                                   (1, 2, (2, 1), 0, 0.0, 10, 10)]
+
+
+def test_a_creep_through_a_lining_round_the_fold_is_found_of_the_piece():
+    # the same with a lining round the fold in place of the two patches:
+    # the piece's own halves, 1.5 mm apart, are found so; the lining's own
+    # halves line up and are red all the same (once only the shell's
+    # lower half with the lining's upper, 1 mm)
+    check = _creep(20.0, 21.5, [sh.Sheet(
+        rect(0, 0, 150, 120), 1.0, 1, name="lining",
+        holes=[(20.5, 54.0 - 10 * i, 1.2) for i in range(5)]
+        + [(21.0, 66.0 + 10 * i, 1.2) for i in range(5)])]).lineup()
+    assert len(check.off) == 20
+    assert _faced_found(check) == [(0, 0, (1, 2), 10, 1.5, 0, 0),
+                                   (1, 1, (2, 1), 0, 0.0, 10, 10)]
+
+
+def test_a_creep_through_two_linings_is_found_of_the_two_furthest_apart():
+    # two 0.8 mm linings round the fold of a 2 mm piece whose own seam is
+    # elsewhere (at x = 100, its halves in line): outer 20, inner 20.5,
+    # inner 21, outer 21.5 -- each in line with the next. Of the three
+    # pairs further apart that miss, the outer lining's own halves, 1.5
+    # mm, are found, not those with the least leather between them, 1 mm
+    # (once the inner's lower half with the outer's upper)
+    def rows(a, b):
+        return [(a, 54.0 - 10 * i, 1.2) for i in range(5)] + \
+            [(b, 66.0 + 10 * i, 1.2) for i in range(5)]
+    lay = fs.fold_piece(rect(0, 0, 150, 120), [fold(0, 60, 150, 60)],
+                        thickness=2.0, holes=rows(100.0, 100.0), sheets=[
+        sh.Sheet(rect(0, 0, 150, 120), 0.8, 1, name="outer",
+                 holes=rows(20.0, 21.5)),
+        sh.Sheet(rect(0, 0, 150, 120), 0.8, 1, name="inner",
+                 holes=rows(20.5, 21.0))])
+    check = lay.lineup()
+    assert len(check.off) == 20
+    assert _faced_found(check) == [(0, 0, (1, 2), 0, 0.0, 10, 0),
+                                   (1, 1, (2, 1), 10, 1.5, 0, 0),
+                                   (2, 2, (2, 1), 0, 0.0, 10, 10)]
+
+
+def test_two_needle_lines_that_creep_differently_each_say_their_furthest():
+    # the same two linings, with two needle lines that creep and three
+    # that are in line. On the first (outer 20, inner 20.5, inner 21,
+    # outer 21.5) the outer lining's own halves are furthest out of line,
+    # 1.5 mm. On the second (20, 20.7, 21.4, 20.8) they are only 0.8 mm
+    # apart, and the outer's lower half and the inner's upper are the
+    # furthest, 1.4 mm: those two are found as well (once the outer's own
+    # halves, found for the first line, were taken to say the second
+    # too, and its 1.4 mm was in no finding)
+    at = [(20.0, 20.5, 21.0, 21.5), (20.0, 20.7, 21.4, 20.8)] \
+        + [(20.0,) * 4] * 3
+
+    def low(j):
+        return [(at[i][j], 54.0 - 10 * i, 1.2) for i in range(5)]
+
+    def up(j):
+        return [(at[i][j], 66.0 + 10 * i, 1.2) for i in range(5)]
+    lay = fs.fold_piece(
+        rect(0, 0, 150, 120), [fold(0, 60, 150, 60)], thickness=2.0,
+        holes=[(100.0, y, d) for _x, y, d in low(0) + up(0)], sheets=[
+            sh.Sheet(rect(0, 0, 150, 120), 0.8, 1, name="outer",
+                     holes=low(0) + up(3)),
+            sh.Sheet(rect(0, 0, 150, 120), 0.8, 1, name="inner",
+                     holes=low(1) + up(2))])
+    check = lay.lineup()
+    assert len(check.off) == 8
+    assert _faced_found(check) == [(0, 0, (1, 2), 0, 0.0, 10, 0),
+                                   (1, 1, (2, 1), 4, 1.5, 6, 0),
+                                   (1, 2, (2, 1), 4, 1.4, 6, 0),
+                                   (2, 2, (2, 1), 0, 0.0, 10, 4)]
+
+
+def _between_strip(ring, side=1, cutouts=()):
+    # a 1 mm strip in three, fold B (x = 180) first, then fold A: the left
+    # and middle panels' holes along y = 50, mirrored, land on each other
+    # through the right panel; a 0.6 mm patch with no holes
+    mid = [(110.0 + 10 * i, 50.0, 1.0) for i in range(5)]
+    return fs.fold_piece(
+        rect(0, 0, 260, 100),
+        [fold(80, 0, 80, 100, order=2),
+         fold(180, 0, 180, 100, order=1, label="B")],
+        thickness=1.0, base=1,
+        holes=mid + [(160.0 - x, y, d) for x, y, d in mid],
+        sheets=[sh.Sheet(ring, 0.6, side, name="patch",
+                         cutouts=list(cutouts))])
+
+
+@pytest.mark.parametrize("top, told", [(60.0, 10), (50.03, 0), (50.0, 0),
+                                       (49.97, 0)])
+def test_leather_between_two_halves_is_passed_through_as_the_layers_say(
+        top, told):
+    # the patch's top edge at ``top``: on the right panel, between the two
+    # halves when shut, the needles come through its leather only more
+    # than a hair inside its edge, as through the layers: so laid on the
+    # middle panel, where the layers find the middle's holes in it or not,
+    # every count is the same (once 10 between the halves with the edge
+    # on the row and 0.03 mm past it, and 0 laid there)
+    for ring in (rect(185, 10, 255, top), rect(105, 10, 175, top)):
+        check = _between_strip(ring).lineup()
+        assert [check.state.get(i) for i in range(10)] == [fs.MEETS] * 10
+        assert len(check.passes.get((0, 1, 0), ())) == told
+        # (ringed on the patch where each two of them come through it)
+        assert len(check.through.get(1, ())) == told // 2
+        assert len(check.passes[0, 0, 3]) == 10
+
+
+def test_a_window_cut_in_leather_between_two_halves_is_not_passed_through():
+    # the patch on the right panel with a window cut out over the row:
+    # the needles go through the window, no leather of the patch (once
+    # told to pass through it, and ringed)
+    check = _between_strip(rect(185, 10, 255, 90),
+                           cutouts=[rect(190, 40, 250, 60)]).lineup()
+    assert {key: len(ks) for key, ks in check.passes.items()} == \
+        {(0, 0, 3): 10}
+    assert 1 not in check.through
+
+
 def _many(n):
     # a shell 240 by 90 mm, 1.6 mm, folded in three, with ``n`` pieces
     # laid on its three panels at random

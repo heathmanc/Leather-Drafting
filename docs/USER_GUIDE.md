@@ -862,9 +862,11 @@ leather a needle goes through, most and least; after that what is drawn
 through what, and last the stitch holes, in up to three parts. The dot
 before a count is red where the holes counted are out of line, green
 where they meet and amber where they have no hole to meet (those are
-left plain on the model). On a line that names two pieces, or two
-panels of one, the dot is what those two do with each other: their
-holes can meet each other and still be red on the model, as told below.
+left plain on the model). A line that names two pieces, or two panels
+of one, says what those two do with each other, and so do its dots:
+their holes can meet each other and still be red on the model, as told
+below. Where the first part lists several pairs, only the count at its
+head has dots.
 
 * **Stitch holes through the layers** — the pieces lying on each other,
   pair by pair: *Shell and Lining: ● all 68 line up.* It also counts
@@ -895,7 +897,9 @@ Where a piece goes round a fold with holes of its own, the marks on the
 model and the counts of all three parts go by that one reading. In a
 stack read as shut, a lining punched to meet lying flat is checked as
 if it were sewn in shut, and is mostly said to be out of line; and the
-other way about. Punch every lining of one stack the same way.
+other way about. Punch every lining of one stack the same way. While a
+row is out of line, few holes meet either way, and the reading shown
+may not be the one you punched for: the report says which it shows.
 
 A hole is marked by its whole needle line, as on one folded piece: if
 anything on the line is out of line, every hole on it is red. Each line
@@ -906,15 +910,26 @@ all 44 line up with each other, 36 of them red all the same: their
 needle lines are out of line elsewhere.*
 
 A line that says holes are out of line says only that those two pieces
-miss each other, not which of them is wrong. A piece's own two halves
-say more, where a fold brings them together: the main piece's are said
-under its own name (*Shell, panels 1 and 3: ● 12 are out of line, by up
-to 3.33 mm.*), a lining's on its line in the last part. A piece out of
-line with itself has rows to move, and so has any piece that lines up
-with it throughout, which was cut to copy it. A piece whose halves line
-up with each other is most likely right as drawn, and so are the pieces
-that line up with it throughout. Where that does not settle it and
-several lines give the same distance, look at the piece they all name.
+miss each other: not which of them is wrong, and, through the layers,
+not on which half. Two things help.
+
+A piece said to be out of line with itself across a fold has a row of
+its own to move: the main piece is said so under its own name (*Shell,
+panels 1 and 3: ● 12 are out of line, by up to 3.33 mm.*), a lining
+whose halves the fold brings face to face on its line in the last part.
+(In a stack read the other way than it was punched, that can be said of
+a lining whose rows are right: look at the reading first.) Another
+piece that goes round the same fold and lines up with it throughout was
+cut to copy it, and moves with it. A pocket on one half that lines up
+with it only agrees with it on that half: leave the pocket, and look at
+the row on the other half.
+
+Where no piece is said to be out of line with itself, look first at a
+piece that all the others miss while they line up with each other. The
+report would read the same if all the others were out the same way,
+but one piece drawn wrong is the likelier. With only two pieces, or
+where the pieces fall into two groups, the report cannot tell which to
+move: move a row in the drawing and look again, the preview follows.
 
 In red, with the names and how deep, is anything that stays drawn
 through something else where the leather ends up: *at rest*, when a

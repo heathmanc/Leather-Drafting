@@ -859,41 +859,56 @@ the two thicknesses you give it.
 
 Then it gives the size folded and, once every fold is shut, how much
 leather a needle goes through, most and least; after that what is drawn
-through what, and last the stitch holes, in up to three parts:
+through what, and last the stitch holes, in up to three parts. The dot
+before a count is red where the holes counted are out of line and green
+where they meet. In a line that names two pieces, that is what the two
+do with each other: the marks of holes that meet each other can be red
+on the model all the same, as told after the three parts.
 
 * **Stitch holes through the layers** — the pieces lying on each other,
-  pair by pair, as while the stack lay flat: *Shell and Lining: ● all 68
-  line up.* Holes that go through a piece with none there are counted
-  here too, a piece that only comes between two halves once the stack
-  is shut among them.
+  pair by pair: *Shell and Lining: ● all 68 line up.* It also counts
+  holes that go through a piece with no hole there. That includes a
+  piece that comes between two halves only once the stack is shut, as
+  long as the halves are close enough to be checked against each other
+  (the next part says how close).
 * **Stitch holes where the folding brings pieces together** — pieces
   the fold shuts on to each other, like a pocket on each half of a
   wallet: *Left pocket (panel 1) and Right pocket (panel 2): ● all 26
   line up*, or, with one row 1.5 mm along from the other, *● 26 are out
   of line, by up to 1.5 mm.* Brought together means face to face, or
-  with no more leather between them than about twice the main piece's
-  thickness: two halves that shut over a pile of pockets are not taken
-  to be sewn to each other, and their holes are not checked against
-  each other.
+  with no more leather between them than twice the main piece's
+  thickness (for a main piece thinner than 1 mm: 3 mm less its
+  thickness, so 2.2 mm for 0.8 mm leather). Two halves that shut over a
+  thicker pile of pockets are not taken to be sewn to each other, and
+  their holes are not checked against each other.
 * **Stitch holes of the pieces that go round a fold** — a lining with
   holes of its own can be punched to meet the shell's lying flat, or to
   meet them when shut, once its length round the bend is taken up. The
   report reads the whole stack both ways, says which reading has more
   holes meeting and how many meet in each (*… all 102 do, against none
-  lying flat*), and gives each such piece's count either way. The marks
-  on the model show that reading.
+  lying flat*), and gives each such piece's count either way. A
+  lining's own two halves, where the fold brings them face to face, are
+  said on its line here, not in the part above.
+
+Where a piece goes round a fold with holes of its own, the marks on the
+model and the counts of all three parts go by that one reading, each
+lining's holes where that reading has them. In a stack read as shut, a
+lining punched to meet lying flat is checked as if it were sewn in
+shut, and is mostly said to be out of line; and the other way about.
+Punch every lining of one stack the same way.
 
 A hole is marked by its whole needle line, as on one folded piece: if
 anything on the line is out of line, every hole on it is red. Each line
 of the report says what its two pieces do *with each other*, so the
 pair to put right is the one said to be out of line, with its own
-distance. A pair that agrees but lies on such a needle line reads *all
-44 line up with each other, 36 of them red all the same: their needle
-lines are out of line elsewhere.* Where the main piece's own rows do
-not meet across a fold, that is said of the main piece itself
-(*Shell, panels 1 and 3: ● 12 are out of line, by up to 3.33 mm.*):
-a lining cut to copy it is out by as much, and the rows of both have
-to move.
+distance. A pair that agrees but lies on such a needle line reads *●
+all 44 line up with each other, 36 of them red all the same: their
+needle lines are out of line elsewhere.* Where two or more lines say
+holes are out of line by the same distance, look for the piece they all
+name: that is the one to move. Where the main piece's own rows do not
+meet across a fold, that is said of the main piece itself (*Shell,
+panels 1 and 3: ● 12 are out of line, by up to 3.33 mm.*): a lining cut
+to copy it is out by as much, and the rows of both have to move.
 
 In red, with the names and how deep, is anything that stays drawn
 through something else where the leather ends up: *at rest*, when a

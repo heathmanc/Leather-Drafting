@@ -44,6 +44,9 @@ SLIVER = 1.0        # a piece resting on less overlap than this (mm) is told
 # place where one piece really stands past or clear of another; and a
 # stitch hole this near an edge of a piece is on that edge, not in it
 HAIR = 0.05
+# two pairs of stitch holes whose distances out of line are this near
+# each other (mm) are as far out of line: the least the report tells apart
+AS_FAR = 0.01
 _SMOOTH = 0.03      # how closely (mm) a sheet's curved outline is followed
 _BUSY = 260         # ... unless it would still have more corners than this
 _LOOSE = 0.5        # ... and then no more loosely than this (mm)
@@ -4735,13 +4738,13 @@ class _Faces:
         up and these two do not (``link`` are the stacks of holes that
         meet, ``laid`` the misses through the layers, as ``_stacked``
         gives them; a finding says a miss of the stacks of the two holes
-        it counts out of line). Of several such, the two furthest out of
-        line are said first, and of two as far, the two with the least
-        leather between them (all that lies between their two bodies,
-        over the whole of where they overlap); the others then only for a
-        miss on a needle line that still has none said -- needle line by
-        needle line: two bodies said for one of them are not thereby
-        said for another, where two others may be further out of line.
+        it counts out of line). Stack by stack: for each stack of holes
+        with such a miss and none said, the two bodies furthest out of
+        line there get the finding, and of those as far as they are, to
+        within ``AS_FAR``, the two with the least leather between them
+        (all that lies between their two bodies, over the whole of where
+        they overlap). Two bodies found for one stack are not thereby
+        found for another, where two others may be further out of line.
         And none is left out if some hole of theirs marked out of line
         would then be said by no line.
 
@@ -4779,31 +4782,35 @@ class _Faces:
                 said.append(item)
             else:
                 far.append(item)
-        told: Optional[set] = None      # the stacks a line says a miss in
         rest = []
-        # (the misses of the pairs further apart, the furthest first, then
-        # those with the least leather between them: two misses as far to
-        # a millionth of a millimetre are as far, or the last digit of a
-        # sum would choose between two pairs whose holes coincide)
-        order = sorted(
-            (-round(d, 6), sum(found[n][3] - found[n][2] for n in item[0][4]),
-             at, k, k2) for at, item in enumerate(far)
-            for k, _p, k2, d in item[3] if d > tol)
+        # (the misses of the pairs further apart, by the stack of each of
+        # their two holes: how far, the leather between the two bodies,
+        # which pair)
+        misses: Dict[int, list] = {}
+        for at, item in enumerate(far):
+            leather = sum(found[n][3] - found[n][2] for n in item[0][4])
+            for k, _p, k2, d in item[3]:
+                if d > tol:
+                    for top in {_top(link, k), _top(link, k2)}:
+                        misses.setdefault(top, []).append((d, leather, at))
         named = set()
-        for _d, _leather, at, k, k2 in order:
-            if told is None:
-                told = set()
-                for h, h2 in list(laid) + [
-                        (h, h2) for _pr, _m, _t, here in said
-                        for h, _p, h2, d in here if d > tol]:
-                    told.update((_top(link, h), _top(link, h2)))
-            # (this miss alone is then said, not every miss of its two
-            # bodies: on another needle line two others may be further
-            # out of line than they are, and are the ones to say there)
-            tops = {_top(link, k), _top(link, k2)}
-            if tops - told:
-                named.add(at)
-                told.update(tops)
+        if misses:
+            told = set()                # the stacks a line says a miss in
+            for h, h2 in list(laid) + [
+                    (h, h2) for _pr, _m, _t, here in said
+                    for h, _p, h2, d in here if d > tol]:
+                told.update((_top(link, h), _top(link, h2)))
+            # (a stack with none said: its furthest miss alone is then
+            # said, not every miss of those two bodies -- in another stack
+            # two others may be further out of line, and are the ones to
+            # say there. Misses within AS_FAR of the furthest are as far:
+            # a tolerance about the furthest, not a rounding, so that no
+            # last digit chooses between two pairs whose holes coincide)
+            for top, here in misses.items():
+                if top not in told:
+                    furthest = max(here)[0]
+                    named.add(min((leather, at) for d, leather, at in here
+                                  if d >= furthest - AS_FAR)[1])
         for at, item in enumerate(far):
             (said if at in named else rest).append(item)
         kept = set(check.sewn)

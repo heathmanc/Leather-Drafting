@@ -1753,26 +1753,26 @@ def test_a_lining_half_way_between_its_readings_is_told_as_it_is_marked(
         dlg.close()
 
 
-def _c_fold(*linings):
+def _c_fold(*linings, pitch=11.0):
     """A 240 x 80 shell of 2 mm folded in a C: to the front at x = -45
     (fold A, step 1) and x = 45 (fold B, step 2), the middle panel
     still; with linings of its size, 1 mm, one on the other, each sewn
-    along y = 30 on each panel as the shell is, at a pitch of 11 mm. A
-    lining "flat" is punched to meet lying flat; one "shut" has the rows
-    of its two end panels pi x (1 + what lies under it + 0.5) mm nearer
-    the folds, to meet when shut."""
+    along y = 30 on each panel as the shell is, at a pitch of 11 mm
+    (or ``pitch``). A lining "flat" is punched to meet lying flat; one
+    "shut" has the rows of its two end panels pi x (1 + what lies under
+    it + 0.5) mm nearer the folds, to meet when shut."""
     spans = ((-115, -51), (-39, 39), (51, 115))
     shell = _piece("Shell", 240, 80)
     pieces, seams = [shell], []
     for a, b in spans:
-        seams.append(_seam((a, 30), (b, 30), 11.0))
+        seams.append(_seam((a, 30), (b, 30), pitch))
     for k, how in enumerate(linings):
         x = 500.0 * (k + 1)
         name = "Liner" if len(linings) == 1 else f"Liner{k + 1}"
         pieces.append(_piece(name, 240, 80, at=(x, 0)))
         pull = math.pi * (1.0 + k + 0.5) if how == "shut" else 0.0
         for (a, b), d in zip(spans, (pull, 0.0, -pull)):
-            seams.append(_seam((x + a + d, 30), (x + b + d, 30), 11.0))
+            seams.append(_seam((x + a + d, 30), (x + b + d, 30), pitch))
     folds = [_line((-45, -40), (-45, 40), "F1"), _line((45, -40), (45, 40),
                                                        "F2")]
     for order, fold in enumerate(folds, 1):
@@ -2592,18 +2592,25 @@ def test_a_stack_of_one_hole_is_read_as_one(qapp, mm):
         "lying flat."
 
 
-def test_two_pairs_as_far_out_of_line_are_said_by_the_two_nearer(qapp, mm):
+@pytest.mark.parametrize("pitch, said", [
+    (10.0, "● 6 are out of line, by up to 3.2 mm; "),
+    (11.0, "● 10 are out of line, by up to 3.76 mm."),
+    (12.0, "● 8 are out of line, by up to 3.57 mm; ")])
+def test_two_pairs_as_far_out_of_line_are_said_by_the_two_nearer(
+        qapp, mm, pitch, said):
     # the C fold with two liners, the second punched for shut. Liner2 is
     # cut to copy the Shell, so on every needle line its first panel and
-    # the Shell's are exactly as far from Liner1's second: the two with
-    # the less leather between them say it, and the other two do not
-    # (once the last digit of a sum chose between them needle line by
-    # needle line, and the Shell's line came back beside Liner2's)
-    dlg = _dialog(_c_fold("flat", "shut"))
+    # the Shell's are as far from Liner1's second, to well under a
+    # thousandth of a millimetre (a few ten-millionths apart): the two
+    # with the less leather between them say it, and the other two do
+    # not, whatever the pitch (once the last digit of a sum chose between
+    # them needle line by needle line; then the sixth decimal did, and at
+    # a pitch of 10 mm the Shell's line was given, not Liner2's)
+    dlg = _dialog(_c_fold("flat", "shut", pitch=pitch))
     try:
         says = _hole_lines(dlg)
-        assert ("Liner2 (panel 1) and Liner1 (panel 2): ● 10 are out of "
-                "line, by up to 3.76 mm.") in says
+        assert any(line.startswith("Liner2 (panel 1) and Liner1 (panel 2): "
+                                   + said) for line in says)
         assert not any(line.startswith("Shell (panel 1) and Liner1 (panel 2)")
                        for line in says)
     finally:

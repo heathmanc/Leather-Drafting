@@ -2922,6 +2922,34 @@ def test_two_needle_lines_that_creep_differently_each_say_their_furthest():
                                    (2, 2, (2, 1), 0, 0.0, 10, 4)]
 
 
+@pytest.mark.parametrize("middle, found", [(20.004, 2), (20.05, 1)])
+def test_two_pairs_as_far_to_a_hundredth_are_found_of_the_two_nearer(
+        middle, found):
+    # three 0.8 mm linings round the fold of a 2 mm piece whose own seam
+    # is elsewhere: lower rows at 20 (outer), ``middle`` and 20.6 (inner),
+    # upper rows all at 21.2 -- each in line with the next, the inner's
+    # upper 1.2 mm from the outer's lower. A middle lining that copies the
+    # outer to a few thousandths (as a row typed to two decimals does) is
+    # as far from it, 1.196 mm, with less leather between: those two are
+    # found. One 0.05 mm off is not as far, and the outer is found (once
+    # the middle had to be as far to the sixth decimal, as that rounds)
+    def rows(a, b):
+        return [(a, 54.0 - 10 * i, 1.2) for i in range(5)] + \
+            [(b, 66.0 + 10 * i, 1.2) for i in range(5)]
+    lay = fs.fold_piece(rect(0, 0, 150, 120), [fold(0, 60, 150, 60)],
+                        thickness=2.0, holes=rows(100.0, 100.0), sheets=[
+        sh.Sheet(rect(0, 0, 150, 120), 0.8, 1, name="outer",
+                 holes=rows(20.0, 21.2)),
+        sh.Sheet(rect(0, 0, 150, 120), 0.8, 1, name="middle",
+                 holes=rows(middle, 21.2)),
+        sh.Sheet(rect(0, 0, 150, 120), 0.8, 1, name="inner",
+                 holes=rows(20.6, 21.2))])
+    check = lay.lineup()
+    assert len(check.off) == 30
+    assert _faced_found(check) == [(found, 3, (2, 1), 10, 1.2, 0, 0),
+                                   (3, 3, (2, 1), 0, 0.0, 10, 10)]
+
+
 def _between_strip(ring, side=1, cutouts=()):
     # a 1 mm strip in three, fold B (x = 180) first, then fold A: the left
     # and middle panels' holes along y = 50, mirrored, land on each other

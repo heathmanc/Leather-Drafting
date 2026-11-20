@@ -664,7 +664,9 @@ def _readings_report(parts, model, check) -> List[str]:
                                f"are out of line, by up to "
                                f"{_len(f.worst)}"))
             if getattr(f, "red", 0):
-                bits.append(f"{_bullet(fs.OFF)} {f.red} "
+                # (a green dot, as in the line of any two pieces: these
+                # holes meet each other)
+                bits.append(f"{_bullet(fs.MEETS)} {f.red} "
                             + ("" if f.off else "of their holes ")
                             + ("lines up with the other's, but is"
                                if f.red == 1 else

@@ -2298,6 +2298,17 @@ def test_a_c_fold_lining_punched_for_shut_is_told_as_the_model_marks_it(
                 "line up with each other, but are red all the same: their "
                 "needle lines are out of line elsewhere.") in liner
         assert "by up to 0 mm" not in _words(dlg)
+        # the dot of a count is what the two do with each other, in this
+        # line as in the line of any two pieces: red before those out of
+        # line, green before those that line up with each other and are
+        # red on the model all the same (once red before both)
+        from leathercad_app import foldview as fv
+        red, green = (f"<span style='color:{fv.hole_colour(s).name()}'>●"
+                      "</span> " for s in (fs.OFF, fs.MEETS))
+        text = dlg.readout.text()
+        assert red + "10 of their holes are out of line" in text
+        assert green + "2 line up with each other, but are red" in text
+        assert red + "2 line up with each other" not in text
     finally:
         dlg.close()
 

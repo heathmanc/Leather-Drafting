@@ -44,8 +44,9 @@ SLIVER = 1.0        # a piece resting on less overlap than this (mm) is told
 # place where one piece really stands past or clear of another; and a
 # stitch hole this near an edge of a piece is on that edge, not in it
 HAIR = 0.05
-# two pairs of stitch holes whose distances out of line are this near
-# each other (mm) are as far out of line: the least the report tells apart
+# two stitch holes out of line by within this (mm) of the furthest two of
+# their stack of holes are as far out of line as those: the least the
+# report tells apart
 AS_FAR = 0.01
 _SMOOTH = 0.03      # how closely (mm) a sheet's curved outline is followed
 _BUSY = 260         # ... unless it would still have more corners than this
@@ -4244,7 +4245,8 @@ def stack_check(layout, tol: float = 0.75, near: float = 4.0):
     (``_Faces._told``: two pieces next to each other on a needle line,
     and two panels of the main piece that miss each other, whatever lies
     between them; two further apart only for a miss that none of those
-    says, the two furthest out of line first, then those with the least
+    says, and then, for each stack of holes, the two furthest out of
+    line, to within ``AS_FAR``, and of those the two with the least
     leather between them; a finding says all its two do with each other,
     so a miss can be said by two). Two holes that lie
     on one needle line meet, whatever leather lies between them: leather
@@ -4743,8 +4745,9 @@ class _Faces:
         line there get the finding, and of those as far as they are, to
         within ``AS_FAR``, the two with the least leather between them
         (all that lies between their two bodies, over the whole of where
-        they overlap). Two bodies found for one stack are not thereby
-        found for another, where two others may be further out of line.
+        they overlap; ``_named``). Two bodies found for one stack are not
+        thereby found for another, where two others may be further out
+        of line.
         And none is left out if some hole of theirs marked out of line
         would then be said by no line.
 
@@ -4800,17 +4803,13 @@ class _Faces:
                     (h, h2) for _pr, _m, _t, here in said
                     for h, _p, h2, d in here if d > tol]:
                 told.update((_top(link, h), _top(link, h2)))
-            # (a stack with none said: its furthest miss alone is then
-            # said, not every miss of those two bodies -- in another stack
-            # two others may be further out of line, and are the ones to
-            # say there. Misses within AS_FAR of the furthest are as far:
-            # a tolerance about the furthest, not a rounding, so that no
-            # last digit chooses between two pairs whose holes coincide)
+            # (a stack with none said: the two bodies of one of its
+            # furthest misses are found for it. That does not count as
+            # saying another stack of theirs, where two others may be
+            # further out of line and are the ones to find)
             for top, here in misses.items():
                 if top not in told:
-                    furthest = max(here)[0]
-                    named.add(min((leather, at) for d, leather, at in here
-                                  if d >= furthest - AS_FAR)[1])
+                    named.add(_named(here))
         for at, item in enumerate(far):
             (said if at in named else rest).append(item)
         kept = set(check.sewn)
@@ -4867,6 +4866,22 @@ class _Faces:
                         dia = layers[whose].holes[k - self.firsts[whose]][2]
                         check.through.setdefault(piece, []).append(
                             (x, y, dia))
+
+
+def _named(misses) -> int:
+    """Which two bodies further apart are found for a stack of holes
+    with no miss said: of their misses in it, ``(how far, the leather
+    between the two bodies, which two)``, the furthest; of those within
+    ``AS_FAR`` of the furthest (a tolerance about it, not a rounding: no
+    last digit chooses between two pairs whose holes coincide), the two
+    with the least leather between them; and of those with as little, to
+    a millionth of a millimetre (the same thicknesses summed in another
+    order), the two found first."""
+    furthest = max(misses)[0]
+    as_far = [(leather, at) for d, leather, at in misses
+              if d >= furthest - AS_FAR]
+    least = min(as_far)[0]
+    return min(at for leather, at in as_far if leather <= least + 1e-6)
 
 
 def _deep(p, sides) -> bool:

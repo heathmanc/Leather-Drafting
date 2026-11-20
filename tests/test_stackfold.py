@@ -2950,6 +2950,22 @@ def test_two_pairs_as_far_to_a_hundredth_are_found_of_the_two_nearer(
                                    (3, 3, (2, 1), 0, 0.0, 10, 10)]
 
 
+def test_of_two_bodies_as_far_the_least_leather_then_the_first_is_named():
+    # the misses of a stack of holes that only bodies further apart
+    # make: (how far, the leather between the two, which two)
+    # as far to a hundredth: the two with less leather between them
+    assert sh._named([(1.2, 1.6, 0), (1.196, 0.8, 1)]) == 1
+    # not as far: the furthest, whatever lies between
+    assert sh._named([(1.2, 1.6, 0), (1.15, 0.8, 1)]) == 0
+    # as far as the furthest, not as far as each other: 1.384 is within
+    # a hundredth of 1.392 and not of 1.4
+    assert sh._named([(1.4, 3.0, 0), (1.392, 2.0, 1), (1.384, 1.0, 2)]) == 1
+    # the same thicknesses summed in another order are as much leather:
+    # then the two found first (once the last digit of the sum chose)
+    assert sh._named([(1.0, 0.8, 0), (1.0, 0.7 + 0.1, 1)]) == 0
+    assert 0.7 + 0.1 < 0.8
+
+
 def _between_strip(ring, side=1, cutouts=()):
     # a 1 mm strip in three, fold B (x = 180) first, then fold A: the left
     # and middle panels' holes along y = 50, mirrored, land on each other

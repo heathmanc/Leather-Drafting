@@ -873,7 +873,9 @@ head has dots.
   holes that go through a piece with no hole there. That includes a
   piece that comes between two halves only once the stack is shut, as
   long as the halves are close enough to be checked against each other
-  (the next part says how close).
+  (the next part says how close). A row more than 4 mm from its partner
+  is not taken to be meant for it, and is told this way too: its holes
+  are left plain on the model, not marked red.
 * **Stitch holes where the folding brings pieces together** — pieces
   the fold shuts on to each other, like a pocket on each half of a
   wallet: *Left pocket (panel 1) and Right pocket (panel 2): ● all 26
@@ -896,40 +898,43 @@ head has dots.
 Where a piece goes round a fold with holes of its own, the marks on the
 model and the counts of all three parts go by that one reading. In a
 stack read as shut, a lining punched to meet lying flat is checked as
-if it were sewn in shut, and is mostly said to be out of line; and the
-other way about. Punch every lining of one stack the same way. While a
-row is out of line, few holes meet either way, and the reading shown
-may not be the one you punched for: the report says which it shows.
+if it were sewn in shut, and is mostly said to be out of line; so is a
+lining punched to meet when shut, in a stack read as lying flat. Punch
+every lining of one stack the same way. While a row is out of line, few
+holes meet either way, and the reading shown may not be the one you
+punched for: the report says which it shows.
 
 A hole is marked by its whole needle line, as on one folded piece: if
 anything on the line is out of line, every hole on it is red. Each line
-of the report says what its two pieces do *with each other*, so the
-pair to put right is the one said to be out of line, with its own
-distance. A pair that agrees but lies on such a needle line reads *●
-all 44 line up with each other, 36 of them red all the same: their
-needle lines are out of line elsewhere.*
+of the report says what its two pieces do *with each other*: a pair
+that agrees but lies on such a needle line reads *● all 44 line up with
+each other, 36 of them red all the same: their needle lines are out of
+line elsewhere.*
 
 A line that says holes are out of line says only that those two pieces
 miss each other: not which of them is wrong, and, through the layers,
 not on which half. Two things help.
 
 A piece said to be out of line with itself across a fold has a row of
-its own to move: the main piece is said so under its own name (*Shell,
-panels 1 and 3: ● 12 are out of line, by up to 3.33 mm.*), a lining
-whose halves the fold brings face to face on its line in the last part.
-(In a stack read the other way than it was punched, that can be said of
-a lining whose rows are right: look at the reading first.) Another
-piece that goes round the same fold and lines up with it throughout was
-cut to copy it, and moves with it. A pocket on one half that lines up
-with it only agrees with it on that half: leave the pocket, and look at
-the row on the other half.
+its own to move. The main piece is said so under its own name (*Shell,
+panels 1 and 3: ● 12 are out of line, by up to 3.33 mm.*); a lining, on
+its own line in the last part, where the fold brings its halves face to
+face. If the last part says the stack is read the other way than you
+punched it, a lining whose rows are right can be said so too. Another
+piece round the same fold that lines up with it throughout may have
+been cut to copy it: move the first piece's row, look again, and move
+the other's the same way if it is then out of line with it. A pocket on
+one half that lines up with it agrees with it on that half only: leave
+the pocket, and look at the row on the other half. If pockets on both
+halves line up with it, the report cannot tell which half is wrong:
+move one row and look again.
 
 Where no piece is said to be out of line with itself, look first at a
-piece that all the others miss while they line up with each other. The
-report would read the same if all the others were out the same way,
-but one piece drawn wrong is the likelier. With only two pieces, or
-where the pieces fall into two groups, the report cannot tell which to
-move: move a row in the drawing and look again, the preview follows.
+piece that all the others miss while they line up with each other; but
+the report reads just the same if all the others are out the same way.
+With only two pieces, or where the pieces fall into two groups, the
+report cannot tell which to move: move a row in the drawing and look
+again, the preview follows.
 
 In red, with the names and how deep, is anything that stays drawn
 through something else where the leather ends up: *at rest*, when a

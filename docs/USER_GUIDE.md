@@ -873,9 +873,12 @@ head has dots.
   holes that go through a piece with no hole there. That includes a
   piece that comes between two halves only once the stack is shut, as
   long as the halves are close enough to be checked against each other
-  (the next part says how close). A row more than 4 mm from its partner
-  is not taken to be meant for it, and is told this way too: its holes
-  are left plain on the model, not marked red.
+  (the next part says how close). Look out for those holes: a row more
+  than 4 mm from its partner, or run off the edge of its own piece, is
+  not taken to be meant for it and is not called out of line. Its holes
+  are left plain on the model, and it shows only here, as holes that
+  pass through a piece with no holes there where you meant that piece
+  to be sewn. That piece most likely has the row to move.
 * **Stitch holes where the folding brings pieces together** — pieces
   the fold shuts on to each other, like a pocket on each half of a
   wallet: *Left pocket (panel 1) and Right pocket (panel 2): ● all 26
@@ -919,22 +922,27 @@ A piece said to be out of line with itself across a fold has a row of
 its own to move. The main piece is said so under its own name (*Shell,
 panels 1 and 3: ● 12 are out of line, by up to 3.33 mm.*); a lining, on
 its own line in the last part, where the fold brings its halves face to
-face. If the last part says the stack is read the other way than you
-punched it, a lining whose rows are right can be said so too. Another
-piece round the same fold that lines up with it throughout may have
-been cut to copy it: move the first piece's row, look again, and move
-the other's the same way if it is then out of line with it. A pocket on
-one half that lines up with it agrees with it on that half only: leave
-the pocket, and look at the row on the other half. If pockets on both
-halves line up with it, the report cannot tell which half is wrong:
-move one row and look again.
+face. Look first at which reading the last part says it shows: if it is
+not the way you punched, what it says of a lining's own two halves
+cannot be trusted. Move a row in the drawing and look again: once the
+faulty row is right, the reading comes back to the one you punched for.
 
-Where no piece is said to be out of line with itself, look first at a
-piece that all the others miss while they line up with each other; but
-the report reads just the same if all the others are out the same way.
-With only two pieces, or where the pieces fall into two groups, the
-report cannot tell which to move: move a row in the drawing and look
-again, the preview follows.
+Another piece round the same fold that lines up with it throughout may
+have been cut to copy it, or may only be meeting the next hole along:
+move the first piece's row, look again, and move the other the same way
+only if it is then out of line with it. A pocket on one half that lines
+up with it agrees with it on that half only: leave the pocket, and look
+at the row on the other half. If a pocket on each half lines up with
+it, the report reads the same whichever half is wrong: move one half's
+row, with its pocket, and look again.
+
+Where no piece is said to be out of line with itself, look at a piece
+that all the others miss while they line up with each other. Either
+that piece is out, or all the others are out the same way, and the
+report cannot always tell which: measure that piece's row from its edge
+in the drawing, and if it is where you meant it, move the others'. With
+only two pieces, or two groups of them, the report cannot tell either:
+measure, move a row and look again. The preview follows.
 
 In red, with the names and how deep, is anything that stays drawn
 through something else where the leather ends up: *at rest*, when a

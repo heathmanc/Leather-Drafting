@@ -4,7 +4,7 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
-## Unreleased
+## 0.4.15 — 2026-11-20
 
 ### Drawing as in Fusion
 * **Type sizes while you draw.** After the first click, boxes beside the

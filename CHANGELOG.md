@@ -4,6 +4,35 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
+## Unreleased
+
+### Drawing as in Fusion
+* **Type sizes while you draw.** After the first click, boxes beside the
+  cursor show what the next click gives: a line's **length** and
+  **angle**, a box's **width** and **height**, a circle's **diameter**
+  (Tab: radius), a centre arc's **radius** and then **sweep**, an
+  offset's **distance**. Type, `Tab` to the next box, `Enter` to place. A
+  typed value holds while the mouse sets the rest, and is read as
+  Properties reads one: units, sums and parameters.
+* **Keys go into the boxes.** Typing "25" in the middle of a line used to
+  switch to the 2-point circle and then the centre arc and lose the line;
+  `Backspace` deleted the shape drawn before. While the boxes show, keys
+  are theirs.
+* **Tools stay on.** Every drawing tool stays on after a shape, for the
+  next one; `Esc` goes back to Select. (Text and the tracing photo's
+  calibration still go back by themselves.)
+* **Lines keep going.** The Line tool adds a segment with each click and
+  makes **one joined path**; click its start to close it into a stitched
+  piece, `Enter` or `Esc` to end it open. With Drag to draw on, a drag is
+  still one line.
+* **Right-click** while a shape is half-drawn to **Finish** or **Cancel**
+  it, or **Close outline** a line. With nothing half-drawn, the menu's
+  first entry goes back to the Select tool.
+* **Hold Ctrl** to place a point exactly where the cursor is, without
+  snapping.
+* While a line is drawn the status bar gives its **length and angle**
+  (it gave the width and height of its box).
+
 ## 0.4.14 — 2026-11-20
 
 ### Putting pieces together

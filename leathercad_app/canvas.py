@@ -13,7 +13,7 @@ from typing import List, Optional
 
 import time
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtWidgets import QGraphicsSceneMouseEvent
 from PySide6.QtGui import (QColor, QCursor, QPainter, QPen, QPainterPath,
                            QPixmap, QPolygonF, QTransform)
@@ -35,6 +35,7 @@ from leathercad.holes import LooseHole
 from leathercad.stitching import (stitch_shape_path, holes_for_shape, Hole,
                                   StitchResult, flip_symmetry)
 from . import units as U
+from .valueboxes import ValueBoxes
 from .items import (ShapeItem, StitchLineItem, VertexHandle, HoleItem,
                     ResizeHandle, RotateHandle, SelectionRotateHandle,
                     DimensionItem, TextItem,
@@ -190,16 +191,40 @@ _POLY_TOOLS = (POLYGON, STITCHLINE, SCORE)
 # has enough points)
 _MULTI_TOOLS = (ARC3, ARCCENTER, CIRCLE2, CIRCLE3)
 _MULTI_NEED = {ARC3: 3, ARCCENTER: 3, CIRCLE2: 2, CIRCLE3: 3}
+# the value boxes beside the cursor while drawing (valueboxes.py): what can
+# be typed at each step -- (key, label, kind)
+_VB_LINE = (("len", "Length", "length"), ("ang", "Angle", "angle"))
+_VB_BOX = (("w", "Width", "length"), ("h", "Height", "length"))
+_VB_CIRCLE = (("dia", "Diameter", "length"), ("rad", "Radius", "length"))
+_VB_RADIUS = (("rad", "Radius", "length"),)
+_VB_SWEEP = (("sweep", "Sweep", "angle"),)
+_VB_DIST = (("dist", "Distance", "length"),)
 # (tool, points already placed) -> prompt for the next click
 _MULTI_HINT = {
     (ARC3, 1): "arc: click a point on the arc",
     (ARC3, 2): "arc: click the end point",
-    (ARCCENTER, 1): "centre arc: click the start point (sets the radius)",
-    (ARCCENTER, 2): "centre arc: click the end point (sweeps counter-clockwise)",
-    (CIRCLE2, 1): "circle: click the opposite end of the diameter",
+    (ARCCENTER, 1): "centre arc: click the start point (sets the radius) · "
+                    "or type the radius",
+    (ARCCENTER, 2): "centre arc: click the end point (sweeps counter-"
+                    "clockwise) · or type the sweep in degrees",
+    (CIRCLE2, 1): "circle: click the opposite end of the diameter · or type "
+                  "the diameter",
     (CIRCLE3, 1): "circle: click the second point",
     (CIRCLE3, 2): "circle: click the third point",
 }
+
+
+def _typed_char(event) -> str:
+    """The character a key press types into a value box, or "" (a key with
+    Ctrl, Alt or Meta held is a shortcut, not typing)."""
+    text = event.text()
+    if not text or not text.isprintable():
+        return ""
+    if event.modifiers() & (Qt.ControlModifier | Qt.AltModifier
+                            | Qt.MetaModifier):
+        return ""
+    return text
+
 
 class _LazyBezier:
     """A curve of an outline, as a trim piece only once it's needed: the
@@ -496,6 +521,12 @@ class Canvas(QGraphicsView):
         self._moved_during_press = False
         self._suppress_commit = False
         self._suppress_next_release = False
+        # value boxes beside the cursor while drawing: created on first use;
+        # the last cursor point (snapped) and where it is in the view
+        self._vb = None
+        self._vb_cursor: Optional[QPointF] = None
+        self._vb_view: Optional[QPoint] = None
+        self._offset_cursor: Optional[Vec2] = None
         self.hole_tool_diameter = 4.0
         # drawing style: False = click first point, click second point (default);
         # True = press-drag-release. Tunable from the View menu.
@@ -1128,10 +1159,10 @@ class Canvas(QGraphicsView):
         3-point circle's last point); ``("ring", c, r)`` -- a centre arc's
         end, on its circle. None when the point starts something."""
         t = self.tool
+        if self._chain_tool():               # a line's, polygon's, seam's
+            return ("ray", self._poly_pts[-1]) if self._poly_pts else None
         if t in (LINE, CONSTRUCTION, MEASURE, DIMENSION):
             return ("ray", self._start) if self._start is not None else None
-        if t in _POLY_TOOLS:
-            return ("ray", self._poly_pts[-1]) if self._poly_pts else None
         if t == PEN:
             if not self._pen_pts or self._pen_drag:
                 return None
@@ -1956,10 +1987,14 @@ class Canvas(QGraphicsView):
             if event.button() == Qt.LeftButton:
                 if self._offset_item is None:
                     self._arm_offset(Vec2(raw.x(), raw.y()))
+                    self._vb_view = event.position().toPoint()
+                    if not self.hasFocus():       # the boxes take the keys
+                        self.setFocus(Qt.MouseFocusReason)
                 else:
                     self._commit_offset()
             elif event.button() == Qt.RightButton:
                 self._cancel_offset()
+            self._vb_sync()
             event.accept()
             return
         if self.tool == UNDERLAYCAL:
@@ -1994,21 +2029,15 @@ class Canvas(QGraphicsView):
             event.accept()
             return
         pos = raw
+        free = bool(event.modifiers() & Qt.ControlModifier)   # Ctrl: no snap
         if self.tool != SELECT:
-            pos, _v = self.snap(pos)
+            if not free:
+                pos, _v = self.snap(pos)
             pos, _o, _k = self._maybe_ortho(raw, pos, event)
         if self.tool == SELECT:
             self._select_press(event)          # the item the click means
             return
         if event.button() == Qt.LeftButton:
-            if self.tool in _MULTI_TOOLS:
-                self._multi_pts.append(pos)
-                if len(self._multi_pts) >= _MULTI_NEED[self.tool]:
-                    self._finalize_multi()
-                else:
-                    self._update_multi_preview(pos)
-                event.accept()
-                return
             if self.tool == PEN:
                 # click near the first anchor closes the path; otherwise drop a
                 # new anchor and start a (possible) handle drag off it.
@@ -2022,49 +2051,82 @@ class Canvas(QGraphicsView):
                     self._update_pen_preview(raw, dragging=True)
                 event.accept()
                 return
-            if self.tool == HOLE:
-                self._place_hole(pos)
-            elif self.tool == TEXT:
-                self._place_text(pos)
-            elif self.tool in (MEASURE, DIMENSION):
-                # two clicks: first sets the start, second finishes (or, with
-                # Drag to draw on, a press-drag-release does it in one)
-                if self._start is None:
-                    self._start = pos
-                    self._preview = QGraphicsPathItem()
-                    pen = QPen(self.preview_color(), 2, Qt.DashLine)
-                    pen.setCosmetic(True)
-                    self._preview.setPen(pen)
-                    self.scene_obj.addItem(self._preview)
-                else:
-                    self._suppress_next_release = True
-                    self._finish_measure_like(pos)
-            elif self.tool in _DRAG_TOOLS:
-                if not self.drag_to_draw and self._start is not None:
-                    # click-to-place: this is the second click -> finish. Swallow
-                    # the release that follows so the view (now on the Select
-                    # tool) doesn't get an unpaired release that leaves the new
-                    # shape un-grabbable until you reselect it.
-                    start = self._start
-                    self._start = None
-                    self._clear_preview()
-                    self._suppress_next_release = True
-                    made = self._finalize_drag(start, pos)
-                    self._hide_snap_marker()
-                    if made:               # keep a refusal ("too thin") visible
-                        self.statusMessage.emit("")
-                else:
-                    # begin (drag-mode press, or first click of click-to-place)
-                    self._start = pos
-                    self._preview = QGraphicsPathItem()
-                    pen = QPen(self.preview_color(), 2, Qt.DashLine)
-                    pen.setCosmetic(True)
-                    self._preview.setPen(pen)
-                    self.scene_obj.addItem(self._preview)
-            elif self.tool in _POLY_TOOLS:
-                self._poly_pts.append(pos)
-                self._update_poly_preview(pos)
+            if not self.hasFocus():
+                # what is typed next goes into the value boxes, not to
+                # whatever field had the keyboard before
+                self.setFocus(Qt.MouseFocusReason)
+            self._vb_view = event.position().toPoint()
+            self._vb_cursor = QPointF(pos)
+            self._place_point(self._vb_constrain(pos), click=True, free=free)
+            self._vb_sync()
         event.accept()
+
+    def _place_point(self, pos: QPointF, click: bool = False,
+                     free: bool = False) -> None:
+        """What a left click at ``pos`` does with the current drawing tool
+        (all but Pen, Trim, Fillet, Extend and Offset, which have their own):
+        the next point of a line, polygon or seam, of an arc or circle, a
+        box's first or second corner, a hole... Enter places the point the
+        value boxes give the same way. ``click``: it is a mouse press, whose
+        release is then swallowed when it finishes a shape; ``free``: Ctrl
+        is held -- a click on a line's start point doesn't close it."""
+        if self.tool in _MULTI_TOOLS:
+            if (self.tool == ARCCENTER and len(self._multi_pts) == 2
+                    and (self._vb_value("sweep") or 0.0) < 0.0):
+                # a sweep typed below zero turns clockwise: the same arc,
+                # drawn counter-clockwise from its other end
+                self._multi_pts[1], pos = pos, self._multi_pts[1]
+            self._multi_pts.append(pos)
+            if len(self._multi_pts) >= _MULTI_NEED[self.tool]:
+                self._finalize_multi()
+            else:
+                self._update_multi_preview(pos)
+            return
+        if self.tool == HOLE:
+            self._place_hole(pos)
+        elif self.tool == TEXT:
+            self._place_text(pos)
+        elif self.tool in (MEASURE, DIMENSION):
+            # two clicks: first sets the start, second finishes (or, with
+            # Drag to draw on, a press-drag-release does it in one)
+            if self._start is None:
+                self._start = pos
+                self._preview = QGraphicsPathItem()
+                pen = QPen(self.preview_color(), 2, Qt.DashLine)
+                pen.setCosmetic(True)
+                self._preview.setPen(pen)
+                self.scene_obj.addItem(self._preview)
+            else:
+                self._suppress_next_release = click
+                self._finish_measure_like(pos)
+        elif self._chain_tool():
+            pts = self._poly_pts
+            if (self.tool in (LINE, POLYGON) and len(pts) >= 2 and not free
+                    and self._near(pos, pts[0])):
+                self._finalize_poly(closed=True)    # back on the start: close
+            else:
+                pts.append(pos)
+                self._update_poly_preview(pos)
+        elif self.tool in _DRAG_TOOLS:
+            if not self.drag_to_draw and self._start is not None:
+                # click-to-place: this is the second click -> finish. Swallow
+                # the release that follows: the view would otherwise get an
+                # unpaired release that leaves the new shape un-grabbable
+                # until you reselect it.
+                start = self._start
+                self._start = None
+                self._clear_preview()
+                self._suppress_next_release = click
+                self._finalize_drag(start, pos)
+                self._hide_snap_marker()
+            else:
+                # begin (drag-mode press, or first click of click-to-place)
+                self._start = pos
+                self._preview = QGraphicsPathItem()
+                pen = QPen(self.preview_color(), 2, Qt.DashLine)
+                pen.setCosmetic(True)
+                self._preview.setPen(pen)
+                self.scene_obj.addItem(self._preview)
 
     def _measure_text(self, a: QPointF, b: QPointF) -> str:
         import math
@@ -2118,6 +2180,7 @@ class Canvas(QGraphicsView):
         self._start = None
         self._clear_preview()
         self._hide_snap_marker()
+        self._vb_sync()
 
     def take_last_created(self):
         """The item the last tool action created (and forget it) -- what a
@@ -2256,7 +2319,7 @@ class Canvas(QGraphicsView):
         """The point ortho locks are measured from for the current tool."""
         if self._start is not None and self.tool in (LINE, CONSTRUCTION):
             return self._start
-        if self._poly_pts and self.tool in _POLY_TOOLS:
+        if self._poly_pts and self._chain_tool():
             return self._poly_pts[-1]
         return None
 
@@ -2299,9 +2362,10 @@ class Canvas(QGraphicsView):
                 ux, uy = ux / n, uy / n
                 t = (pos.x() - anchor.x()) * ux + (pos.y() - anchor.y()) * uy
                 op = QPointF(anchor.x() + ux * t, anchor.y() + uy * t)
-        crossed = self._ortho_edge_snap(anchor, op)
-        if crossed is not None:
-            return crossed, True, "cross"
+        if not event.modifiers() & Qt.ControlModifier:     # Ctrl: no snap
+            crossed = self._ortho_edge_snap(anchor, op)
+            if crossed is not None:
+                return crossed, True, "cross"
         return op, True, None
 
     def mouseMoveEvent(self, event):
@@ -2320,7 +2384,11 @@ class Canvas(QGraphicsView):
         if self.tool == OFFSET:
             self._hide_snap_marker()
             if self._offset_item is not None:
-                self._update_offset_preview(Vec2(raw.x(), raw.y()))
+                self._offset_cursor = Vec2(raw.x(), raw.y())
+                self._vb_view = event.position().toPoint()
+                self._vb_sync()
+                self._update_offset_preview(self._offset_cursor)
+                self._vb_place()
             super().mouseMoveEvent(event)
             return
         if self.tool == UNDERLAYCAL and self._cal_pts:
@@ -2340,16 +2408,51 @@ class Canvas(QGraphicsView):
             return
         pos = raw
         if self.tool != SELECT:
-            pos, vtx, guides, kind = self._smart_snap(raw)
+            free = bool(event.modifiers() & Qt.ControlModifier)
+            if free:
+                # Ctrl: the point goes exactly where the cursor is
+                pos, guides, kind = raw, [], None
+            else:
+                pos, vtx, guides, kind = self._smart_snap(raw)
             pos, applied, okind = self._maybe_ortho(raw, pos, event)  # 0/45/90
             if applied:
                 guides, kind = [], okind
+            if not free and self._chain_closes_at(pos):
+                pos, guides, kind = QPointF(self._poly_pts[0]), [], "end"
             self._show_align_guides(guides)
-            self._show_snap_nodes(raw)
+            if free:
+                self._hide_snap_nodes()
+            else:
+                self._show_snap_nodes(raw)
             self._show_snap_marker(pos, kind)
             self.statusMessage.emit(_SNAP_LABEL.get(kind, ""))
+            self._vb_cursor = QPointF(pos)
+            self._vb_view = event.position().toPoint()
+            self._vb_sync()
         else:
             self._hide_snap_marker()
+        if self.tool == PEN and self._pen_pts:
+            if self._pen_drag and (event.buttons() & Qt.LeftButton):
+                a = self._pen_pts[-1]                 # pull a free tangent handle
+                self._pen_handles[-1] = QPointF(raw.x() - a.x(), raw.y() - a.y())
+                self._update_pen_preview(None, dragging=True)
+                self.statusMessage.emit("drag to shape the curve · release for a corner")
+            else:
+                self._update_pen_preview(pos, dragging=False)
+                self.statusMessage.emit(
+                    f"{len(self._pen_pts)} pts · click to add, drag to curve · "
+                    "right-click / Enter to finish, click start to close")
+        elif self.tool != SELECT:
+            self._update_draw_preview(pos)
+        super().mouseMoveEvent(event)
+
+    def _update_draw_preview(self, pos: QPointF) -> None:
+        """The dashed preview of the shape being drawn and its figures in the
+        status bar and the value boxes, for the cursor at ``pos`` (snapped):
+        what the next click -- or Enter -- would make, held to whatever has
+        been typed."""
+        cur = pos
+        pos = self._vb_constrain(pos)
         if (self._preview is not None and self._start is not None
                 and self.tool in (MEASURE, DIMENSION)):
             path = QPainterPath()
@@ -2364,8 +2467,9 @@ class Canvas(QGraphicsView):
             self._preview.setPath(self._preview_path(
                 self._start, end,
                 fit.corner_radius if fit is not None else None))
-            w = abs(pos.x() - self._start.x())
-            h = abs(pos.y() - self._start.y())
+            dx = pos.x() - self._start.x()
+            dy = pos.y() - self._start.y()
+            w, h = abs(dx), abs(dy)
             if fit is not None:
                 kind = ("rect" if self.tool in (RECT, ROUNDED) else
                         "circle" if self.tool == CIRCLE else "oval")
@@ -2373,31 +2477,41 @@ class Canvas(QGraphicsView):
                     kind, fit, self._default_stitch()))
             elif self.tool in (CIRCLE,):
                 r = math.hypot(w, h)          # through the cursor
-                self.statusMessage.emit(f"r {U.fmt(r)}   ø {U.fmt(2 * r)}")
+                self.statusMessage.emit(f"ø {U.fmt(2 * r)}   r {U.fmt(r)}")
+            elif self.tool in (LINE, CONSTRUCTION):
+                self.statusMessage.emit(self._length_text(dx, dy))
             else:
                 self.statusMessage.emit(f"{U.fmt_num(w)} × {U.fmt(h)}")
         elif self.tool in _MULTI_TOOLS and self._multi_pts:
             self._update_multi_preview(pos)
             self.statusMessage.emit(_MULTI_HINT.get(
                 (self.tool, len(self._multi_pts)), ""))
-        elif self.tool == PEN and self._pen_pts:
-            if self._pen_drag and (event.buttons() & Qt.LeftButton):
-                a = self._pen_pts[-1]                 # pull a free tangent handle
-                self._pen_handles[-1] = QPointF(raw.x() - a.x(), raw.y() - a.y())
-                self._update_pen_preview(None, dragging=True)
-                self.statusMessage.emit("drag to shape the curve · release for a corner")
-            else:
-                self._update_pen_preview(pos, dragging=False)
-                self.statusMessage.emit(
-                    f"{len(self._pen_pts)} pts · click to add, drag to curve · "
-                    "right-click / Enter to finish, click start to close")
-        elif self._poly_pts and self.tool in _POLY_TOOLS:
+        elif self._poly_pts and self._chain_tool():
             self._update_poly_preview(pos)
             last = self._poly_pts[-1]
-            seg = ((pos.x() - last.x()) ** 2 + (pos.y() - last.y()) ** 2) ** 0.5
-            self.statusMessage.emit(
-                f"segment {U.fmt(seg)}   ({len(self._poly_pts)} pts)")
-        super().mouseMoveEvent(event)
+            text = (self._length_text(pos.x() - last.x(), pos.y() - last.y())
+                    + f"   ({len(self._poly_pts)} pts)")
+            if self._chain_closes_at(pos):
+                text += " · click to close"
+            elif self.tool == LINE:
+                text += " · Enter or Esc ends the line, its start closes it"
+            self.statusMessage.emit(text)
+        self._vb_update_live(cur)
+        self._vb_place()
+
+    @staticmethod
+    def _length_text(dx: float, dy: float) -> str:
+        """A segment's length and angle, for the status bar."""
+        ang = math.degrees(math.atan2(dy, dx)) if (dx or dy) else 0.0
+        return f"length {U.fmt(math.hypot(dx, dy))}   ∠ {ang:.1f}°"
+
+    def _chain_closes_at(self, pos: QPointF) -> bool:
+        """Whether a click at ``pos`` would close the line or polygon being
+        drawn: it is on the start point (Ctrl aside) and nothing is typed."""
+        pts = self._poly_pts
+        return (self.tool in (LINE, POLYGON) and self._chain_tool()
+                and len(pts) >= 2 and not self._vb_any()
+                and self._near(pos, pts[0]))
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MiddleButton:
@@ -2419,7 +2533,8 @@ class Canvas(QGraphicsView):
         raw = self.mapToScene(event.position().toPoint())
         pos = raw
         if self.tool != SELECT:
-            pos, _v = self.snap(raw)
+            if not event.modifiers() & Qt.ControlModifier:
+                pos, _v = self.snap(raw)
             # the same Shift lock the preview showed while dragging
             pos, _o, _k = self._maybe_ortho(raw, pos, event)
         # In drag mode, releasing finishes the shape. In click-to-place mode the
@@ -2428,11 +2543,9 @@ class Canvas(QGraphicsView):
                 and self._start is not None and self.tool in _DRAG_TOOLS):
             self.scene_obj.removeItem(self._preview)
             self._preview = None
-            made = self._finalize_drag(self._start, pos)
-            self._start = None
+            start, self._start = self._start, None
+            self._finalize_drag(start, pos)
             self._hide_snap_marker()
-            if made:                        # keep a refusal ("too thin") visible
-                self.statusMessage.emit("")
             event.accept()
             return
         if (self.drag_to_draw and self._start is not None
@@ -2461,8 +2574,9 @@ class Canvas(QGraphicsView):
             self._emit_commit()
 
     def mouseDoubleClickEvent(self, event):
-        if self.tool in _POLY_TOOLS and self._poly_pts:
+        if self._chain_tool() and self._poly_pts:
             self._finalize_poly()
+            self._vb_sync()
             event.accept()
             return
         if self.tool == PEN and self._pen_pts:
@@ -2531,6 +2645,13 @@ class Canvas(QGraphicsView):
                 self._finish_pen(closed=False)
             event.accept()
             return
+        if self._drawing_in_progress():
+            # half-way through a shape: finish it or cancel it, as Fusion's
+            # right-click OK / Cancel (it used to open the editing menu and
+            # leave the shape hanging)
+            self._draw_menu(event)
+            event.accept()
+            return
         # select the item under the cursor if it isn't already selected (the
         # nearest one, as a left-click picks it)
         it = self.pick_item(event.pos())
@@ -2561,6 +2682,10 @@ class Canvas(QGraphicsView):
             shapes[0].model, (Polygon, PathShape, EditablePath))
 
         menu = QMenu(self)
+        a_seltool = None
+        if self.tool != SELECT:          # a drawing tool stays on: a way out
+            a_seltool = menu.addAction("Back to the Select tool (Esc)")
+            menu.addSeparator()
         # -- node editing: the clicked node / edge of the path being edited
         node_item, node_idx, edge_idx, edge_kind = None, None, None, None
         if self._edit_owner is not None and _alive(self._edit_owner) \
@@ -2688,7 +2813,9 @@ class Canvas(QGraphicsView):
         chosen = menu.exec(event.globalPos())
         if chosen is None:
             return
-        if chosen is a_nrm:
+        if chosen is a_seltool:
+            self.requestSelectTool.emit()
+        elif chosen is a_nrm:
             self.remove_node_index(node_item, node_idx)
         elif chosen is a_brk:
             self.break_path_at_node(node_item, node_idx)
@@ -2758,28 +2885,41 @@ class Canvas(QGraphicsView):
         elif chosen is a_del:
             self.delete_selected()
 
+    def event(self, e):
+        t = e.type()
+        if (t == QEvent.ShortcutOverride and self._vb_active()
+                and self._vb_takes(e)):
+            # while the value boxes show, what is typed goes into them: "25"
+            # used to switch to the 2-point circle and the centre arc and
+            # throw the line away, and Backspace deleted the last shape
+            e.accept()
+            return True
+        if (t == QEvent.KeyPress and e.key() in (Qt.Key_Tab, Qt.Key_Backtab)
+                and self._vb_active()):
+            self.keyPressEvent(e)            # Tab moves box, not focus
+            return True
+        return super().event(e)
+
     def keyPressEvent(self, event):
+        if self._vb_active() and self._vb_key(event):
+            event.accept()
+            return
         if event.key() == Qt.Key_Escape:
+            if self.tool == LINE and self._chain_tool() \
+                    and self._chain_points() >= 2:
+                # Esc ends a line and keeps what was drawn, as in Fusion; a
+                # second Esc goes back to Select
+                self._finalize_poly()
+                self._vb_sync()
+                return
             # Esc cancels whatever is in progress; a second Esc (nothing in
             # progress) drops back to the pointer/Select tool.
             busy = (bool(self._poly_pts) or bool(self._pen_pts)
                     or bool(self._multi_pts) or bool(self._cal_pts)
                     or self._offset_item is not None
                     or self._start is not None or bool(self._handles))
-            self._cancel_poly()
-            self._cancel_pen()
-            self._cancel_multi()
-            self._cancel_offset()
-            if self._cal_pts:                # drop the calibration rubber line
-                self._cal_pts = []
-                self._clear_preview()
-                self._hide_snap_marker()
+            self._cancel_drawing()
             self.clear_vertex_handles()
-            if self._start is not None:      # cancel an in-progress click-draw
-                self._start = None
-                self._clear_preview()
-                self._hide_snap_marker()
-                self.statusMessage.emit("")
             if not busy and self.tool != SELECT:
                 self.requestSelectTool.emit()
         elif event.key() in (Qt.Key_Return, Qt.Key_Enter):
@@ -2787,8 +2927,7 @@ class Canvas(QGraphicsView):
                 self._finalize_poly()
             elif self._pen_pts:
                 self._finish_pen(closed=False)
-            elif self.tool == OFFSET and self._offset_item is not None:
-                self._ask_offset_exact()
+            self._vb_sync()
         elif event.key() in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up,
                              Qt.Key_Down) and self.selected_items():
             # nudge: 1 mm, Shift 10 mm, Ctrl 0.1 mm -- or 1/16, 1/2 and 1/64 in
@@ -2801,6 +2940,328 @@ class Canvas(QGraphicsView):
             event.accept()
         else:
             super().keyPressEvent(event)
+
+    def _cancel_drawing(self) -> None:
+        """Drop whatever the tool has half-drawn (Esc, or Cancel on the
+        right-click menu): the tool stays on."""
+        self._cancel_poly()
+        self._cancel_pen()
+        self._cancel_multi()
+        self._cancel_offset()
+        if self._cal_pts:                # drop the calibration rubber line
+            self._cal_pts = []
+            self._clear_preview()
+            self._hide_snap_marker()
+        if self._start is not None:      # cancel an in-progress click-draw
+            self._start = None
+            self._clear_preview()
+            self._hide_snap_marker()
+            self.statusMessage.emit("")
+        self._vb_sync()
+
+    def _draw_menu_entries(self) -> list:
+        """The right-click menu while a shape is half-drawn: ``[(text,
+        enabled, what it does)]``."""
+        out = []
+        if self._chain_tool() and self._poly_pts:
+            n = self._chain_points()
+            if self.tool == LINE:
+                out.append(("Finish line", n >= 2,
+                            lambda: self._finalize_poly()))
+                out.append(("Close outline", n >= 3,
+                            lambda: self._finalize_poly(closed=True)))
+            elif self.tool == POLYGON:
+                out.append(("Finish polygon", n >= 3,
+                            lambda: self._finalize_poly()))
+            else:
+                out.append(("Finish", n >= 2, lambda: self._finalize_poly()))
+        out.append(("Cancel", True, self._cancel_drawing))
+        return out
+
+    def _draw_menu(self, event) -> None:
+        menu = QMenu(self)
+        acts = []
+        for text, enabled, do in self._draw_menu_entries():
+            act = menu.addAction(text)
+            act.setEnabled(enabled)
+            acts.append((act, do))
+        chosen = menu.exec(event.globalPos())
+        for act, do in acts:
+            if chosen is act:
+                do()
+        self._vb_sync()
+
+    def _drawing_in_progress(self) -> bool:
+        """Whether a shape is half-drawn (a pen curve aside, which a
+        right-click finishes)."""
+        return (bool(self._poly_pts) or bool(self._multi_pts)
+                or bool(self._cal_pts) or self._offset_item is not None
+                or self._start is not None)
+
+    def _chain_points(self) -> int:
+        """How many different points the line / polygon / seam has."""
+        n, last = 0, None
+        for p in self._poly_pts:
+            if last is None or math.hypot(p.x() - last.x(),
+                                          p.y() - last.y()) > 1e-6:
+                n += 1
+            last = p
+        return n
+
+    # -- value boxes: sizes typed while drawing ----------------------------
+    def _chain_tool(self) -> bool:
+        """Whether the tool draws a chain of points: a polygon, score line
+        or seam, and a line (one joined path) unless Drag to draw is on."""
+        return self.tool in _POLY_TOOLS or (self.tool == LINE
+                                            and not self.drag_to_draw)
+
+    def _vb_specs(self) -> tuple:
+        """The value boxes for where the current tool is, or ()."""
+        t = self.tool
+        if self._chain_tool():
+            return _VB_LINE if self._poly_pts else ()
+        if self.drag_to_draw and t in _DRAG_TOOLS:
+            return ()          # one press-drag-release: no time to type
+        if self._start is not None:
+            if t in (LINE, CONSTRUCTION):
+                return _VB_LINE
+            if t in (RECT, ROUNDED, ELLIPSE, SLOT):
+                return _VB_BOX
+            if t == CIRCLE:
+                return _VB_CIRCLE
+            return ()
+        n = len(self._multi_pts)
+        if t == CIRCLE2 and n == 1:
+            return _VB_CIRCLE
+        if t == ARCCENTER and n == 1:
+            return _VB_RADIUS
+        if t == ARCCENTER and n == 2:
+            return _VB_SWEEP
+        if t == OFFSET and self._offset_item is not None:
+            return _VB_DIST
+        return ()
+
+    def _vb_anchor(self) -> Optional[QPointF]:
+        """The point the boxes measure from: a chain's last point, a box's
+        first corner, a circle's centre or first end, an arc's centre."""
+        if self._chain_tool() and self._poly_pts:
+            return self._poly_pts[-1]
+        if self._start is not None:
+            return self._start
+        if self._multi_pts:
+            return self._multi_pts[0]
+        return None
+
+    def _vb_active(self) -> bool:
+        return self._vb is not None and bool(self._vb.fields)
+
+    def _vb_any(self) -> bool:
+        """Whether a typed value holds the shape being drawn."""
+        return self._vb_active() and self._vb.any_value()
+
+    def _vb_value(self, key: str) -> Optional[float]:
+        return self._vb.value(key) if self._vb_active() else None
+
+    def _vb_sync(self) -> None:
+        """Show the boxes for the step the tool is at, new ones (and what
+        was typed dropped) when the step changes; hide them when there are
+        none."""
+        specs = self._vb_specs()
+        if not specs:
+            if self._vb is not None and self._vb.fields:
+                self._vb.clear()
+            return
+        a = self._vb_anchor()
+        stage = (self.tool, specs, len(self._poly_pts), len(self._multi_pts),
+                 id(self._offset_item) if self._offset_item is not None
+                 else 0, None if a is None else (a.x(), a.y()))
+        if self._vb is None:
+            self._vb = ValueBoxes(self)
+        self._vb.dark = self.dark
+        if self._vb.stage != stage:
+            self._vb.set_fields(specs, stage)
+            if self.tool != OFFSET:
+                self._vb_update_live(self._vb_cursor if self._vb_cursor
+                                     is not None else a)
+            self._vb_place()
+
+    def _vb_place(self) -> None:
+        """Put the boxes beside the cursor."""
+        if not self._vb_active():
+            return
+        at = self._vb_view
+        if at is None:
+            a = self._vb_anchor()
+            at = self.mapFromScene(a) if a is not None else QPoint(40, 40)
+        self._vb.place_near(at)
+
+    def _vb_constrain(self, pos: QPointF) -> QPointF:
+        """The point a click at ``pos`` places, held to what is typed: a
+        length along the mouse's direction, an angle with the mouse's
+        length along it, a width and height towards the mouse, a diameter
+        or radius, a sweep. ``pos`` itself when nothing is typed."""
+        if not self._vb_any():
+            return pos
+        a = self._vb_anchor()
+        if a is None:
+            return pos
+        vb, keys = self._vb, self._vb.keys()
+        dx, dy = pos.x() - a.x(), pos.y() - a.y()
+        n = math.hypot(dx, dy)
+        ux, uy = (dx / n, dy / n) if n > 1e-9 else (1.0, 0.0)
+        if "len" in keys:
+            length, ang = vb.value("len"), vb.value("ang")
+            if ang is not None:
+                ux = math.cos(math.radians(ang))
+                uy = math.sin(math.radians(ang))
+                if length is None:       # the mouse's length along the angle
+                    length = max(0.0, dx * ux + dy * uy)
+            elif length is None:
+                length = n
+            return QPointF(a.x() + length * ux, a.y() + length * uy)
+        if "w" in keys:
+            w, h = vb.value("w"), vb.value("h")
+            sx = -1.0 if dx < 0 else 1.0       # towards the mouse
+            sy = -1.0 if dy < 0 else 1.0
+            return QPointF(a.x() + sx * (abs(dx) if w is None else w),
+                           a.y() + sy * (abs(dy) if h is None else h))
+        if "dia" in keys:
+            dia, rad = vb.value("dia"), vb.value("rad")
+            size = dia if dia is not None else 2.0 * rad
+            d = size / 2.0 if self.tool == CIRCLE else size  # 2-point: ends
+            return QPointF(a.x() + d * ux, a.y() + d * uy)
+        if "rad" in keys:                       # a centre arc's start
+            r = vb.value("rad")
+            return QPointF(a.x() + r * ux, a.y() + r * uy)
+        if "sweep" in keys and len(self._multi_pts) >= 2:
+            s = self._multi_pts[1]
+            r = math.hypot(s.x() - a.x(), s.y() - a.y())
+            a0 = math.atan2(s.y() - a.y(), s.x() - a.x())
+            a1 = a0 + math.radians(vb.value("sweep"))
+            return QPointF(a.x() + r * math.cos(a1), a.y() + r * math.sin(a1))
+        return pos
+
+    def _vb_update_live(self, cursor: Optional[QPointF]) -> None:
+        """What the boxes show where nothing is typed: the sizes the next
+        click would give with the cursor at ``cursor``."""
+        if not self._vb_active() or cursor is None:
+            return
+        a = self._vb_anchor()
+        if a is None:
+            return
+        vb, keys = self._vb, self._vb.keys()
+        t = self._vb_constrain(cursor)
+        dx, dy = t.x() - a.x(), t.y() - a.y()
+        n = math.hypot(dx, dy)
+        if "len" in keys:
+            vb.set_live("len", n)
+            if n > 1e-9:
+                vb.set_live("ang", math.degrees(math.atan2(dy, dx)))
+        elif "w" in keys:
+            vb.set_live("w", abs(dx))
+            vb.set_live("h", abs(dy))
+        elif "dia" in keys:
+            dia = 2.0 * n if self.tool == CIRCLE else n
+            vb.set_live("dia", dia)
+            vb.set_live("rad", dia / 2.0)
+        elif "rad" in keys:
+            vb.set_live("rad", n)
+        elif "sweep" in keys and len(self._multi_pts) >= 2:
+            s = self._multi_pts[1]
+            a0 = math.atan2(s.y() - a.y(), s.x() - a.x())
+            a1 = math.atan2(dy, dx)
+            sweep = math.degrees((a1 - a0) % (2 * math.pi))
+            vb.set_live("sweep", sweep if sweep > 1e-9 else 360.0)
+
+    def _vb_takes(self, event) -> bool:
+        """Whether a key is one the value boxes take while they show."""
+        return (event.key() in (Qt.Key_Backspace, Qt.Key_Delete, Qt.Key_Tab,
+                                Qt.Key_Backtab, Qt.Key_Return, Qt.Key_Enter,
+                                Qt.Key_Escape)
+                or bool(_typed_char(event)))
+
+    def _vb_key(self, event) -> bool:
+        """A key pressed while the value boxes show: typing, Tab / Shift+
+        Tab, Backspace, Delete, Enter, and Esc when something is typed.
+        True if it was theirs."""
+        vb, key = self._vb, event.key()
+        if key in (Qt.Key_Tab, Qt.Key_Backtab):
+            if not vb.keep_active():
+                self._vb_unreadable()
+                return True
+            back = (key == Qt.Key_Backtab
+                    or bool(event.modifiers() & Qt.ShiftModifier))
+            vb.move_active(-1 if back else 1)
+            self._vb_refresh()
+            return True
+        if key == Qt.Key_Backspace:
+            vb.backspace()
+            self._vb_refresh()
+            return True
+        if key == Qt.Key_Delete:
+            vb.clear_active()
+            self._vb_refresh()
+            return True
+        if key == Qt.Key_Escape:
+            if vb.unkeep_all():          # first Esc: back to the mouse
+                self._vb_refresh()
+                return True
+            return False
+        if key in (Qt.Key_Return, Qt.Key_Enter):
+            if not vb.keep_active():
+                self._vb_unreadable()
+                return True
+            self._vb_enter()
+            return True
+        ch = _typed_char(event)
+        if ch:
+            vb.type_text(ch)
+            self._vb_refresh()
+            return True
+        return False
+
+    def _vb_enter(self) -> None:
+        """Enter with the value boxes showing: place the point they give
+        (what is typed, the mouse for the rest). With nothing typed a
+        line, polygon or seam is finished instead, and anything else placed
+        where the mouse is."""
+        if not self._vb.any_value() and self._poly_pts:
+            self._finalize_poly()
+            self._vb_sync()
+            return
+        if self.tool == OFFSET:
+            self._commit_offset()
+            self._vb_sync()
+            return
+        cur = self._vb_cursor if self._vb_cursor is not None \
+            else self._vb_anchor()
+        if cur is None:
+            return
+        self._place_point(self._vb_constrain(cur))
+        self._vb_sync()
+        if self._vb_cursor is not None:
+            self._update_draw_preview(self._vb_cursor)
+
+    def _vb_refresh(self) -> None:
+        """After a key: the preview, the status bar and the boxes follow
+        what is typed, with the mouse where it was."""
+        if self.tool == OFFSET:
+            if self._offset_item is not None \
+                    and self._offset_cursor is not None:
+                self._update_offset_preview(self._offset_cursor)
+            self._vb_place()
+            return
+        cur = self._vb_cursor if self._vb_cursor is not None \
+            else self._vb_anchor()
+        if cur is not None:
+            self._update_draw_preview(cur)
+
+    def _vb_unreadable(self) -> None:
+        f = self._vb.fields[self._vb.active]
+        self.statusMessage.emit(
+            f"Can't use “{(f.text or '').strip()}” for the {f.label.lower()}"
+            " — type a number, a sum (12*2), a unit (1/2in) or a parameter"
+            + ("" if f.kind == "angle" else ", above zero"))
 
     # -- preview helpers ------------------------------------------------
     def _preview_path(self, a: QPointF, b: QPointF,
@@ -2922,7 +3383,10 @@ class Canvas(QGraphicsView):
         self.add_shape(sh)
         self.toolFinished.emit()
 
-    def _finalize_poly(self) -> None:
+    def _finalize_poly(self, closed: bool = False) -> None:
+        """Make the shape of a chain of points: a polygon, score line or
+        seam, or a line -- one joined path, or a closed piece (stitched, as
+        a polygon) when ``closed``: its start point was clicked again."""
         pts = list(self._poly_pts)
         # a double-click on the last vertex repeats it; identical neighbours
         # add nothing to the shape (and gave a zero-length seam)
@@ -2936,8 +3400,9 @@ class Canvas(QGraphicsView):
             self._poly_pts = []
             self._clear_preview()
             return
-        degenerate = len(pts) < (3 if self.tool == POLYGON else 2)
-        if self.tool == POLYGON and not degenerate:
+        closed = closed or self.tool == POLYGON
+        degenerate = len(pts) < (3 if closed else 2)
+        if closed and not degenerate:
             area = 0.0
             for i in range(len(pts)):
                 a, b = pts[i], pts[(i + 1) % len(pts)]
@@ -2952,18 +3417,29 @@ class Canvas(QGraphicsView):
             self.statusMessage.emit(
                 "A polygon needs three corners that aren't in a line — keep "
                 "clicking, or Esc to cancel" if self.tool == POLYGON else
+                "A closed outline needs three corners that aren't in a line "
+                "— keep clicking, or Esc to cancel" if closed else
                 "Two different points are needed — keep clicking, or Esc to "
                 "cancel")
             return
         self._poly_pts = []
         self._clear_preview()
-        if self.tool == POLYGON:
+        if closed:              # a polygon, or a line closed on its start
             cx = sum(p.x() for p in pts) / len(pts)
             cy = sum(p.y() for p in pts) / len(pts)
             local = [Vec2(p.x() - cx, p.y() - cy) for p in pts]
             sh = Polygon(points=local, close_path=True, sharp_corners=True,
                          transform=Transform(x=cx, y=cy),
                          stitch=self._default_stitch(), layer=self._current_layer)
+            self.add_shape(sh)
+        elif self.tool == LINE:
+            # one joined path, a cut line (two points: what the Line tool
+            # always made, with Length and Angle in Properties)
+            cx = sum(p.x() for p in pts) / len(pts)
+            cy = sum(p.y() for p in pts) / len(pts)
+            sh = PathShape(points=[Vec2(p.x() - cx, p.y() - cy) for p in pts],
+                           close_path=False, transform=Transform(x=cx, y=cy),
+                           layer=self._current_layer)
             self.add_shape(sh)
         elif self.tool == SCORE:
             score_layer = "Score" if self.doc.layer("Score") else self._current_layer
@@ -3405,6 +3881,8 @@ class Canvas(QGraphicsView):
         ``(b, None)`` otherwise, or when no perfect size is near."""
         if not self.perfect_fit or self.tool not in (RECT, ROUNDED, CIRCLE,
                                                      ELLIPSE):
+            return b, None
+        if self._vb_any():            # a size typed is the size wanted
             return b, None
         from leathercad import perfectfit as pf
         st = self._default_stitch()
@@ -5288,7 +5766,8 @@ class Canvas(QGraphicsView):
 
     # -- interactive Offset tool ----------------------------------------
     _OFFSET_HINT = ("Offset: move the cursor inside / outside · click to "
-                    "place · Enter = type an exact distance · Esc cancels")
+                    "place · or type the distance and press Enter · Esc "
+                    "cancels")
 
     def _arm_offset(self, p: Vec2) -> None:
         """First click of the Offset tool: pick the shape under the cursor and
@@ -5338,6 +5817,12 @@ class Canvas(QGraphicsView):
         dist = self._signed_offset_dist(p)
         if self.snap_to_grid and self.snap_grid > 0:      # honour grid steps
             dist = round(dist / self.snap_grid) * self.snap_grid
+        if self._vb_active():
+            self._vb.set_live("dist", abs(dist))
+            typed = self._vb_value("dist")
+            if typed is not None:
+                # a typed distance, on the side the mouse is
+                dist = math.copysign(abs(typed), dist if dist else 1.0)
         self._offset_dist = dist
         out = (offset_closed(self._offset_pts, dist) if self._offset_closed
                else offset_open(self._offset_pts, dist))
@@ -5386,18 +5871,6 @@ class Canvas(QGraphicsView):
         self.documentChangedSig.emit()
         self._emit_commit()
         self.statusMessage.emit(self._OFFSET_HINT)
-
-    def _ask_offset_exact(self) -> None:
-        """Enter while the Offset preview is live: type the exact distance."""
-        from PySide6.QtWidgets import QInputDialog
-        from .prompts import ask_length
-        d, ok = ask_length(
-            self, "Offset outline", "Distance", round(self._offset_dist, 2),
-            -1000.0, 1000.0, 2,
-            hint="Positive = outward (right of travel on an open path), "
-                 "negative = inward.")
-        if ok:
-            self._commit_offset(d)
 
     def _cancel_offset(self) -> None:
         if self._offset_preview is not None:
@@ -8045,6 +8518,9 @@ class Canvas(QGraphicsView):
     # -- grid -----------------------------------------------------------
     def set_dark_theme(self, dark: bool) -> None:
         self.dark = bool(dark)
+        if self._vb is not None:
+            self._vb.dark = self.dark
+            self._vb.update()
         self.viewport().update()
 
     def drawBackground(self, painter, rect):

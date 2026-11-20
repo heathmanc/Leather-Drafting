@@ -1110,7 +1110,8 @@ def test_click_to_place_vs_drag_drawing(qapp):
 
 def test_every_drawing_tool_is_click_to_place(qapp):
     """No drawing tool needs click-and-hold: 2-point tools take two clicks,
-    polygon/seam/score take clicks then a double-click, hole is one click."""
+    line/polygon/seam/score take clicks then a double-click, hole is one
+    click."""
     from PySide6.QtCore import QPointF, QEvent, Qt
     from PySide6.QtGui import QMouseEvent
     from leathercad_app.mainwindow import MainWindow
@@ -1141,7 +1142,7 @@ def test_every_drawing_tool_is_click_to_place(qapp):
 
     # every two-point tool: click, click
     for tool in (cm.RECT, cm.ROUNDED, cm.ELLIPSE, cm.CIRCLE, cm.SLOT,
-                 cm.LINE, cm.CONSTRUCTION):
+                 cm.CONSTRUCTION):
         n = len(win.doc.shapes)
         c.tool = tool
         click(-40, -28)
@@ -1154,8 +1155,8 @@ def test_every_drawing_tool_is_click_to_place(qapp):
     click(5, 5)
     assert len(win.doc.shapes) == n + 1
 
-    # polygon / score: clicks then double-click to finish
-    for tool in (cm.POLYGON, cm.SCORE):
+    # line / polygon / score: clicks then double-click to finish
+    for tool in (cm.LINE, cm.POLYGON, cm.SCORE):
         n = len(win.doc.shapes)
         c.tool = tool
         for (x, y) in [(-30, -20), (30, -20), (0, 25)]:
@@ -1262,6 +1263,7 @@ def test_drawing_tools_size_and_lock_correctly(qapp):
     on a drag-to-draw release and didn't respect the grid."""
     import math
     from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
     from leathercad_app import canvas as cm
     win, c, ev, click = _draw_rig(qapp)
     c.tool = cm.RECT
@@ -1287,6 +1289,8 @@ def test_drawing_tools_size_and_lock_correctly(qapp):
     c.tool = cm.LINE
     click(0, 0)
     click(40.3, 3.2, Qt.ShiftModifier)
+    c.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Return,
+                              Qt.NoModifier))       # ends the line
     pts = win.doc.shapes[-1].world_polyline()[0]
     length = math.hypot(pts[-1].x - pts[0].x, pts[-1].y - pts[0].y)
     assert abs(length - round(length)) < 1e-6 and abs(pts[-1].y) < 1e-9

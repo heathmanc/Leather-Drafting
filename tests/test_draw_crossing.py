@@ -18,7 +18,7 @@ pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPointF, Qt  # noqa: E402
-from PySide6.QtGui import QMouseEvent  # noqa: E402
+from PySide6.QtGui import QKeyEvent, QMouseEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from leathercad.geometry import Vec2  # noqa: E402
@@ -162,8 +162,11 @@ def test_a_line_ends_where_it_crosses_an_edge(qapp):
                  - (pos.y() - ay) * (cur.x() - ax))
         assert cross == pytest.approx(0.0, abs=1e-6)
         _click(c, cur.x(), cur.y())
+        c.keyPressEvent(QKeyEvent(QEvent.KeyPress, Qt.Key_Return,
+                                  Qt.NoModifier))    # ends the line
         line = [s for s in c.doc.shapes if s is not None and s.kind != "rectangle"]
         assert line
+        assert line[0].world_polyline()[0][-1].y == pytest.approx(436.0)
     finally:
         win.hide()
 

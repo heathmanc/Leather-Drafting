@@ -90,7 +90,9 @@ def test_live_readouts_and_statuses_follow_the_unit(qapp, inches):
     _ev(c, QEvent.MouseButtonPress, 100, 0)
     _ev(c, QEvent.MouseButtonRelease, 100, 0, Qt.NoButton)
     _ev(c, QEvent.MouseMove, 125.4, 0, Qt.NoButton)
-    assert msgs[-1].startswith("r ") and msgs[-1].endswith(" in")
+    # the diameter first (the cursor lands on a whole pixel)
+    assert msgs[-1].startswith("ø ") and " in   r " in msgs[-1]
+    assert msgs[-1].endswith(" in") and "mm" not in msgs[-1]
     c.cancel_in_progress()
     # the fillet status
     c.fillet_radius = 6.35

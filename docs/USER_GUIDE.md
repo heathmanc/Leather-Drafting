@@ -185,11 +185,13 @@ pick something that pops against your photo. As soon as you finish the shape it
 takes its **layer colour**, so the cut/score/engrave role (and the SVG/DXF
 export) is never affected — the bright colour is purely a drawing aid.
 
-1. Press `R` (Rectangle). Click once for the first corner, move, click again
-   for the opposite corner. *(Prefer press-drag-release? Toggle
-   View → Drag to draw.)*
-2. The Width field is focused automatically — type an exact **Width**, Tab
-   to **Height**, type it (say 100, Tab, 70) and press Enter.
+1. Press `R` (Rectangle). Click once for the first corner and move the
+   mouse the way the rectangle should grow.
+2. Boxes beside the cursor show its **Width** and **Height**. Type the
+   width, `Tab`, the height (say 100, Tab, 70) and press `Enter`. *(Or
+   click the opposite corner. Prefer press-drag-release? Toggle View →
+   Drag to draw.)* The tool stays on for the next rectangle; `Esc` goes
+   back to Select.
 3. In Properties, the **Stitching** box is already on: you get a blue row of
    stitch holes inset 3.5 mm from the edge at a 3.85 mm pitch.
 4. Pick your **Punch** style (round / oblique / french / diamond) and your
@@ -203,15 +205,43 @@ export) is never affected — the bright colour is purely a drawing aid.
 
 ## 5. Drawing tools
 
-Every drawing tool places points **by clicking** — no click-and-hold needed.
-Two-point tools take two clicks; multi-point tools take several clicks and
-finish with a double-click or `Enter`. `Esc` cancels the shape in progress;
-press `Esc` again (with nothing in progress) to drop back to the Select tool.
-After a shape is created the tool returns to **Select** and the primary size
-field is focused so you can type an exact value.
+Drawing works as in Fusion. Every drawing tool places points **by
+clicking** — no click-and-hold needed — and **stays on** after a shape, so
+you can draw the next one straight away. Two-point tools take two clicks;
+multi-point tools take several clicks and finish with a double-click or
+`Enter`. `Esc` cancels the shape in progress; press `Esc` again (with
+nothing in progress) to go back to the Select tool. Text and the tracing
+photo's calibration are the exceptions: they go back to Select by
+themselves.
+
+**Typing sizes while you draw.** After the first click, boxes beside the
+cursor show the sizes the next click would give:
+
+| Tool | Boxes |
+|---|---|
+| Line, polygon, score line, stitch line, construction line | **Length**, **Angle** of the next segment |
+| Rectangle, rounded rectangle, ellipse, slot | **Width**, **Height** |
+| Circle, 2-point circle | **Diameter**, **Radius** |
+| Centre arc | **Radius**, then **Sweep** (degrees, counter-clockwise; below zero turns clockwise) |
+| Offset | **Distance** (on the side the mouse is) |
+
+Just type: the value goes into the lit box. `Tab` keeps it and lights the
+next one (`Shift+Tab` the one before); `Enter` places the point. A typed
+value holds while the mouse sets the rest — type a length and the line
+still turns with the mouse, type an angle and the mouse sets how long it
+is; a rectangle grows towards the mouse. `Backspace` corrects, `Delete`
+clears a box, and `Esc` drops everything typed (a second `Esc` cancels the
+shape). Values are read as in Properties: in the display unit unless they
+name their own (`1/2in`, `12mm`), with sums (`25*2`) and parameters.
+While the boxes show, keys go into them — tool shortcuts and Delete wait
+until the shape is placed. A typed size wins over **Perfect fit**.
 
 Hold **Shift** while placing any line-like point to lock the segment to
-**0° / 45° / 90°**.
+**0° / 45° / 90°**, and **Ctrl** to place a point exactly where the cursor
+is, without snapping. **Right-click** while a shape is half-drawn to
+**Finish** or **Cancel** it (a line can also **Close outline**); with
+nothing half-drawn, the menu's first entry takes you back to the Select
+tool.
 
 | Tool | Key | How to use |
 |---|---|---|
@@ -219,14 +249,14 @@ Hold **Shift** while placing any line-like point to lock the segment to
 | **Rectangle** | `R` | Two clicks: opposite corners. |
 | **Rounded rect** | `O` | Same, with a corner radius you can edit in Properties. |
 | **Ellipse** | `E` | Two clicks: bounding corners. |
-| **Circle** | `C` | First click = centre, second sets the radius. |
+| **Circle** | `C` | First click = centre, second sets the radius — or type the diameter. |
 | **Circle (2-point)** | `2` | Click the two ends of a **diameter**. |
 | **Circle (3-point)** | `3` | Click three points on the rim — the circle is fitted through them. |
 | **Arc (3-point)** | `4` | Click the **start**, a **point on the arc** (it passes through it), then the **end**. The preview follows the cursor as the end. |
 | **Arc (centre)** | `5` | Click the **centre**, the **start** (sets the radius), then the **end** — sweeps counter-clockwise. |
 | **Polygon** | `P` | Click each vertex; double-click or `Enter` to close. |
 | **Pen (bezier curve)** | `B` | See below. |
-| **Line** | `L` | Two clicks. Set exact **Length**/**Angle** afterwards in Properties. |
+| **Line** | `L` | Click the start, then each next point: one joined path. Click the start again to close it into a stitched piece; `Enter`, `Esc` or a double-click ends it open. A two-point line has **Length**/**Angle** in Properties. |
 | **Construction line** | `G` | A dashed guide — snappable, never cut or exported. |
 | **Hole** | `H` | One click places a round hardware hole (cut only, no stitching). |
 | **Slot** | `T` | Two clicks; a stadium-shaped slot (for buckle tongues, strap slots). |
@@ -235,7 +265,7 @@ Hold **Shift** while placing any line-like point to lock the segment to
 | **Trim** | `X` | Click the piece of an outline you want gone (red preview on hover, drawn right on the outline). |
 | **Fillet / chamfer corner** | `6` | Set the **radius** and **Round / Chamfer** mode in the toolbar box, then click any corner of a polygon/path to round or bevel it with a true arc — rounding blends into curved sides (arcs, beziers, trimmed ellipses). Works where two pieces' ends meet, and where an outline's own two ends meet (it closes there). |
 | **Extend to intersection** | `7` | Click the **end** of a line/path: it grows until it meets the next outline or guide, landing exactly on it (the opposite of Trim). |
-| **Offset outline** | `8` | Click a shape, then move the cursor **inside or outside** it — a dashed preview follows with the live distance in the status bar. Click to place the offset copy, or press **Enter** to type an exact distance. Circles offset to true circles and rounded rectangles keep proper rounded corners. The copy is what its source was: offsetting a construction guide gives another guide, never a cut line. |
+| **Offset outline** | `8` | Click a shape, then move the cursor **inside or outside** it — a dashed preview follows with the live distance in the status bar. Click to place the offset copy, or type the distance and press **Enter**. Circles offset to true circles and rounded rectangles keep proper rounded corners. The copy is what its source was: offsetting a construction guide gives another guide, never a cut line. |
 | **Text** | `A` | Click to place engraved lettering. |
 | **Measure** | `Q` | Two clicks; length/angle/dx/dy in the status bar. |
 | **Dimension** | `D` | Two clicks; a permanent dimension annotation. |
@@ -1073,7 +1103,7 @@ While it's sizing a piece, that grip ignores node snapping.
   rectangles offset to true circles / rounded rectangles; other outlines
   become polygons with mitered corners. For a visual, cursor-driven version
   use the **Offset outline** tool (`8`): click the shape, move inside or
-  outside, click to place (or press Enter for an exact distance).
+  outside, click to place (or type the distance and press Enter).
 * **Boolean operations** — select two or more **closed** shapes:
   **Union (merge shapes)** (`Ctrl+U`) welds them into one outline;
   **Subtract (bottom − top)** (`Ctrl+Shift+U`) removes the upper shapes from
@@ -1615,7 +1645,10 @@ what the **Stitch line** tool is for.
 | Arrow keys | Nudge 1 mm (Shift 10 mm, Ctrl 0.1 mm); in inches 1/16 in (Shift ½ in, Ctrl 1/64 in) |
 | `F` | Fit view to content |
 | `Ctrl+1` / `Ctrl+2` | Properties / Layers panel |
-| `Esc` | Cancel in-progress shape; again → Select tool |
+| `Esc` | Drop typed values; again: cancel the in-progress shape (a line ends, kept); again → Select tool |
+| `Tab` / `Shift+Tab` | While drawing: keep the typed value, next / previous box |
+| `Enter` | While drawing: place the point the boxes give; with nothing typed, end a line / polygon / seam |
+| `Ctrl` (held) | Place a point without snapping |
 | `Shift` (held) | 0/45/90° ortho lock while placing or node-dragging |
 | `Alt`+click | Select the next item under the pointer (things on top of each other) |
 

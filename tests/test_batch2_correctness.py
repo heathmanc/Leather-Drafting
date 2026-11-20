@@ -79,27 +79,32 @@ def _item_of(c, model):
 
 
 # -- drawing workflow ----------------------------------------------------------
-def test_focus_lands_in_the_size_field_after_drawing(qapp):
+def test_a_drawing_tool_stays_on_and_keeps_the_keyboard(qapp):
+    # as in Fusion, the tool stays on for the next shape and the keyboard
+    # stays with the canvas, for the value boxes of the next shape (once
+    # it went back to Select and the keyboard to the size field in
+    # Properties, so a second shape needed the tool picked again)
     win, c = _win()
+    win.properties.w.setFocus()               # the keyboard elsewhere first
     win._select_mode(canvas_mod.RECT)
     _click(c, 0, 0)
-    _click(c, 40, 30)                         # first shape, nothing selected before
+    _click(c, 40, 30)
     for _ in range(3):
         QApplication.processEvents()
     assert len(win.doc.shapes) == 1
-    assert QApplication.focusWidget() is win.properties.w
+    assert c.tool == canvas_mod.RECT
+    assert QApplication.focusWidget() is c
+    assert win.properties.w.value() == 40.0   # the new shape is shown
+    _click(c, 100, 0)                         # straight on: another
+    _click(c, 110, 20)
+    assert len(win.doc.shapes) == 2 and c.tool == canvas_mod.RECT
     win._select_mode(canvas_mod.CIRCLE)
     _click(c, 100, 0)
-    _click(c, 110, 0)                         # a later shape, one selected before
+    _click(c, 110, 0)
     for _ in range(3):
         QApplication.processEvents()
-    assert QApplication.focusWidget() is win.properties.circ_r
-    win._select_mode(canvas_mod.MEASURE)      # creates nothing: no focus jump
-    _click(c, 0, 50)
-    _click(c, 30, 50)
-    for _ in range(3):
-        QApplication.processEvents()
-    assert QApplication.focusWidget() is not win.properties.w
+    assert c.tool == canvas_mod.CIRCLE and QApplication.focusWidget() is c
+    win._select_mode(canvas_mod.TEXT)         # lettering goes back to Select
     win.hide()
 
 
@@ -155,7 +160,7 @@ def test_measure_result_survives_the_finishing_click(qapp):
     _click(c, 0, -50)
     _click(c, 30, -50)
     assert "length" in msgs[-1] and "Select" not in msgs[-1]
-    assert c.tool == canvas_mod.SELECT
+    assert c.tool == canvas_mod.MEASURE      # stays on: measure again
     win.hide()
 
 

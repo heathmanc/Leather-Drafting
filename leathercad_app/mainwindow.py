@@ -1156,24 +1156,35 @@ class MainWindow(QMainWindow):
         hints = {
             m.SELECT: "Select: click to pick, drag to move, drag a blank area "
                       "to rubber-band · double-click a shape to edit its nodes",
-            m.RECT: "Rectangle: click two opposite corners (or drag, with "
-                    "Drag to draw on) · type exact W×H in Properties after",
-            m.ROUNDED: "Rounded rectangle: click two opposite corners, then "
-                       "set the corner radius in Properties",
-            m.ELLIPSE: "Ellipse: click two opposite corners of its box",
-            m.CIRCLE: "Circle: click the centre, then a point on the circle",
-            m.POLYGON: "Polygon: click each vertex · double-click or Enter to "
-                       "close · Esc cancels",
-            m.LINE: "Line: click the start, click the end · Shift = ortho · "
-                    "snaps to nodes/edges",
-            m.CONSTRUCTION: "Construction line: click two points for an infinite "
-                            "guide (never exported)",
-            m.STITCHLINE: "Stitch line: click each point of the seam · "
-                          "double-click / Enter to finish (holes march along it)",
-            m.SCORE: "Score line: click each point · double-click / Enter to "
-                     "finish (a fold/score, not a cut)",
-            m.HOLE: "Hole: click to drop a single stitch hole",
-            m.SLOT: "Slot: click two opposite corners of a rounded slot",
+            m.RECT: "Rectangle: click a corner, then the opposite one · or "
+                    "type the width, Tab, the height, Enter · Esc = Select",
+            m.ROUNDED: "Rounded rectangle: click a corner, then the opposite "
+                       "one · or type width, Tab, height, Enter · the corner "
+                       "radius is in Properties",
+            m.ELLIPSE: "Ellipse: click two opposite corners of its box · or "
+                       "type the width, Tab, the height, Enter",
+            m.CIRCLE: "Circle: click the centre, then a point on the circle "
+                      "· or type the diameter (Tab: radius) and Enter",
+            m.POLYGON: "Polygon: click each vertex · or type a length, Tab, "
+                       "an angle, Enter · click the start, double-click or "
+                       "Enter to close · Esc cancels",
+            m.LINE: "Line: click the start, then each next point · or type "
+                    "a length, Tab, an angle, Enter · click the start to "
+                    "close · Enter or Esc ends the line · Shift = 0/45/90 · "
+                    "Ctrl = no snap",
+            m.CONSTRUCTION: "Construction line: click two points for an "
+                            "infinite guide (never exported) · or type a "
+                            "length, Tab, an angle, Enter",
+            m.STITCHLINE: "Stitch line: click each point of the seam · or "
+                          "type a length, Tab, an angle, Enter · "
+                          "double-click / Enter to finish (holes march along "
+                          "it)",
+            m.SCORE: "Score line: click each point · or type a length, Tab, "
+                     "an angle, Enter · double-click / Enter to finish (a "
+                     "fold/score, not a cut)",
+            m.HOLE: "Hole: click to drop a hole · Esc = Select",
+            m.SLOT: "Slot: click two opposite corners of a rounded slot · or "
+                    "type the width, Tab, the height, Enter",
             m.PEN: "Pen: click for corners, click-drag for curves · "
                    "double-click / Enter / right-click to finish",
             m.DIMENSION: "Dimension: click two points to measure · snap onto "
@@ -1184,15 +1195,18 @@ class MainWindow(QMainWindow):
             m.TEXT: "Text: click to place, then type in Properties",
             m.TRIM: "Trim: click the part of an outline to cut back to where it "
                     "crosses another shape",
-            m.OFFSET: "Offset: click a shape, move the cursor inside or outside, "
-                      "click to place · Enter = type an exact distance",
+            m.OFFSET: "Offset: click a shape, move the cursor inside or "
+                      "outside, click to place · or type the distance and "
+                      "press Enter",
             m.FILLET: "Corner: set the radius / mode in the toolbar above, then "
                       "click corners (or the point where two line ends meet)",
             m.EXTEND: "Extend: click the END of a line/path to grow it until it "
                       "meets the next outline or guide",
             m.ARC3: "3-point arc: click the start, a point on the arc, then the end",
-            m.ARCCENTER: "Centre arc: click the centre, the start, then the end",
-            m.CIRCLE2: "2-point circle: click the two ends of a diameter",
+            m.ARCCENTER: "Centre arc: click the centre, the start, then the "
+                         "end · or type the radius, then the sweep",
+            m.CIRCLE2: "2-point circle: click the two ends of a diameter · "
+                       "or type the diameter",
             m.CIRCLE3: "3-point circle: click three points on the circle",
         }
         return hints.get(mode, "")
@@ -1216,11 +1230,19 @@ class MainWindow(QMainWindow):
         self._set_tool(mode)
 
     def _tool_finished(self):
-        self._select_mode(canvas_mod.SELECT)
-        # let the user type an exact size for the shape just created (the
-        # panel shows it a moment later; Measure creates nothing to size)
-        if self.canvas.take_last_created() is not None:
-            self.properties.request_focus_after_show()
+        mode = self.canvas.tool
+        if mode in (canvas_mod.TEXT, canvas_mod.UNDERLAYCAL):
+            # lettering is edited once it is placed, and a tracing photo is
+            # calibrated once: these two go back to Select
+            self._select_mode(canvas_mod.SELECT)
+            if self.canvas.take_last_created() is not None:
+                self.properties.request_focus_after_show()
+            return
+        # every other tool stays on for the next shape, as in Fusion (sizes
+        # are typed in the boxes beside the cursor while drawing); Esc, or
+        # another tool, ends it
+        self.canvas.take_last_created()
+        self.canvas.statusMessage.emit(self._tool_hint(mode))
 
     def _selection_changed(self):
         self.properties.show_selection(self.canvas.selected_items())

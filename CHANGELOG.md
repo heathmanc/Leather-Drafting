@@ -5,7 +5,7 @@ Downloads are on [stitch-hero.com](https://stitch-hero.com) and the
 Windows and macOS builds ship with every release from 0.4.16 on (before it,
 a macOS build was made only for some).
 
-## Unreleased
+## 0.4.17 — 2026-11-21
 
 ### Keeping in touch
 * **Stitch Hero says when a newer version is out.** A few seconds after it

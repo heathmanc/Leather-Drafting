@@ -4,7 +4,8 @@ name: Release builds
 # Release:
 #   * Windows -> Stitch-Hero-Setup-<ver>.exe            (Inno Setup)
 #   * macOS   -> Stitch-Hero-<ver>-macOS-universal.dmg  (Intel + Apple Silicon;
-#                OFF by default -- tick "build_macos" when running it by hand)
+#                ON by default -- untick "build_macos" on a manual run to
+#                skip it)
 #   * The user manual (docs/Stitch-Hero-Manual.pdf) is attached too.
 #
 # Trigger by pushing a tag like v0.2.0, or Actions -> "Release builds" ->
@@ -23,9 +24,9 @@ on:
         type: boolean
         default: true
       build_macos:
-        description: "Also build the macOS .dmg (paused for now)"
+        description: "Also build the macOS .dmg (untick for a Windows-only release)"
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: write
@@ -108,8 +109,9 @@ jobs:
 
   macos:
     needs: version
-    # Paused: only built when asked for on a manual run (tag pushes skip it).
-    if: ${{ github.event.inputs.build_macos == 'true' }}
+    # Built on every release: tag pushes (which have no inputs) and manual
+    # runs alike, unless a manual run unticks "build_macos".
+    if: ${{ github.event.inputs.build_macos != 'false' }}
     # One universal2 build on the Apple-Silicon runner. GitHub's Intel
     # (macos-13) runners are being retired and jobs targeting them sit
     # "waiting for a runner" forever, so instead of a per-arch matrix we build
@@ -191,7 +193,8 @@ jobs:
 
   release:
     needs: [version, windows, macos]
-    # macos may be skipped (it's opt-in); publish as long as nothing failed
+    # macos may be skipped (a manual run can untick it); publish as long as
+    # nothing failed -- a failed macOS build holds the whole release back
     if: ${{ !cancelled() && needs.version.outputs.publish == 'true'
             && needs.windows.result == 'success'
             && needs.macos.result != 'failure' }}

@@ -7,12 +7,14 @@ across overlapping pieces** no matter which side you laser.
 
 ![the app](docs/app.png)
 
-> Status: v0.3, working and tested. Draw with a full CAD toolset (rectangles,
-> circles, polygons, bezier pen, arcs, trim, fillet / chamfer, boolean ops), get
-> chord-accurate stitch holes that register hole-for-hole across pieces, and put
-> laser-ready **SVG / DXF / 1:1 PDF** on the bed — with kerf compensation, sheet
-> nesting, a parts library, starter templates, job & thread estimates, autosave
-> and a dark theme. Roadmap below.
+> Status: working and tested, with new versions most weeks — what changed in
+> each is in the [changelog](CHANGELOG.md). Draw with a full CAD toolset
+> (rectangles, circles, polygons, bezier pen, arcs, trim, fillet / chamfer,
+> boolean ops), get chord-accurate stitch holes that register hole-for-hole
+> across pieces, and put laser-ready **SVG / DXF** on the bed or a **1:1 PDF**
+> on paper for cutting by hand — with kerf compensation, sheet nesting, a 3D
+> assembly preview, a parts and hardware library, starter templates, job &
+> thread estimates, autosave and a dark theme.
 
 **📖 New here? Read the [User Guide](docs/USER_GUIDE.md)** — a full manual with
 tool reference, a stitching deep-dive, three worked tutorials (card holder,
@@ -84,23 +86,25 @@ the back. The slanted slits mirror too, so they line up when the piece is flippe
 
 ### Download a ready-to-run build
 
-From the [**Releases**](https://github.com/heathmanc/leather-drafting/releases)
-page — no Python needed:
+From [**stitch-hero.com**](https://stitch-hero.com) or the
+[**Releases**](https://github.com/heathmanc/leather-drafting/releases) page —
+no Python needed:
 
 * **Windows** — `Stitch-Hero-Setup-<version>.exe` (per-user install, no
   admin prompt).
 * **macOS** — `Stitch-Hero-<version>-macOS-universal.dmg` (one download; runs
   natively on both Apple Silicon and Intel). Open it and drag the app to
-  Applications. It's unsigned, so the first launch is **right-click → Open**
-  (or `xattr -dr com.apple.quarantine "/Applications/Stitch Hero.app"`).
-  *Mac builds are paused for now: releases after 0.3.2 ship Windows only
-  unless the build is run with "Also build the macOS .dmg" ticked.*
+  Applications. It's unsigned, so macOS stops the first launch: open
+  **System Settings → Privacy & Security** and click **Open Anyway** beside
+  Stitch Hero (on macOS 14 and earlier, **right-click → Open** does the
+  same), or run `xattr -dr com.apple.quarantine "/Applications/Stitch Hero.app"`.
+  You only do this once.
 
 Both are built by the **Release builds** GitHub Action: push a `v0.2.0`-style
 tag, or run it manually (Actions → *Release builds* → *Run workflow*), and it
-publishes the Windows `.exe` (and the macOS `.dmg`, when that option is
-ticked) to a Release automatically. What changed in each version is in
-[CHANGELOG.md](CHANGELOG.md).
+publishes the Windows `.exe` and the macOS `.dmg` to a Release automatically.
+(A manual run can untick *Also build the macOS .dmg* for a Windows-only
+release.) What changed in each version is in [CHANGELOG.md](CHANGELOG.md).
 
 ### From source (any OS)
 

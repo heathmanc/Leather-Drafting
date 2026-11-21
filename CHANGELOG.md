@@ -1,8 +1,8 @@
 # Changelog
 
 Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/releases)
-page. Windows builds ship with every release; the macOS build is paused and is
-made only when the release workflow is run by hand with it ticked.
+page. Windows and macOS builds ship with every release (0.3.3 to 0.4.16 have a
+macOS build only where one was asked for, 0.4.15 among them).
 
 ## 0.4.16 — 2026-11-21
 

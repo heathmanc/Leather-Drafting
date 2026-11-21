@@ -431,10 +431,19 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
 nodes* / *Convert to editable nodes*, `Ctrl+K`) to edit its geometry
 point-by-point:
 
-* **White squares** — on-path vertices. Drag them; they snap to other
-  geometry and to the other nodes of the shape you're editing (an open
-  path's end onto its start, say), but never onto their own neighbours.
-  Hold **Shift** to constrain the node's movement to 0/45/90°.
+* **White squares** — on-path vertices. Drag them; they snap the way a
+  point you're drawing does (§8): to other shapes' corners, ends, midpoints,
+  centres and intersections, and to the other nodes of the shape you're
+  editing (an open path's end onto its start, say), but never onto their own
+  neighbours. A node also lands on another outline anywhere along it, where
+  its own edge from the node beside it meets that outline, so a line's end
+  can be dragged onto the middle of another line. The points a node can
+  snap to are marked as it nears them, and the status bar names the one it's
+  on. A stitch hole takes a node only when you bring it right onto the hole,
+  so a corner wins over the holes just inside it. With **Grid** on, a node
+  that isn't near anything snaps to the grid. Hold **Shift** to constrain
+  the node's movement to 0/45/90° (it still stops on an outline it meets),
+  or **Ctrl** to put it exactly where the pointer is, with no snapping.
 * **Orange circles** — arc midpoints. Drag to reshape the arc; they snap the
   same way, to other geometry and to the shape's other nodes (not to the two
   ends of their own arc).
@@ -1084,11 +1093,12 @@ Two independent toggles in the top toolbar:
 * **Grid** — snap to the grid (size selectable next to the toggle, default
   1 mm). Turn Grid off to snap purely to geometry.
 
-Both apply while **drawing** and while **moving**. A marker shows the snap
-point and the status bar names it (*endpoint*, *midpoint*, *centre*,
-*intersection*, *on line*…). When your cursor lines up with another object's
-node or centre, a dashed **alignment guide** appears and the point locks to
-that x/y — Illustrator-style smart guides.
+Both apply while **drawing**, while **moving**, and while dragging a **node**
+in node editing (§6). A marker shows the snap point and the status bar names
+it (*endpoint*, *midpoint*, *centre*, *intersection*, *on line*…). When your
+cursor lines up with another object's node or centre while drawing, a dashed
+**alignment guide** appears and the point locks to that x/y —
+Illustrator-style smart guides.
 
 **Ending on an edge.** While you draw a line, the next point of a polyline,
 seam or pen path, a measurement, or an arc, the point you're placing also
@@ -1740,7 +1750,7 @@ what the **Stitch line** tool is for.
 | `Esc` | Drop typed values; again: cancel the in-progress shape (a line ends, kept); again → Select tool |
 | `Tab` / `Shift+Tab` | While drawing: keep the typed value, next / previous box |
 | `Enter` | While drawing: place the point the boxes give; with nothing typed, end a line / polygon / seam |
-| `Ctrl` (held) | Place a point without snapping |
+| `Ctrl` (held) | Place a point, or drag a node, without snapping |
 | `Shift` (held) | 0/45/90° ortho lock while placing or node-dragging |
 | `Alt`+click | Select the next item under the pointer (things on top of each other) |
 

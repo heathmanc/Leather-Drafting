@@ -250,6 +250,17 @@ _SNAP_LABEL = {"center": "centre", "end": "endpoint", "mid": "midpoint",
                "quad": "quadrant", "hole": "hole centre", "cross": "intersection",
                "align": "aligned", "grid": "", "edge": "on line"}
 
+# How hard each kind of snap point pulls: a point's distance is multiplied by
+# its weight and the lowest wins, so intersections, ends and centres catch
+# from a little further than a midpoint or a circle's quarter point.
+_SNAP_PRIO = {"cross": 0.5, "end": 0.55, "center": 0.55, "hole": 0.65,
+              "mid": 0.9, "quad": 1.1}
+# A node of an outline being dragged is after the outline's own points: a
+# stitch hole catches it only when it is far nearer than any corner, end or
+# crossing in reach (a corner's holes sit just inside it, so the old pull
+# put a node meant for the corner on the hole).
+_NODE_SNAP_PRIO = dict(_SNAP_PRIO, hole=2.0)
+
 
 def _rev(seg):
     a, b, kind, mid = seg
@@ -540,6 +551,7 @@ class Canvas(QGraphicsView):
         # object while it is still selected -> crash in clearSelection().
         self._live = set()
         self._snap_cache = None   # static snap nodes captured at drag start
+        self._vertex_snap = None  # a node drag's targets (see begin_node_snap)
         self._snap_grid = None    # same nodes bucketed for O(1) lookup
         self._snap_cell = 1.0     # grid cell size == snap threshold (mm)
         self._snap_idx = None     # scene-wide hover snap index (see _snap_index)
@@ -745,14 +757,12 @@ class Canvas(QGraphicsView):
             # High-value osnaps (intersection, endpoint, centre, hole centre) are
             # made "stickier" with a priority weight so you don't have to hover
             # pixel-perfect on a centre to catch it over a closer quadrant/edge.
-            prio = {"cross": 0.5, "end": 0.55, "center": 0.55, "hole": 0.65,
-                    "mid": 0.9, "quad": 1.1}
             best, best_score, best_d, best_kind = None, thr, thr, None
             for c, kind in cands:
                 d = ((pos.x() - c.x) ** 2 + (pos.y() - c.y) ** 2) ** 0.5
                 if d >= thr:
                     continue
-                score = d * prio.get(kind, 1.0)
+                score = d * _SNAP_PRIO.get(kind, 1.0)
                 if score < best_score:
                     best_score, best_d, best, best_kind = score, d, c, kind
             if best is not None:
@@ -1083,14 +1093,18 @@ class Canvas(QGraphicsView):
                     out.append(e)
         return out
 
-    def _typed_candidates(self, near: Vec2, radius: float, point_radius=None):
+    def _typed_candidates(self, near: Vec2, radius: float, point_radius=None,
+                          idx=None):
         """All snap targets as (Vec2, kind): shape nodes (typed), seam points,
         hole centres, nearby outline intersections ('cross') and the midpoints
         of the sub-segments those intersections carve out ('mid').
 
         ``point_radius`` bounds the node candidates (``None`` = the whole
-        scene); ``radius`` bounds the intersection work, as before."""
-        idx = self._snap_index()          # resolve ONCE for the whole query
+        scene); ``radius`` bounds the intersection work, as before. ``idx``:
+        an index to look in instead of the scene's (a node drag's, without
+        the shape being edited)."""
+        if idx is None:
+            idx = self._snap_index()      # resolve ONCE for the whole query
         out = list(self._indexed_points(near, point_radius, idx))
         edges = self._edges_near(near, radius, idx)
         # Zoomed out over dense artwork the snap radius can swallow thousands of
@@ -1119,12 +1133,16 @@ class Canvas(QGraphicsView):
         responsive -- the index makes the full set cheap)."""
         return self._snap_index()["edges"]
 
-    def _nearest_on_guide(self, near: Vec2, radius: float):
+    def _nearest_on_guide(self, near: Vec2, radius: float, exclude=None):
         """Nearest point on a construction line or open guide line within
         ``radius`` (the 'nearest' osnap). Skips closed shape outlines so it
-        doesn't fire all over solid pieces -- only guides/lines."""
+        doesn't fire all over solid pieces -- only guides/lines -- and
+        ``exclude`` (the shape whose node is being dragged). A hidden layer's
+        lines don't snap, as its points don't."""
         best, best_d = None, radius
         for it in self.scene_obj.items():
+            if it is exclude or not it.isVisible():
+                continue
             if isinstance(it, ShapeItem):
                 m = it.model
                 is_guide = getattr(m, "construction", False) or (
@@ -1193,14 +1211,7 @@ class Canvas(QGraphicsView):
             return None
         from leathercad.trim import _Piece
         if g[0] == "ray":
-            a = Vec2(g[1].x(), g[1].y())
-            d = near - a
-            n = d.length()
-            if n <= 1e-9:
-                return None
-            # from its start, through the cursor and on past it
-            drawn = _Piece("line", a, a + d * ((n + 2.0 * thr) / n))
-            return self._drawn_crossing(drawn, near, thr, avoid=(a,))
+            return self._ray_crossing(Vec2(g[1].x(), g[1].y()), near, thr)
         if g[0] == "circle":
             p, q = Vec2(g[1].x(), g[1].y()), Vec2(g[2].x(), g[2].y())
             cr = arc_through(p, q, near)
@@ -1226,14 +1237,29 @@ class Canvas(QGraphicsView):
         drawn = _Piece("arc", on(th - dth), on(th + dth), on(th))
         return self._drawn_crossing(drawn, focus, thr, avoid)
 
-    def _drawn_crossing(self, drawn, focus: Vec2, thr: float, avoid=()):
+    def _ray_crossing(self, a: Vec2, p: Vec2, thr: float, idx=None):
+        """Where the straight line from ``a`` through ``p``, and on a little
+        past it, crosses an outline within ``thr`` of ``p`` -- or None. (A
+        crossing right on ``a``, where it starts, doesn't count.)"""
+        from leathercad.trim import _Piece
+        d = p - a
+        n = d.length()
+        if n <= 1e-9:
+            return None
+        drawn = _Piece("line", a, a + d * ((n + 2.0 * thr) / n))
+        return self._drawn_crossing(drawn, p, thr, avoid=(a,), idx=idx)
+
+    def _drawn_crossing(self, drawn, focus: Vec2, thr: float, avoid=(),
+                        idx=None):
         """The point nearest ``focus``, within ``thr``, where the trim piece
         ``drawn`` crosses another outline or seam -- on the outline's true
         lines, arcs and curves (as Trim cuts), not its flattened copy, so a
         line ended on a curve lies on it. Points within a hair of ``avoid``
-        (where the drawing started) don't count. None if there's none."""
+        (where the drawing started) don't count. None if there's none.
+        ``idx``: the index to look in, when not the scene's."""
         from leathercad.trim import _cross, _in_box
-        idx = self._snap_index()
+        if idx is None:
+            idx = self._snap_index()
         owners = idx["owners"]
         best, best_d, seen = None, thr, set()
         for _a, _b, oid in self._edges_near(focus, thr, idx):
@@ -1295,7 +1321,7 @@ class Canvas(QGraphicsView):
         """Outline edges (a, b, owner) within ``radius`` of ``near``. Same exact
         distance test as before -- the index just narrows what has to be tested
         from every segment in the scene to the cursor's own cells."""
-        return [e for e in self._indexed_edges(near, radius)
+        return [e for e in self._indexed_edges(near, radius, idx)
                 if _point_polyline_dist(near, [e[0], e[1]]) <= radius]
 
     def _intersection_candidates(self, edges, near: Vec2, radius: float,
@@ -1544,11 +1570,21 @@ class Canvas(QGraphicsView):
             return
         near = Vec2(cursor.x(), cursor.y())
         hl = 60.0 / self._zoom
+        self._mark_snap_nodes(near, self._typed_candidates(near, hl,
+                                                           point_radius=hl))
+
+    def _mark_snap_nodes(self, near: Vec2, cands, skip=None) -> None:
+        """Faintly mark the targets ``cands`` -- (point, kind) -- that are
+        within reach of the hints around ``near``; none on ``skip`` (where a
+        dragged node started: it doesn't snap back there)."""
+        hl = 60.0 / self._zoom
         r = 3.0 / self._zoom
         path = QPainterPath()
         seen = set()
-        for pt, kind in self._typed_candidates(near, hl, point_radius=hl):
+        for pt, kind in cands:
             if (pt - near).length() > hl:
+                continue
+            if skip is not None and (pt - skip).length_sq() <= 0.25:
                 continue
             key = (round(pt.x, 2), round(pt.y, 2), kind)
             if key in seen:
@@ -1867,28 +1903,128 @@ class Canvas(QGraphicsView):
                 self._group_driving = False
         return best
 
-    # -- node-to-node snapping while editing nodes ----------------------
+    # -- snapping while editing nodes ------------------------------------
+    # A dragged node snaps the way a point being drawn does (_smart_snap):
+    # onto other shapes' corners, ends, midpoints, centres, crossings and
+    # holes; onto another outline anywhere along it, where the node's own
+    # edge meets it (as a line being drawn is ended on an edge); onto a guide
+    # line; else onto the grid. Shift locks it to 0 / 45 / 90 degrees from
+    # where it started and still catches an outline it meets; Ctrl leaves it
+    # free. The targets near it are marked as it moves, and the status bar
+    # names the one it's on. (It used to catch only points, nearest first --
+    # a corner's stitch hole as soon as a corner -- with nothing shown until
+    # it caught, a curve's "middle" off the curve, Shift and the grid
+    # ignored.)
     def begin_node_snap(self, handle) -> None:
+        """Arm snapping for a drag of ``handle``: a node of the shape being
+        edited (see snap_vertex), or a box-resize grip, which snaps to other
+        shapes' nodes (see snap_node)."""
+        self._vertex_snap = None
+        if getattr(handle, "node", None) is not None:
+            self._snap_cache = None
+            self._begin_vertex_snap(handle)
+            return
         if not self.snap_to_nodes:
             self._snap_cache = None
             return
         start = handle.pos()
-        # snap to OTHER objects (and their intersections), not the shape being
-        # edited -- otherwise the node just sticks to its own neighbours...
+        # snap to OTHER objects (and their intersections), not the shape
+        # being resized
         owner = getattr(handle, "owner", None)
         cands = (self._snap_candidates(exclude=owner)
-                 + self._all_intersections(exclude=owner)
-                 + self._own_node_targets(handle))
+                 + self._all_intersections(exclude=owner))
         self._snap_cache = [c for c in cands
                             if (c.x - start.x()) ** 2 + (c.y - start.y()) ** 2 > 0.25]
 
+    def _begin_vertex_snap(self, handle) -> None:
+        """What a node drag snaps to, taken once at the press: the snap
+        index without the shape being edited -- its outline moves with the
+        node, so it is no target, and isn't re-indexed on every move -- that
+        shape's own other nodes, and the nodes either side of this one (its
+        edges run from them, for the crossings)."""
+        owner = getattr(handle, "owner", None)
+        p = handle.pos()
+        st = {"owner": owner, "start": Vec2(p.x(), p.y()), "idx": None,
+              "own": [], "rays": []}
+        if self.snap_to_nodes:
+            st["idx"] = self._index_without(self._snap_index(), owner)
+            st["own"] = self._own_node_targets_typed(handle)
+            st["rays"] = self._node_neighbours(handle)
+        self._vertex_snap = st
+
+    @staticmethod
+    def _index_without(idx, item):
+        """A view of the snap index ``idx`` without ``item``'s points and
+        edges. The index itself is left as it is: only the lists that held
+        them are copied."""
+        oid = id(item)
+        rec = idx["owners"].get(oid) if item is not None else None
+        if rec is None:
+            return idx
+        mine = {id(e) for e in rec["pts"]}
+        pgrid = dict(idx["pgrid"])
+        for c in set(rec["pcells"]):
+            keep = [e for e in pgrid.get(c, ()) if id(e) not in mine]
+            if keep:
+                pgrid[c] = keep
+            else:
+                pgrid.pop(c, None)
+        egrid = dict(idx["egrid"])
+        for c in set(rec["ecells"]):
+            keep = [e for e in egrid.get(c, ()) if e[2] != oid]
+            if keep:
+                egrid[c] = keep
+            else:
+                egrid.pop(c, None)
+        sub = dict(idx)
+        sub.update(pgrid=pgrid, egrid=egrid,
+                   spread=[e for e in idx["spread"] if e[2] != oid],
+                   pts=[e for e in idx["pts"] if id(e) not in mine],
+                   edges=[e for e in idx["edges"] if e[2] != oid],
+                   owners={k: v for k, v in idx["owners"].items() if k != oid},
+                   by_owner={k: v for k, v in idx["by_owner"].items()
+                             if k is not item})
+        return sub
+
+    def _node_neighbours(self, handle):
+        """Where the on-path nodes either side of ``handle``'s node are (its
+        edges run from them to it). Empty for an arc's middle or a curve's
+        handle."""
+        node = getattr(handle, "node", None)
+        owner = getattr(handle, "owner", None)
+        topo = getattr(owner, "path_topology", None)
+        if (node is None or topo is None or node.is_mid
+                or getattr(node, "is_ctrl", False) or node.index is None):
+            return []
+        n, closed = topo()
+        if n < 2:
+            return []
+        i = node.index
+        want = {k % n for k in (i - 1, i + 1) if closed or 0 <= k < n} - {i}
+        out = []
+        for h in self._handles:
+            hn = getattr(h, "node", None)
+            if (h is handle or hn is None or getattr(h, "owner", None) is not owner
+                    or hn.is_mid or getattr(hn, "is_ctrl", False)):
+                continue
+            if hn.index in want:
+                p = h.pos()
+                out.append(Vec2(p.x(), p.y()))
+        return out
+
     def _own_node_targets(self, handle):
-        """...but the shape's own OTHER nodes are fair game: an arc's middle
-        node onto a node elsewhere on the same outline (a bookmark welded
-        into one path had nothing left to snap to), an open path's end onto
-        its start. Never the nodes this drag would collapse onto -- a node's
-        neighbours, the middles of the arcs either side of it, or the two
-        ends of the arc whose middle is dragged."""
+        """The shape's own other nodes a node can snap to (see
+        _own_node_targets_typed)."""
+        return [p for p, _k in self._own_node_targets_typed(handle)]
+
+    def _own_node_targets_typed(self, handle):
+        """``[(point, kind)]``: the shape being edited is no target, but its
+        own OTHER nodes are fair game -- an arc's middle node onto a node
+        elsewhere on the same outline (a bookmark welded into one path had
+        nothing left to snap to), an open path's end onto its start. Never
+        the nodes this drag would collapse onto -- a node's neighbours, the
+        middles of the arcs either side of it, or the two ends of the arc
+        whose middle is dragged."""
         node = getattr(handle, "node", None)
         owner = getattr(handle, "owner", None)
         topo = getattr(owner, "path_topology", None)
@@ -1927,10 +2063,114 @@ class Canvas(QGraphicsView):
             elif hn.index is None or hn.index in skip_nodes:
                 continue
             p = h.pos()
-            out.append(Vec2(p.x(), p.y()))
+            out.append((Vec2(p.x(), p.y()), "mid" if hn.is_mid else "end"))
         return out
 
+    def snap_vertex(self, value: QPointF, start: Optional[QPointF] = None,
+                    shift: bool = False, free: bool = False) -> QPointF:
+        """Where a node of the shape being edited goes when dragged to
+        ``value``. ``start``: where the drag began -- Shift (``shift``)
+        locks the movement to 0 / 45 / 90 degrees from it; ``free``: Ctrl,
+        exactly where it's put. A node moved by code, with no press arming
+        the snap, goes where it's put (Shift's lock aside)."""
+        st = self._vertex_snap
+        if st is None:
+            if shift and start is not None:
+                return self._apply_ortho(start, value)
+            return value
+        if start is None:
+            start = QPointF(st["start"].x, st["start"].y)
+        near = Vec2(value.x(), value.y())
+        cands = None
+        if not free and st["idx"] is not None:
+            hl = 60.0 / self._zoom              # the hints' reach, as drawing's
+            cands = (self._typed_candidates(near, hl, point_radius=hl,
+                                            idx=st["idx"])
+                     + st["own"])
+        pos, kind = (value, None) if free else self._vertex_point(st, value,
+                                                                  cands or ())
+        if shift:
+            op = self._apply_ortho(start, value)
+            if pos != value:
+                # the length from the snapped point (a node, the grid): its
+                # projection on the locked ray, as when drawing
+                ux, uy = op.x() - start.x(), op.y() - start.y()
+                n = math.hypot(ux, uy)
+                if n > 1e-9:
+                    ux, uy = ux / n, uy / n
+                    t = (pos.x() - start.x()) * ux + (pos.y() - start.y()) * uy
+                    op = QPointF(start.x() + ux * t, start.y() + uy * t)
+            pos, kind = op, None
+            if cands is not None:
+                # still caught where the locked line meets an outline
+                x = self._ray_crossing(Vec2(start.x(), start.y()),
+                                       Vec2(op.x(), op.y()),
+                                       10.0 / self._zoom, st["idx"])
+                if x is not None:
+                    pos, kind = QPointF(x.x, x.y), "cross"
+        if cands is None:
+            self._hide_snap_nodes()
+        else:
+            self._mark_snap_nodes(near, cands, skip=st["start"])
+        self._show_snap_marker(pos, kind)
+        self.statusMessage.emit(_SNAP_LABEL.get(kind, "") if kind else "")
+        return pos
+
+    def _vertex_point(self, st, value: QPointF, cands):
+        """``(where, kind)`` for a node dragged to ``value``, Shift aside --
+        or ``(value, None)``. ``cands``: the snap points near it."""
+        thr = 10.0 / self._zoom
+        if st["idx"] is not None:
+            near = Vec2(value.x(), value.y())
+            start = st["start"]
+            # 1. a point: the strongest pull within reach wins (see
+            # _NODE_SNAP_PRIO). Where the node started doesn't hold it.
+            best, best_score, best_kind = None, float("inf"), None
+            for c, kind in cands:
+                d = (c - near).length()
+                if d >= thr or (c - start).length_sq() <= 0.25:
+                    continue
+                score = d * _NODE_SNAP_PRIO.get(kind, 1.0)
+                if score < best_score:
+                    best, best_score, best_kind = c, score, kind
+            if best is not None:
+                return QPointF(best.x, best.y), best_kind
+            # 2. where one of its own edges meets another outline
+            x = self._vertex_edge_crossing(st, near, thr)
+            if x is not None:
+                return QPointF(x.x, x.y), "cross"
+            # 3. anywhere along a guide line
+            foot = self._nearest_on_guide(near, thr, exclude=st["owner"])
+            if foot is not None and (foot - start).length_sq() > 0.25:
+                return QPointF(foot.x, foot.y), "edge"
+        # 4. the grid
+        if self.snap_to_grid and self.snap_grid > 0:
+            g = self.snap_grid
+            return (QPointF(round(value.x() / g) * g, round(value.y() / g) * g),
+                    "grid")
+        return value, None
+
+    def _vertex_edge_crossing(self, st, near: Vec2, thr: float):
+        """Where one of the dragged node's edges -- from the node beside it,
+        through ``near`` -- crosses another outline within ``thr``: the node
+        lands on that outline, anywhere along it, the way the end of a line
+        being drawn does. The nearest such point, or None."""
+        best, best_d = None, thr
+        for a in st["rays"]:
+            x = self._ray_crossing(a, near, thr, st["idx"])
+            if x is None or (x - st["start"]).length_sq() <= 0.25:
+                continue
+            d = (x - near).length()
+            if d < best_d:
+                best, best_d = x, d
+        return best
+
     def snap_node(self, value: QPointF) -> QPointF:
+        """Where a resize grip dragged to ``value`` snaps: the nearest of
+        the other shapes' nodes within reach. (A node being edited goes
+        through snap_vertex.)"""
+        if self._vertex_snap is not None:
+            return self.snap_vertex(value)
         if not self.snap_to_nodes or self._snap_cache is None:
             return value
         thr = 10.0 / self._zoom
@@ -1948,8 +2188,12 @@ class Canvas(QGraphicsView):
         return value
 
     def end_node_snap(self) -> None:
+        node_drag = self._vertex_snap is not None
         self._snap_cache = None
+        self._vertex_snap = None
         self._hide_snap_marker()
+        if node_drag:
+            self.statusMessage.emit("")      # the snap it named is gone
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MiddleButton:
@@ -2330,15 +2574,8 @@ class Canvas(QGraphicsView):
         curves. Returns a QPointF or None."""
         if not self.snap_to_nodes:
             return None
-        from leathercad.trim import _Piece
-        a, p = Vec2(anchor.x(), anchor.y()), Vec2(op.x(), op.y())
-        d = p - a
-        n = d.length()
-        if n < 1e-9:
-            return None
-        thr = 10.0 / self._zoom
-        drawn = _Piece("line", a, a + d * ((n + 2.0 * thr) / n))
-        x = self._drawn_crossing(drawn, p, thr, avoid=(a,))
+        x = self._ray_crossing(Vec2(anchor.x(), anchor.y()),
+                               Vec2(op.x(), op.y()), 10.0 / self._zoom)
         return QPointF(x.x, x.y) if x is not None else None
 
     def _maybe_ortho(self, raw: QPointF, pos: QPointF, event):

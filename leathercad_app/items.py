@@ -163,6 +163,24 @@ def _qpoly(points: List[Vec2]) -> QPolygonF:
     return QPolygonF([QPointF(p.x, p.y) for p in points])
 
 
+def _curve_middle(seg, steps: int = 16) -> Vec2:
+    """The point halfway along a Bezier curve ``seg`` (cubic or quadratic),
+    by its length: a point on the curve, found from ``steps`` chords."""
+    c = seg.to_cubic() if hasattr(seg, "to_cubic") else seg
+    pts = [c._at(k / steps) for k in range(steps + 1)]
+    run = [0.0]
+    for a, b in zip(pts, pts[1:]):
+        run.append(run[-1] + (b - a).length())
+    half = run[-1] / 2.0
+    if half <= 1e-12:
+        return pts[0]
+    for k in range(1, steps + 1):
+        if run[k] >= half:
+            f = (half - run[k - 1]) / max(run[k] - run[k - 1], 1e-12)
+            return c._at((k - 1 + f) / steps)
+    return pts[-1]
+
+
 def smooth_path(path) -> Optional[QPainterPath]:
     """A ``leathercad.path.Path`` as Qt curves: its arcs as arcs and its
     Beziers as Beziers, which Qt draws round at any zoom -- where the
@@ -284,6 +302,7 @@ class VertexHandle(QGraphicsItem):
         self.canvas = canvas
         self._dragged = False
         self._shift = False
+        self._ctrl = False           # held: the node goes where it's put
         self._drag_start = None      # node world pos when the drag began
         # Place the handle BEFORE it reports geometry changes: with the flag
         # already set, this first setPos ran itemChange -> _sync_owner, which
@@ -332,20 +351,23 @@ class VertexHandle(QGraphicsItem):
             event.accept()
             return
         self._shift = bool(event.modifiers() & Qt.ShiftModifier)
+        self._ctrl = bool(event.modifiers() & Qt.ControlModifier)
         self._drag_start = QPointF(self.pos())      # where the node started
         if self.canvas is not None:
             self.canvas.begin_node_snap(self)
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        # read Shift from the live event -- QApplication.keyboardModifiers() is
-        # unreliable mid-drag (notably on macOS).
+        # read Shift and Ctrl from the live event --
+        # QApplication.keyboardModifiers() is unreliable mid-drag (notably on
+        # macOS).
         self._shift = bool(event.modifiers() & Qt.ShiftModifier)
+        self._ctrl = bool(event.modifiers() & Qt.ControlModifier)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
-        self._shift = False
+        self._shift = self._ctrl = False
         self._drag_start = None
         if self.canvas is not None:
             self.canvas.end_node_snap()
@@ -369,18 +391,22 @@ class VertexHandle(QGraphicsItem):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange and self.canvas is not None:
-            shift = self._shift or bool(
-                QApplication.keyboardModifiers() & Qt.ShiftModifier)
-            if shift and self._drag_start is not None:
-                # Constrain the node's MOVEMENT to 0 / 45 / 90 degrees from where
-                # the drag began -- the same ortho lock as the drawing tools, so
-                # an endpoint can be dragged straight up into a vertical position
-                # (the old lock was relative to the far neighbour, so a node that
-                # started well off-axis could never reach vertical).
-                return self.canvas._apply_ortho(self._drag_start, value)
+            mods = QApplication.keyboardModifiers()
+            shift = self._shift or bool(mods & Qt.ShiftModifier)
+            # Shift constrains the node's MOVEMENT to 0 / 45 / 90 degrees from
+            # where the drag began -- the same ortho lock as the drawing tools,
+            # so an endpoint can be dragged straight up into a vertical
+            # position (the old lock was relative to the far neighbour, so a
+            # node that started well off-axis could never reach vertical).
             if getattr(self.node, "is_ctrl", False):
-                return value      # tangent handles move freely (no osnap)
-            return self.canvas.snap_node(value)
+                # tangent handles move freely (no osnap)
+                if shift and self._drag_start is not None:
+                    return self.canvas._apply_ortho(self._drag_start, value)
+                return value
+            # a node snaps as a point being drawn does; Ctrl: no snapping
+            return self.canvas.snap_vertex(
+                value, start=self._drag_start, shift=shift,
+                free=self._ctrl or bool(mods & Qt.ControlModifier))
         if change == QGraphicsItem.ItemPositionHasChanged:
             self._dragged = True
             self.node.setter(Vec2(self.pos().x(), self.pos().y()))
@@ -1557,7 +1583,7 @@ class ShapeItem(QGraphicsItem):
         """Meaningful snap points in local coords, as (Vec2, kind): endpoints,
         edge/arc midpoints, arc & shape centres, circle quadrants."""
         from leathercad.shapes import Circle, Ellipse
-        from leathercad.path import Arc
+        from leathercad.path import Arc, CubicBezier, QuadraticBezier
         m = self.model
         typed = []
         if isinstance(m, (Circle, Ellipse)):
@@ -1575,6 +1601,12 @@ class ShapeItem(QGraphicsItem):
                 mid = seg._point(seg.a0 + seg._sweep() / 2.0)
                 typed += [(seg.start(), "end"), (mid, "mid"),
                           (seg.center, "center")]
+                last_end = seg.end()
+            elif isinstance(seg, (CubicBezier, QuadraticBezier)):
+                # a curve's middle is on the curve, halfway along it -- the
+                # middle of the straight line between its ends was offered,
+                # out on the empty paper beside it
+                typed += [(seg.start(), "end"), (_curve_middle(seg), "mid")]
                 last_end = seg.end()
             else:
                 a, b = seg.start(), seg.end()

@@ -5,6 +5,27 @@ Downloads are on [stitch-hero.com](https://stitch-hero.com) and the
 Windows and macOS builds ship with every release from 0.4.16 on (before it,
 a macOS build was made only for some).
 
+## Unreleased
+
+### Node editing snaps the way drawing does
+* **You can see what a node will snap to.** Dragging a node marks the snap
+  points near it, as drawing does, and the status bar names the one it's on.
+  Before, nothing showed until the node had already snapped.
+* **Corners win over stitch holes.** A node brought towards a stitched
+  piece's corner from inside landed on the corner's stitch hole, which sits
+  just inside it. A hole now takes a node only when it's brought right onto
+  the hole.
+* **A node lands on a line anywhere along it**, where its own edge meets
+  that line, so a line's end can be dragged onto the middle of another line.
+  Before, only a line's ends, middle and crossings caught it.
+* **A curve's middle is on the curve.** Its middle snap point was the
+  middle of the straight line between its ends, out on the empty paper
+  beside it.
+* **Shift and the grid work as they do when drawing.** With Shift held, a
+  node keeps to 0/45/90° but still stops on a line it meets; before, Shift
+  turned snapping off. With **Grid** on, a node that isn't near anything
+  snaps to the grid. **Ctrl** puts a node exactly where the pointer is.
+
 ## 0.4.17 — 2026-11-21
 
 ### Keeping in touch

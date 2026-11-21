@@ -4,7 +4,8 @@ your notes on it, the pattern it was cut from and that pattern's 1:1 PDF.
 ``leathercad.library`` keeps them, as plain folders; this is the window on
 them. On the left the pieces as a wall of pictures, the latest made first;
 on the right the one that is chosen. What you type is kept as you type it:
-there is nothing to save.
+there is nothing to save. A piece's pattern is a drawing like any other:
+opened from here (Open), saving it in the main window keeps it here.
 """
 
 from __future__ import annotations
@@ -17,11 +18,11 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import (QDate, QFile, QLocale, QPointF, QSize,
+from PySide6.QtCore import (QDate, QFile, QLocale, QPointF, QRectF, QSize,
                             QStandardPaths, Qt, QTimer, QUrl, Signal)
-from PySide6.QtGui import (QColor, QDesktopServices, QGuiApplication, QIcon,
-                           QImage, QImageReader, QKeySequence, QPainter,
-                           QPalette, QPen, QPixmap, QPolygonF)
+from PySide6.QtGui import (QColor, QDesktopServices, QFont, QGuiApplication,
+                           QIcon, QImage, QImageReader, QKeySequence,
+                           QPainter, QPalette, QPen, QPixmap, QPolygonF)
 from PySide6.QtWidgets import (QDateEdit, QDialog, QFileDialog, QFormLayout,
                                QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QListView, QListWidget, QListWidgetItem,
@@ -273,6 +274,27 @@ def _tile(img: Optional[QImage], size: int, palette: QPalette,
     return pm
 
 
+def _badge(tile: QPixmap, text: str = "3D") -> QPixmap:
+    """A tile with a small label in its corner: "3D" on a picture from the
+    3D assembly preview, to tell it from a photograph of the piece."""
+    p = QPainter(tile)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    font = QFont(p.font())                     # (tiles are drawn at twice
+    font.setBold(True)                         # their size)
+    font.setPointSizeF(max(8.0, font.pointSizeF()) * 1.6)
+    p.setFont(font)
+    fm = p.fontMetrics()
+    w, h = fm.horizontalAdvance(text) + 14, fm.height() + 4
+    box = QRectF(tile.width() - w - 8, tile.height() - h - 8, w, h)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(20, 20, 20, 175))
+    p.drawRoundedRect(box, 6.0, 6.0)
+    p.setPen(QColor(255, 255, 255))
+    p.drawText(box, Qt.AlignCenter, text)
+    p.end()
+    return tile
+
+
 def _icon(tile: QPixmap) -> QIcon:
     """A tile as an icon that looks the same chosen or not (the frame
     round it says which is chosen; Qt would tint the picture blue)."""
@@ -293,21 +315,37 @@ QListWidget::item:selected { border-color: palette(highlight);
 
 
 class _Picture(QFrame):
-    """A picture as large as fits, or a line of help where there is none."""
+    """A picture as large as fits, or a line of help where there is none
+    -- or, for a piece with no picture at all, a large invitation to add
+    photographs of it: clicked, it asks for them (``asked``)."""
 
     opened = Signal()
+    asked = Signal()
+
+    #: what the invitation says
+    INVITE = "Add photos of the finished piece"
+    HOW = ("Click here to choose them, or drop them on this window. "
+           "You can paste one with Ctrl+V, too.")
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._img: Optional[QImage] = None
         self.hint = ""
+        self.invite = False
+        self.caption = ""             # a line under a picture: what it is
         self.setFrameShape(QFrame.StyledPanel)
         self.setMinimumSize(240, 180)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-    def show_image(self, img: Optional[QImage], hint: str = ""):
+    def show_image(self, img: Optional[QImage], hint: str = "",
+                   invite: bool = False, caption: str = ""):
         self._img = img if img is not None and not img.isNull() else None
         self.hint = hint
+        self.caption = caption if self._img is not None else ""
+        self.invite = bool(invite) and self._img is None
+        self.setCursor(Qt.PointingHandCursor if self.invite
+                       else Qt.ArrowCursor)
+        self.setToolTip(self.HOW if self.invite else "")
         self.update()
 
     def has_image(self) -> bool:
@@ -318,7 +356,9 @@ class _Picture(QFrame):
         p = QPainter(self)
         area = self.contentsRect().adjusted(4, 4, -4, -4)
         p.fillRect(self.contentsRect(), self.palette().color(QPalette.Base))
-        if self._img is None:
+        if self._img is None and self.invite:
+            self._paint_invite(p, QRectF(area))
+        elif self._img is None:
             p.setPen(self.palette().color(QPalette.PlaceholderText))
             p.drawText(area.adjusted(12, 12, -12, -12),
                        Qt.AlignCenter | Qt.TextWordWrap, self.hint)
@@ -331,10 +371,76 @@ class _Picture(QFrame):
             y = area.y() + (area.height() - fit.height()) // 2
             p.drawImage(x, y, self._img.scaled(fit, Qt.KeepAspectRatio,
                                                Qt.SmoothTransformation))
+            if self.caption:
+                self._paint_caption(p, QRectF(area))
         p.end()
 
+    def _paint_caption(self, p: QPainter, area: QRectF) -> None:
+        """The caption on a dark band along the foot of the picture."""
+        p.setRenderHint(QPainter.Antialiasing, True)
+        font = QFont(self.font())
+        p.setFont(font)
+        fm = p.fontMetrics()
+        room = area.width() - 40
+        lines = fm.boundingRect(QRectF(0, 0, room, 200).toRect(),
+                                int(Qt.AlignHCenter | Qt.TextWordWrap),
+                                self.caption)
+        band = QRectF(area.left() + 12, area.bottom() - lines.height() - 22,
+                      area.width() - 24, lines.height() + 12)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(20, 20, 20, 170))
+        p.drawRoundedRect(band, 6.0, 6.0)
+        p.setPen(QColor(255, 255, 255))
+        p.drawText(band.adjusted(8, 6, -8, -6),
+                   Qt.AlignHCenter | Qt.AlignVCenter | Qt.TextWordWrap,
+                   self.caption)
+
+    def _paint_invite(self, p: QPainter, area: QRectF) -> None:
+        """A dashed place to drop photographs on, with a camera in it and
+        the words saying what it is for."""
+        pal = self.palette()
+        accent = pal.color(QPalette.Highlight)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        zone = area.adjusted(10, 10, -10, -10)
+        wash = QColor(accent)
+        wash.setAlpha(22)
+        p.setPen(QPen(accent, 2.0, Qt.DashLine))
+        p.setBrush(wash)
+        p.drawRoundedRect(zone, 12.0, 12.0)
+        big = QFont(self.font())
+        big.setBold(True)
+        big.setPointSizeF(max(8.0, big.pointSizeF()) * 1.35)
+        small = QFont(self.font())
+        # camera, words and how-to, as one block in the middle
+        cam_h, gap = 52.0, 14.0
+        top = zone.center().y() - (cam_h + gap + 30 + 44) / 2
+        cx, cy = zone.center().x(), top + 26
+        p.setPen(QPen(accent, 3.0))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(QRectF(cx - 34, cy - 18, 68, 44), 8.0, 8.0)
+        p.drawRoundedRect(QRectF(cx - 13, cy - 26, 26, 9), 3.0, 3.0)
+        p.drawEllipse(QPointF(cx, cy + 4), 13.0, 13.0)
+        y = top + cam_h + gap
+        p.setFont(big)
+        p.setPen(pal.color(QPalette.Text))
+        p.drawText(QRectF(zone.left() + 16, y, zone.width() - 32, 30),
+                   Qt.AlignHCenter | Qt.AlignTop, self.INVITE)
+        p.setFont(small)
+        p.setPen(pal.color(QPalette.PlaceholderText))
+        p.drawText(QRectF(zone.left() + 24, y + 30, zone.width() - 48, 60),
+                   Qt.AlignHCenter | Qt.AlignTop | Qt.TextWordWrap, self.HOW)
+
+    def mouseReleaseEvent(self, event):
+        if self.invite and event.button() == Qt.LeftButton \
+                and self.rect().contains(event.position().toPoint()):
+            event.accept()
+            self.asked.emit()
+            return
+        super().mouseReleaseEvent(event)
+
     def mouseDoubleClickEvent(self, _event):
-        self.opened.emit()
+        if not self.invite:
+            self.opened.emit()
 
 
 class LibraryWindow(QDialog):
@@ -423,10 +529,10 @@ class LibraryWindow(QDialog):
         self.strip.setStyleSheet(_CHOSEN)
         self.strip.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.strip.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.btn_add = QPushButton("Add pictures…")
-        self.btn_add.setToolTip("Add photographs of it from this computer. "
-                                "You can also drop them on this window, or "
-                                "paste one (Ctrl+V)")
+        self.btn_add = QPushButton("Add photos…")
+        self.btn_add.setToolTip("Add photographs of the finished piece from "
+                                "this computer. You can also drop them on "
+                                "this window, or paste one (Ctrl+V)")
         self.btn_cover = QPushButton("Make cover")
         self.btn_cover.setToolTip("Show this picture for the piece on the "
                                   "wall")
@@ -453,35 +559,43 @@ class LibraryWindow(QDialog):
         self.ed_notes.setMinimumHeight(90)
 
         self.lbl_pattern = QLabel()
-        self.btn_open_pattern = QPushButton("Open a copy")
+        self.lbl_pattern.setWordWrap(True)
+        self.btn_open_pattern = QPushButton("Open")
         self.btn_open_pattern.setToolTip(
-            "Open the pattern in the main window as a new drawing. The "
-            "library keeps its own copy as it is")
+            "Open the pattern in the main window to work on it. Saving it "
+            "there (Ctrl+S) keeps your changes here")
+        self.btn_open_copy = QPushButton("Open a copy")
+        self.btn_open_copy.setToolTip(
+            "Open a copy of the pattern as a new, untitled drawing, to start "
+            "another piece from it. This piece keeps its own as it is")
         self.btn_keep_drawing = QPushButton("Use the open drawing")
         self.btn_keep_drawing.setToolTip(
-            "Keep a copy of the drawing that is open in the main window as "
-            "this piece's pattern")
-        pat = QHBoxLayout()
-        pat.addWidget(self.lbl_pattern, 1)
+            "Make the drawing that is open in the main window this piece's "
+            "pattern. From then on, saving that drawing keeps it here")
         self.lbl_pdf = QLabel()
+        self.lbl_pdf.setWordWrap(True)
         self.btn_open_pdf = QPushButton("Open")
         self.btn_make_pdf = QPushButton("Make…")
-        self.btn_make_pdf.setToolTip("Make the 1:1 PDF of this piece's "
-                                     "pattern and keep it here")
         self.btn_attach_pdf = QPushButton("Attach…")
         self.btn_attach_pdf.setToolTip("Keep a PDF you already have with "
                                        "this piece")
         self.btn_remove_pdf = QPushButton("Remove")
-        pdf = QHBoxLayout()
-        pdf.addWidget(self.lbl_pdf, 1)
-        for row, buttons in ((pat, (self.btn_open_pattern,
-                                    self.btn_keep_drawing)),
-                             (pdf, (self.btn_open_pdf, self.btn_make_pdf,
-                                    self.btn_attach_pdf,
-                                    self.btn_remove_pdf))):
+        pat, pdf = QVBoxLayout(), QVBoxLayout()
+        for box, label, buttons in (
+                (pat, self.lbl_pattern, (self.btn_open_pattern,
+                                         self.btn_open_copy,
+                                         self.btn_keep_drawing)),
+                (pdf, self.lbl_pdf, (self.btn_open_pdf, self.btn_make_pdf,
+                                     self.btn_attach_pdf,
+                                     self.btn_remove_pdf))):
+            row = QHBoxLayout()
             for b in buttons:
                 b.setAutoDefault(False)
                 row.addWidget(b)
+            row.addStretch(1)
+            box.setSpacing(4)
+            box.addWidget(label)
+            box.addLayout(row)
 
         named = QHBoxLayout()
         named.addWidget(self.ed_title, 1)
@@ -546,6 +660,7 @@ class LibraryWindow(QDialog):
         self.wall.currentItemChanged.connect(self._chosen)
         self.strip.currentItemChanged.connect(self._picture_chosen)
         self.picture.opened.connect(self.open_picture)
+        self.picture.asked.connect(lambda: self.add_pictures())
         self.btn_add.clicked.connect(lambda: self.add_pictures())
         self.btn_cover.clicked.connect(self.make_cover)
         self.btn_drop.clicked.connect(self.remove_picture)
@@ -553,6 +668,7 @@ class LibraryWindow(QDialog):
         self.ed_made.dateChanged.connect(self._day_changed)
         self.ed_notes.textChanged.connect(self._typing)
         self.btn_open_pattern.clicked.connect(self.open_pattern)
+        self.btn_open_copy.clicked.connect(self.open_copy)
         self.btn_keep_drawing.clicked.connect(self.keep_drawing)
         self.btn_open_pdf.clicked.connect(self.open_pdf)
         self.btn_make_pdf.clicked.connect(self.make_pdf)
@@ -682,7 +798,10 @@ class LibraryWindow(QDialog):
                 cover = self.thumbs.image(path, _TILE * 2)
             words = "No picture yet" if path is None or drawn \
                 else "This picture can't be shown here"
-            icon = _icon(_tile(cover, _TILE * 2, self.palette(), words))
+            tile = _tile(cover, _TILE * 2, self.palette(), words)
+            if not drawn and item.photos and item.is_view(item.photos[0]):
+                tile = _badge(tile)
+            icon = _icon(tile)
             self._icons[key] = icon
         return icon
 
@@ -733,10 +852,12 @@ class LibraryWindow(QDialog):
         chosen = None
         for name in (item.photos if item else ()):
             small = self.thumbs.image(item.path(name), _SMALL * 2)
-            entry = QListWidgetItem(
-                _icon(_tile(small, _SMALL * 2, self.palette(), "?")), "")
+            tile = _tile(small, _SMALL * 2, self.palette(), "?")
+            view = item.is_view(name)
+            entry = QListWidgetItem(_icon(_badge(tile) if view else tile), "")
             entry.setData(Qt.UserRole, name)
-            entry.setToolTip(name)
+            entry.setToolTip(name + (" — a picture from the 3D assembly "
+                                     "preview" if view else ""))
             self.strip.addItem(entry)
             if name == show:
                 chosen = entry
@@ -755,19 +876,29 @@ class LibraryWindow(QDialog):
         name = entry.data(Qt.UserRole) if entry is not None else ""
         self._shown = name or ""
         if item is None or not name:
-            self.picture.show_image(
-                None, "" if item is None else
-                "No picture yet.\n\nAdd pictures…, drop a photograph here, "
-                "or paste one with Ctrl+V.")
+            # no picture yet: the place for them asks for photographs
+            self.picture.show_image(None, "", invite=item is not None)
         else:
             img = self.thumbs.image(item.path(name), _LARGE)
+            caption = ""
+            if item.is_view(name):
+                caption = "A 3D view, from the 3D assembly preview"
+                if all(item.is_view(n) for n in item.photos):
+                    caption += (". No photos of the finished piece yet: "
+                                "Add photos…, or drop them here")
             self.picture.show_image(
                 img, f"{name} is kept with this piece, but it is a kind of "
                      "picture that can't be shown here.\n\nDouble-click to "
-                     "open it in another program.")
+                     "open it in another program.", caption=caption)
         has = bool(item and name)
         self.btn_drop.setEnabled(has)
         self.btn_cover.setEnabled(has and item.photos[0] != name)
+
+    def open_here(self, item: Optional[Item]) -> bool:
+        """Whether a piece's pattern is the drawing open in the main
+        window -- the one that saving there keeps here."""
+        return item is not None and self.host is not None \
+            and getattr(self.host, "_library_id", None) == item.id
 
     def _fill_files(self) -> None:
         item = self.current
@@ -775,11 +906,24 @@ class LibraryWindow(QDialog):
         pattern = bool(item and item.pattern_path
                        and item.pattern_path.is_file())
         pdf = bool(item and item.pdf_path and item.pdf_path.is_file())
-        self.lbl_pattern.setText(item.pattern if pattern else "None kept")
+        self.lbl_pattern.setText(
+            (item.pattern + (" — open in the main window"
+                             if self.open_here(item) else ""))
+            if pattern else "None kept")
         self.lbl_pattern.setEnabled(pattern)
-        self.lbl_pdf.setText(item.pdf if pdf else "None kept")
+        stale = pdf and item.pdf_outdated
+        self.lbl_pdf.setText(
+            (item.pdf + (" — made before the pattern was last changed"
+                         if stale else "")) if pdf else "None kept")
+        self.lbl_pdf.setStyleSheet("color: #c27c0e;" if stale else "")
         self.lbl_pdf.setEnabled(pdf)
+        self.btn_make_pdf.setText("Make again…" if stale else "Make…")
+        self.btn_make_pdf.setToolTip(
+            "The pattern has been changed since this PDF was made: make it "
+            "again from the pattern as it is now" if stale else
+            "Make the 1:1 PDF of this piece's pattern and keep it here")
         self.btn_open_pattern.setEnabled(pattern and host)
+        self.btn_open_copy.setEnabled(pattern and host)
         self.btn_keep_drawing.setEnabled(bool(item) and host)
         self.btn_open_pdf.setEnabled(pdf)
         self.btn_make_pdf.setEnabled(pattern and host)
@@ -834,6 +978,8 @@ class LibraryWindow(QDialog):
             self._tell("Library", f"Couldn't save “{item.title}”:\n{err}")
             return
         self._retitle(item)
+        if self.host is not None and hasattr(self.host, "library_renamed"):
+            self.host.library_renamed(item)        # (its title bar)
 
     # -- entries -----------------------------------------------------------
 
@@ -886,6 +1032,8 @@ class LibraryWindow(QDialog):
                 return
         self.current = None
         self.reload()
+        if self.host is not None and hasattr(self.host, "library_deleted"):
+            self.host.library_deleted(item.id)
 
     def show_folder(self) -> None:
         if self.current is not None:
@@ -926,6 +1074,8 @@ class LibraryWindow(QDialog):
             self._settings.setValue("libraryFolder", str(self.library.root))
         self.current = None
         self.reload()
+        if self.host is not None and hasattr(self.host, "library_moved"):
+            self.host.library_moved()
 
     # -- pictures ----------------------------------------------------------
 
@@ -938,7 +1088,7 @@ class LibraryWindow(QDialog):
         if paths is None:
             ends = " ".join(f"*{e}" for e in picture_endings())
             paths, _ = QFileDialog.getOpenFileNames(
-                self, "Add pictures", self._last_folder(),
+                self, "Add photos of the finished piece", self._last_folder(),
                 f"Pictures ({ends});;All files (*)")
             if paths and self._settings is not None:
                 self._settings.setValue("libraryPictures",
@@ -962,7 +1112,7 @@ class LibraryWindow(QDialog):
         unseen = [n for n in added if not can_show(item.path(n))]
         if strange or unseen:
             self._tell(
-                "Add pictures",
+                "Add photos",
                 ("These aren't pictures, and were left out:\n"
                  + "\n".join(strange) + "\n\n" if strange else "")
                 + ("These are kept with the piece, but are a kind of "
@@ -1040,8 +1190,8 @@ class LibraryWindow(QDialog):
     # -- the pattern and its PDF ------------------------------------------
 
     def open_pattern(self) -> None:
-        """Open the chosen piece's pattern in the main window, as a new
-        drawing -- and get out of its way."""
+        """Open the chosen piece's pattern in the main window to work on --
+        saving it there keeps it here -- and get out of its way."""
         item = self.current
         if item is None or self.host is None or item.pattern_path is None \
                 or not item.pattern_path.is_file():
@@ -1050,15 +1200,27 @@ class LibraryWindow(QDialog):
         if self.host.library_open_pattern(item):
             self.close()
 
+    def open_copy(self) -> None:
+        """Open a copy of the chosen piece's pattern in the main window,
+        as a new drawing that is no piece's yet."""
+        item = self.current
+        if item is None or self.host is None or item.pattern_path is None \
+                or not item.pattern_path.is_file():
+            return
+        self._keep_text()
+        if self.host.library_open_copy(item):
+            self.close()
+
     def keep_drawing(self) -> None:
         item = self.current
         if item is None or self.host is None:
             return
         self._keep_text()
-        if item.pattern and not self._ask(
+        if item.pattern and not self.open_here(item) and not self._ask(
                 "Use the open drawing",
                 f"“{item.title}” has a pattern already.\n\nReplace it with "
-                "the drawing that is open in the main window?", "Replace"):
+                "the drawing that is open in the main window? From then on, "
+                "saving that drawing keeps it here.", "Replace"):
             return
         if self.host.library_keep_drawing(item):
             self._fill_files()

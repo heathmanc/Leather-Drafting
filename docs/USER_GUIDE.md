@@ -694,6 +694,13 @@ time, or play it through. With the view clicked: `Space` plays, `←` `→`
 step, `Home` and `End` jump to flat and folded. The view keeps the piece
 centred as it closes up, until you zoom or slide it yourself.
 
+**Keep this view in the library**, under the view, keeps a picture of the
+model as it is shown — folded and turned as you have it, the leather
+alone, without the fold lines, letters or hole marks — with the drawing in
+the library of finished pieces (§14), beside the photos of the finished
+piece. A drawing that isn't in the library yet is put there first, once
+you say so.
+
 Below the table the preview reports:
 
 * **Leather the bends take** — each bend is *angle × (inside radius + ½
@@ -1265,7 +1272,10 @@ linear dimensions it's an annotation — never exported.
 
 * **Save / Open** (`Ctrl+S` / `Ctrl+O`) — projects are plain JSON
   (`*.json` / `*.leathercad.json`). Everything round-trips: shapes, curves,
-  stitching settings, baked holes, groups, dimensions, text, layers.
+  stitching settings, baked holes, groups, dimensions, text, layers. A
+  drawing that is in the library of finished pieces (§14) is saved there
+  too — or only there, if you opened it from the library; the title bar
+  says which.
 * **File → Open recent** lists your last eight patterns (files that no longer
   exist quietly drop off). **File → New from template** starts from a complete
   example instead of a blank canvas.
@@ -1461,27 +1471,46 @@ the right. **Search** looks through names, notes and dates.
 **Putting a piece in**
 
 * **File → Add to library…** puts the drawing you have open in the
-  library, with a copy of the pattern as it stands, and opens the library
-  on it with its name ready to change.
+  library and opens the library on it, with its name ready to change and
+  a large space asking for photos of the finished piece. From then on the
+  drawing *is* that piece's pattern: saving it keeps it there (see
+  *Working on a pattern in the library*, below).
 * Or tick **Keep a copy in the library** when you export the 1:1 PDF
   (§13): the PDF is filed with the pattern, in an entry made for it if it
   has none. The box stays as you left it for the next pattern.
+* Or press **Keep this view in the library** in the 3D assembly preview:
+  a drawing that isn't in the library yet is put in, with a picture of it
+  in 3D (see *A 3D view*, below).
 * Or press **New entry** for something that has no drawing — made from a
   bought pattern, say — and give it its pictures and notes.
 
-**Pictures.** Photograph the piece with whatever you have and get the
-picture onto this computer; then press **Add pictures…**, or drag the
-files onto the window, or copy a picture and paste it (`Ctrl+V`). Pictures
+**Photos of the finished piece.** Photograph the piece with whatever you
+have and get the pictures onto this computer (a phone's photo app, AirDrop,
+email or a synced folder all do). A piece with no picture shows a large
+space that asks for them: **click it** to choose them, or **drag the files
+onto the window**, or copy a picture and **paste** it (`Ctrl+V`) —
+**Add photos…**, under the picture, does the same at any time. Pictures
 dropped on the window when no piece is chosen start an entry of their own.
-The first picture is the piece's **cover**, the one shown on the left: to
+The first photo is the piece's **cover**, the one shown on the left: to
 change it, click another in the strip under the large picture and press
 **Make cover**. Double-click the large picture to open the file itself.
-A piece with no picture yet is shown by its pattern, drawn small.
+On the left, a piece with no picture yet is shown by its pattern, drawn
+small.
 
 > JPEG, PNG, WebP, GIF, BMP and TIFF pictures are shown. The HEIC
 > photographs an iPhone takes are kept with the piece, but Windows can't
 > show them here: set the phone's camera to *Most Compatible* (Settings →
 > Camera → Formats), or save the photograph as a JPEG first.
+
+**A 3D view.** In the 3D assembly preview (View → 3D assembly preview…),
+fold and turn the model as you want to see it and press **Keep this view
+in the library**. A picture of it — the leather alone, without its fold
+lines, letters or hole marks — is kept with the drawing's piece, beside
+the photos; press it again for another. A drawing that isn't in the
+library yet is put in first, once you say so. A 3D view is marked **3D**
+on the wall and in the strip, and says so under the large picture. Your
+photos come before the 3D views: the first photo you add takes the cover
+from a 3D view, unless you chose that view as the cover yourself.
 
 **Name, date and notes.** Type them in. They are kept as you type: there
 is nothing to save. The date is the day you made the piece; the notes are
@@ -1489,29 +1518,49 @@ for whatever you'll want to know next time — the leather and its
 thickness, the thread, the hardware, how the edges were finished, how long
 it took, what you'd do differently.
 
-**The pattern and its PDF**
+**Working on a pattern in the library**
 
-* **Open a copy** opens the piece's pattern in the main window as a new,
-  unsaved drawing, and closes the library. Change the copy as you like:
-  the library's own stays as it was when the piece was made, and what you
-  make from the copy is a new piece, to add to the library as one.
-* **Use the open drawing** makes the drawing now open in the main window
-  the piece's pattern — for an entry started without one, or a pattern
-  corrected since. It asks before replacing one.
+* **Open** opens the piece's pattern in the main window, and closes the
+  library. It is that piece's drawing: the title bar shows the piece's
+  name, *Card wallet (in the library)*, and **File → Save** (`Ctrl+S`)
+  keeps your changes in the library — there is no file to choose. Closing
+  with changes not saved asks whether to save them to the piece. Renamed in
+  the library, the title bar follows. A drawing you put in with **Add to
+  library** is the same from then on.
+* A drawing that has a file of its own and is in the library — you added
+  it from its file — is saved in both, and its title bar says *(also in
+  the library)*. Opened from that file another day, it is still the
+  piece's. (Once the piece's pattern has been changed and saved in the
+  library alone, the file is an old copy, and opening it no longer brings
+  it back over the library's.)
+* **Save As…** makes the drawing a file of its own: from then on it is
+  that file's, and the piece in the library keeps the pattern as it was
+  last saved there.
+* **Open a copy** opens a copy of the pattern as a new, untitled drawing,
+  to start another piece from it. The piece keeps its own as it is; add
+  the new one to the library as a piece of its own.
+* **Use the open drawing** makes the drawing open in the main window the
+  piece's pattern — for an entry started without one, or another drawing
+  to take its place (it asks first). From then on, saving that drawing
+  keeps it there.
 * In the **1:1 PDF** row, **Make…** makes the PDF from the piece's own
   pattern, with the print options of §13, and keeps it with the piece.
-  **Attach…** keeps a PDF you already have instead (so does dropping one
-  on the window); **Open** shows it in your PDF viewer, to print again.
-* A drawing you added knows its entry: export its PDF again later, and
-  **Keep a copy in the library** is already ticked and names the piece.
-  The drawing as it now stands and the new PDF take the place of the ones
-  kept with the piece, so the two always match.
+  When the pattern has been changed since the PDF was made, the row says
+  so in amber and the button reads **Make again…**. **Attach…** keeps a
+  PDF you already have instead (so does dropping one on the window);
+  **Open** shows it in your PDF viewer, to print again.
+* A drawing that is in the library knows its piece: export its PDF again,
+  and **Keep a copy in the library** is already ticked and names the
+  piece. The drawing as it now stands and the new PDF take the place of
+  the ones kept with the piece, so the two always match.
 * **Nothing is lost when a pattern or PDF is replaced.** The one the
   piece had is moved into a folder called *earlier* inside the piece's
   folder (**Show folder**), named for the day it was put in — so the
   pattern a finished piece was really cut from survives your going on
-  changing the drawing. Only one that was put in within the last day, and
-  so was still being worked on, is simply replaced.
+  changing the drawing. Save as often as you like: one put in today is
+  simply replaced, so *earlier* keeps the last of each day it was saved
+  on. An earlier one opened from that folder is a drawing of its own,
+  not the piece's.
 
 **Where it's kept.** The library is an ordinary folder on this computer —
 *Stitch Hero Library*, in your Documents — holding one folder for each
@@ -1524,7 +1573,8 @@ OneDrive, Dropbox or iCloud keeps the same on your other computers — and
 offers to move the pieces there.
 
 **Delete entry…** sends a piece's folder to the recycle bin, with its
-pictures, pattern and PDF.
+pictures, pattern and PDF. If its pattern is open in the main window, the
+drawing stays open there, saved nowhere now: save it as a file to keep it.
 
 ---
 

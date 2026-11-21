@@ -5,6 +5,7 @@ The library is a folder, and each finished piece is a folder in it:
     Card wallet/
         item.json                    its name, when it was made, the notes
         IMG_2041.jpg ...             pictures of it (the first is its cover)
+        3D view.png                  a picture from the 3D assembly preview
         Card wallet.leathercad.json  the pattern it was cut from
         Card wallet.pdf              the 1:1 PDF of that pattern
         earlier/                     patterns and PDFs these have replaced
@@ -20,11 +21,11 @@ from __future__ import annotations
 
 import datetime
 import filecmp
+import hashlib
 import json
 import os
 import re
 import shutil
-import time
 import uuid
 from pathlib import Path
 from typing import List, Optional
@@ -36,9 +37,8 @@ PICTURES = (".jpg", ".jpeg", ".jfif", ".png", ".webp", ".gif", ".bmp",
 PATTERN_END = ".leathercad.json"
 #: The folder, in a piece's own, for the patterns and PDFs it had before.
 EARLIER = "earlier"
-#: A pattern or PDF replaced within this long of being put in was still
-#: being worked on, and isn't kept: a day, in seconds.
-FRESH = 24 * 3600.0
+#: The name a picture from the 3D assembly preview is given.
+VIEW_NAME = "3D view.png"
 
 _BAD = re.compile(r'[\\/:*?"<>|\x00-\x1f]+')
 _RESERVED = {"CON", "PRN", "AUX", "NUL"} \
@@ -90,8 +90,32 @@ def _free(folder: Path, name: str, keep: Optional[str] = None) -> str:
     return out
 
 
+def _date_today() -> datetime.date:
+    return datetime.date.today()
+
+
 def _today() -> str:
-    return datetime.date.today().isoformat()
+    return _date_today().isoformat()
+
+
+def _digest(path: Optional[Path]) -> str:
+    """What a file holds, in short: the same for two files that hold the
+    same, "" for no file."""
+    if path is None:
+        return ""
+    try:
+        return hashlib.sha1(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def _same_file(a, b) -> bool:
+    """Whether two paths name the same file, however they are written."""
+    try:
+        return os.path.normcase(os.path.abspath(str(a))) \
+            == os.path.normcase(os.path.abspath(str(b)))
+    except (TypeError, ValueError):
+        return False
 
 
 def _now() -> str:
@@ -103,11 +127,14 @@ class Item:
 
     ``title``, ``made`` (the day, as ``YYYY-MM-DD``, or "") and ``notes``
     are yours to set -- then ``save()``. ``photos`` are the names of its
-    pictures, its cover first; ``pattern`` and ``pdf`` the names of the
-    pattern it was cut from and of that pattern's 1:1 PDF ("" for none).
-    ``source`` is where the pattern was when it was put in, for filing a
-    PDF made from it later. ``id`` never changes, though the folder is
-    renamed with the title."""
+    pictures, its cover first; ``views`` those of them that are pictures
+    from the 3D assembly preview, not photographs; ``cover_chosen``
+    whether the cover was picked by hand. ``pattern`` and ``pdf`` are the
+    names of the pattern it was cut from and of that pattern's 1:1 PDF
+    ("" for none), and ``pdf_of`` what the pattern held when the PDF was
+    made (see ``pdf_outdated``). ``source`` is the file of the drawing
+    the pattern was copied from, while the two are the same drawing.
+    ``id`` never changes, though the folder is renamed with the title."""
 
     def __init__(self, folder: Path):
         self.folder = Path(folder)
@@ -118,8 +145,11 @@ class Item:
         self.created = _now()
         self.modified = self.created
         self.photos: List[str] = []
+        self.views: List[str] = []
+        self.cover_chosen = False
         self.pattern = ""
         self.pdf = ""
+        self.pdf_of = ""
         self.source = ""
 
     # -- reading and writing ----------------------------------------------
@@ -162,8 +192,14 @@ class Item:
             name = kept(name)
             if name and name not in item.photos:
                 item.photos.append(name)
+        views = d.get("views") if isinstance(d.get("views"), list) else []
+        item.views = [n for n in (kept(v) for v in views)
+                      if n and n in item.photos]
+        item.cover_chosen = d.get("cover_chosen") is True \
+            and bool(item.photos)
         item.pattern = kept(d.get("pattern"))
         item.pdf = kept(d.get("pdf"))
+        item.pdf_of = text("pdf_of") if item.pdf else ""
         for name in sorted(here.values(), key=str.lower):
             low = name.lower()
             if low.endswith(PICTURES) and not low.startswith("."):
@@ -182,8 +218,9 @@ class Item:
         d = {"library": 1, "id": self.id, "title": self.title,
              "made": self.made, "notes": self.notes,
              "created": self.created, "modified": self.modified,
-             "photos": list(self.photos), "pattern": self.pattern,
-             "pdf": self.pdf, "source": self.source}
+             "photos": list(self.photos), "views": list(self.views),
+             "cover_chosen": self.cover_chosen, "pattern": self.pattern,
+             "pdf": self.pdf, "pdf_of": self.pdf_of, "source": self.source}
         tmp = self.folder / (INFO + ".tmp")
         tmp.write_text(json.dumps(d, indent=1, ensure_ascii=False),
                        encoding="utf-8")
@@ -221,8 +258,15 @@ class Item:
         """The picture that stands for the piece, if it has one."""
         return self.folder / self.photos[0] if self.photos else None
 
-    def add_photo(self, source, name: Optional[str] = None) -> str:
-        """Copy a picture into the piece. Returns the name it has there."""
+    def add_photo(self, source, name: Optional[str] = None,
+                  view: bool = False) -> str:
+        """Copy a picture into the piece. Returns the name it has there.
+
+        A ``view`` -- a picture from the 3D assembly preview -- goes after
+        the rest. A photograph of the piece goes after the photographs
+        before it but ahead of the views, so that the first photograph
+        becomes the cover in place of a view -- unless the cover was
+        chosen by hand, which it leaves where it is."""
         source = Path(source)
         name = safe_file(name or source.name, "picture")
         if not name.lower().endswith(PICTURES):
@@ -230,15 +274,32 @@ class Item:
         self.folder.mkdir(parents=True, exist_ok=True)
         name = _free(self.folder, name)
         shutil.copy2(source, self.folder / name)
-        self.photos.append(name)
+        if view:
+            self.photos.append(name)
+            self.views.append(name)
+        else:
+            real = [i for i, n in enumerate(self.photos)
+                    if n not in self.views]
+            at = real[-1] + 1 if real else 0
+            if at == 0 and self.cover_chosen and self.photos:
+                at = 1
+            self.photos.insert(at, name)
         self.save()
         return name
+
+    def is_view(self, name: str) -> bool:
+        """Whether a picture of the piece is from the 3D assembly preview."""
+        return name in self.views
 
     def remove_photo(self, name: str) -> None:
         """Take a picture out of the piece, and delete its copy."""
         if name not in self.photos:
             return
+        if self.photos[0] == name:
+            self.cover_chosen = False
         self.photos.remove(name)
+        if name in self.views:
+            self.views.remove(name)
         try:
             (self.folder / name).unlink()
         except OSError:
@@ -250,6 +311,7 @@ class Item:
         if name in self.photos and self.photos[0] != name:
             self.photos.remove(name)
             self.photos.insert(0, name)
+            self.cover_chosen = True
             self.save()
 
     # -- its pattern and the pattern's PDF --------------------------------
@@ -291,12 +353,14 @@ class Item:
         ``new``: keep the one it had in the piece's ``earlier`` folder,
         named for the day it was put in. A piece in the library is a
         record of something made, and the pattern it was made from is
-        not to vanish because a later one is filed with it.
+        not to vanish because a later one is saved over it.
 
-        Not kept: one the same as the new one, and one put in within the
-        last day -- still being worked on, then, not a record yet."""
+        Not kept: one the same as the new one, and one put in today --
+        still being worked on, then, not a record yet. So saving a
+        pattern again and again keeps the last of each day it was saved
+        on, and no more."""
         put_in = was.stat().st_mtime
-        if time.time() - put_in < FRESH \
+        if datetime.date.fromtimestamp(put_in) >= _date_today() \
                 or filecmp.cmp(was, new, shallow=False):
             return
         folder = self.folder / EARLIER
@@ -313,15 +377,28 @@ class Item:
 
     def attach_pattern(self, source, origin: Optional[str] = None) -> str:
         """Keep a copy of a pattern file as the one the piece was cut
-        from. ``origin`` is where the drawing itself lives, if anywhere."""
+        from. ``origin`` is the file of the drawing it is a copy of, if
+        there is one ("" for none)."""
+        was = self.source
         if origin is not None:
             self.source = str(origin)
-        return self._keep("pattern", source,
-                          safe_name(self.title) + PATTERN_END)
+        try:
+            return self._keep("pattern", source,
+                              safe_name(self.title) + PATTERN_END)
+        except BaseException:
+            self.source = was
+            raise
 
     def attach_pdf(self, source) -> str:
-        """Keep a copy of a PDF as the piece's 1:1 pattern."""
-        return self._keep("pdf", source, safe_name(self.title) + ".pdf")
+        """Keep a copy of a PDF as the piece's 1:1 pattern: the PDF of its
+        pattern as it is now."""
+        was = self.pdf_of
+        self.pdf_of = _digest(self.pattern_path)
+        try:
+            return self._keep("pdf", source, safe_name(self.title) + ".pdf")
+        except BaseException:
+            self.pdf_of = was
+            raise
 
     def remove_pdf(self) -> None:
         if self.pdf:
@@ -330,7 +407,24 @@ class Item:
             except OSError:
                 pass
             self.pdf = ""
+            self.pdf_of = ""
             self.save()
+
+    @property
+    def pdf_outdated(self) -> bool:
+        """Whether the pattern has been changed since the PDF was made of
+        it. (A PDF kept before the library said what it was made of, or
+        with no pattern to compare, is taken to be up to date.)"""
+        if not (self.pdf and self.pdf_of and self.pattern):
+            return False
+        now = _digest(self.pattern_path)
+        return bool(now) and now != self.pdf_of
+
+    def is_pattern(self, path) -> bool:
+        """Whether a file is the piece's pattern itself (not one of the
+        earlier ones, nor the drawing it was copied from)."""
+        return bool(path) and self.pattern_path is not None \
+            and _same_file(path, self.pattern_path)
 
     @property
     def pattern_path(self) -> Optional[Path]:
@@ -404,6 +498,18 @@ class Library:
             return None
         for item in self.items():
             if item.holds(path):
+                return item
+        return None
+
+    def drawing_of(self, path) -> Optional[Item]:
+        """The piece whose pattern a drawing's file is: the pattern kept in
+        it, or the file that pattern is a copy of. (Not one of the earlier
+        patterns kept with a piece: opened, that is a drawing of its own.)"""
+        if not path:
+            return None
+        for item in self.items():
+            if item.is_pattern(path) or (
+                    item.source and _same_file(path, item.source)):
                 return item
         return None
 

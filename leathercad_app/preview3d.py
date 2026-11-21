@@ -32,7 +32,8 @@ from PySide6.QtGui import QColor, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QAbstractSpinBox,
                                QCheckBox, QDialog,
                                QFormLayout, QFrame, QHBoxLayout, QHeaderView,
-                               QLabel, QPushButton, QScrollArea, QSlider,
+                               QLabel, QMessageBox, QPushButton, QScrollArea,
+                               QSlider,
                                QSplitter, QStyle, QTableWidget,
                                QTableWidgetItem, QTabWidget, QToolButton,
                                QVBoxLayout, QWidget)
@@ -821,12 +822,31 @@ class FoldPreviewDialog(QDialog):
                                      "other, to see what lies on what")
         self.slider_apart.valueChanged.connect(self._apart_slid)
         self._apart_label = QLabel("Pull apart")
+        # a picture of the model as it is shown, for the library: only with
+        # a main window to put it in the drawing's entry
+        self._keeper = getattr(parent, "library_keep_view", None)
+        self.btn_keep_view = QPushButton("Keep this view in the library")
+        self.btn_keep_view.setAutoDefault(False)
+        self.btn_keep_view.setToolTip(
+            "Keep a picture of the model as it is shown now — folded and "
+            "turned as you have it — with this drawing in the library, "
+            "beside the photographs of the finished piece.\n"
+            "The fold lines, letters and hole marks are left out of it.")
+        self.btn_keep_view.clicked.connect(self._keep_view)
+        self.btn_keep_view.setVisible(self._keeper is not None)
+        self._kept_soon = QTimer(self)         # the button's own words back
+        self._kept_soon.setSingleShot(True)
+        self._kept_soon.setInterval(4000)
+        self._kept_soon.timeout.connect(
+            lambda: self.btn_keep_view.setText("Keep this view in the "
+                                               "library"))
         apart = QHBoxLayout()
         apart.addWidget(self._apart_label)
         apart.addWidget(self.slider_apart, 1)
         apart.addStretch(1)
         apart.addWidget(self.chk_through)
         apart.addStretch(1)
+        apart.addWidget(self.btn_keep_view)
 
         left = QVBoxLayout()
         left.addWidget(self.view, 1)
@@ -1719,6 +1739,37 @@ class FoldPreviewDialog(QDialog):
         if self._on_bench():
             where = {"front": "top", "back": "under"}.get(where, where)
         self.view.look_from(where)
+
+    # -- a picture for the library --------------------------------------------
+
+    def _keep_view(self) -> None:
+        """Keep a picture of the model as it is shown with the drawing's
+        entry in the library (putting the drawing there, if it isn't, once
+        you say so)."""
+        if self._keeper is None:
+            return
+        img = self.view.picture()
+        if img is None:
+            return
+        item = self._keeper(img, ask=self._ask_add)
+        if item is not None:
+            self.btn_keep_view.setText("Kept in the library ✓")
+            self._kept_soon.start()
+
+    def _ask_add(self, name: str) -> bool:
+        """Whether to put a drawing that isn't in the library there, for
+        its picture to be kept with it."""
+        box = QMessageBox(
+            QMessageBox.Question, "Keep this view in the library",
+            f"“{name}” isn't in the library yet.\n\nAdd it, with this "
+            "picture? The library keeps the pattern with it, and saving the "
+            "drawing keeps it up to date there.", QMessageBox.Cancel, self)
+        box.addButton("Add to library", QMessageBox.AcceptRole)
+        box.setDefaultButton(QMessageBox.Cancel)
+        box.exec()
+        clicked = box.clickedButton()
+        return clicked is not None \
+            and box.buttonRole(clicked) == QMessageBox.AcceptRole
 
     # -- folding and unfolding ------------------------------------------------
 

@@ -4,6 +4,45 @@ Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/re
 page. Windows builds ship with every release; the macOS build is paused and is
 made only when the release workflow is run by hand with it ticked.
 
+## Unreleased
+
+### The library: a pattern in it is the drawing
+* **Open a pattern from the library and it is that piece's drawing.** It
+  used to open as an *Untitled* copy, and changes reached the library only
+  through *Use the open drawing*. Now the title bar shows the piece's
+  name — *Card wallet (in the library)* — and **Save** (`Ctrl+S`) keeps
+  your changes there, with no file to choose. Closing with changes not
+  saved asks to save them to the piece; renamed in the library, the title
+  bar follows. **Open a copy** is still there, for starting another piece
+  from an old pattern.
+* **Add to library does the same.** Once added, the drawing is the
+  piece's: saving it keeps it in the library. A drawing added from a file
+  of its own is saved in both — *wallet.leathercad.json (also in the
+  library)* — and is the piece's again when that file is opened another
+  day. **Save As** makes a drawing of its own; the piece keeps what was
+  last saved there.
+* **Every day's pattern is kept.** What a piece had is set aside in its
+  *earlier* folder when it was put in on an earlier day — the last of each
+  day it was saved on — where before only a pattern more than 24 hours old
+  was kept, so saving in the evening and again next morning lost one.
+* **A 1:1 PDF older than its pattern says so**, in amber, and *Make…*
+  becomes **Make again…**.
+* A piece deleted from the library while its pattern is open leaves the
+  drawing open, saved nowhere — the title bar and the next Save say so.
+  Work recovered after a crash is still the piece's.
+
+### Photos and a 3D view in the library
+* **A piece with no picture asks for photos** of the finished piece: a
+  large space, click it to choose them, or drop them on it (**Add
+  photos…** and `Ctrl+V` still work).
+* **Keep this view in the library**, in the 3D assembly preview, keeps a
+  picture of the model as you have it folded and turned — the leather
+  alone, without fold lines, letters or hole marks — with the drawing's
+  piece; a drawing not in the library yet is put in first, once you say
+  so. 3D views are marked **3D**, and your photos come first: the first
+  photo you add takes the cover from a 3D view, unless you chose that
+  view as the cover.
+
 ## 0.4.15 — 2026-11-20
 
 ### Drawing as in Fusion

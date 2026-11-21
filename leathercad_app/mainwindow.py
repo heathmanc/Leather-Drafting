@@ -166,9 +166,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.doc = document or Document()
         self.path: Optional[str] = None
-        # the library's entry for this drawing, when it was put there or
-        # opened from there (see the library methods below)
+        # the library's entry this drawing is, when it was put there or
+        # opened from there: saving it keeps it there (see the library
+        # methods below), and the title bar says so, by the entry's name
         self._library_id: Optional[str] = None
+        self._library_title = ""
         self.setWindowTitle("Stitch Hero")
         self.setWindowIcon(app_icon())
         self.resize(1200, 800)
@@ -297,9 +299,11 @@ class MainWindow(QMainWindow):
         test windows proceed silently."""
         if not (self._unsaved_changes and self.isVisible()):
             return True
+        entry = self._library_title if self._library_id else ""
         ans = QMessageBox.question(
             self, "Unsaved changes",
-            f"Save your changes before {verb}?",
+            f"Save your changes to “{entry}” in the library before {verb}?"
+            if entry else f"Save your changes before {verb}?",
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard
             | QMessageBox.StandardButton.Cancel,
@@ -340,6 +344,7 @@ class MainWindow(QMainWindow):
         wrapper = {
             "autosave": 1,
             "source_path": self.path,
+            "library_id": self._library_id,
             "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
             "doc": self.doc.to_dict(),
         }
@@ -379,8 +384,17 @@ class MainWindow(QMainWindow):
             return False
         source = wrapper.get("source_path")
         saved_at = wrapper.get("saved_at", "")
+        entry = None
+        if isinstance(wrapper.get("library_id"), str) \
+                and wrapper["library_id"]:
+            try:
+                entry = self.library().find(wrapper["library_id"])
+            except OSError:
+                entry = None
         if ask is None:                        # pragma: no cover - GUI dialog
-            name = os.path.basename(source) if source else "an unsaved pattern"
+            name = os.path.basename(source) if source else (
+                f"“{entry.title}” from the library" if entry is not None
+                else "an unsaved pattern")
             ans = QMessageBox.question(
                 self, "Recover unsaved work?",
                 f"Stitch Hero didn't close cleanly last time.\n\n"
@@ -395,6 +409,8 @@ class MainWindow(QMainWindow):
         if not accept:
             return False
         self._adopt_document(doc, source, fit=True)
+        if entry is not None:                  # ... and it is the entry's
+            self._link_library(entry)
         self._unsaved_changes = True           # recovered != saved on disk
         self._update_title()
         return True
@@ -405,6 +421,7 @@ class MainWindow(QMainWindow):
         self.doc = doc
         self.path = path
         self._library_id = None
+        self._library_title = ""
         self.canvas.doc = doc
         # a traced or graded file with hundreds of distinct pieces takes a
         # few seconds of stitch fitting: show the wait cursor meanwhile
@@ -2298,6 +2315,9 @@ class MainWindow(QMainWindow):
         self.open_path(fn)
 
     def open_path(self, fn: str) -> bool:
+        """Open a drawing's file. A file that is in the library -- the
+        pattern an entry keeps, or the file that pattern is a copy of --
+        is that entry's drawing: saving it keeps it there too."""
         try:
             doc = Document.load(fn)
         except Exception as e:
@@ -2305,8 +2325,22 @@ class MainWindow(QMainWindow):
                                  f"Couldn't open {os.path.basename(fn)}:\n{e}")
             self._forget_recent(fn)
             return False
+        try:
+            item = self.library().drawing_of(fn)
+        except OSError:
+            item = None
+        if item is not None and item.is_pattern(fn):
+            # the library's own copy, opened as a file: as if it had been
+            # opened from the library
+            self._adopt_library_drawing(doc, item)
+            return True
         self._adopt_document(doc, fn, fit=True)
         self._add_recent(fn)
+        if item is not None:
+            self._link_library(item)
+            self.statusBar().showMessage(
+                f"This drawing is in the library as “{item.title}”: saving "
+                "it (Ctrl+S) keeps it there too", 10000)
         return True
 
     # -- recent files ------------------------------------------------------
@@ -2363,21 +2397,72 @@ class MainWindow(QMainWindow):
             return
         self.open_path(fn)
 
-    def save_document(self):
-        if not self.path:
+    def save_document(self) -> bool:
+        """Save the drawing where it is kept: in its file, in its entry in
+        the library, or in both. One kept nowhere yet is saved as a file
+        (Save As). Returns whether it was saved."""
+        had = self._library_title if self._library_id else ""
+        item = self.library_entry() if (self._library_id or self.path) \
+            else None
+        if had and item is None:
+            QMessageBox.information(
+                self, "Save",
+                f"“{had}” is no longer in the library: it was deleted, or "
+                "the library is kept in another folder now."
+                + ("\n\nThe drawing is saved in its file."
+                   if self.path else
+                   "\n\nSave the drawing as a file, or put it in the "
+                   "library again with File → Add to library."))
+        if item is None and not self.path:
             return self.save_document_as()
-        self.doc.save(self.path)
+        if self.path and not self._write_file(self.path):
+            return False
+        if item is not None and not self.library_keep_drawing(item):
+            return False
         self._after_save()
+        if item is not None:
+            where = f" and in {os.path.basename(self.path)}" \
+                if self.path else ""
+            self.statusBar().showMessage(
+                f"Saved in the library as “{item.title}”{where}"
+                + (". Its 1:1 PDF is of the pattern as it was: make it "
+                   "again in the library" if item.pdf_outdated else ""),
+                10000)
+        return True
 
-    def save_document_as(self):
+    def save_document_as(self) -> bool:
+        """Save the drawing as a file of its own. A drawing that was a
+        library entry's is that file's from now on: the entry keeps the
+        pattern as it was last saved there."""
+        base = re.sub(r'[\\/:*?"<>|]+', "-",
+                      self._pattern_title()).strip(" .") or "untitled"
         fn, _ = QFileDialog.getSaveFileName(
-            self, "Save As", "untitled.leathercad.json",
+            self, "Save As", base + ".leathercad.json",
             "Stitch Hero (*.json *.leathercad.json)")
         if not fn:
-            return
+            return False
+        if not self._write_file(fn):
+            return False
+        was = self._library_title if self._library_id else ""
         self.path = fn
-        self.doc.save(fn)
+        self._link_library(None)
         self._after_save()
+        if was:
+            self.statusBar().showMessage(
+                f"Saved as {os.path.basename(fn)}, a drawing of its own. "
+                f"“{was}” in the library stays as it was last saved there",
+                10000)
+        return True
+
+    def _write_file(self, path: str) -> bool:
+        try:
+            self.doc.save(path)
+        except OSError as e:
+            QMessageBox.critical(self, "Save failed",
+                                 f"Couldn't save {os.path.basename(path)}:"
+                                 f"\n{e}")
+            return False
+        return True
 
     def _after_save(self):
         self._unsaved_changes = False
@@ -2567,13 +2652,15 @@ class MainWindow(QMainWindow):
               ("Custom size", 0.0, 0.0))
 
     def _pattern_title(self) -> str:
-        """The pattern's name for a print: the file's name, else the
-        drawing's own name."""
+        """The pattern's name for a print: the file's name, else the name
+        of the library entry it is, else the drawing's own name."""
         if self.path:
             base = os.path.basename(self.path)
             if base.lower().endswith(".leathercad.json"):
                 return base[:-len(".leathercad.json")]
             return os.path.splitext(base)[0]
+        if self._library_id and self._library_title:
+            return self._library_title
         name = (getattr(self.doc, "name", "") or "").strip()
         return "" if name in ("", "Untitled") else name
 
@@ -2721,8 +2808,8 @@ class MainWindow(QMainWindow):
                 "the pattern and 1:1 PDF it was made from."
                 + ("\n\nThis drawing and its PDF take the place of the "
                    "ones kept with the piece. Those are moved to “earlier” "
-                   "in the piece's folder, unless they were only put there "
-                   "in the last day." if entry is not None else ""))
+                   "in the piece's folder, unless they were put there "
+                   "today." if entry is not None else ""))
             keep.setChecked(entry is not None
                             or s.value("pdfToLibrary", False, type=bool))
             lay.addWidget(keep)
@@ -2807,16 +2894,76 @@ class MainWindow(QMainWindow):
         return Library(library_folder(self._settings()))
 
     def library_entry(self):
-        """The library's entry for the open drawing, if it has one: the one
-        it was put in or opened from, else the one that was made from this
-        drawing's file."""
+        """The library's entry the open drawing is, if any: the one it was
+        put in or opened from, else the one whose pattern is a copy of
+        this drawing's file. Saving the drawing keeps it there."""
         lib = self.library()
         if self._library_id:
             item = lib.find(self._library_id)
             if item is not None:
+                if item.title != self._library_title:
+                    self._library_title = item.title   # renamed since
+                    self._update_title()
                 return item
-            self._library_id = None            # deleted since
-        return lib.holding(self.path) if self.path else None
+            self._lost_entry()                 # deleted since
+        if self.path:
+            item = lib.drawing_of(self.path)
+            if item is not None:
+                self._link_library(item)
+            return item
+        return None
+
+    def _link_library(self, item) -> None:
+        """The drawing is ``item``'s from now on: saving it keeps it in
+        that entry of the library (None: it is no entry's)."""
+        self._library_id = item.id if item is not None else None
+        self._library_title = item.title if item is not None else ""
+        self._update_title()
+
+    def _lost_entry(self) -> None:
+        """The drawing's entry is gone from the library (deleted, or the
+        library is kept elsewhere now): the drawing is no entry's -- and
+        if it has no file either, it is saved nowhere."""
+        self._library_id = None
+        self._library_title = ""
+        if not self.path:
+            self._unsaved_changes = True
+        self._update_title()
+
+    def library_renamed(self, item) -> None:
+        """The library window gave an entry another name."""
+        if item.id == self._library_id and item.title != self._library_title:
+            self._library_title = item.title
+            self._update_title()
+
+    def library_deleted(self, item_id: str) -> None:
+        """The library window deleted an entry."""
+        if item_id and item_id == self._library_id:
+            title = self._library_title
+            self._lost_entry()
+            self.statusBar().showMessage(
+                f"“{title}” was deleted from the library. The drawing is "
+                "still open here" + ("" if self.path else ", not saved "
+                                     "anywhere now"), 10000)
+
+    def library_moved(self) -> None:
+        """The library is kept in another folder now: is the drawing's
+        entry still in it?"""
+        if self._library_id:
+            try:
+                self.library_entry()
+            except OSError:
+                pass
+
+    def _library_changed(self, item=None) -> None:
+        """Show the library window, if it is open, what was just changed:
+        on ``item``, if one is given, else on the entry it shows."""
+        win = getattr(self, "_library_win", None)
+        try:
+            if win is not None and win.isVisible():
+                win.reload(select=item.id if item is not None else None)
+        except RuntimeError:                   # closed and freed
+            pass
 
     def show_library(self, select: Optional[str] = None):
         """Open the library window (or bring it forward), on the entry
@@ -2875,13 +3022,27 @@ class MainWindow(QMainWindow):
 
     def library_keep_drawing(self, item) -> bool:
         """Keep a copy of the open drawing, as it stands, as the pattern
-        of a library entry; the drawing is that entry's from now on."""
+        of a library entry. The drawing is that entry's from now on:
+        saving it keeps it there. (A drawing with no file of its own is
+        saved by this.)"""
+        import filecmp
         import tempfile
         fd, tmp = tempfile.mkstemp(suffix=".leathercad.json")
         os.close(fd)
         try:
             self.doc.save(tmp)
-            item.attach_pattern(tmp, origin=self.path or "")
+            origin = self.path or ""
+            if not origin and item.source:
+                # the entry was put in from a file. While that file holds
+                # what is kept now, it is still this drawing; once they
+                # differ it is an old copy, and opening it must not bring
+                # its drawing back over the entry's
+                try:
+                    if filecmp.cmp(item.source, tmp, shallow=False):
+                        origin = item.source
+                except OSError:
+                    pass
+            item.attach_pattern(tmp, origin=origin)
         except OSError as e:
             QMessageBox.critical(self, "Library",
                                  f"Couldn't keep the pattern:\n{e}")
@@ -2891,13 +3052,41 @@ class MainWindow(QMainWindow):
                 os.remove(tmp)
             except OSError:
                 pass
-        self._library_id = item.id
+        self._link_library(item)
+        if not self.path:
+            self._after_save()             # the entry is where it's kept
+        self._library_changed()
         return True
 
     def library_open_pattern(self, item) -> bool:
-        """Open a library entry's pattern as a new drawing: a copy, so the
-        library's stays as it was when the piece was made. The copy is no
-        entry's -- what is made from it next is another piece."""
+        """Open a library entry's pattern in the main window, as that
+        entry's drawing: saving it (Ctrl+S) keeps the changes in the
+        entry. Open already, it is only brought forward."""
+        path = item.pattern_path
+        if path is None or not path.is_file():
+            QMessageBox.information(self, "Library",
+                                    f"“{item.title}” has no pattern kept.")
+            return False
+        if self._library_id == item.id:
+            self.raise_()
+            self.activateWindow()
+            self.statusBar().showMessage(
+                f"“{item.title}” is open already", 6000)
+            return True
+        if not self._confirm_discard("opening a pattern from the library"):
+            return False
+        doc = self._load_library_pattern(item)
+        if doc is None:
+            return False
+        self._adopt_library_drawing(doc, item)
+        self.raise_()
+        self.activateWindow()
+        return True
+
+    def library_open_copy(self, item) -> bool:
+        """Open a copy of a library entry's pattern as a new, untitled
+        drawing -- to start another piece from it. The entry keeps its
+        own as it is."""
         path = item.pattern_path
         if path is None or not path.is_file():
             QMessageBox.information(self, "Library",
@@ -2905,21 +3094,80 @@ class MainWindow(QMainWindow):
             return False
         if not self._confirm_discard("opening a pattern from the library"):
             return False
+        doc = self._load_library_pattern(item)
+        if doc is None:
+            return False
+        self._adopt_document(doc, None, fit=True)
+        self.raise_()
+        self.activateWindow()
+        self.statusBar().showMessage(
+            f"Opened a copy of “{item.title}” as a new drawing. The "
+            "library's own stays as it is", 10000)
+        return True
+
+    def _load_library_pattern(self, item) -> Optional[Document]:
+        path = item.pattern_path
         try:
             doc = Document.load(str(path))
         except Exception as e:
             QMessageBox.critical(self, "Open failed",
                                  f"Couldn't open {path.name}:\n{e}")
-            return False
+            return None
         if (getattr(doc, "name", "") or "").strip() in ("", "Untitled"):
             doc.name = item.title              # what a print of it is called
+        return doc
+
+    def _adopt_library_drawing(self, doc: Document, item) -> None:
+        """Show a library entry's pattern as that entry's drawing."""
+        if (getattr(doc, "name", "") or "").strip() in ("", "Untitled"):
+            doc.name = item.title
         self._adopt_document(doc, None, fit=True)
-        self.raise_()
-        self.activateWindow()
+        self._link_library(item)
         self.statusBar().showMessage(
-            f"Opened a copy of “{item.title}” from the library, as a new "
-            "drawing. The library's own stays as it is", 10000)
-        return True
+            f"Opened “{item.title}” from the library. Saving it (Ctrl+S) "
+            "keeps your changes there", 10000)
+        self._library_changed()
+
+    def library_keep_view(self, img, ask=None):
+        """Keep a picture from the 3D assembly preview with the drawing's
+        entry in the library, beside the photographs of the piece. A
+        drawing that isn't in the library is put in it first -- if
+        ``ask(name)`` agrees, when given. Returns the entry, or None."""
+        import tempfile
+        from leathercad.library import VIEW_NAME
+        item = self.library_entry()
+        if item is None:
+            name = self._pattern_title() or "Untitled"
+            if ask is not None and not ask(name):
+                return None
+            try:
+                item = self.library().add(name)
+            except OSError as e:
+                QMessageBox.critical(self, "Library",
+                                     f"Couldn't add it to the library:\n{e}")
+                return None
+            if not self.library_keep_drawing(item):
+                return None
+        fd, tmp = tempfile.mkstemp(suffix=".png")
+        os.close(fd)
+        try:
+            if img is None or not img.save(tmp, "PNG"):
+                raise OSError("the picture couldn't be written")
+            item.add_photo(tmp, name=VIEW_NAME, view=True)
+        except (OSError, ValueError) as e:
+            QMessageBox.critical(self, "Library",
+                                 f"Couldn't keep the picture:\n{e}")
+            return None
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        self._library_changed(item)
+        self.statusBar().showMessage(
+            f"A picture of the 3D view is kept with “{item.title}” in the "
+            "library", 8000)
+        return item
 
     def library_make_pdf(self, item) -> bool:
         """Make the 1:1 PDF of a library entry's own pattern, and keep it
@@ -2929,6 +3177,26 @@ class MainWindow(QMainWindow):
         path = item.pattern_path
         if path is None or not path.is_file():
             return False
+        if self._library_id == item.id and self._unsaved_changes \
+                and self.isVisible():
+            # the piece's own drawing is open, changed: the PDF is made of
+            # what is saved, so offer to save the changes first
+            ans = QMessageBox.question(
+                self, "Make 1:1 PDF",
+                f"“{item.title}” has changes in the main window that "
+                "aren't saved.\n\nSave them first, so that the PDF has "
+                "them?",
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Ignore
+                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save)
+            if ans == QMessageBox.StandardButton.Cancel:
+                return False
+            if ans == QMessageBox.StandardButton.Save \
+                    and not self.save_document():
+                return False
+            item = self.library().find(item.id) or item
+            path = item.pattern_path
         try:
             doc = Document.load(str(path))
         except Exception as e:
@@ -2952,6 +3220,7 @@ class MainWindow(QMainWindow):
                 os.remove(tmp)
             except OSError:
                 pass
+        self._library_changed(item)
         return True
 
     def _file_pdf_in_library(self, pdf: str, title: str = ""):
@@ -2974,12 +3243,7 @@ class MainWindow(QMainWindow):
                                 "The PDF was exported, but a copy couldn't "
                                 f"be kept in the library:\n{e}")
             return None
-        win = getattr(self, "_library_win", None)
-        try:
-            if win is not None and win.isVisible():
-                win.reload(select=item.id)
-        except RuntimeError:
-            pass
+        self._library_changed(item)
         return item
 
     def print_pattern(self):
@@ -3005,6 +3269,18 @@ class MainWindow(QMainWindow):
             " to the printer at 1:1 scale", 6000)
 
     def _update_title(self):
-        name = os.path.basename(self.path) if self.path else "Untitled"
+        """The title bar: what the drawing is kept as -- its file, its
+        entry in the library, or both -- with a dot while it has changes
+        that aren't saved."""
+        entry = getattr(self, "_library_title", "") \
+            if getattr(self, "_library_id", None) else ""
+        if self.path:
+            name = os.path.basename(self.path)
+            if entry:
+                name += " (also in the library)"
+        elif entry:
+            name = f"{entry} (in the library)"
+        else:
+            name = "Untitled"
         mark = "• " if getattr(self, "_unsaved_changes", False) else ""
         self.setWindowTitle(f"Stitch Hero — {mark}{name}")

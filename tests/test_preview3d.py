@@ -1499,3 +1499,124 @@ def test_esc_keeps_what_was_changed_before_and_lets_go_what_is_half_typed(
     finally:
         win._unsaved_changes = False
         win.hide()
+
+
+# -- a picture of the view, for the library -----------------------------------
+
+def test_a_picture_of_the_view_is_of_the_leather_alone(qapp):
+    """The picture kept for the library is the model as the view shows it
+    -- folded, turned and slid as it is -- with nothing drawn over the
+    leather: no fold lines, letters or marks, and no words."""
+    from leathercad_app import foldview as fv
+    from leathercad_app.preview3d import fold_lines, foldables
+    doc = _trifold()
+    item = foldables(doc)[0]
+    lay = fs.fold_piece(item.outline, fold_lines(item.lines))
+    view = fv.FoldView()
+    view.resize(600, 400)
+    assert view.picture() is None                      # nothing shown yet
+    view.set_layout(lay, 0.0)
+    view.look_from("front")
+    pic = view.picture(1200)                           # twice the view
+    assert (pic.width(), pic.height()) == (1200, 800)
+    ox, ax, ay, _az, oy, bx, by, _bz = view.cam.mapping(600, 400)
+
+    def at(x, y, k=2):
+        return (int(round(k * (ox + ax * x + ay * y))),
+                int(round(k * (oy + bx * x + by * y))))
+
+    look = view.look
+    # on the fold line the view draws its line; the picture has leather
+    shown = view.grab().toImage()
+    line = fv.fold_colour(lay.folds[0])
+    seen = shown.pixelColor(*at(80, 25, 1))
+    assert abs(seen.red() - line.red()) + abs(seen.green() - line.green()) \
+        + abs(seen.blue() - line.blue()) < 60
+    leather = _patch(pic, *at(80, 25), half=2)
+    assert math.dist(leather, look.front) < 40
+    # no words in the corners: the ground, plain
+    for x, y in ((8, 8), (1190, 8), (8, 790), (1190, 790)):
+        assert math.dist(_rgb(pic.pixelColor(x, y)), _rgb(look.ground)) < 6
+    # slid in the view, slid as far in the picture (twice as far, at twice
+    # the size)
+
+    def left_edge(img):
+        y = img.height() // 2
+        return next(x for x in range(img.width())
+                    if math.dist(_rgb(img.pixelColor(x, y)),
+                                 _rgb(look.ground)) > 30)
+
+    before = left_edge(pic)
+    view.cam.pan_x += 40.0
+    assert abs(left_edge(view.picture(1200)) - before - 80) <= 2
+
+
+def _library_window(qapp, doc, tmp_path, monkeypatch):
+    win = _window(qapp, doc, tmp_path, monkeypatch)
+    win._settings().setValue("libraryFolder", str(tmp_path / "lib"))
+    return win
+
+
+def test_the_view_is_kept_in_the_library(qapp, tmp_path, monkeypatch):
+    """"Keep this view in the library" keeps a picture of the model with
+    the drawing's entry; a drawing not in the library is put there first,
+    when you say so."""
+    from PySide6.QtGui import QImage
+    from leathercad.library import Library
+    shelf = Library(tmp_path / "lib")
+    win = _library_window(qapp, _trifold(), tmp_path, monkeypatch)
+    try:
+        win._assembly_preview()
+        dlg = win._assembly_dlg
+        assert not dlg.btn_keep_view.isHidden()
+        asked = []
+        monkeypatch.setattr(dlg, "_ask_add",
+                            lambda name: asked.append(name) or False)
+        dlg.btn_keep_view.click()
+        assert asked == ["trifold"] and shelf.items() == []
+        assert dlg.btn_keep_view.text() == "Keep this view in the library"
+        monkeypatch.setattr(dlg, "_ask_add",
+                            lambda name: asked.append(name) or True)
+        dlg.btn_keep_view.click()
+        (item,) = shelf.items()
+        assert item.title == "trifold" and item.pattern
+        assert item.photos == item.views == ["3D view.png"]
+        assert win.library_entry().id == item.id
+        assert win.windowTitle() == "Stitch Hero — trifold (in the library)"
+        assert dlg.btn_keep_view.text() == "Kept in the library ✓"
+        img = QImage(str(item.path("3D view.png")))
+        assert not img.isNull() and max(img.width(), img.height()) == 1600
+        assert "3D view is kept with “trifold”" \
+            in win.statusBar().currentMessage()
+        # in the library now, it asks no more: another picture is added
+        dlg.btn_keep_view.click()
+        assert len(asked) == 2
+        item = shelf.find(item.id)
+        assert item.views == ["3D view.png", "3D view (2).png"]
+        # the library window marks them, and a photograph goes first
+        lw = win.show_library(select=item.id)
+        assert lw.strip.count() == 2
+        assert "3D assembly preview" in lw.strip.item(0).toolTip()
+        from PySide6.QtGui import QColor
+        shot = tmp_path / "IMG_9.jpg"
+        photo = QImage(320, 240, QImage.Format_RGB32)
+        photo.fill(QColor(30, 120, 30))
+        assert photo.save(str(shot))
+        lw.add_pictures([str(shot)])
+        assert shelf.find(item.id).photos[0] == "IMG_9.jpg"
+        assert "3D" not in lw.strip.item(0).toolTip()
+        lw.close()
+        dlg._kept_soon.timeout.emit()              # (a few seconds on)
+        assert dlg.btn_keep_view.text() == "Keep this view in the library"
+    finally:
+        win._unsaved_changes = False
+        win.close()
+
+
+def test_without_a_main_window_there_is_no_library_button(qapp):
+    dlg = _dialog(_trifold())
+    try:
+        assert dlg.btn_keep_view.isHidden()
+        dlg._keep_view()                           # and nothing happens
+    finally:
+        dlg.close()

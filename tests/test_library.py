@@ -87,6 +87,133 @@ def test_pictures_are_copied_in_and_the_first_is_the_cover(tmp_path):
     assert back.path("") is None
 
 
+def test_photographs_come_before_3d_views_and_take_the_cover(tmp_path):
+    """A picture from the 3D assembly preview is a view, not a photograph:
+    the first photograph of the piece takes the cover from it, and the
+    photographs stay ahead of the views -- unless a cover was chosen."""
+    shelf = lib.Library(tmp_path / "lib")
+    item = shelf.add("Wallet")
+    render = _file(tmp_path / "render.png", b"3d")
+    shot = _file(tmp_path / "phone" / "IMG_1.jpg", b"photo")
+    assert item.add_photo(render, name=lib.VIEW_NAME, view=True) \
+        == "3D view.png"
+    assert item.photos == ["3D view.png"] and item.is_view("3D view.png")
+    assert item.cover.name == "3D view.png"         # better than nothing
+    assert item.add_photo(shot) == "IMG_1.jpg"
+    assert item.photos == ["IMG_1.jpg", "3D view.png"]
+    assert item.add_photo(render, name=lib.VIEW_NAME, view=True) \
+        == "3D view (2).png"
+    assert item.add_photo(shot, name="IMG_2.jpg") == "IMG_2.jpg"
+    assert item.photos == ["IMG_1.jpg", "IMG_2.jpg", "3D view.png",
+                           "3D view (2).png"]
+    assert not item.is_view("IMG_2.jpg")
+    # read back, the library still knows which are views
+    back = shelf.find(item.id)
+    assert back.views == ["3D view.png", "3D view (2).png"]
+    assert back.photos == item.photos and not back.cover_chosen
+    # a view chosen as the cover by hand stays the cover
+    back.set_cover("3D view (2).png")
+    assert back.cover_chosen
+    back.add_photo(shot, name="IMG_3.jpg")
+    assert back.photos == ["3D view (2).png", "IMG_1.jpg", "IMG_2.jpg",
+                           "IMG_3.jpg", "3D view.png"]
+    # the chosen cover taken out: the next picture is the cover, chosen
+    # by no one
+    back.remove_photo("3D view (2).png")
+    assert back.views == ["3D view.png"] and not back.cover_chosen
+    assert shelf.find(item.id).photos[0] == "IMG_1.jpg"
+    # a cover chosen when there were only views keeps its place too
+    other = shelf.add("Belt")
+    other.add_photo(render, name=lib.VIEW_NAME, view=True)
+    other.add_photo(render, name="3D view.png", view=True)
+    other.set_cover("3D view (2).png")
+    other.add_photo(shot)
+    assert other.photos == ["3D view (2).png", "IMG_1.jpg", "3D view.png"]
+    # a picture dropped in the folder by hand is a photograph
+    _file(other.folder / "by hand.jpg", b"hand")
+    assert not shelf.find(other.id).is_view("by hand.jpg")
+
+
+def test_a_pdf_made_before_the_pattern_changed_is_out_of_date(tmp_path):
+    shelf = lib.Library(tmp_path / "lib")
+    item = shelf.add("Card wallet")
+    assert not item.pdf_outdated                       # nothing to say
+    item.attach_pattern(_file(tmp_path / "a.leathercad.json", b"pattern 1"))
+    item.attach_pdf(_file(tmp_path / "a.pdf", b"%PDF 1"))
+    assert not item.pdf_outdated
+    # the same pattern saved again: still the PDF of it
+    item.attach_pattern(_file(tmp_path / "b.leathercad.json", b"pattern 1"))
+    assert not shelf.find(item.id).pdf_outdated
+    # another pattern: the PDF is of the one before
+    item.attach_pattern(_file(tmp_path / "c.leathercad.json", b"pattern 2"))
+    assert item.pdf_outdated and shelf.find(item.id).pdf_outdated
+    # made again, it is the PDF of this one
+    item.attach_pdf(_file(tmp_path / "c.pdf", b"%PDF 2"))
+    assert not shelf.find(item.id).pdf_outdated
+    item.remove_pdf()
+    assert item.pdf_of == "" and not item.pdf_outdated
+    # a PDF kept before the library said what it was made of is taken to
+    # be the pattern's
+    old = shelf.add("Old one")
+    old.attach_pattern(_file(tmp_path / "d.leathercad.json", b"pattern"))
+    old.attach_pdf(_file(tmp_path / "d.pdf", b"%PDF"))
+    info = json.loads((old.folder / "item.json").read_text("utf-8"))
+    del info["pdf_of"]
+    (old.folder / "item.json").write_text(json.dumps(info), "utf-8")
+    old = shelf.find(old.id)
+    old.attach_pattern(_file(tmp_path / "e.leathercad.json", b"new"))
+    assert not shelf.find(old.id).pdf_outdated
+
+
+def test_saving_again_keeps_the_last_pattern_of_each_day(tmp_path,
+                                                         monkeypatch):
+    """What a piece had is set aside when it was put in on an earlier day
+    -- even one only an hour ago, before midnight -- and not when it was
+    put in today."""
+    shelf = lib.Library(tmp_path / "lib")
+    item = shelf.add("Wallet")
+    item.attach_pattern(_file(tmp_path / "1.leathercad.json", b"one"))
+    # put in at 23:30 yesterday, replaced at 00:30 today
+    today = datetime.date(2026, 11, 21)
+    then = datetime.datetime(2026, 11, 20, 23, 30).timestamp()
+    os.utime(item.pattern_path, (then, then))
+    monkeypatch.setattr(lib, "_date_today", lambda: today)
+    item.attach_pattern(_file(tmp_path / "2.leathercad.json", b"two"))
+    assert [p.name for p in item.earlier] == [
+        "2026-11-20 Wallet.leathercad.json"]
+    # put in this morning, replaced this afternoon: just replaced
+    morning = datetime.datetime(2026, 11, 21, 9, 0).timestamp()
+    os.utime(item.pattern_path, (morning, morning))
+    item.attach_pattern(_file(tmp_path / "3.leathercad.json", b"three"))
+    assert len(item.earlier) == 1
+    assert item.pattern_path.read_bytes() == b"three"
+
+
+def test_which_files_are_a_pieces_drawing(tmp_path):
+    """The file of a piece's pattern, and the drawing it was copied from,
+    are the piece's drawing; an earlier pattern kept with it is not."""
+    shelf = lib.Library(tmp_path / "lib")
+    item = shelf.add("Card wallet")
+    drawing = _file(tmp_path / "work" / "wallet.leathercad.json", b"p")
+    item.attach_pattern(drawing, origin=str(drawing))
+    assert shelf.drawing_of(drawing).id == item.id
+    assert shelf.drawing_of(item.pattern_path).id == item.id
+    assert item.is_pattern(item.pattern_path)
+    assert item.is_pattern(str(item.pattern_path).replace(
+        "Card wallet.leathercad.json",
+        "./Card wallet.leathercad.json"))
+    assert not item.is_pattern(drawing)
+    earlier = _file(item.folder / lib.EARLIER / "2020-01-01 x.leathercad.json")
+    assert shelf.holding(earlier).id == item.id       # it is in the folder,
+    assert shelf.drawing_of(earlier) is None          # but not the drawing
+    assert shelf.drawing_of(tmp_path / "other.json") is None
+    assert shelf.drawing_of(None) is None and shelf.drawing_of("") is None
+    # a pattern put in from no file: the drawing it was copied from is no
+    # longer the piece's
+    item.attach_pattern(_file(tmp_path / "x.leathercad.json"), origin="")
+    assert item.source == "" and shelf.drawing_of(drawing) is None
+
+
 def test_the_pattern_and_its_pdf_are_kept_with_the_piece(tmp_path):
     shelf = lib.Library(tmp_path / "lib")
     item = shelf.add("Card wallet")
@@ -224,6 +351,20 @@ def test_a_copy_that_fails_changes_nothing(tmp_path, monkeypatch):
     assert [p.name for p in item.folder.iterdir() if p.is_file()
             and p.name != "item.json"] == ["Card wallet.pdf"]
     assert shelf.find(item.id).pdf == "Card wallet.pdf"
+    # nor what the piece says of its pattern and PDF
+    drawing = _file(tmp_path / "w.leathercad.json", b"pattern 1")
+    item.attach_pattern(drawing, origin=str(drawing))
+    item.attach_pdf(_file(tmp_path / "c.pdf", b"%PDF 3"))
+    was = (item.source, item.pdf_of)
+    monkeypatch.setattr(lib.shutil, "copyfile", full)
+    with pytest.raises(OSError):
+        item.attach_pattern(_file(tmp_path / "x.leathercad.json", b"2"),
+                            origin="")
+    with pytest.raises(OSError):
+        item.attach_pdf(_file(tmp_path / "x.pdf", b"%PDF 4"))
+    monkeypatch.undo()
+    assert (item.source, item.pdf_of) == was
+    assert not item.pdf_outdated
 
 
 def test_renaming_a_piece_renames_its_folder_and_keeps_its_files(tmp_path):

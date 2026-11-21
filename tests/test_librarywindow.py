@@ -14,7 +14,8 @@ from PySide6.QtCore import (QDate, QEvent, QMimeData, QPoint,  # noqa: E402
                             QSettings, Qt, QUrl)
 from PySide6.QtGui import (QColor, QDropEvent, QGuiApplication,  # noqa: E402
                            QImage)
-from PySide6.QtWidgets import QApplication, QDialog, QFileDialog  # noqa: E402
+from PySide6.QtWidgets import (QApplication, QDialog,  # noqa: E402
+                               QFileDialog, QMessageBox)
 
 from leathercad.document import Document  # noqa: E402
 from leathercad.library import Library  # noqa: E402
@@ -111,7 +112,46 @@ def test_an_empty_library_says_how_to_start(qapp, tmp_path):
         assert win.ed_title.selectedText() == "Untitled"
         assert win.ed_made.date() == QDate.currentDate()
         assert win.count.text() == "1 piece"
-        assert "No picture yet" in win.picture.hint
+        # with no picture yet, the place for one asks for photographs
+        assert win.picture.invite and not win.picture.has_image()
+        assert "photos of the finished piece" in win.picture.INVITE
+        assert "Ctrl+V" in win.picture.toolTip()
+    finally:
+        win.close()
+
+
+def test_the_empty_picture_asks_for_photos_and_a_click_adds_them(
+        qapp, tmp_path, monkeypatch):
+    """A piece with no picture shows a large place that asks for photos of
+    the finished piece: clicking it chooses them, as Add photos... does."""
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QMouseEvent
+    shot = _picture(tmp_path / "phone" / "IMG_2041.jpg")
+    win, _user = _open(tmp_path)
+    try:
+        item = win.new_entry()
+        pic = win.picture
+        assert pic.invite and pic.cursor().shape() == Qt.PointingHandCursor
+        # painted as it is: a dashed place with the words in it
+        img = pic.grab().toImage()
+        assert not img.isNull()
+        chosen = []
+        monkeypatch.setattr(
+            QFileDialog, "getOpenFileNames",
+            staticmethod(lambda *a, **k: (chosen.append(1) or [str(shot)],
+                                          "")))
+        at = QPointF(pic.width() / 2, pic.height() / 2)
+        for kind in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease):
+            QApplication.sendEvent(pic, QMouseEvent(
+                kind, at, at, Qt.LeftButton, Qt.LeftButton,
+                Qt.NoModifier))
+        assert chosen == [1]
+        back = win.library.find(item.id)
+        assert back.photos == ["IMG_2041.jpg"] and back.views == []
+        # with a picture it shows the picture, and asks no more
+        assert pic.has_image() and not pic.invite
+        assert pic.cursor().shape() == Qt.ArrowCursor
+        assert win.btn_add.text() == "Add photos…"
     finally:
         win.close()
 
@@ -961,11 +1001,13 @@ def test_a_pattern_is_opened_from_the_library_as_a_copy(qapp, tmp_path,
         lw = win.show_library(select=item.id)
         assert lw.current.id == item.id
         assert lw.btn_open_pattern.isEnabled()
-        lw.open_pattern()
+        assert lw.btn_open_copy.isEnabled()
+        lw.open_copy()
         # it is a new drawing, not the library's file
         assert win.path is None and len(win.doc.shapes) == 1
         assert "copy" in win.statusBar().currentMessage()
         assert win._pattern_title() == "Test piece"
+        assert win.windowTitle() == "Stitch Hero — Untitled"
         # the library gets out of the way of it
         assert not lw.isVisible()
         # the copy is no entry's: what is made from it is another piece,
@@ -995,8 +1037,10 @@ def test_a_pattern_is_opened_from_the_library_as_a_copy(qapp, tmp_path,
         # an entry with no pattern has none to open
         lw.reload(select=bare.id)
         assert not lw.btn_open_pattern.isEnabled()
+        assert not lw.btn_open_copy.isEnabled()
         assert not lw.btn_make_pdf.isEnabled()
         lw.open_pattern()
+        lw.open_copy()
         assert lw.isVisible() and len(win.doc.shapes) == 2   # as it was
         # closing the main window closes the library with it, and what
         # was being typed there is kept
@@ -1067,19 +1111,343 @@ def test_an_entry_takes_the_open_drawing_as_its_pattern(qapp, tmp_path,
         assert not user.asked
         back = shelf.find(item.id)
         assert back.pattern == "Made by hand.leathercad.json"
-        assert lw.lbl_pattern.text() == back.pattern
+        # the drawing is that entry's now, and is called by its name
+        assert lw.lbl_pattern.text() \
+            == back.pattern + " — open in the main window"
         assert win.library_entry().id == item.id
-        # replacing one asks
-        win.doc.shapes.clear()
+        assert win.windowTitle() \
+            == "Stitch Hero — Made by hand (in the library)"
+        # its own drawing, changed, is taken again without a question
+        win.doc.shapes.append(Rectangle(width=10, height=10, name="Tab"))
+        lw.keep_drawing()
+        assert not user.asked
+        assert len(Document.load(str(back.pattern_path)).shapes) == 2
+        # another drawing in its place asks first
+        win.new_document()
+        lw.reload(select=item.id)
+        assert lw.lbl_pattern.text() == back.pattern
         user.yes = False
         lw.keep_drawing()
         assert "has a pattern already" in user.asked[-1][1]
-        assert len(Document.load(str(back.pattern_path)).shapes) == 1
+        assert len(Document.load(str(back.pattern_path)).shapes) == 2
+        assert win.library_entry() is None
         user.yes = True
         lw.keep_drawing()
         assert len(Document.load(str(back.pattern_path)).shapes) == 0
+        assert win.library_entry().id == item.id
     finally:
         _close(win)
+
+
+def _pdf(path, body=b"%PDF-1.4 made for a test"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body)
+    return path
+
+
+def _change(win, name="Tab"):
+    """An edit made in the main window, as any edit is: undoable, unsaved."""
+    win.doc.shapes.append(Rectangle(width=30, height=20, name=name))
+    win.canvas.rebuild()
+    win.commit()
+
+
+def _no_file_asked(monkeypatch):
+    """Fails the test if a Save As box is shown: the library is where the
+    drawing is saved."""
+    asked = []
+
+    def box(*a, **k):
+        asked.append(a)
+        return "", ""
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(box))
+    return asked
+
+
+def test_a_drawing_opened_from_the_library_is_saved_there(qapp, tmp_path,
+                                                         monkeypatch):
+    """Opened from the library, a pattern is that entry's drawing: the
+    title bar says so, Save (Ctrl+S) keeps the changes in the entry with
+    no file to choose, and the pattern it had before today goes under
+    "earlier" -- the record of the piece as it was made."""
+    import datetime
+    shelf = Library(tmp_path / "lib")
+    item = shelf.add("Card wallet")
+    _drawing(tmp_path / "p.leathercad.json")
+    item.attach_pattern(tmp_path / "p.leathercad.json")
+    item.attach_pdf(_pdf(tmp_path / "p.pdf"))
+    asked = _no_file_asked(monkeypatch)
+    win = _main(qapp, tmp_path, monkeypatch, Document())
+    try:
+        lw = win.show_library(select=item.id)
+        assert lw.btn_open_pattern.text() == "Open"
+        lw.open_pattern()
+        assert not lw.isVisible()                  # out of the way
+        assert win.path is None and len(win.doc.shapes) == 1
+        assert win.library_entry().id == item.id
+        assert win.windowTitle() \
+            == "Stitch Hero — Card wallet (in the library)"
+        assert "keeps your changes there" in win.statusBar().currentMessage()
+        assert win._pattern_title() == "Card wallet"     # what prints say
+        # the pattern was put in a month ago; now it is changed and saved
+        then = time.time() - 30 * 86400
+        os.utime(item.pattern_path, (then, then))
+        day = datetime.date.fromtimestamp(then).isoformat()
+        _change(win)
+        assert win.windowTitle() \
+            == "Stitch Hero — • Card wallet (in the library)"
+        assert win.save_document()
+        assert asked == []
+        back = shelf.find(item.id)
+        assert len(Document.load(str(back.pattern_path)).shapes) == 2
+        assert win.windowTitle() \
+            == "Stitch Hero — Card wallet (in the library)"
+        assert not win._unsaved_changes
+        assert "Saved in the library as “Card wallet”" \
+            in win.statusBar().currentMessage()
+        assert [p.name for p in back.earlier] == [
+            f"{day} Card wallet.leathercad.json"]
+        assert len(Document.load(str(back.earlier[0])).shapes) == 1
+        # saved again the same day: the one put in today just gives way
+        _change(win, "Strap")
+        assert win.save_document()
+        back = shelf.find(item.id)
+        assert len(Document.load(str(back.pattern_path)).shapes) == 3
+        assert len(back.earlier) == 1
+        # its PDF is of the pattern as it was, and the library says so
+        assert back.pdf_outdated
+        assert "make it again" in win.statusBar().currentMessage()
+        lw = win.show_library(select=item.id)
+        assert lw.lbl_pattern.text() \
+            == "Card wallet.leathercad.json — open in the main window"
+        assert "made before the pattern was last changed" \
+            in lw.lbl_pdf.text()
+        assert lw.btn_make_pdf.text() == "Make again…"
+        # opened again, it is open already: as it is, changes and all
+        _change(win, "Loop")
+        lw.open_pattern()
+        assert len(win.doc.shapes) == 4 and win._unsaved_changes
+        assert "open already" in win.statusBar().currentMessage()
+        # given another name in the library, the title bar follows
+        lw = win.show_library(select=item.id)
+        lw.ed_title.setText("Bifold")
+        lw._keep_text()
+        assert win.windowTitle() == "Stitch Hero — • Bifold (in the library)"
+        assert win._pattern_title() == "Bifold"
+        assert win.save_document()
+        back = shelf.find(item.id)
+        assert back.title == "Bifold" and back.pattern == \
+            "Bifold.leathercad.json"
+        assert len(Document.load(str(back.pattern_path)).shapes) == 4
+        assert asked == []
+    finally:
+        _close(win)
+
+
+def test_making_the_pdf_offers_to_save_the_open_drawing_first(
+        qapp, tmp_path, monkeypatch):
+    """The library makes a piece's PDF from its pattern as saved. With
+    that piece's drawing open and changed, it offers to save it first."""
+    from leathercad_app.printing import PrintOptions
+    shelf = Library(tmp_path / "lib")
+    win = _main(qapp, tmp_path, monkeypatch)
+    try:
+        item = win.add_to_library()
+        win.show()
+        _change(win)
+        lw = win._library_win
+        monkeypatch.setattr(win, "_print_options", lambda *a, **k:
+                            PrintOptions(title="Piece", layout_budget=0.2))
+        asked = []
+
+        def answer(button):
+            def ask(_w, _title, text, *a, **k):
+                asked.append(text)
+                return button
+            return staticmethod(ask)
+
+        SB = QMessageBox.StandardButton
+        monkeypatch.setattr(QMessageBox, "question", answer(SB.Cancel))
+        lw.make_pdf()
+        assert "aren't saved" in asked[-1]
+        assert shelf.find(item.id).pdf == ""             # nothing made
+        monkeypatch.setattr(QMessageBox, "question", answer(SB.Save))
+        lw.make_pdf()
+        back = shelf.find(item.id)
+        assert len(Document.load(str(back.pattern_path)).shapes) == 2
+        assert back.pdf and not back.pdf_outdated
+        assert not win._unsaved_changes
+        lw = win._library_win
+        assert lw.lbl_pdf.text() == back.pdf
+        assert lw.btn_make_pdf.text() == "Make…"
+        # made without them, the PDF is of the pattern as saved
+        _change(win, "Strap")
+        monkeypatch.setattr(QMessageBox, "question", answer(SB.Ignore))
+        lw.make_pdf()
+        back = shelf.find(item.id)
+        assert len(Document.load(str(back.pattern_path)).shapes) == 2
+        assert win._unsaved_changes and len(asked) == 3
+    finally:
+        win._unsaved_changes = False
+        _close(win)
+
+
+def test_save_as_makes_a_drawing_of_its_own(qapp, tmp_path, monkeypatch):
+    """Save As writes a file of its own: from then on the drawing is that
+    file's, and the library's entry keeps what was last saved there."""
+    shelf = Library(tmp_path / "lib")
+    win = _main(qapp, tmp_path, monkeypatch)
+    try:
+        item = win.add_to_library()
+        assert win.windowTitle() == "Stitch Hero — Test piece (in the library)"
+        assert not win._unsaved_changes           # it is kept there
+        _change(win)
+        out = tmp_path / "work" / "variant.leathercad.json"
+        out.parent.mkdir()
+        offered = []
+        monkeypatch.setattr(
+            QFileDialog, "getSaveFileName",
+            staticmethod(lambda _w, _t, name, _f: (offered.append(name)
+                                                   or (str(out), ""))))
+        assert win.save_document_as()
+        assert offered == ["Test piece.leathercad.json"]   # named after it
+        assert len(Document.load(str(out)).shapes) == 2
+        assert win.path == str(out) and win.library_entry() is None
+        assert win.windowTitle() == "Stitch Hero — variant.leathercad.json"
+        assert "stays as it was last saved" \
+            in win.statusBar().currentMessage()
+        back = shelf.find(item.id)
+        assert len(Document.load(str(back.pattern_path)).shapes) == 1
+        _change(win, "Strap")
+        assert win.save_document()
+        assert len(Document.load(str(out)).shapes) == 3
+        back = shelf.find(item.id)
+        assert len(Document.load(str(back.pattern_path)).shapes) == 1
+    finally:
+        _close(win)
+
+
+def test_a_file_in_the_library_is_saved_in_both(qapp, tmp_path,
+                                                monkeypatch):
+    """A drawing that has a file and is in the library -- put there from
+    its file -- is saved in both. Changed in the library alone, the file
+    is an old copy from then on: opened, it is no longer the entry's."""
+    path = tmp_path / "work" / "wallet.leathercad.json"
+    _drawing(path)
+    shelf = Library(tmp_path / "lib")
+    asked = _no_file_asked(monkeypatch)
+    win = _main(qapp, tmp_path, monkeypatch)
+    try:
+        assert win.open_path(str(path))
+        item = win.add_to_library()
+        assert win.windowTitle() \
+            == "Stitch Hero — wallet.leathercad.json (also in the library)"
+        _change(win)
+        assert win.save_document()
+        assert len(Document.load(str(path)).shapes) == 2
+        back = shelf.find(item.id)
+        assert len(Document.load(str(back.pattern_path)).shapes) == 2
+        assert back.source == str(path)
+        # opened again another day, the file is still the entry's
+        assert win.open_path(str(path))
+        assert win.library_entry().id == item.id
+        assert "in the library as “wallet”" \
+            in win.statusBar().currentMessage()
+        # the entry opened from the library is saved there alone...
+        win.new_document()
+        lw = win.show_library(select=item.id)
+        lw.open_pattern()
+        assert win.path is None and win.library_entry().id == item.id
+        _change(win, "Strap")
+        assert win.save_document()
+        assert len(Document.load(str(path)).shapes) == 2     # file as it was
+        back = shelf.find(item.id)
+        assert len(Document.load(str(back.pattern_path)).shapes) == 3
+        # ... and the file is an old copy now: it doesn't bring its drawing
+        # back over the entry's
+        assert back.source == ""
+        assert win.open_path(str(path))
+        assert win.library_entry() is None
+        assert win.windowTitle() == "Stitch Hero — wallet.leathercad.json"
+        # the entry's own pattern, opened as a file, is the entry's drawing
+        assert win.open_path(str(back.pattern_path))
+        assert win.path is None and win.library_entry().id == item.id
+        assert win.windowTitle() == "Stitch Hero — wallet (in the library)"
+        # ... but an earlier one kept with it is a drawing of its own
+        old = back.folder / "earlier" / "2020-01-01 wallet.leathercad.json"
+        old.parent.mkdir()
+        _drawing(old)
+        assert win.open_path(str(old))
+        assert win.path == str(old) and win.library_entry() is None
+        assert asked == []
+    finally:
+        _close(win)
+
+
+def test_an_entry_deleted_or_gone_lets_go_of_the_drawing(qapp, tmp_path,
+                                                         monkeypatch):
+    shelf = Library(tmp_path / "lib")
+    win = _main(qapp, tmp_path, monkeypatch)
+    try:
+        item = win.add_to_library()
+        lw = win._library_win
+        user = _Answers(lw)
+        lw._trash = lambda folder: False           # (not the real bin)
+        assert not win._unsaved_changes
+        lw.delete_entry()
+        assert user.asked and shelf.items() == []
+        # the drawing is still open, and saved nowhere now
+        assert win.library_entry() is None and win._unsaved_changes
+        assert win.windowTitle() == "Stitch Hero — • Untitled"
+        assert "was deleted from the library" \
+            in win.statusBar().currentMessage()
+        # gone behind the window's back: Save says so, then asks for a file
+        item = win.add_to_library()
+        shelf.delete(shelf.find(item.id))
+        told = []
+        monkeypatch.setattr(QMessageBox, "information", staticmethod(
+            lambda _w, title, text, *a: told.append(text)))
+        out = tmp_path / "rescued.leathercad.json"
+        monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                            staticmethod(lambda *a, **k: (str(out), "")))
+        assert win.save_document()
+        assert told and "no longer in the library" in told[0]
+        assert out.is_file() and win.path == str(out)
+    finally:
+        _close(win)
+
+
+def test_unsaved_work_on_an_entry_is_recovered_as_the_entrys(qapp, tmp_path,
+                                                            monkeypatch):
+    """Autosaved and recovered after a crash, a library entry's drawing is
+    still the entry's: saving it keeps it there."""
+    shelf = Library(tmp_path / "lib")
+    win = _main(qapp, tmp_path, monkeypatch)
+    win.autosave_dir = str(tmp_path / "autosave")
+    try:
+        item = win.add_to_library()
+        _change(win)
+        saved = win.write_autosave()
+        left = saved.read_bytes()
+    finally:
+        win._unsaved_changes = False
+        _close(win)                                # (takes its autosave)
+    saved.write_bytes(left)                        # as a crash leaves it
+    again = _main(qapp, tmp_path, monkeypatch, Document())
+    again.autosave_dir = str(tmp_path / "autosave")
+    try:
+        assert again.maybe_recover_autosave(ask=lambda *a: True)
+        assert len(again.doc.shapes) == 2
+        assert again.library_entry().id == item.id
+        assert again.windowTitle() \
+            == "Stitch Hero — • Test piece (in the library)"
+        _no_file_asked(monkeypatch)
+        assert again.save_document()
+        back = shelf.find(item.id)
+        assert len(Document.load(str(back.pattern_path)).shapes) == 2
+    finally:
+        _close(again)
 
 
 def test_the_library_is_in_the_file_menu(qapp, tmp_path, monkeypatch):

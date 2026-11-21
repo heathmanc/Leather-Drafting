@@ -23,6 +23,7 @@ begins: what is laid on the main piece is to stop there.
 
 from __future__ import annotations
 
+import copy
 import html
 import math
 import random
@@ -686,10 +687,11 @@ def _in_sight(q, r, pieces: int, fine: bool, discs, eye, m):
 def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                 look: Look, *, labels: bool = True, selected: int = -1,
                 hover: int = -1, looks=None, chosen=(), wash=None,
-                seen: Optional[list] = None, faint=()):
+                seen: Optional[list] = None, faint=(), folds: bool = True):
     """Paint the model into a ``w`` x ``h`` area. Returns the fold lines as
     drawn -- ``[(fold, x0, y0, x1, y1)]`` -- for finding the one under the
-    mouse.
+    mouse. Without ``folds`` the fold lines, and the dashes where a bend
+    begins, are left out: the leather alone, as for a picture of the piece.
 
     The faces are filled without smoothing: that is many times quicker for
     the narrow strips a bend is made of, and it leaves no gaps between the
@@ -1127,7 +1129,7 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
     # nearest eighth of its length: what is under the mouse beside it is
     # either the line or the piece, and a click has to know which.)
     drawn = []
-    for fi, stretches in scene.folds.items():
+    for fi, stretches in (scene.folds.items() if folds else ()):
         fold = layout.folds[fi]
         live = bool(layout.steps[fi])
         for mark in stretches:
@@ -1163,8 +1165,8 @@ def paint_scene(p: QPainter, w: int, h: int, scene: Scene, cam: Camera,
                         seen.append((fi,) + run)
     # ... and on a stack lying flat, where each fold's bend begins: a
     # dashed line each side of it, where it is in sight
-    for x0, y0, x1, y1, runs in _clear_in_sight(scene, w, h, m, eye, spot,
-                                                discs):
+    for x0, y0, x1, y1, runs in (_clear_in_sight(scene, w, h, m, eye, spot,
+                                                 discs) if folds else ()):
         for colour, width in _CLEAR:
             p.setPen(_clear_pen(colour, width))
             for t0, t1 in runs:
@@ -1846,6 +1848,29 @@ class FoldView(QWidget):
         self.follow = True
         self._frame()
         self.update()
+
+    def picture(self, long_side: int = 1600) -> Optional[QImage]:
+        """A picture of the model as it is shown -- folded as far, turned,
+        slid and zoomed as it is, each piece in its leather -- of the
+        leather alone: no fold lines, letters, hole marks, lit pieces or
+        words. It has the shape of the view, ``long_side`` pixels along its
+        longer side. None when nothing is shown."""
+        if self.layout_ is None or self.scene is None:
+            return None
+        w0, h0 = max(1, self.width()), max(1, self.height())
+        k = long_side / max(w0, h0)
+        w, h = max(1, round(w0 * k)), max(1, round(h0 * k))
+        cam = copy.copy(self.cam)                  # (slid as far, in scale)
+        cam.pan_x, cam.pan_y = self.cam.pan_x * k, self.cam.pan_y * k
+        scene = Scene(self.layout_, self.t, None, self.apart)
+        looks = sheet_looks(self.layout_, self.look, self._leathers,
+                            self._looks)
+        img = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+        p = QPainter(img)
+        paint_scene(p, w, h, scene, cam, self.look, labels=False,
+                    looks=looks, folds=False)
+        p.end()
+        return img
 
     # -- painting -------------------------------------------------------------
 

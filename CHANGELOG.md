@@ -1,8 +1,43 @@
 # Changelog
 
-Downloads are on the [Releases](https://github.com/heathmanc/leather-drafting/releases)
-page. Windows and macOS builds ship with every release (0.3.3 to 0.4.16 have a
-macOS build only where one was asked for, 0.4.15 among them).
+Downloads are on [stitch-hero.com](https://stitch-hero.com) and the
+[Releases](https://github.com/heathmanc/leather-drafting/releases) page.
+Windows and macOS builds ship with every release from 0.4.16 on (before it,
+a macOS build was made only for some).
+
+## Unreleased
+
+### Keeping in touch
+* **Stitch Hero says when a newer version is out.** A few seconds after it
+  opens, at most once a day, it looks at stitch-hero.com. When a newer
+  version is out, a strip above the drawing says so, with **What's new**,
+  **Download** and **Not now**. *Not now* puts that version off; a newer
+  one is said again. **Help → Check for updates now** looks straight away
+  and says the answer either way, and **Help → Tell me when a new version
+  is out** turns the daily look off. The look sends nothing about you: it
+  asks for one small file, saying only which version of Stitch Hero is
+  asking.
+* **What's new, the first time a new version opens:** these notes, for the
+  version you have. **Help → What's new in this version** shows them again.
+* **The way to the Stitch Hero group, from Help.** **Join the Stitch Hero
+  group** opens it. **Report a problem…** and **Suggest a feature…** write
+  the post for you, with the version of Stitch Hero and of Windows or macOS
+  already in it: copy, open the group, paste. The About box links the group
+  and stitch-hero.com.
+
+### Installing
+* **The guide's install steps are for downloading from stitch-hero.com**,
+  with Windows' *More info → Run anyway* and the Mac's *Privacy & Security →
+  Open Anyway* (right-click → Open no longer does it on recent macOS).
+
+### Building and testing
+* **A test run on Windows or a Mac leaves your own settings and library
+  alone.** The tests kept settings in files of their own only where the
+  system keeps settings in files (Linux): on Windows a run read and wrote
+  Stitch Hero's settings in the registry, and could reach the library in
+  Documents. Now every run has its own settings and folders, everywhere.
+* **A build checks it can make https connections and has these notes**, so
+  one that could never hear of a newer version doesn't ship.
 
 ## 0.4.16 — 2026-11-21
 

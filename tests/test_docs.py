@@ -63,7 +63,11 @@ def test_key_menu_commands_documented(guide_text):
                 "Keep a copy in the library",
                 "Leather thickness", "Make room for the fold",
                 "Pull apart", "See through", "Main piece", "Line up",
-                "Turn over", "Take along what lies on it"):
+                "Turn over", "Take along what lies on it",
+                "What's new in this version", "Join the Stitch Hero group",
+                "Report a problem", "Suggest a feature",
+                "Check for updates now",
+                "Tell me when a new version is out"):
         assert cmd in guide_text, f"menu command not documented: {cmd}"
 
 

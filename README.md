@@ -24,6 +24,10 @@ manual to the code, so the docs can't silently drift out of date.
 
 **📄 Prefer a printable copy? [Download the manual as a PDF](docs/Stitch-Hero-Manual.pdf).**
 
+**💬 Questions, tutorials and new-version news:** the
+[Stitch Hero group on Facebook](https://www.facebook.com/groups/stitchhero),
+also one click away in the app (**Help → Join the Stitch Hero group**).
+
 ---
 
 ## Two problems this is designed around

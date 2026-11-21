@@ -65,6 +65,18 @@ def _smoke() -> int:
         if gone or not shown:
             return failed(4, "The user guide's pictures aren't in this "
                              f"build: {', '.join(gone) or 'it shows none'}")
+        from .updates import changelog_path
+        if not changelog_path().is_file():
+            return failed(6, "The changelog isn't in this build, so Help → "
+                             "What's new would have nothing to show "
+                             f"(looked for {changelog_path()})")
+        from PySide6.QtNetwork import QSslSocket
+        if not QSslSocket.supportsSsl():
+            return failed(5, "This build can't make https connections, so "
+                             "it could never hear of a newer version (TLS "
+                             "backends: " + (", ".join(
+                                 QSslSocket.availableBackends()) or "none")
+                             + ")")
     except Exception:
         return failed(2, traceback.format_exc())
     return 0
@@ -95,6 +107,7 @@ def main(argv=None) -> int:
     if doc is None:                      # don't offer over an explicit file
         win.maybe_recover_autosave()
     win.show()
+    win.after_launch()                   # what's new; is a newer one out?
     return app.exec()
 
 

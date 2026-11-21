@@ -4,8 +4,8 @@
 Run from the packaging/ directory:   pyinstaller --noconfirm leather-drafting.spec
 Output: dist/Stitch Hero/  (and dist/Stitch Hero.app on macOS)
 
-The user guide (docs/) and the app icon are bundled so Help -> User guide (F1)
-and the window icon work offline.
+The user guide (docs/), the changelog and the app icon are bundled so Help ->
+User guide (F1), Help -> What's new and the window icon work offline.
 """
 
 import os
@@ -36,6 +36,8 @@ a = Analysis(
         (os.path.join(ROOT, "docs", "assembly_apart.png"), "docs"),
         (os.path.join(ROOT, "docs", "assembly_folding.png"), "docs"),
         (os.path.join(ROOT, "docs", "library.png"), "docs"),
+        # Help -> What's new reads this version's part of it
+        (os.path.join(ROOT, "CHANGELOG.md"), "."),
         (os.path.join(ROOT, "leathercad_app", "resources", "appicon.png"),
          "leathercad_app/resources"),
         (os.path.join(ROOT, "leathercad_app", "resources", "fonts",
@@ -45,7 +47,9 @@ a = Analysis(
         (os.path.join(ROOT, "leathercad_app", "resources", "fonts",
                       "LICENSE-DejaVu.txt"), "leathercad_app/resources/fonts"),
     ],
-    hiddenimports=[],
+    # (imported only when the update check runs; with it come Qt's TLS
+    # plugins, which the smoke test checks are there)
+    hiddenimports=["PySide6.QtNetwork"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

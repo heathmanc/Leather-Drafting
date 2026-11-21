@@ -27,6 +27,7 @@ from .panels import PropertiesPanel, LayersPanel
 from .mathspin import MathSpinBox, NoWheelComboBox, NoWheelSpinBox
 from .history import History
 from .icons import tool_icon
+from . import updates
 
 
 # What "Use for new shapes" carries over to every new shape: the punch, its
@@ -177,7 +178,16 @@ class MainWindow(QMainWindow):
 
         self.canvas = Canvas(self.doc)
         self._load_new_stitch()          # the pitch / inset new shapes get
-        self.setCentralWidget(self._wrap_with_rulers(self.canvas))
+        # the strip that says a newer version is out (hidden till one is)
+        self.update_bar = updates.UpdateBar()
+        self.update_bar.whatsNew.connect(self._update_whats_new)
+        self.update_bar.download.connect(
+            lambda: updates.open_url(updates.DOWNLOAD_URL))
+        self.update_bar.notNow.connect(self._update_not_now)
+        self._update_checks = []         # looks at the website under way
+        self._whats_new_dialog = None
+        self.setCentralWidget(
+            self._with_update_bar(self._wrap_with_rulers(self.canvas)))
         # every MathSpinBox in the app can use this document's parameters
         from . import mathspin
         mathspin.set_params_provider(lambda: self.doc.param_values())
@@ -249,6 +259,17 @@ class MainWindow(QMainWindow):
         self._ruler_corner = corner
         return frame
 
+    def _with_update_bar(self, frame) -> QWidget:
+        """The drawing area with the new-version strip above it."""
+        from PySide6.QtWidgets import QVBoxLayout
+        box = QWidget()
+        col = QVBoxLayout(box)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(0)
+        col.addWidget(self.update_bar)
+        col.addWidget(frame, 1)
+        return box
+
     def _set_rulers_visible(self, on: bool) -> None:
         for w in (self.ruler_h, self.ruler_v, self._ruler_corner):
             w.setVisible(on)
@@ -267,6 +288,7 @@ class MainWindow(QMainWindow):
             "QMainWindow::separator:hover { background: rgba(42,130,218,0.85); }"
             % sep)
         self.canvas.set_dark_theme(dark)
+        self.update_bar.restyle()
         self._ruler_corner.setStyleSheet(RULER[dark]["corner_css"])
         self.ruler_h.update()
         self.ruler_v.update()
@@ -993,6 +1015,23 @@ class MainWindow(QMainWindow):
 
         hm = m.addMenu("&Help")
         self._add(hm, "User guide", "F1", self.show_help)
+        self._add(hm, "What's new in this version", None, self.show_whats_new)
+        hm.addSeparator()
+        self._add(hm, "Join the Stitch Hero group", None, self.join_group)
+        self._add(hm, "Report a problem…", None,
+                  lambda: self.post_to_group("bug"))
+        self._add(hm, "Suggest a feature…", None,
+                  lambda: self.post_to_group("feature"))
+        hm.addSeparator()
+        self._add(hm, "Check for updates now", None,
+                  lambda: self.check_for_updates(asked=True))
+        self.act_updates = QAction("Tell me when a new version is out", self)
+        self.act_updates.setCheckable(True)
+        self.act_updates.setChecked(
+            self._settings().value("updatesCheck", True, type=bool))
+        self.act_updates.toggled.connect(self._toggle_updates)
+        hm.addAction(self.act_updates)
+        hm.addSeparator()
         self._add(hm, "About", None, self._about)
 
     def show_help(self):
@@ -1012,7 +1051,164 @@ class MainWindow(QMainWindow):
             f"<b>Stitch Hero {__version__}</b><br>CAD for laser-cut leather "
             "patterns with pricking-iron-accurate (chord-spaced) stitch "
             "holes.<br><br>Lengths show in millimetres or inches "
-            "(<b>View → Units</b>). Press <b>F1</b> for the user guide.")
+            "(<b>View → Units</b>). Press <b>F1</b> for the user guide."
+            f'<br><br><a href="{updates.SITE}">stitch-hero.com</a> · '
+            f'<a href="{updates.GROUP_URL}">the Stitch Hero group on '
+            'Facebook</a>')
+
+    # -- keeping in touch: a newer version, what's new, the group -------
+    update_check_delay_ms = 4000      # after opening: let the window settle
+
+    def after_launch(self):
+        """What opening Stitch Hero does once the window is up (called by
+        __main__; the tests call it with the look at the website stood in
+        for): say what's new when this version is newer than the last one
+        run here, show a newer version already heard of, and look for one,
+        at most once a day."""
+        self._say_whats_new_once()
+        s = self._settings()
+        if not s.value("updatesCheck", True, type=bool):
+            return
+        self._show_known_update()
+        if updates.due(s.value("updatesLastCheck", "", type=str)):
+            QTimer.singleShot(self.update_check_delay_ms, self._daily_check)
+
+    def _daily_check(self):
+        if self._settings().value("updatesCheck", True, type=bool):
+            self.check_for_updates()      # (unless turned off meanwhile)
+
+    def check_for_updates(self, asked: bool = False):
+        """Ask stitch-hero.com which version is the newest. ``asked``: Help
+        → Check for updates now, which says the answer either way."""
+        self._settings().setValue("updatesLastCheck", updates.now_text())
+        looking = []
+
+        def answered(latest, why):
+            for check in looking:
+                if check in self._update_checks:
+                    self._update_checks.remove(check)
+            if latest is not None:
+                self._settings().setValue("updatesLatest", latest.to_json())
+            self._new_version_answer(latest, why, asked)
+
+        check = self._look_for_latest(answered)
+        if check is not None:
+            looking.append(check)
+            self._update_checks.append(check)
+
+    def _look_for_latest(self, answered):
+        """Start one look at latest.json; ``answered(latest, why)`` when it
+        is back. (The tests put a stand-in here: none of them goes on the
+        network.)"""
+        check = updates.LatestCheck(parent=self)
+        check.done.connect(answered)
+        check.done.connect(check.deleteLater)
+        return check.start()
+
+    def _new_version_answer(self, latest, why: str, asked: bool):
+        """Act on what latest.json said (``latest``), or that it couldn't
+        be read (None, and ``why``)."""
+        from leathercad import __version__
+        if latest is not None and updates.is_newer(latest.version,
+                                                   __version__):
+            put_off = self._settings().value("updatesNotNow", "", type=str)
+            if asked or put_off != latest.version:
+                self.update_bar.say(latest.version)
+            if asked:
+                self._whats_new_in(latest)
+            return
+        if latest is not None:
+            self.update_bar.hide()            # nothing newer than this one
+        if not asked:
+            return
+        if latest is None:
+            QMessageBox.information(
+                self, "Check for updates",
+                "Stitch Hero couldn't find out from stitch-hero.com whether "
+                "a newer version is out" + (f" ({why})." if why else ".")
+                + "\n\nIs this computer online? Try again later, or look at "
+                "stitch-hero.com.")
+        else:
+            QMessageBox.information(
+                self, "Check for updates",
+                f"You have the newest version: Stitch Hero {__version__}.")
+
+    def _known_latest(self):
+        """The newest version heard of at the last look, if any."""
+        raw = self._settings().value("updatesLatest", "", type=str)
+        return updates.parse_latest(raw) if raw else None
+
+    def _show_known_update(self):
+        latest = self._known_latest()
+        if latest is not None:
+            self._new_version_answer(latest, "", asked=False)
+
+    def _toggle_updates(self, on: bool):
+        self._settings().setValue("updatesCheck", bool(on))
+        if not on:
+            self.update_bar.hide()
+
+    def _update_not_now(self):
+        """Not now: no more of this version; a newer one is said again."""
+        self._settings().setValue("updatesNotNow", self.update_bar.version)
+        self.update_bar.hide()
+
+    def _update_whats_new(self):
+        latest = self._known_latest()
+        if latest is None or latest.version != self.update_bar.version:
+            latest = updates.Latest(self.update_bar.version)
+        self._whats_new_in(latest)
+
+    def _whats_new_in(self, latest):
+        """What's new in a newer version that is out, and the way to it."""
+        when = f" · {updates.day_said(latest.date)}" if latest.date else ""
+        self._show_whats_new_dialog(updates.WhatsNewDialog(
+            f"What's new in Stitch Hero {latest.version}", self,
+            notes=latest.notes, download=True,
+            heading=f"Stitch Hero {latest.version}{when}"))
+
+    def show_whats_new(self):
+        """Help → What's new in this version: its part of the changelog."""
+        from leathercad import __version__
+        text = updates.whats_new_text(__version__) or (
+            "The notes for this version weren't found with the program.")
+        self._show_whats_new_dialog(updates.WhatsNewDialog(
+            f"What's new in Stitch Hero {__version__}", self,
+            markdown=text))
+
+    def _show_whats_new_dialog(self, dlg):
+        old = self._whats_new_dialog
+        if old is not None:
+            try:
+                old.close()
+            except RuntimeError:              # closed and freed
+                pass
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._whats_new_dialog = dlg
+        dlg.show()
+
+    def _say_whats_new_once(self):
+        """The first time a newer version opens, say what is new in it. (A
+        computer that ran Stitch Hero before this was kept has its window
+        place saved: that counts as an older version.)"""
+        from leathercad import __version__
+        s = self._settings()
+        last = s.value("lastVersionRun", "", type=str)
+        if not last and s.value("geometry") is not None:
+            last = "0"
+        s.setValue("lastVersionRun", __version__)
+        if last and updates.is_newer(__version__, last):
+            self.show_whats_new()
+
+    def join_group(self):
+        """Help → Join the Stitch Hero group."""
+        updates.open_url(updates.GROUP_URL)
+
+    def post_to_group(self, kind: str):
+        """Help → Report a problem / Suggest a feature."""
+        from leathercad import __version__
+        updates.GroupPostDialog(kind, __version__, updates.system_text(),
+                                self).exec()
 
     # -- display units ----------------------------------------------------
     _GRIDS_MM = (0.5, 1.0, 2.0, 2.5, 5.0, 10.0)

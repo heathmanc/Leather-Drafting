@@ -55,7 +55,20 @@ export.
 
 ## 2. Installing and launching
 
-You need Python 3.9+ and PySide6.
+Most people download Stitch Hero from **[stitch-hero.com](https://stitch-hero.com)**:
+an installer for Windows, a `.dmg` for a Mac (Apple Silicon or Intel). No
+Python needed.
+
+* **Windows** — run the installer. If a blue *Windows protected your PC*
+  box appears, click **More info**, then **Run anyway**: it appears because
+  Stitch Hero is new, not because anything is wrong.
+* **Mac** — open the `.dmg` and drag Stitch Hero into Applications. The app
+  is unsigned, so the first time you open it macOS says it can't check it:
+  open **System Settings → Privacy & Security**, scroll down and click
+  **Open Anyway** beside Stitch Hero. (On macOS 14 and earlier, right-click
+  the app → **Open** does the same.) You do this once.
+
+To run it from its source instead, you need Python 3.9+ and PySide6.
 
 ```bash
 git clone https://github.com/heathmanc/leather-drafting.git
@@ -88,9 +101,38 @@ Zip the result and send it. Each script finishes by launching the freshly
 built app in a self-check (`--smoke`) so a broken build never ships silently.
 The user guide travels inside the app (Help → User guide still works).
 
-> macOS note: the app is unsigned, so the first launch needs
-> **right-click → Open** (once). Builds must be made *on* the platform they
-> target — build the Mac app on a Mac, the Windows exe on Windows.
+> macOS note: the app is unsigned, so its first launch needs the
+> **Open Anyway** step above (once). Builds must be made *on* the platform
+> they target — build the Mac app on a Mac, the Windows exe on Windows.
+
+### Staying up to date
+
+New versions come out most weeks. A few seconds after Stitch Hero opens, at
+most once a day, it looks at **stitch-hero.com** to see whether a newer one
+is out. If one is, a strip above the drawing says so, with **What's new**,
+**Download** and **Not now**. *Not now* puts that version off; a newer one is
+said again. **Help → Check for updates now** looks straight away and says
+the answer either way.
+
+The look sends nothing about you: it asks for one small file, saying only
+which version of Stitch Hero is asking.
+**Help → Tell me when a new version is out** turns the daily look off
+(Check for updates now still works).
+
+The first time a newer version opens, it says what's new in it; **Help →
+What's new in this version** shows that again.
+
+### Getting help, reporting a problem
+
+The **Stitch Hero group** on Facebook has the tutorials, answers and
+new-version news, and it's where problems are tracked and ideas gathered.
+
+* **Help → Join the Stitch Hero group** opens it.
+* **Help → Report a problem…** writes the post for you, with the version of
+  Stitch Hero and of Windows or macOS already in it. Fill in what you did
+  and what happened, click **Copy and open the group**, then make a new
+  post there and paste. Add a screenshot if you can.
+* **Help → Suggest a feature…** does the same for an idea.
 
 ---
 
@@ -1715,6 +1757,15 @@ copy. Say yes, then `Ctrl+S`.
 Your work was auto-saved before the dialog appeared, and you can usually keep
 working. The dialog names an error-log file — if the problem repeats, send
 that file with a description of what you clicked.
+
+**Stitch Hero says it couldn't find out whether a newer version is out.**
+It couldn't reach stitch-hero.com: usually the computer is offline, or a
+firewall lets only the browser go online. Nothing else is affected — look
+at stitch-hero.com in the browser instead.
+
+**Where do I report a problem or ask for a feature?**
+In the Stitch Hero group on Facebook: **Help → Report a problem…** or
+**Help → Suggest a feature…** writes the post for you.
 
 **My printed pattern is the wrong size.**
 Print at **Actual size / 100 %**, never "Fit to page". Measure the reference

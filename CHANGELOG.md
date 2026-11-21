@@ -5,7 +5,7 @@ Downloads are on [stitch-hero.com](https://stitch-hero.com) and the
 Windows and macOS builds ship with every release from 0.4.16 on (before it,
 a macOS build was made only for some).
 
-## Unreleased
+## 0.4.18 — 2026-11-21
 
 ### Node editing snaps the way drawing does
 * **You can see what a node will snap to.** Dragging a node marks the snap

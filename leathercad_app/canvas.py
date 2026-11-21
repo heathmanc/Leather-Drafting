@@ -3563,13 +3563,25 @@ class Canvas(QGraphicsView):
         self._clear_preview()
 
     # -- arc / circle (multi-click) tools -------------------------------
-    def _arc_flatten(self, start: QPointF, through: QPointF, end: QPointF):
-        """World-space polyline of the arc through three points (empty if the
-        three points are collinear)."""
+    @staticmethod
+    def _arc_path(start: QPointF, through: QPointF, end: QPointF):
+        """The arc through three points, as a ``Path`` in world space."""
         ep = EditablePath(nodes=[Vec2(start.x(), start.y()), Vec2(end.x(), end.y())],
                           edges=[Edge("arc", Vec2(through.x(), through.y()))],
                           closed=False)                 # identity transform -> world
-        return ep.local_path().flatten()
+        return ep.local_path()
+
+    def _arc_preview(self, path: QPainterPath, start: QPointF,
+                     through: QPointF, end: QPointF) -> bool:
+        """Add the arc through three points to ``path`` as a true curve,
+        round at any zoom. False (and nothing added) when they are in a
+        line, with no arc through them."""
+        from .items import smooth_path
+        arc = smooth_path(self._arc_path(start, through, end))
+        if arc is None:
+            return False
+        path.addPath(arc)
+        return True
 
     def _centre_arc_through(self, centre: QPointF, start: QPointF, end: QPointF):
         """For a centre arc: the start/end points snapped to the radius circle and
@@ -3618,12 +3630,7 @@ class Canvas(QGraphicsView):
                 # cursor -- the arc the next click makes. (This used to treat
                 # the second click as the END, so the preview bent the wrong
                 # way and a point snapped onto looked like it became the end.)
-                poly = self._arc_flatten(pts[0], pts[1], cursor)
-                if len(poly) >= 2:
-                    path.moveTo(poly[0].x, poly[0].y)
-                    for p in poly[1:]:
-                        path.lineTo(p.x, p.y)
-                else:
+                if not self._arc_preview(path, pts[0], pts[1], cursor):
                     path.moveTo(pts[0]); path.lineTo(pts[1]); path.lineTo(cursor)
         elif tool == ARCCENTER:
             if len(pts) == 1:                            # centre placed -> radius
@@ -3634,11 +3641,7 @@ class Canvas(QGraphicsView):
                 tri = self._centre_arc_through(pts[0], pts[1], cursor)
                 if tri:
                     s, thru, e = tri
-                    poly = self._arc_flatten(s, thru, e)
-                    if len(poly) >= 2:
-                        path.moveTo(poly[0].x, poly[0].y)
-                        for p in poly[1:]:
-                            path.lineTo(p.x, p.y)
+                    self._arc_preview(path, s, thru, e)
         if self._preview is None:
             self._preview = QGraphicsPathItem()
             pen = QPen(self.preview_color(), 2, Qt.DashLine)

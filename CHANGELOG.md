@@ -31,6 +31,15 @@ made only when the release workflow is run by hand with it ticked.
   drawing open, saved nowhere — the title bar and the next Save say so.
   Work recovered after a crash is still the piece's.
 
+### Round circles and arcs
+* **Circles, arcs and rounded corners are drawn as true curves** on the
+  canvas, round however far you zoom in. They used to be drawn as the
+  fine polyline they are worked out on — a 5 mm circle in 25 straight
+  sides — whose corners showed close up. The arc tools' previews are true
+  arcs too, and so is the dotted line over an unsewn curved edge. (What is
+  cut never had the corners: SVG and DXF exports write true arcs, unless
+  kerf compensation is on.)
+
 ### Photos and a 3D view in the library
 * **A piece with no picture asks for photos** of the finished piece: a
   large space, click it to choose them, or drop them on it (**Add

@@ -10,11 +10,12 @@ stitch settings change.
 
 from __future__ import annotations
 
+import math
 from typing import List, Optional
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import (QColor, QPainterPath, QPainterPathStroker, QPen,
-                           QPolygonF, QBrush, QFont)
+                           QPolygonF, QBrush, QFont, QTransform)
 from PySide6.QtWidgets import (QGraphicsItem, QApplication,
                                QGraphicsSimpleTextItem)
 
@@ -160,6 +161,91 @@ def _decimate(poly: QPolygonF, tol: float) -> QPolygonF:
 
 def _qpoly(points: List[Vec2]) -> QPolygonF:
     return QPolygonF([QPointF(p.x, p.y) for p in points])
+
+
+def smooth_path(path) -> Optional[QPainterPath]:
+    """A ``leathercad.path.Path`` as Qt curves: its arcs as arcs and its
+    Beziers as Beziers, which Qt draws round at any zoom -- where the
+    polyline they are flattened to (to 0.02 mm, a 5 mm circle in some
+    twenty-five sides) shows its corners close up. None for a path of
+    straight lines only: its polyline is all there is to it."""
+    from leathercad.path import Arc, CubicBezier, QuadraticBezier
+    segs = path.segments
+    if not any(isinstance(s, (Arc, CubicBezier, QuadraticBezier))
+               for s in segs):
+        return None
+    qp = QPainterPath()
+    at = None
+    for sg in segs:
+        a = sg.start()
+        if at is None or abs(a.x - at.x) > 1e-9 or abs(a.y - at.y) > 1e-9:
+            qp.moveTo(a.x, a.y)
+        _segment_to(qp, sg)
+        at = sg.end()
+    if path.closed:
+        qp.closeSubpath()
+    return qp
+
+
+def _segment_to(qp: QPainterPath, sg) -> None:
+    """Carry ``qp`` along one segment of a path, from where it is (the
+    segment's start) to the segment's end, as the curve it is."""
+    from leathercad.path import Arc, CubicBezier, QuadraticBezier
+    if isinstance(sg, Arc) and sg.radius > 0:
+        _arc_beziers(qp, sg.center.x, sg.center.y, sg.radius, sg.a0,
+                     sg._sweep())
+    elif isinstance(sg, CubicBezier):
+        qp.cubicTo(sg.p1.x, sg.p1.y, sg.p2.x, sg.p2.y, sg.p3.x, sg.p3.y)
+    elif isinstance(sg, QuadraticBezier):
+        qp.quadTo(sg.p1.x, sg.p1.y, sg.p2.x, sg.p2.y)
+    else:
+        e = sg.end()
+        qp.lineTo(e.x, e.y)
+
+
+def _arc_beziers(qp: QPainterPath, cx: float, cy: float, r: float,
+                 a0: float, sweep: float) -> None:
+    """An arc of a circle as cubic Beziers of a quarter turn at most, from
+    where ``qp`` is (the arc's start): within 0.03 % of the radius of the
+    circle, and ending exactly where the arc ends. (Qt's own ``arcTo``
+    puts the end of an arc that isn't whole quarters a few hundredths of a
+    per cent of its radius off -- a step at the joint with what follows.)"""
+    n = max(1, int(math.ceil(abs(sweep) / (0.5 * math.pi) - 1e-9)))
+    d = sweep / n
+    k = 4.0 / 3.0 * math.tan(d / 4.0)     # the handles' length, by radius
+    for i in range(n):
+        t0 = a0 + i * d
+        t1 = t0 + d
+        c0, s0 = math.cos(t0), math.sin(t0)
+        c1, s1 = math.cos(t1), math.sin(t1)
+        qp.cubicTo(cx + r * (c0 - k * s0), cy + r * (s0 + k * c0),
+                   cx + r * (c1 + k * s1), cy + r * (s1 - k * c1),
+                   cx + r * c1, cy + r * s1)
+
+
+def _orientation(t) -> QTransform:
+    """A shape's turn and mirror (not its place), as ``Transform.apply_dir``
+    has them: mirrored across the upright, then turned."""
+    th = math.radians(t.rotation)
+    c, s = math.cos(th), math.sin(th)
+    m = -1.0 if t.mirror_x else 1.0
+    return QTransform(c * m, s * m, -s, c, 0.0, 0.0)
+
+
+def _smooth_outline(model, path) -> Optional[QPainterPath]:
+    """A shape's outline as Qt curves (see ``smooth_path``), turned and
+    mirrored as the shape is but not moved -- as ``ShapeItem._outline``
+    is. A circle or ellipse is an ellipse: its outline is built of
+    straight sides, and has no arcs to keep. None for straight sides."""
+    from leathercad.shapes import Ellipse
+    if isinstance(model, Ellipse):
+        qp = QPainterPath()
+        qp.addEllipse(QPointF(0.0, 0.0), model.rx, model.ry)
+    else:
+        qp = smooth_path(path)
+        if qp is None:
+            return None
+    return _orientation(model.transform).map(qp)
 
 
 def _paint_backstitch(painter, result, settings) -> None:
@@ -1056,6 +1142,9 @@ class ShapeItem(QGraphicsItem):
         self.model = shape
         self.canvas = canvas
         self._outline: QPolygonF = QPolygonF()
+        # ... and as curves, for a shape with arcs or round: drawn round at
+        # any zoom (None: the polyline is the outline)
+        self._curve: Optional[QPainterPath] = None
         self._skipped = QPainterPath()
         self._holes: Optional[StitchResult] = None
         self._holes_path: Optional[QPainterPath] = None
@@ -1099,6 +1188,7 @@ class ShapeItem(QGraphicsItem):
             local = path.flatten()
             oriented = [t.apply_dir(p) for p in local]
             self._outline = _qpoly(oriented)
+            self._curve = _smooth_outline(self.model, path)
             self._closed = path.closed
             self._hit_shape = None
             self._outline_lod = None
@@ -1125,13 +1215,14 @@ class ShapeItem(QGraphicsItem):
         st0 = self.model.stitch
         if (mask is not None and len(mask) == len(path.segments)
                 and st0 is not None and st0.enabled and not all(mask)):
+            skipped = QPainterPath()
             for flag, seg in zip(mask, path.segments):
                 if flag:
                     continue
-                pts = [t.apply_dir(q) for q in [seg.start()] + seg.flatten()]
-                self._skipped.moveTo(pts[0].x, pts[0].y)
-                for q in pts[1:]:
-                    self._skipped.lineTo(q.x, q.y)
+                a = seg.start()
+                skipped.moveTo(a.x, a.y)
+                _segment_to(skipped, seg)       # (an arc as an arc)
+            self._skipped = _orientation(t).map(skipped)
 
         self._hole_locals = []          # local stitch-hole centres (set below)
 
@@ -1201,6 +1292,8 @@ class ShapeItem(QGraphicsItem):
         keep-out ring -- without the zoom-dependent stroke pad of
         ``boundingRect``; what 'fit to content' measures."""
         r = self._outline.boundingRect()
+        if self._curve is not None:            # (a hair beyond the sides)
+            r = r.united(self._curve.boundingRect())
         pad = 2.0
         if self._holes:
             pad += max(1.0, (self.model.stitch.hole_diameter
@@ -1351,13 +1444,19 @@ class ShapeItem(QGraphicsItem):
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)
         poly = self._outline
-        if poly.size() > 48 and lod * _LOD_TOL_MM < 0.5:
-            # zoomed out: no vertex of the simplified copy is half a pixel off
-            if self._outline_lod is None:
-                self._outline_lod = _decimate(poly, _LOD_TOL_MM)
-            poly = self._outline_lod
-        if outline_vis and poly.size() >= 2:
-            painter.drawPolyline(poly)
+        if self._curve is not None:
+            # arcs and circles as curves: round however far you zoom in
+            if outline_vis:
+                painter.drawPath(self._curve)
+        else:
+            if poly.size() > 48 and lod * _LOD_TOL_MM < 0.5:
+                # zoomed out: no vertex of the simplified copy is half a
+                # pixel off
+                if self._outline_lod is None:
+                    self._outline_lod = _decimate(poly, _LOD_TOL_MM)
+                poly = self._outline_lod
+            if outline_vis and poly.size() >= 2:
+                painter.drawPolyline(poly)
         r_keep = float(getattr(self.model, "keepout", 0.0) or 0.0)
         if r_keep > 0 and (selected or getattr(self.model, "hardware", "")):
             # the stitch keep-out round a piece of hardware: a faint dashed

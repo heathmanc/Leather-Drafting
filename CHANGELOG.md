@@ -5,7 +5,7 @@ Downloads are on [stitch-hero.com](https://stitch-hero.com) and the
 Windows and macOS builds ship with every release from 0.4.16 on (before it,
 a macOS build was made only for some).
 
-## Unreleased
+## 0.4.19 — 2026-11-22
 
 ### Construction lines catch what you move
 * **A piece you move lands on a construction line anywhere along it.** Only

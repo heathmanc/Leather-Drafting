@@ -5,6 +5,29 @@ Downloads are on [stitch-hero.com](https://stitch-hero.com) and the
 Windows and macOS builds ship with every release from 0.4.16 on (before it,
 a macOS build was made only for some).
 
+## Unreleased
+
+### Construction lines catch what you move
+* **A piece you move lands on a construction line anywhere along it.** Only
+  a construction line's two ends, its middle and its crossings caught a
+  moved piece. So a piece taken to a guide, or a piece grouped with a
+  construction line, snapped to nothing, though the guide said construction
+  lines snap along their whole length while moving too. Now, with no
+  corner, end, midpoint or crossing in reach, the point you grabbed goes
+  onto the line and slides along it freely. A corner or end on the line
+  still wins when it's near. Open lines and seams catch it too, as they do
+  when drawing.
+* **A construction line grabbed along its length snaps by the spot you
+  grabbed.** It snapped by whichever end, middle or corner of its group was
+  nearest the grab, which on a long line could be far from the pointer.
+  Grab it near an end or its middle to snap by that.
+* **A resize grip lands on a construction line anywhere along it**, too.
+  Resizing a group, the grip leaves the group's own lines alone: they
+  stretch with it.
+* A moved group's snapping point is found among all of its points. A group
+  with more than 600 (a traced piece, say) dropped most of them first, so
+  the point nearest the grab could be missing.
+
 ## 0.4.18 — 2026-11-21
 
 ### Node editing snaps the way drawing does

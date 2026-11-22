@@ -349,10 +349,14 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
 * **Move**: drag. While dragging, the shape magnetically **snaps** to other
   shapes' endpoints/centres/midpoints and intersections (see §8), **by the
   point you grabbed it by**: its corner, end, midpoint or centre nearest
-  where you pressed lands on the target nearest that point. Grab it near
+  where you pressed lands on the target nearest that point. With no point
+  in reach, it lands on a **construction line** anywhere along it (and
+  slides along it freely). Grab it near
   another point to snap by that one; a faint orange mark shows which point
   will snap. Circles and loose holes snap by their **centre** (grab a circle
-  right on a quarter point to snap by that instead). Grab a piece **by one of
+  right on a quarter point to snap by that instead). A construction line
+  grabbed along its length snaps by **the spot you grabbed** (grab it near
+  an end or its middle to snap by that). Grab a piece **by one of
   its stitch holes** and that hole's centre snaps, onto a corner or onto
   another piece's hole, so two pieces' stitching lines up hole for hole. It
   works the same for a piece in a `Ctrl+G` group: the whole group moves.
@@ -1119,6 +1123,12 @@ it exactly onto a centre point without any extra construction. Grabbed by
 one of its stitch holes, a piece snaps by that hole's **centre**: drop it on
 another piece's hole to register the two rows of stitching. Nothing else
 on the shape snaps, so it never jumps to a target far from the pointer.
+With no point near, that point lands on a **construction line** anywhere
+along it, as a point you're drawing does (open lines and seams too), so a
+piece, or a piece grouped with its own construction line, can be laid
+along a guide. A construction line you drag snaps by the spot where you
+grabbed it, unless you grabbed it near an end or its middle. A resize grip
+lands on a construction line the same way.
 
 A third toggle, **Perfect fit**, snaps *sizes* instead of points: with it on, a
 resize grip on a stitched rectangle, circle or oval jumps between the sizes

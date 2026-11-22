@@ -551,6 +551,7 @@ class Canvas(QGraphicsView):
         # object while it is still selected -> crash in clearSelection().
         self._live = set()
         self._snap_cache = None   # static snap nodes captured at drag start
+        self._snap_lines = None   # ...and the lines it lands on (_guide_lines)
         self._vertex_snap = None  # a node drag's targets (see begin_node_snap)
         self._snap_grid = None    # same nodes bucketed for O(1) lookup
         self._snap_cell = 1.0     # grid cell size == snap threshold (mm)
@@ -1133,6 +1134,18 @@ class Canvas(QGraphicsView):
         responsive -- the index makes the full set cheap)."""
         return self._snap_index()["edges"]
 
+    @staticmethod
+    def _is_guide_item(it) -> bool:
+        """Whether a point snaps onto ``it`` anywhere along it (the 'nearest'
+        osnap): a construction line or ruler guide, an open line, a seam.
+        Not a closed outline -- that would fire all over solid pieces."""
+        if isinstance(it, ShapeItem):
+            m = it.model
+            return bool(getattr(m, "construction", False) or (
+                isinstance(m, PathShape)
+                and not getattr(m, "close_path", False)))
+        return isinstance(it, StitchLineItem)
+
     def _nearest_on_guide(self, near: Vec2, radius: float, exclude=None):
         """Nearest point on a construction line or open guide line within
         ``radius`` (the 'nearest' osnap). Skips closed shape outlines so it
@@ -1141,19 +1154,13 @@ class Canvas(QGraphicsView):
         lines don't snap, as its points don't."""
         best, best_d = None, radius
         for it in self.scene_obj.items():
-            if it is exclude or not it.isVisible():
+            if (it is exclude or not it.isVisible()
+                    or not self._is_guide_item(it)):
                 continue
             if isinstance(it, ShapeItem):
-                m = it.model
-                is_guide = getattr(m, "construction", False) or (
-                    isinstance(m, PathShape) and not getattr(m, "close_path", False))
-                if not is_guide:
-                    continue
-                poly = [Vec2(p.x, p.y) for p in m.world_polyline()[0]]
-            elif isinstance(it, StitchLineItem):
-                poly = [Vec2(p.x, p.y) for p in it.line.points]
+                poly = [Vec2(p.x, p.y) for p in it.model.world_polyline()[0]]
             else:
-                continue
+                poly = [Vec2(p.x, p.y) for p in it.line.points]
             for k in range(len(poly) - 1):
                 a, b = poly[k], poly[k + 1]
                 ab = b - a
@@ -1165,6 +1172,41 @@ class Canvas(QGraphicsView):
                 d = (foot - near).length()
                 if d < best_d:
                     best_d, best = d, foot
+        return best
+
+    def _guide_lines(self, exclude):
+        """The lines a dragged piece or grip lands on anywhere along (see
+        _is_guide_item), taken once at the press: ``(snap index, ids of
+        their items)``, without ``exclude`` -- an item, or the set being
+        dragged -- or None when there are none. Read by _foot_on_lines.
+        (The index leaves hidden layers out; whatever it re-indexes during
+        the drag belongs to the dragged items, which aren't in the ids.)"""
+        excl = exclude if isinstance(exclude, (set, list, tuple)) else {exclude}
+        idx = self._snap_index()
+        ids = frozenset(oid for oid, rec in idx["owners"].items()
+                        if rec["item"] not in excl
+                        and self._is_guide_item(rec["item"]))
+        return (idx, ids) if ids else None
+
+    def _foot_on_lines(self, p: Vec2, radius: float, lines):
+        """The nearest point within ``radius`` of ``p`` on ``lines`` (from
+        _guide_lines), or None."""
+        if lines is None:
+            return None
+        idx, ids = lines
+        best, best_d = None, radius
+        for a, b, oid in self._indexed_edges(p, radius, idx):
+            if oid not in ids:
+                continue
+            ab = b - a
+            d2 = ab.length_sq()
+            if d2 <= 1e-12:
+                continue
+            t = max(0.0, min(1.0, (p - a).dot(ab) / d2))
+            foot = a.lerp(b, t)
+            d = (foot - p).length()
+            if d < best_d:
+                best_d, best = d, foot
         return best
 
     # -- where the line or arc being drawn crosses an outline ---------------
@@ -1624,11 +1666,13 @@ class Canvas(QGraphicsView):
 
     def begin_move_snap(self, item, press: Optional[QPointF] = None) -> None:
         """Arm magnetic snapping for a drag of ``item`` pressed at scene point
-        ``press``: the targets (other shapes' nodes and intersections) once,
-        and the ONE point of the item that will snap to them -- its node
-        nearest where it was grabbed (see _grab_source)."""
+        ``press``: the targets (other shapes' nodes and intersections, and
+        the construction lines and other lines it can land on anywhere
+        along) once, and the ONE point of the item that will snap to them
+        -- its node nearest where it was grabbed (see _grab_source)."""
         self._move_src = self._move_src_kind = None
         self._move_src_said = False
+        self._snap_lines = None
         # Don't fight the node-edit lock: the item being edited stays frozen so a
         # stray press on its body can't drag it out from under its handles.
         if self._edit_owner is not None and item is self._edit_owner:
@@ -1662,6 +1706,7 @@ class Canvas(QGraphicsView):
             self._snap_cache = (self._snap_candidates(exclude=item)
                                 + self._all_intersections(exclude=item))
             self._build_snap_grid()
+            self._snap_lines = self._guide_lines(exclude=item)
             self._move_src, self._move_src_kind = self._grab_source(
                 item, getattr(item, "_snap_offsets", None),
                 getattr(item, "_snap_offset_kinds", None), press, item.pos())
@@ -1675,6 +1720,7 @@ class Canvas(QGraphicsView):
         self._snap_cache = (self._snap_candidates(exclude=set(sel))
                             + self._all_intersections(exclude=set(sel)))
         self._build_snap_grid()
+        self._snap_lines = self._guide_lines(exclude=set(sel))
         leader = item
         members = [it for it in sel if it is not leader]
         lp = leader.pos()
@@ -1684,8 +1730,12 @@ class Canvas(QGraphicsView):
             bx, by = mp.x() - lp.x(), mp.y() - lp.y()
             for o in getattr(m, "_snap_offsets", None) or [Vec2(0.0, 0.0)]:
                 offsets.append(Vec2(bx + o.x, by + o.y))
-        # a huge multi-select would mean scanning thousands of group nodes on
-        # every mouse move -- thin them; group snapping degrades gracefully
+        # the point grabbed by, from all of the group's nodes...
+        self._move_src, self._move_src_kind = self._grab_source(
+            leader, offsets, None, press, lp)
+        # ...while the every-node fallback (no grab point) would scan a huge
+        # multi-select's thousands of nodes on every mouse move -- thin them;
+        # group snapping degrades gracefully
         if len(offsets) > 600:
             offsets = offsets[::len(offsets) // 600 + 1]
         self._group_drag = {
@@ -1695,15 +1745,16 @@ class Canvas(QGraphicsView):
             "starts": {id(m): QPointF(m.pos()) for m in members},
             "offsets": offsets,
         }
-        self._move_src, self._move_src_kind = self._grab_source(
-            leader, offsets, None, press, lp)
         self._grab_by_hole(leader, press, lp)
         for m in members:
             m.setFlag(QGraphicsItem.ItemIsMovable, False)
         self._nonmovable_members = list(members)
 
     # A round thing grabbed this close (px) to a point on its rim snaps by
-    # that point; grabbed anywhere else it snaps by its centre.
+    # that point; grabbed anywhere else it snaps by its centre. A
+    # construction line grabbed this close to a point (an end, its middle,
+    # a point of a piece grouped with it) snaps by that point; grabbed
+    # anywhere else along it, by the spot it was grabbed at.
     _RIM_GRAB_PX = 10.0
 
     def _grab_source(self, item, offsets, kinds, press, origin):
@@ -1713,6 +1764,9 @@ class Canvas(QGraphicsView):
         each move, so the shape jumped to whichever pair happened to line up
         -- often a far corner, a long way from the pointer. A circle, oval or
         hole snaps by its centre unless it was grabbed right on a rim point.
+        A construction line grabbed along it, away from its points, snaps by
+        the spot grabbed (kind ``"line"``): its nearest point could be far
+        from the pointer, so it seemed to snap to nothing.
         ``(None, None)`` without a grab point: every node is tried, as
         before."""
         if press is None or not offsets:
@@ -1721,14 +1775,46 @@ class Canvas(QGraphicsView):
         d2, i = min(((o.x - px) ** 2 + (o.y - py) ** 2, j)
                     for j, o in enumerate(offsets))
         kind = kinds[i] if kinds and i < len(kinds) else None
+        near = (self._RIM_GRAB_PX / max(self._zoom, 1e-6)) ** 2
         if kinds and getattr(item, "_center_snap_priority", False):
-            rim = (self._RIM_GRAB_PX / max(self._zoom, 1e-6)) ** 2
-            if kind != "center" and d2 > rim:
+            if kind != "center" and d2 > near:
                 ci = next((j for j, k in enumerate(kinds) if k == "center"),
                           None)
                 if ci is not None:
                     i, kind = ci, "center"
+        elif d2 > near and self._is_open_guide(item):
+            spot = self._grabbed_spot(item, press)
+            if spot is not None:
+                return Vec2(spot.x - origin.x(), spot.y - origin.y()), "line"
         return offsets[i], kind
+
+    @staticmethod
+    def _is_open_guide(item) -> bool:
+        """A construction line or ruler guide (an open one: a closed
+        construction outline -- a sheet, a hardware footprint -- is held by
+        its corners like a piece)."""
+        return (isinstance(item, ShapeItem)
+                and bool(getattr(item.model, "construction", False))
+                and not getattr(item, "_closed", True))
+
+    @staticmethod
+    def _grabbed_spot(item, press: QPointF):
+        """The point of ``item``'s line nearest the press ``press`` (scene
+        coordinates), or None."""
+        poly = item.world_outline()
+        p = Vec2(press.x(), press.y())
+        best, best_d = None, float("inf")
+        for k in range(len(poly) - 1):
+            a, b = poly[k], poly[k + 1]
+            ab = b - a
+            d2 = ab.length_sq()
+            t = 0.0 if d2 <= 1e-12 else max(0.0, min(1.0,
+                                                      (p - a).dot(ab) / d2))
+            foot = a.lerp(b, t)
+            d = (foot - p).length()
+            if d < best_d:
+                best_d, best = d, foot
+        return best
 
     def _grab_by_hole(self, item, press, origin) -> None:
         """Pressed on one of the piece's own stitch holes: that hole is the
@@ -1789,6 +1875,7 @@ class Canvas(QGraphicsView):
         self._group_drag = None
         self._snap_cache = None
         self._snap_grid = None
+        self._snap_lines = None
         self._move_src = self._move_src_kind = None
         self._show_src_marker(None, None)
         self._hide_snap_marker()
@@ -1808,7 +1895,9 @@ class Canvas(QGraphicsView):
         return moved
 
     def snap_move(self, item, value: QPointF) -> QPointF:
-        """Snap a dragged shape so one of its nodes lands on a nearby node."""
+        """Snap a dragged shape so the point it was grabbed by lands on a
+        nearby node -- or, with none in reach, anywhere along a nearby
+        construction line or other line, as a point being drawn does."""
         if not self.snap_to_nodes or self._snap_cache is None:
             return value
         # Only the item the mouse is actually dragging snaps. Positions set by
@@ -1866,6 +1955,17 @@ class Canvas(QGraphicsView):
                 best, best_target = _best(centre)
         if best is None:
             best, best_target = _best(offsets)
+        kind = "end"
+        if best is None and src is not None:
+            # no point in reach: it lands on a construction line (or another
+            # line) anywhere along it. Only a line's ends, middle and
+            # crossings used to catch a moved piece, so a piece taken to a
+            # guide snapped to nothing.
+            foot = self._foot_on_lines(Vec2(vx + src.x, vy + src.y), thr,
+                                       self._snap_lines)
+            if foot is not None:
+                best = QPointF(foot.x - src.x, foot.y - src.y)
+                best_target, kind = foot, "edge"
 
         if src is not None and not getattr(self, "_move_src_said", True):
             self._move_src_said = True
@@ -1873,6 +1973,10 @@ class Canvas(QGraphicsView):
                 self.statusMessage.emit(
                     "Snaps by the centre of the hole you grabbed it by (grab "
                     "the outline to snap by a corner, end or midpoint)")
+            elif self._move_src_kind == "line":
+                self.statusMessage.emit(
+                    "Snaps by the spot on the construction line you grabbed "
+                    "(grab near its end or middle to snap by that)")
             else:
                 self.statusMessage.emit(
                     f"Snaps by its {self._move_src_name(item)}: the point "
@@ -1887,7 +1991,7 @@ class Canvas(QGraphicsView):
                                       self._move_src_kind)
         else:
             self._show_src_marker(None, None)
-            self._show_snap_marker(QPointF(best_target.x, best_target.y), "end")
+            self._show_snap_marker(QPointF(best_target.x, best_target.y), kind)
         if gd is not None:                    # drag the rest of the group along
             dx = best.x() - gd["leader_start"].x()
             dy = best.y() - gd["leader_start"].y()
@@ -1918,8 +2022,9 @@ class Canvas(QGraphicsView):
     def begin_node_snap(self, handle) -> None:
         """Arm snapping for a drag of ``handle``: a node of the shape being
         edited (see snap_vertex), or a box-resize grip, which snaps to other
-        shapes' nodes (see snap_node)."""
+        shapes' nodes and onto construction lines (see snap_node)."""
         self._vertex_snap = None
+        self._snap_lines = None
         if getattr(handle, "node", None) is not None:
             self._snap_cache = None
             self._begin_vertex_snap(handle)
@@ -1935,6 +2040,15 @@ class Canvas(QGraphicsView):
                  + self._all_intersections(exclude=owner))
         self._snap_cache = [c for c in cands
                             if (c.x - start.x()) ** 2 + (c.y - start.y()) ** 2 > 0.25]
+        # the lines it lands on along them: not those it stretches -- a
+        # group resize scales the whole group, its own guides with it
+        resized = {owner}
+        gid = getattr(self._item_model(owner), "group_id", None)
+        if gid and self._resize_group:
+            resized.update(
+                it for it in self.scene_obj.items()
+                if getattr(self._item_model(it), "group_id", None) == gid)
+        self._snap_lines = self._guide_lines(exclude=resized)
 
     def _begin_vertex_snap(self, handle) -> None:
         """What a node drag snaps to, taken once at the press: the snap
@@ -2167,7 +2281,8 @@ class Canvas(QGraphicsView):
 
     def snap_node(self, value: QPointF) -> QPointF:
         """Where a resize grip dragged to ``value`` snaps: the nearest of
-        the other shapes' nodes within reach. (A node being edited goes
+        the other shapes' nodes within reach -- or, with none, anywhere
+        along a construction line or other line. (A node being edited goes
         through snap_vertex.)"""
         if self._vertex_snap is not None:
             return self.snap_vertex(value)
@@ -2184,12 +2299,19 @@ class Canvas(QGraphicsView):
         if best is not None:
             self._show_snap_marker(best, "end")
             return best
+        foot = self._foot_on_lines(Vec2(value.x(), value.y()), thr,
+                                   self._snap_lines)
+        if foot is not None:
+            best = QPointF(foot.x, foot.y)
+            self._show_snap_marker(best, "edge")
+            return best
         self._hide_snap_marker()
         return value
 
     def end_node_snap(self) -> None:
         node_drag = self._vertex_snap is not None
         self._snap_cache = None
+        self._snap_lines = None
         self._vertex_snap = None
         self._hide_snap_marker()
         if node_drag:

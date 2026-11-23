@@ -5,7 +5,7 @@ Downloads are on [stitch-hero.com](https://stitch-hero.com) and the
 Windows and macOS builds ship with every release from 0.4.16 on (before it,
 a macOS build was made only for some).
 
-## Unreleased
+## 0.4.20 — 2026-11-22
 
 ### Type a size on the toolbar; the aspect lock is there too
 * **W and H boxes on the top toolbar** show the width and height of what's

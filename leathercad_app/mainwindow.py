@@ -15,7 +15,7 @@ from PySide6.QtGui import (QAction, QActionGroup, QColor, QIcon, QKeySequence,
 from PySide6.QtWidgets import (
     QMainWindow, QDockWidget, QFileDialog, QToolBar, QLabel, QMessageBox,
     QWidget, QScrollArea, QComboBox, QInputDialog, QDoubleSpinBox,
-    QToolButton, QMenu, QColorDialog,
+    QToolButton, QMenu, QColorDialog, QAbstractSpinBox,
 )
 
 from leathercad.document import Document
@@ -26,7 +26,7 @@ from .canvas import Canvas
 from .panels import PropertiesPanel, LayersPanel
 from .mathspin import MathSpinBox, NoWheelComboBox, NoWheelSpinBox
 from .history import History
-from .icons import tool_icon
+from .icons import toggle_icon, tool_icon
 from . import updates
 
 
@@ -296,6 +296,8 @@ class MainWindow(QMainWindow):
             act.setIcon(tool_icon(_ICON_FOR.get(mode, "rect"), dark=dark))
         self.act_pin.setIcon(tool_icon("pin", dark=dark))
         self.act_ungroup.setIcon(tool_icon("ungroup", dark=dark))
+        self.act_aspect_lock.setIcon(
+            toggle_icon("ratio_locked", "ratio_free", dark=dark))
         self._settings().setValue("darkTheme", dark)
 
     # -- persist toolbar/window layout across sessions ------------------
@@ -451,6 +453,7 @@ class MainWindow(QMainWindow):
         self.layers.canvas = self.canvas
         self.layers.reload()
         self.properties.set_layers(doc.layers)
+        self._refresh_size_fields()
         if fit:
             self.canvas.fit_to_content()
         self.history.reset(doc.to_dict())
@@ -588,6 +591,50 @@ class MainWindow(QMainWindow):
         fit.triggered.connect(self.canvas.fit_to_content)
         tb.addAction(fit)
 
+        # the selection's size: type a width or height and it's resized to
+        # it, about its centre. The lock between them keeps the proportions
+        # -- here and when a grip is dragged (it's in the View menu too).
+        tb.addSeparator()
+        tb.addWidget(QLabel(" W "))
+        self.size_w = self._size_spin(
+            "Width: the selection's size along X.\n"
+            "Type a width and press Enter to resize the selection to it,\n"
+            "about its centre; with the lock on, the height keeps in\n"
+            "proportion. Holes, seams and lettering go with it; the\n"
+            "stitch pitch and inset stay. Ctrl+Z undoes it.")
+        self.size_w.valueChanged.connect(lambda v: self._size_typed(width=v))
+        tb.addWidget(self.size_w)
+        self.act_aspect_lock = QAction(
+            toggle_icon("ratio_locked", "ratio_free"),
+            "Lock aspect ratio on resize", self)
+        self.act_aspect_lock.setCheckable(True)
+        self.act_aspect_lock.setIconVisibleInMenu(False)    # a tick in View
+        self.act_aspect_lock.setToolTip(
+            "Lock aspect ratio: a resize keeps the proportions, whether\n"
+            "it's typed in W or H or dragged with a resize grip.\n"
+            "Hold Shift while dragging a grip to do the opposite.")
+        self.act_aspect_lock.setChecked(
+            self._settings().value("aspectLock", False, type=bool))
+        self.canvas.aspect_lock = self.act_aspect_lock.isChecked()
+        self.act_aspect_lock.toggled.connect(self._toggle_aspect_lock)
+        tb.addAction(self.act_aspect_lock)
+        tb.addWidget(QLabel(" H "))
+        self.size_h = self._size_spin(
+            "Height: the selection's size along Y.\n"
+            "Type a height and press Enter to resize the selection to it,\n"
+            "about its centre; with the lock on, the width keeps in\n"
+            "proportion. Holes, seams and lettering go with it; the\n"
+            "stitch pitch and inset stay. Ctrl+Z undoes it.")
+        self.size_h.valueChanged.connect(lambda v: self._size_typed(height=v))
+        tb.addWidget(self.size_h)
+        # a drag or a grip changes the size many times a second: the boxes
+        # catch up at most every 50 ms
+        self._size_timer = QTimer(self)
+        self._size_timer.setSingleShot(True)
+        self._size_timer.setInterval(50)
+        self._size_timer.timeout.connect(self._refresh_size_fields)
+        self._refresh_size_fields()
+
         tb.addSeparator()
         self.act_snap_nodes = QAction("Nodes", self)
         self.act_snap_nodes.setCheckable(True)
@@ -721,6 +768,47 @@ class MainWindow(QMainWindow):
     def _toggle_aspect_lock(self, on):
         self.canvas.aspect_lock = bool(on)
         self._settings().setValue("aspectLock", bool(on))
+
+    def _size_spin(self, tip: str) -> MathSpinBox:
+        """A toolbar box for the selection's width or height, in the display
+        unit (a sum, another unit or a parameter can be typed too). It acts
+        on Enter, or when it's left -- never at each key."""
+        sp = MathSpinBox()
+        sp.setRange(0.0, 100000.0)
+        sp.setDecimals(4)
+        sp.trim_zeros = True
+        sp.physical = True
+        _units.register_spin(sp)
+        sp.setSpecialValueText("—")        # nothing selected, or flat
+        sp.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        sp.setKeyboardTracking(False)
+        sp.setToolTip(tip)
+        return sp
+
+    def _size_typed(self, width=None, height=None) -> None:
+        """A width or height was typed: resize the selection to it."""
+        self.canvas.resize_selection_to(width, height,
+                                        keep_ratio=self.canvas.aspect_lock)
+        self._refresh_size_fields(typed=True)
+
+    def _schedule_size_refresh(self) -> None:
+        if not self._size_timer.isActive():
+            self._size_timer.start()
+
+    def _refresh_size_fields(self, typed: bool = False) -> None:
+        """Show the selection's width and height in the toolbar boxes: "—",
+        greyed, with nothing selected or for a size it hasn't (a straight
+        line's height, a hole's). A box with a half-typed size in it is
+        left alone, unless that size was just entered."""
+        size = self.canvas.selection_size() or (0.0, 0.0)
+        for sp, v in zip((self.size_w, self.size_h), size):
+            if (not typed and sp.hasFocus()
+                    and sp.lineEdit().isModified()):
+                continue
+            sp.blockSignals(True)
+            sp.setValue(v)
+            sp.blockSignals(False)
+            sp.setEnabled(sp.value() > 0.0)
 
     def _toggle_perfect_fit(self, on):
         self.canvas.perfect_fit = bool(on)
@@ -1002,16 +1090,7 @@ class MainWindow(QMainWindow):
             lambda on: setattr(self.canvas, "drag_to_draw", on))
         vm.addAction(self.act_drag_draw)
 
-        self.act_aspect_lock = QAction("Lock aspect ratio on resize", self)
-        self.act_aspect_lock.setCheckable(True)
-        self.act_aspect_lock.setToolTip(
-            "On: dragging a resize grip keeps the shape's proportions.\n"
-            "Hold Shift while dragging to invert this either way.")
-        self.act_aspect_lock.setChecked(
-            self._settings().value("aspectLock", False, type=bool))
-        self.canvas.aspect_lock = self.act_aspect_lock.isChecked()
-        self.act_aspect_lock.toggled.connect(self._toggle_aspect_lock)
-        vm.addAction(self.act_aspect_lock)
+        vm.addAction(self.act_aspect_lock)      # the toolbar's chain button
 
         hm = m.addMenu("&Help")
         self._add(hm, "User guide", "F1", self.show_help)
@@ -1459,8 +1538,10 @@ class MainWindow(QMainWindow):
 
     def _selection_changed(self):
         self.properties.show_selection(self.canvas.selected_items())
+        self._refresh_size_fields()
 
     def _document_changed(self):
+        self._schedule_size_refresh()
         self.sb_holes.setText(f"{self.canvas.total_holes()} holes")
         self.properties.set_layers(self.doc.layers)
         # keep the Properties position / size fields in step with canvas edits
@@ -1511,6 +1592,7 @@ class MainWindow(QMainWindow):
         self.layers.reload()
         self.properties.set_layers(self.doc.layers)
         self.properties.show_selection([])
+        self._refresh_size_fields()
         self._update_undo_actions()
         self._sync_kerf_spin()
         self.sb_holes.setText(f"{self.canvas.total_holes()} holes")

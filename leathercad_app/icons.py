@@ -38,6 +38,22 @@ def _dots_along(p, pts, color=None, r=1.3):
 
 
 def tool_icon(kind: str, size: int = 22, dark: bool = False) -> QIcon:
+    return QIcon(tool_pixmap(kind, size, dark))
+
+
+def toggle_icon(on_kind: str, off_kind: str, size: int = 22,
+                dark: bool = False) -> QIcon:
+    """A checkable action's icon: ``on_kind`` drawn while it's checked and
+    ``off_kind`` while it isn't, so the button says which way it is."""
+    icon = QIcon()
+    icon.addPixmap(tool_pixmap(on_kind, size, dark),
+                   QIcon.Mode.Normal, QIcon.State.On)
+    icon.addPixmap(tool_pixmap(off_kind, size, dark),
+                   QIcon.Mode.Normal, QIcon.State.Off)
+    return icon
+
+
+def tool_pixmap(kind: str, size: int = 22, dark: bool = False) -> QPixmap:
     # swap the stroke colours for the theme (GUI is single-threaded)
     global _FG, _ACCENT
     _FG = _FG_DARK if dark else _FG_LIGHT
@@ -211,7 +227,36 @@ def tool_icon(kind: str, size: int = 22, dark: bool = False) -> QIcon:
         p.drawLine(b, c2)
         _dots_along(p, [a, b], color=_FG, r=1.4)
         _dots_along(p, [c1, c2], color=_ACCENT, r=1.2)
+    elif kind in ("ratio_locked", "ratio_free"):
+        # two chain links: joined while the aspect ratio is locked, apart
+        # while it's free. Locked, they're white on a tile of the selection
+        # colour -- Windows 11 fills a checked button with that colour, so
+        # a coloured chain vanished into it; the tile is part of that fill
+        # there, and says "on" where a style only shades the button.
+        locked = kind == "ratio_locked"
+        pen = QPen(_FG)
+        if locked:
+            from PySide6.QtGui import QGuiApplication, QPalette
+            pal = QGuiApplication.palette()
+            p.setPen(Qt.NoPen)
+            p.setBrush(pal.color(QPalette.ColorRole.Highlight))
+            p.drawRoundedRect(QRectF(1, 1, size - 2, size - 2), 4, 4)
+            p.setBrush(Qt.NoBrush)
+            pen = QPen(pal.color(QPalette.ColorRole.HighlightedText))
+        pen.setWidthF(1.6)
+        p.setPen(pen)
+        p.translate(size / 2, size / 2)
+        p.rotate(-45)
+        hw = 2.4                  # half a link's width; its ends are round
+        for x0, length in (((-9.5, 12.5), (-3.5, 12.5)) if locked
+                           else ((-11.5, 10.0), (1.5, 10.0))):
+            p.drawRoundedRect(QRectF(x0, -hw, length, 2 * hw), hw, hw)
+        if not locked:            # the break between them
+            pen.setWidthF(1.2)
+            p.setPen(pen)
+            p.drawLine(QPointF(-1.2, -hw - 2.2), QPointF(-0.6, -hw - 0.4))
+            p.drawLine(QPointF(1.2, hw + 2.2), QPointF(0.6, hw + 0.4))
     else:
         p.drawRect(rect)
     p.end()
-    return QIcon(pm)
+    return pm

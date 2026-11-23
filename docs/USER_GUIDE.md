@@ -162,7 +162,9 @@ new-version news, and it's where problems are tracked and ideas gathered.
   the small **▸ arrow** to pick another variant — the button remembers your
   choice. Every variant keeps its own keyboard shortcut.
 * **Actions toolbar** (top) — Undo/Redo, Duplicate, Delete, Group, Ungroup,
-  Fit, the **Nodes** and **Grid** snap toggles, **Perfect fit** (grips snap
+  Fit, the **W** and **H** boxes (the selection's size: type one to resize
+  it, §6) with the **aspect lock** chain button between them, the **Nodes**
+  and **Grid** snap toggles, **Perfect fit** (grips snap
   to sizes where every stitch gap is exactly the pitch, §7), the grid size,
   and the **line** width spinner (on-screen stroke width, 0.3–8 px).
 * **Properties panel** (right, `Ctrl+1`) — everything about the selected item:
@@ -387,9 +389,19 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
   is one undo step. Great for "the whole wallet, resizable from one table".
 * **Resize**: drag any of the 8 box grips on a selected shape (rectangles,
   ellipses, **and polygons / multi-point paths**); the opposite corner or edge
-  stays pinned. Hold **Shift** to keep the aspect ratio, or turn on
-  **View → Lock aspect ratio on resize** to make that the default (then Shift
-  frees it).
+  stays pinned. Hold **Shift** to keep the aspect ratio, or turn on the
+  **aspect lock** — the chain button between the toolbar's W and H boxes,
+  or **View → Lock aspect ratio on resize** — to make that the default
+  (then Shift frees it).
+* **Resize to a size**: the toolbar's **W** and **H** boxes show the width
+  and height of what's selected. Type a size and press **Enter** and it's
+  resized to it about its centre, as one undo step — a group or several
+  pieces as one, holes, seams and lettering with them, the stitch pitch and
+  inset staying as set (as with Scale). With the aspect lock on, the other
+  size changes in proportion; off, it stays. A circle or lettering always
+  keeps its proportions. A level line has no height to type (its H box is
+  greyed), and an upright one no width. Sums, units and parameters work
+  as in any box (`190+2`, `3in`, `strap_w`).
 * **Rotate**: drag the round **rotation grip** floating above a selected
   shape's box — snaps to 1° (hold **Shift** for 15° detents) — or type an
   exact angle in Properties → Rotation. A **group** or any **multi-selection**

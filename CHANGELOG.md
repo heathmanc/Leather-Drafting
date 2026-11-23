@@ -5,6 +5,28 @@ Downloads are on [stitch-hero.com](https://stitch-hero.com) and the
 Windows and macOS builds ship with every release from 0.4.16 on (before it,
 a macOS build was made only for some).
 
+## Unreleased
+
+### Type a size on the toolbar; the aspect lock is there too
+* **W and H boxes on the top toolbar** show the width and height of what's
+  selected. Type a size and press Enter to resize it to that, about its
+  centre, as one undo step. A group, or several pieces, resizes as one,
+  with its holes, seams and lettering; the stitch pitch and inset stay as
+  set, as with Scale. A sum, another unit (`20mm`, `3in`) or a parameter
+  can be typed too.
+* **The aspect ratio lock is a chain button between them.** With it on, a
+  typed width brings the height along in proportion, and the other way
+  round, as a dragged resize grip already did. It's the same switch as
+  View → Lock aspect ratio on resize, and Shift still does the opposite
+  while you drag a grip.
+* A circle or a piece of lettering keeps its proportions whichever size is
+  typed. A level line has no height to type (its H box is greyed), and an
+  upright one no width.
+* **Scale sizes a turned rectangle, oval or circle right.** One turned off
+  the page axes, on its own or with its group, grew by too much: Arrange →
+  Scale… at 200% made a rectangle turned 30° 2.7 times its size, not
+  twice. At 0° or 90° they weren't affected, nor were other pieces.
+
 ## 0.4.19 — 2026-11-22
 
 ### Construction lines catch what you move

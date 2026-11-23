@@ -7122,11 +7122,17 @@ class Canvas(QGraphicsView):
                         map_baked_holes(m, remap, remap_dir)   # holes ride along
                         it.sync_from_model()
                         continue
-                    # parametric: size in its own frame, origin through world
+                    # parametric: size in its own frame, origin through world.
+                    # Each local axis grows by how much the page scaling
+                    # stretches it: the length of (sx cos a, sy sin a), and
+                    # of (sx sin a, sy cos a). (The sum of the two parts,
+                    # used before, made a uniform x2 of a piece turned 30°
+                    # x2.7.) Off the page axes and not uniform, it's the
+                    # nearest a rectangle or oval comes to the sheared box.
                     a = math.radians(t.rotation)
-                    c, s = abs(math.cos(a)), abs(math.sin(a))
-                    lx = sx * c + sy * s          # local x axis' world stretch
-                    ly = sx * s + sy * c
+                    c, s = math.cos(a), math.sin(a)
+                    lx = math.hypot(sx * c, sy * s)   # local x axis' stretch
+                    ly = math.hypot(sx * s, sy * c)
                     o = scaled(Vec2(t.x, t.y))
                     t.x, t.y = o.x, o.y
                     if isinstance(m, Circle):
@@ -7151,6 +7157,59 @@ class Canvas(QGraphicsView):
         self.geometryMovedSig.emit()
         self.documentChangedSig.emit()
         self._emit_commit()
+
+    def selection_size(self):
+        """The width and height, in mm, of what a typed size resizes: the
+        selection with the rest of its groups. None when nothing that can
+        be resized is selected (a dimension alone isn't)."""
+        items = self._selection_with_groups()
+        b = self._unit_bounds(items, bake=False) if items else None
+        if b is None:
+            return None
+        return b[2] - b[0], b[3] - b[1]
+
+    def resize_selection_to(self, width: Optional[float] = None,
+                            height: Optional[float] = None,
+                            keep_ratio: bool = False) -> bool:
+        """Resize the selection (with its groups) about its centre to a
+        typed ``width`` and/or ``height`` in mm, as one undo step. A size
+        not given stays as it is -- or, with ``keep_ratio``, changes in
+        proportion; a lone circle or lettering always keeps its own. It
+        scales as Scale does: holes, seams and labels go with it, the
+        stitch pitch and inset stay. True if anything changed."""
+        size = self.selection_size()
+        if size is None:
+            self.statusMessage.emit("Select something to resize")
+            return False
+        for want, have, what in ((width, size[0], "width"),
+                                 (height, size[1], "height")):
+            if want is None:
+                continue
+            if want <= 0.0:
+                self.statusMessage.emit(f"A {what} has to be more than 0")
+                return False
+            if have <= 1e-9:
+                self.statusMessage.emit(
+                    f"That has no {what} to resize: it's flat that way")
+                return False
+        sx = width / size[0] if width is not None else None
+        sy = height / size[1] if height is not None else None
+        if sx is None and sy is None:
+            return False
+        items = self._selection_with_groups()
+        round_only = len(items) == 1 and (
+            isinstance(items[0], TextItem)
+            or (isinstance(items[0], ShapeItem)
+                and isinstance(items[0].model, Circle)))
+        if keep_ratio or round_only:
+            sx = sy = sx if sx is not None else sy
+        else:
+            sx = 1.0 if sx is None else sx
+            sy = 1.0 if sy is None else sy
+        if abs(sx - 1.0) < 1e-12 and abs(sy - 1.0) < 1e-12:
+            return False
+        self.scale_selected(sx, sy)
+        return True
 
     def mirror_selected(self, axis_point=None, axis_deg: float = 90.0,
                         exclude=()) -> None:
@@ -7276,7 +7335,11 @@ class Canvas(QGraphicsView):
                                           None) == key[1]]
         return [units[k] for k in order if units[k]]
 
-    def _unit_bounds(self, unit):
+    def _unit_bounds(self, unit, bake: bool = True):
+        """The model box of ``unit``'s items (min x, min y, max x, max y),
+        or None. A dragged seam's offset is baked into its points first,
+        unless ``bake`` is False -- a look only, mid-drag: it's measured
+        where it shows."""
         xs, ys = [], []
         for it in unit:
             if isinstance(it, ShapeItem):
@@ -7287,9 +7350,14 @@ class Canvas(QGraphicsView):
                 xs.append(it.hole.point.x)
                 ys.append(it.hole.point.y)
             elif isinstance(it, StitchLineItem):
-                it._bake_move()
-                xs += [p.x for p in it.line.points]
-                ys += [p.y for p in it.line.points]
+                dx = dy = 0.0
+                if bake:
+                    it._bake_move()
+                else:
+                    dx = it.pos().x() - it._base.x
+                    dy = it.pos().y() - it._base.y
+                xs += [p.x + dx for p in it.line.points]
+                ys += [p.y + dy for p in it.line.points]
             elif isinstance(it, TextItem):
                 for c in it.model.world_contours():
                     xs += [p.x for p in c]

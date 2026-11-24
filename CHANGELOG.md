@@ -5,7 +5,7 @@ Downloads are on [stitch-hero.com](https://stitch-hero.com) and the
 Windows and macOS builds ship with every release from 0.4.16 on (before it,
 a macOS build was made only for some).
 
-## Unreleased
+## 0.4.21 — 2026-11-23
 
 ### Resize from a corner; the aspect lock and Perfect fit work together
 * **Choose where a typed size resizes from.** A little box of nine points

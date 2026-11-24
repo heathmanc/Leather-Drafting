@@ -297,6 +297,94 @@ def test_dragging_a_grip_with_the_mouse(win):
     assert (back.width, back.height) == (60, 40)
 
 
+def _drag(grip, path):
+    """Press on ``grip``, move it through ``path`` (scene points) and let go:
+    the sizes it took after each move, as ``grip.owner.resize_extents()``."""
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtWidgets import QGraphicsSceneMouseEvent
+
+    def ev(kind, x, y):
+        e = QGraphicsSceneMouseEvent(kind)
+        e.setScenePos(QPointF(x, y))
+        e.setButton(Qt.LeftButton)
+        e.setButtons(Qt.LeftButton)
+        e.setModifiers(Qt.NoModifier)
+        return e
+
+    grip.mousePressEvent(ev(QEvent.GraphicsSceneMousePress, *path[0]))
+    took = []
+    for x, y in path[1:]:
+        grip.mouseMoveEvent(ev(QEvent.GraphicsSceneMouseMove, x, y))
+        took.append(grip.owner.resize_extents())
+    grip.mouseReleaseEvent(ev(QEvent.GraphicsSceneMouseRelease, *path[-1]))
+    return took
+
+
+def test_a_locked_drag_keeps_the_proportions_it_started_with(win):
+    """The aspect lock and Perfect fit fought: the lock took the ratio from
+    the box as it stood after each move, which Perfect fit had just rounded
+    to whole stitches -- so the ratio wandered with every move. A 2:1 piece
+    dragged straight out shrank as often as it grew (98 wide, then 94),
+    and an edge grip never moved the other side: each small step of it
+    rounded away. Now the lock keeps the proportions the drag started
+    with, and Perfect fit takes the perfect size nearest them."""
+    c = win.canvas
+    sh = Rectangle(width=80, height=40, transform=Transform(x=0, y=0),
+                   layer="Cut", stitch=StitchSettings(pitch_mm=4.0, inset=3.0))
+    item, grips = _add(c, sh)
+    win.act_perfect_fit.setChecked(True)
+    win.act_aspect_lock.setChecked(True)
+    try:
+        # the top right corner, straight out along the 2:1 diagonal
+        took = _drag(grips[(1, 1)], [(40 + i * 0.75, 20 + i * 0.375)
+                                     for i in range(41)])
+        for (hx0, hy0), (hx1, hy1) in zip(took, took[1:]):
+            assert hx1 >= hx0 - 1e-9 and hy1 >= hy0 - 1e-9   # never shrinks
+        for i, (hx, hy) in enumerate(took, start=1):
+            # within half a pitch of the proportional size, each side
+            assert abs(2 * hx - (80 + i * 0.75)) <= 2.0 + 1e-9
+            assert abs(2 * hy - (40 + i * 0.375)) <= 2.0 + 1e-9
+        assert (sh.width, sh.height) == (pytest.approx(110.0),
+                                         pytest.approx(54.0))
+        assert _worst(sh, 4.0)[1] < 1e-9
+        # the bottom left corner stayed put
+        assert sh.transform.x - sh.width / 2 == pytest.approx(-40.0)
+        assert sh.transform.y - sh.height / 2 == pytest.approx(-20.0)
+
+        # an edge grip: the height goes with the width
+        sh2 = Rectangle(width=80, height=40, transform=Transform(x=300, y=0),
+                        layer="Cut",
+                        stitch=StitchSettings(pitch_mm=4.0, inset=3.0))
+        item2, grips2 = _add(c, sh2)
+        _drag(grips2[(1, 0)], [(340 + i, 0) for i in range(30)])
+        assert sh2.width == pytest.approx(110.0)
+        assert sh2.height == pytest.approx(54.0)
+        assert _worst(sh2, 4.0)[1] < 1e-9
+    finally:
+        win.act_aspect_lock.setChecked(False)
+
+
+def test_a_locked_oval_keeps_its_proportions_exactly(win):
+    """An oval pulled by one side was solved for that side's length alone,
+    the other kept as the lock had scaled it: its proportions crept. Locked,
+    it's scaled whole to the nearest perfect size, so they hold exactly."""
+    c = win.canvas
+    ov = Ellipse(rx=40, ry=20, transform=Transform(x=0, y=0), layer="Cut",
+                 stitch=StitchSettings(pitch_mm=4.0, inset=3.0))
+    item, grips = _add(c, ov)
+    win.act_perfect_fit.setChecked(True)
+    win.act_aspect_lock.setChecked(True)
+    try:
+        took = _drag(grips[(1, 0)], [(40 + i, 0) for i in range(20)])
+        for hx, hy in took:
+            assert hx / hy == pytest.approx(2.0, abs=1e-9)
+        assert ov.rx > 48.0                          # and it grew
+        assert ov.rx / ov.ry == pytest.approx(2.0, abs=1e-9)
+        assert _worst(ov, 4.0)[1] < 1e-6
+    finally:
+        win.act_aspect_lock.setChecked(False)
+
+
 def test_grips_snap_circles_and_ovals(win):
     c = win.canvas
     st = StitchSettings(pitch_mm=5.0, inset=3.5)

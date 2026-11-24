@@ -5,6 +5,30 @@ Downloads are on [stitch-hero.com](https://stitch-hero.com) and the
 Windows and macOS builds ship with every release from 0.4.16 on (before it,
 a macOS build was made only for some).
 
+## Unreleased
+
+### Resize from a corner; the aspect lock and Perfect fit work together
+* **Choose where a typed size resizes from.** A little box of nine points
+  before the toolbar's W box picks the point of the selection that stays
+  put when you type a width or height: a corner, the middle of a side, or
+  the centre (as before, and the first choice). Click a point to choose it;
+  it's remembered.
+* **The aspect lock and Perfect fit no longer fight over a dragged grip.**
+  With both on, the lock re-read the piece's proportions after every move,
+  just after Perfect fit had rounded each side to whole stitches, so they
+  wandered off as you dragged. A 2:1 rectangle dragged out and back came
+  back 78 × 54, its width shrank now and then while you pulled it out, and
+  an edge grip never moved the other side. The lock now keeps the
+  proportions the piece had when you grabbed it, and Perfect fit takes the
+  perfect size nearest them: an oval keeps its proportions exactly, a
+  rectangle each side within half a pitch of them.
+* A size typed in W or H is kept as typed with Perfect fit on, as it is
+  when drawing. The status bar now says so, and that Edit → Snap to
+  perfect fit takes it to the nearest perfect size.
+* Array's spacing again measures only what's selected, which is what it
+  copies. Since 0.4.20, with part of a group selected (box-selected, say),
+  it measured the whole group and offered too wide a spacing.
+
 ## 0.4.20 — 2026-11-22
 
 ### Type a size on the toolbar; the aspect lock is there too

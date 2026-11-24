@@ -163,7 +163,8 @@ new-version news, and it's where problems are tracked and ideas gathered.
   choice. Every variant keeps its own keyboard shortcut.
 * **Actions toolbar** (top) — Undo/Redo, Duplicate, Delete, Group, Ungroup,
   Fit, the **W** and **H** boxes (the selection's size: type one to resize
-  it, §6) with the **aspect lock** chain button between them, the **Nodes**
+  it, §6) with the **resize-from** picker before them and the **aspect
+  lock** chain button between them, the **Nodes**
   and **Grid** snap toggles, **Perfect fit** (grips snap
   to sizes where every stitch gap is exactly the pitch, §7), the grid size,
   and the **line** width spinner (on-screen stroke width, 0.3–8 px).
@@ -392,16 +393,25 @@ Curves are stitched, offset, exported and printed exactly like any other shape.
   stays pinned. Hold **Shift** to keep the aspect ratio, or turn on the
   **aspect lock** — the chain button between the toolbar's W and H boxes,
   or **View → Lock aspect ratio on resize** — to make that the default
-  (then Shift frees it).
+  (then Shift frees it). A locked drag keeps the proportions the piece had
+  when you grabbed it, with **Perfect fit** on too (§7).
 * **Resize to a size**: the toolbar's **W** and **H** boxes show the width
   and height of what's selected. Type a size and press **Enter** and it's
-  resized to it about its centre, as one undo step — a group or several
-  pieces as one, holes, seams and lettering with them, the stitch pitch and
-  inset staying as set (as with Scale). With the aspect lock on, the other
-  size changes in proportion; off, it stays. A circle or lettering always
-  keeps its proportions. A level line has no height to type (its H box is
-  greyed), and an upright one no width. Sums, units and parameters work
-  as in any box (`190+2`, `3in`, `strap_w`).
+  resized to it, as one undo step — a group or several pieces as one,
+  holes, seams and lettering with them, the stitch pitch and inset staying
+  as set (as with Scale). With the aspect lock on, the other size changes
+  in proportion; off, it stays. A circle or lettering always keeps its
+  proportions. A level line has no height to type (its H box is greyed),
+  and an upright one no width. Sums, units and parameters work as in any
+  box (`190+2`, `3in`, `strap_w`). A typed size is kept as typed, Perfect
+  fit or not; **Edit → Snap to perfect fit** then takes a stitched piece to
+  the nearest perfect size.
+* **Resize from**: the little box of nine points before **W** picks the
+  point of the selection that stays put when you type a size — a corner,
+  the middle of a side, or the centre (filled in; the centre to start
+  with). Click a point to choose it; it's remembered. With the top left
+  chosen, a wider W grows the piece to the right and a taller H grows it
+  downward.
 * **Rotate**: drag the round **rotation grip** floating above a selected
   shape's box — snaps to 1° (hold **Shift** for 15° detents) — or type an
   exact angle in Properties → Rotation. A **group** or any **multi-selection**
@@ -527,7 +537,13 @@ top toolbar and the shapes find those sizes for you:
   and **Inset from edge**. The grip jumps a pitch at a time; the status bar
   shows the size, the corner radius and the hole count, e.g. *Perfect fit:
   191.0656 × 171.0656 mm, corners R 10.5328 mm (2 gaps each) · 136 holes,
-  every gap 5 mm at a 4 mm inset*.
+  every gap 5 mm at a 4 mm inset*. With the **aspect lock** on as well, the
+  grip asks for the piece scaled in the proportions it had when you grabbed
+  it, and gets the perfect size nearest that: an oval keeps its
+  proportions exactly, a rectangle each side within half a pitch of them.
+* A size typed in the toolbar's **W** or **H** box is kept as typed (as it
+  is when drawing); the status bar says so, and **Edit → Snap to perfect
+  fit** snaps it afterwards.
 * **Draw** a rectangle, rounded rectangle, circle or ellipse and the rubber
   band snaps the same way, for the stitching new shapes start with (see *Use
   for new shapes* above).

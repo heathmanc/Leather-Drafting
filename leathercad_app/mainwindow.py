@@ -27,6 +27,9 @@ from .panels import PropertiesPanel, LayersPanel
 from .mathspin import MathSpinBox, NoWheelComboBox, NoWheelSpinBox
 from .history import History
 from .icons import toggle_icon, tool_icon
+from .originpicker import KEYS as _ORIGIN_KEYS
+from .originpicker import NAMES as _ORIGIN_NAMES
+from .originpicker import OriginPicker, origin_from_key
 from . import updates
 
 
@@ -592,16 +595,24 @@ class MainWindow(QMainWindow):
         tb.addAction(fit)
 
         # the selection's size: type a width or height and it's resized to
-        # it, about its centre. The lock between them keeps the proportions
-        # -- here and when a grip is dragged (it's in the View menu too).
+        # it, about the point picked before W (the centre to start with).
+        # The lock between them keeps the proportions -- here and when a
+        # grip is dragged (it's in the View menu too).
         tb.addSeparator()
+        self.size_origin = OriginPicker()
+        self.size_origin.setOrigin(origin_from_key(
+            self._settings().value("resizeOrigin", "c", type=str)))
+        self.size_origin.originChanged.connect(self._size_origin_changed)
+        tb.addWidget(self.size_origin)
         tb.addWidget(QLabel(" W "))
         self.size_w = self._size_spin(
             "Width: the selection's size along X.\n"
-            "Type a width and press Enter to resize the selection to it,\n"
-            "about its centre; with the lock on, the height keeps in\n"
+            "Type a width and press Enter to resize the selection to it.\n"
+            "The point chosen in the box before W stays put (the centre,\n"
+            "to start with); with the lock on, the height keeps in\n"
             "proportion. Holes, seams and lettering go with it; the\n"
-            "stitch pitch and inset stay. Ctrl+Z undoes it.")
+            "stitch pitch and inset stay, and a typed size wins over\n"
+            "Perfect fit. Ctrl+Z undoes it.")
         self.size_w.valueChanged.connect(lambda v: self._size_typed(width=v))
         tb.addWidget(self.size_w)
         self.act_aspect_lock = QAction(
@@ -621,10 +632,12 @@ class MainWindow(QMainWindow):
         tb.addWidget(QLabel(" H "))
         self.size_h = self._size_spin(
             "Height: the selection's size along Y.\n"
-            "Type a height and press Enter to resize the selection to it,\n"
-            "about its centre; with the lock on, the width keeps in\n"
+            "Type a height and press Enter to resize the selection to it.\n"
+            "The point chosen in the box before W stays put (the centre,\n"
+            "to start with); with the lock on, the width keeps in\n"
             "proportion. Holes, seams and lettering go with it; the\n"
-            "stitch pitch and inset stay. Ctrl+Z undoes it.")
+            "stitch pitch and inset stay, and a typed size wins over\n"
+            "Perfect fit. Ctrl+Z undoes it.")
         self.size_h.valueChanged.connect(lambda v: self._size_typed(height=v))
         tb.addWidget(self.size_h)
         # a drag or a grip changes the size many times a second: the boxes
@@ -786,10 +799,18 @@ class MainWindow(QMainWindow):
         return sp
 
     def _size_typed(self, width=None, height=None) -> None:
-        """A width or height was typed: resize the selection to it."""
+        """A width or height was typed: resize the selection to it, about
+        the point chosen in the picker."""
         self.canvas.resize_selection_to(width, height,
-                                        keep_ratio=self.canvas.aspect_lock)
+                                        keep_ratio=self.canvas.aspect_lock,
+                                        origin=self.size_origin.origin())
         self._refresh_size_fields(typed=True)
+
+    def _size_origin_changed(self, origin) -> None:
+        self._settings().setValue("resizeOrigin", _ORIGIN_KEYS[origin])
+        self.statusBar().showMessage(
+            "A width or height typed in W or H now resizes from the "
+            f"{_ORIGIN_NAMES[origin]}", 4000)
 
     def _schedule_size_refresh(self) -> None:
         if not self._size_timer.isActive():
@@ -800,7 +821,8 @@ class MainWindow(QMainWindow):
         greyed, with nothing selected or for a size it hasn't (a straight
         line's height, a hole's). A box with a half-typed size in it is
         left alone, unless that size was just entered."""
-        size = self.canvas.selection_size() or (0.0, 0.0)
+        b = self.canvas.resize_box()
+        size = (b[2] - b[0], b[3] - b[1]) if b is not None else (0.0, 0.0)
         for sp, v in zip((self.size_w, self.size_h), size):
             if (not typed and sp.hasFocus()
                     and sp.lineEdit().isModified()):

@@ -431,6 +431,7 @@ class ResizeHandle(QGraphicsItem):
         self.owner = owner
         self.canvas = canvas
         self._dragged = False
+        self._drag_base = None           # (hx, hy) when the drag began
         self.setFlags(
             QGraphicsItem.ItemIsMovable
             | QGraphicsItem.ItemSendsGeometryChanges
@@ -491,6 +492,8 @@ class ResizeHandle(QGraphicsItem):
             event.ignore()
             return
         self._dragged = False
+        # the box the drag starts from: a locked aspect keeps its proportions
+        self._drag_base = self.owner.resize_extents()
         if self.canvas is not None:
             self.canvas._active_resize = self
             if self.canvas.perfect_fit_applies(self.owner):
@@ -522,6 +525,7 @@ class ResizeHandle(QGraphicsItem):
         event.accept()
 
     def mouseReleaseEvent(self, event):
+        self._drag_base = None
         if self.canvas is not None:
             self.canvas.end_node_snap()
             self.canvas._active_resize = None
@@ -549,16 +553,24 @@ class ResizeHandle(QGraphicsItem):
         g_local = t.inverse_apply(grip_world)
         hx_new = abs(g_local.x - anchor_local.x) / 2.0 if gx else hx
         hy_new = abs(g_local.y - anchor_local.y) / 2.0 if gy else hy
-        if lock and hx > 1e-9 and hy > 1e-9:
-            # keep the current aspect ratio. A corner follows whichever axis
-            # moved more; an edge grip scales the free axis to match.
+        # A locked aspect keeps the proportions the piece had when the drag
+        # began -- not the ones it has now. With Perfect fit on, each side
+        # is rounded to whole stitches as it goes, and a ratio re-read from
+        # the rounded box after every move wandered off: a 2:1 piece dragged
+        # out and back came back 78 x 54, and an edge grip never moved the
+        # other side at all (each small step of it rounded away). Called
+        # without a press (as the tests do), the box it has now.
+        bx, by = self._drag_base or (hx, hy)
+        if lock and bx > 1e-9 and by > 1e-9:
+            # A corner follows whichever axis moved more; an edge grip
+            # scales the free axis to match.
             if gx and gy:
-                s = max(hx_new / hx, hy_new / hy)
+                s = max(hx_new / bx, hy_new / by)
             elif gx:
-                s = hx_new / hx
+                s = hx_new / bx
             else:
-                s = hy_new / hy
-            hx_new, hy_new = hx * s, hy * s
+                s = hy_new / by
+            hx_new, hy_new = bx * s, by * s
         from leathercad.shapes import Circle
         if isinstance(owner.model, Circle):
             # A circle stays round, so a grip asks for ONE radius: an edge
@@ -574,7 +586,8 @@ class ResizeHandle(QGraphicsItem):
             hx_new = hy_new = r
         hx_new = max(0.5, hx_new)
         hy_new = max(0.5, hy_new)
-        fit = (self.canvas.perfect_fit_snap(owner, hx_new, hy_new, self.grip)
+        fit = (self.canvas.perfect_fit_snap(owner, hx_new, hy_new, self.grip,
+                                            lock=lock)
                if self.canvas is not None else None)
         if fit is not None:
             # Perfect fit: the nearest size at which every stitch gap is the

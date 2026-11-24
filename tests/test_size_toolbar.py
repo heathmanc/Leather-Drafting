@@ -7,8 +7,13 @@ they would obey the ratio lock if on."
 The aspect lock was only in the View menu. It's now a chain button on the
 top toolbar as well (the same switch), between two boxes, W and H, that
 show the selection's width and height and resize it to a size typed in
-them: about its centre, as one undo step, the other size keeping in
-proportion while the lock is on."""
+them: as one undo step, the other size keeping in proportion while the
+lock is on.
+
+Then: "i wish there was an origin setting to dictate where the resize
+happens when using the WxH dimension." A picker before W chooses the
+point of the selection's box that stays put -- one of the four corners,
+the middle of a side, or the centre (the first choice)."""
 
 import os
 
@@ -55,7 +60,10 @@ def rig(qapp):
 
     yield make
     for win in wins:
+        # saved settings: back to how a first start has them
         win.act_aspect_lock.setChecked(False)
+        win.act_perfect_fit.setChecked(False)
+        win.size_origin.setOrigin((0, 0))
         win.hide()
 
 
@@ -258,3 +266,118 @@ def test_a_size_being_typed_is_not_overwritten(qapp, rig):
     QTest.keyClick(win.size_w, Qt.Key_Return)
     qapp.processEvents()
     assert r.width == pytest.approx(12.0)
+
+
+# -- where the resize happens ----------------------------------------------
+_POINTS = [(-1, 1), (0, 1), (1, 1), (-1, 0), (0, 0), (1, 0),
+           (-1, -1), (0, -1), (1, -1)]
+
+
+def _click_point(qapp, picker, g):
+    c = picker._centre(g)
+    QTest.mouseClick(picker, Qt.LeftButton, Qt.NoModifier,
+                     QPoint(round(c.x()), round(c.y())))
+    qapp.processEvents()
+
+
+def test_the_origin_picker_sits_before_w_and_is_remembered(qapp, rig):
+    from leathercad.document import Document
+    from leathercad_app.mainwindow import MainWindow
+    from leathercad_app.originpicker import OriginPicker
+    win = rig(_box())
+    tb = win.findChild(QToolBar, "ActionToolbar")
+    picker = win.size_origin
+    assert isinstance(picker, OriginPicker)
+    order = [tb.widgetForAction(a) for a in tb.actions()]
+    at = order.index(picker)
+    assert order[at + 1].text().strip() == "W"
+    assert order[at + 2] is win.size_w
+    assert picker.origin() == (0, 0)                  # the centre, to start
+    _click_point(qapp, picker, (-1, 1))
+    assert picker.origin() == (-1, 1)
+    assert "top left" in picker.toolTip()
+    assert win._settings().value("resizeOrigin") == "tl"
+    again = MainWindow(Document())
+    try:
+        assert again.size_origin.origin() == (-1, 1)  # remembered
+    finally:
+        again.hide()
+    for g in _POINTS:                                 # each point picks
+        _click_point(qapp, picker, g)
+        assert picker.origin() == g
+
+
+@pytest.mark.parametrize("g", _POINTS)
+def test_a_typed_size_keeps_the_chosen_point_still(qapp, rig, g):
+    r = _box(80, 40, x=10, y=5)                       # x -30..50, y -15..25
+    win = rig(r, lock=True)
+    win.size_origin.setOrigin(g)
+    _select(qapp, win, r)
+
+    def point():                     # where the chosen point of it is now
+        return (r.transform.x + g[0] * r.width / 2,
+                r.transform.y + g[1] * r.height / 2)
+
+    before = point()
+    _type(qapp, win.size_w, "120")
+    assert (r.width, r.height) == pytest.approx((120.0, 60.0))
+    assert point() == pytest.approx(before)
+    win.undo()                                        # one undo step
+    back = win.doc.shapes[0]
+    assert (back.width, back.height) == pytest.approx((80.0, 40.0))
+    assert (back.transform.x, back.transform.y) == pytest.approx((10.0, 5.0))
+
+
+def test_the_chosen_point_stays_exactly_for_a_turned_piece(qapp, rig):
+    """Scale gives a piece turned off the page axes, stretched one way, a
+    box only near the one asked for; the chosen point is put back exactly,
+    in the same undo step."""
+    r = _box(80, 40)
+    r.transform.rotation = 30.0
+    win = rig(r)                                      # the lock is off
+    win.size_origin.setOrigin((-1, 1))                # the top left
+    _select(qapp, win, r)
+    b0 = win.canvas.resize_box()
+    _type(qapp, win.size_w, f"{1.5 * (b0[2] - b0[0]):.4f}")
+    b1 = win.canvas.resize_box()
+    assert (b1[0], b1[3]) == pytest.approx((b0[0], b0[3]), abs=1e-6)
+    assert b1[2] - b1[0] > 1.3 * (b0[2] - b0[0])      # and it did widen
+    win.undo()
+    back = win.doc.shapes[0]
+    assert (back.width, back.height) == pytest.approx((80.0, 40.0))
+    assert (back.transform.x, back.transform.y) == pytest.approx((0.0, 0.0))
+
+
+def test_a_typed_size_wins_over_perfect_fit_and_says_so(qapp, rig):
+    """As when drawing, a size typed is the size wanted: with Perfect fit
+    on it isn't rounded to whole stitches -- and the status line says so,
+    and how to get the perfect size."""
+    from leathercad.stitchsettings import StitchSettings
+    r = _box(80, 40, stitch=StitchSettings(pitch_mm=4.0, inset=3.0))
+    win = rig(r, lock=True)
+    win.act_perfect_fit.setChecked(True)
+    _select(qapp, win, r)
+    msgs = []
+    win.canvas.statusMessage.connect(msgs.append)
+    _type(qapp, win.size_w, "100")
+    assert (r.width, r.height) == pytest.approx((100.0, 50.0))
+    assert "100 × 50 mm, as typed" in msgs[-1]
+    assert "Snap to perfect fit" in msgs[-1]
+    # nothing Perfect fit sizes, nothing said about it
+    win.act_perfect_fit.setChecked(False)
+    _type(qapp, win.size_w, "90")
+    assert not any("as typed" in m for m in msgs[1:])
+
+
+def test_the_array_still_measures_only_what_is_selected(qapp, rig):
+    """0.4.20's typed sizes measured the selection with a method named as
+    the Array's own and took its place, so the Array's spacing counted the
+    rest of a group too -- which it doesn't copy."""
+    a = _box(40, 40, x=-30, group_id="g1")
+    b = _box(20, 20, x=30, group_id="g1")
+    win = rig(a, b)
+    assert win.canvas.selection_size() == (0.0, 0.0)
+    _select(qapp, win, a)
+    assert win.canvas.selection_size() == pytest.approx((40.0, 40.0))
+    box = win.canvas.resize_box()                     # the typed sizes' box
+    assert (box[2] - box[0], box[3] - box[1]) == pytest.approx((90.0, 40.0))

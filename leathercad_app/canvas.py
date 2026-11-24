@@ -4124,10 +4124,13 @@ class Canvas(QGraphicsView):
         model = getattr(owner, "model", None)
         return model is not None and can_fit(model)
 
-    def perfect_fit_snap(self, owner, hx: float, hy: float, grip):
+    def perfect_fit_snap(self, owner, hx: float, hy: float, grip,
+                         lock: bool = False):
         """With Perfect fit on: the perfect size nearest what a grip asks of
         ``owner`` (half-extents), told on the status line -- or None, to
-        resize freely (the status line says why, when it's worth saying)."""
+        resize freely (the status line says why, when it's worth saying).
+        ``lock``: the aspect is locked, so the size asked for is the piece
+        scaled whole, whichever grip asked."""
         if not self.perfect_fit or isinstance(owner, TextItem):
             return None
         model = getattr(owner, "model", None)
@@ -4135,7 +4138,9 @@ class Canvas(QGraphicsView):
             return None
         from leathercad.perfectfit import fit_shape
         gx, gy = grip
-        axis = "both" if (gx and gy) else ("x" if gx else "y")
+        # an oval pulled by one side finds the length of that side alone;
+        # locked, it's scaled whole, so it keeps its proportions exactly
+        axis = "both" if (lock or (gx and gy)) else ("x" if gx else "y")
         fit = fit_shape(model, hx, hy, axis)
         if fit is None:
             why = self._perfect_fit_refusal(model)
@@ -7158,29 +7163,34 @@ class Canvas(QGraphicsView):
         self.documentChangedSig.emit()
         self._emit_commit()
 
-    def selection_size(self):
-        """The width and height, in mm, of what a typed size resizes: the
-        selection with the rest of its groups. None when nothing that can
-        be resized is selected (a dimension alone isn't)."""
+    def resize_box(self):
+        """The model box (min x, min y, max x, max y), in mm, of what a
+        typed size resizes: the selection with the rest of its groups.
+        None when nothing that can be resized is selected (a dimension
+        alone isn't). (Not ``selection_size``: that one is the Array's,
+        and measures only what's selected, which is what it copies.)"""
         items = self._selection_with_groups()
-        b = self._unit_bounds(items, bake=False) if items else None
-        if b is None:
-            return None
-        return b[2] - b[0], b[3] - b[1]
+        return self._unit_bounds(items, bake=False) if items else None
 
     def resize_selection_to(self, width: Optional[float] = None,
                             height: Optional[float] = None,
-                            keep_ratio: bool = False) -> bool:
-        """Resize the selection (with its groups) about its centre to a
-        typed ``width`` and/or ``height`` in mm, as one undo step. A size
-        not given stays as it is -- or, with ``keep_ratio``, changes in
-        proportion; a lone circle or lettering always keeps its own. It
-        scales as Scale does: holes, seams and labels go with it, the
-        stitch pitch and inset stay. True if anything changed."""
-        size = self.selection_size()
-        if size is None:
+                            keep_ratio: bool = False,
+                            origin=(0, 0)) -> bool:
+        """Resize the selection (with its groups) to a typed ``width``
+        and/or ``height`` in mm, as one undo step. ``origin`` is the point
+        of its box that stays put, ``(gx, gy)`` each -1, 0 or 1: (0, 0) the
+        centre, (-1, 1) the top left corner (y runs up the page), (1, 0)
+        the middle of the right side. A size not given stays as it is --
+        or, with ``keep_ratio``, changes in proportion; a lone circle or
+        lettering always keeps its own. It scales as Scale does: holes,
+        seams and labels go with it, the stitch pitch and inset stay. A
+        typed size wins over Perfect fit, as it does when drawing. True if
+        anything changed."""
+        b = self.resize_box()
+        if b is None:
             self.statusMessage.emit("Select something to resize")
             return False
+        size = (b[2] - b[0], b[3] - b[1])
         for want, have, what in ((width, size[0], "width"),
                                  (height, size[1], "height")):
             if want is None:
@@ -7208,7 +7218,51 @@ class Canvas(QGraphicsView):
             sy = 1.0 if sy is None else sy
         if abs(sx - 1.0) < 1e-12 and abs(sy - 1.0) < 1e-12:
             return False
-        self.scale_selected(sx, sy)
+        gx, gy = origin
+
+        def point_of(box):
+            return ((box[0] + box[2]) / 2.0 + gx * (box[2] - box[0]) / 2.0,
+                    (box[1] + box[3]) / 2.0 + gy * (box[3] - box[1]) / 2.0)
+
+        px, py = point_of(b)
+        self._suppress_commit = True          # one undo step for it all
+        try:
+            self.scale_selected(sx, sy, pivot=(px, py))
+            # Most pieces come out exactly the box asked for. A piece
+            # turned off the page axes and stretched one way, lettering, or
+            # a circle among other pieces only nearly so: the point chosen
+            # is put back exactly where it was.
+            items = self._selection_with_groups()
+            nb = self._unit_bounds(items)
+            if nb is not None:
+                qx, qy = point_of(nb)
+                if abs(px - qx) > 1e-7 or abs(py - qy) > 1e-7:
+                    self._suspend_move_refresh = True
+                    try:
+                        self._move_unit(items, px - qx, py - qy)
+                    finally:
+                        self._suspend_move_refresh = False
+                    self.update_dimensions()
+                    self._reposition_resize_handles()
+                    self.geometryMovedSig.emit()
+                    self.documentChangedSig.emit()
+        finally:
+            self._suppress_commit = False
+        self._emit_commit()
+        if self.perfect_fit and nb is not None:
+            from leathercad.perfectfit import can_fit
+            if any(can_fit(getattr(it, "model", None)) for it in items
+                   if not isinstance(it, TextItem)):
+                # Perfect fit is on, and would have snapped a grip on this:
+                # say why it didn't
+                def ln(mm):
+                    t = U.fmt_num(mm, None if U.is_inches() else 4)
+                    return t.rstrip("0").rstrip(".") if "." in t else t
+                self.statusMessage.emit(
+                    f"Resized to {ln(nb[2] - nb[0])} × {ln(nb[3] - nb[1])} "
+                    f"{U.current()}, as typed: a typed size wins over "
+                    "Perfect fit. Edit ▸ Snap to perfect fit takes it to "
+                    "the nearest perfect size.")
         return True
 
     def mirror_selected(self, axis_point=None, axis_deg: float = 90.0,
